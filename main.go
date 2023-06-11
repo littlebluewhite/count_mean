@@ -22,12 +22,13 @@ func main() {
 		panic(err)
 	}
 	l := len(records)
-	maxMean := 0
-	from := 0
-	move := 10
+	var columns int
+	var n int
 	for {
+		maxMean := 0
+		from := 0
+		move := 10
 		fmt.Print("選取的欄位(輸入數字): ")
-		var columns int
 		fmt.Scanln(&columns)
 		if columns < 2 {
 			panic("輸入錯誤")
@@ -39,7 +40,6 @@ func main() {
 		fmt.Printf("你選取的欄位是: %s\n", records[0][columns])
 
 		fmt.Print("多少資料的平均(輸入數字): ")
-		var n int
 		fmt.Scanln(&n)
 		if l-1 < n || n < 1 {
 			panic("不要亂輸入! ^^")
@@ -55,6 +55,9 @@ func main() {
 				from = i
 			}
 		}
-		fmt.Printf("從 %v 到 %v 有最大平均值: %.10f\n", records[from][0], records[from+n][0], float64(maxMean)/math.Pow10(move))
+		fmt.Printf("%v\n%v\n%.10f\n", records[from][0], records[from+n][0], float64(maxMean)/math.Pow10(move))
+		maxMean = 0
+		from = 0
+		move = 0
 	}
 }
