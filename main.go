@@ -61,6 +61,6 @@ func main() {
 				from = i
 			}
 		}
-		fmt.Printf("%v\n%v\n%.10f\n", records[from][0], records[from+n][0], float64(maxMean)/math.Pow10(move))
+		fmt.Printf("%v\n%v\n%.10f\n", records[from][0], records[from+n-1][0], float64(maxMean)/math.Pow10(move))
 	}
 }
