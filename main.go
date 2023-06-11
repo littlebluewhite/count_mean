@@ -9,21 +9,23 @@ import (
 )
 
 func main() {
+	var file string
+	fmt.Print("請輸入檔名: ")
+	fmt.Scanln(&file)
+	f, err := os.Open(file + ".csv")
+	if err != nil {
+		panic(err)
+	}
+	r := csv.NewReader(f)
+	records, err := r.ReadAll()
+	if err != nil {
+		panic(err)
+	}
+	l := len(records)
+	maxMean := 0
+	from := 0
+	move := 10
 	for {
-		f, err := os.Open("result.csv")
-		if err != nil {
-			fmt.Println(err)
-		}
-		r := csv.NewReader(f)
-		records, err := r.ReadAll()
-		if err != nil {
-			fmt.Println(err)
-		}
-		l := len(records)
-		maxMean := 0
-		from := 0
-		move := 10
-
 		fmt.Print("選取的欄位(輸入數字): ")
 		var columns int
 		fmt.Scanln(&columns)
