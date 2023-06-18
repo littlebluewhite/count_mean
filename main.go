@@ -1,19 +1,23 @@
 package main
 
 import (
+	"bufio"
 	"count_mean/util"
 	"encoding/csv"
 	"fmt"
 	"log"
 	"math"
 	"os"
+	"strings"
 	"time"
 )
 
 func main() {
 	var file string
 	fmt.Print("請輸入載入檔名: ")
-	fmt.Scanln(&file)
+	reader := bufio.NewReader(os.Stdin)
+	file, _ = reader.ReadString('\n')
+	file = strings.TrimSpace(file)
 	f, err := os.Open(file + ".csv")
 	defer func(f *os.File) {
 		e := f.Close()
@@ -97,7 +101,11 @@ func fn1(r [][]string) {
 	if err != nil {
 		log.Fatalln("failed to open file", err)
 	}
+
+	bom := []byte{0xEF, 0xBB, 0xBF}
+	file.Write(bom)
 	w := csv.NewWriter(file)
+	w.Comma = ','
 	err = w.WriteAll(result)
 	if err != nil {
 		log.Fatalln("failed to write result", err)
@@ -112,7 +120,9 @@ func fn2(r [][]string) {
 	result := make([][]string, 0, len(r))
 	result = append(result, r[0])
 	fmt.Print("請輸入要相除的csv檔名: ")
-	fmt.Scanln(&file)
+	reader := bufio.NewReader(os.Stdin)
+	file, _ = reader.ReadString('\n')
+	file = strings.TrimSpace(file)
 	f, err := os.Open(file + ".csv")
 	defer func(f *os.File) {
 		e := f.Close()
@@ -147,6 +157,9 @@ func fn2(r [][]string) {
 	if err != nil {
 		log.Fatalln("failed to open file", err)
 	}
+
+	bom := []byte{0xEF, 0xBB, 0xBF}
+	resultFile.Write(bom)
 	w := csv.NewWriter(resultFile)
 	err = w.WriteAll(result)
 	if err != nil {
@@ -163,7 +176,9 @@ func fn3(r [][]string) {
 	result := make([][]string, 0, len(r))
 	result = append(result, r[0])
 	fmt.Print("請輸入分期的csv檔名: ")
-	fmt.Scanln(&file)
+	reader := bufio.NewReader(os.Stdin)
+	file, _ = reader.ReadString('\n')
+	file = strings.TrimSpace(file)
 	f, err := os.Open(file + ".csv")
 	defer func(f *os.File) {
 		e := f.Close()
@@ -285,6 +300,9 @@ func fn3(r [][]string) {
 	if err != nil {
 		log.Fatalln("failed to open file", err)
 	}
+
+	bom := []byte{0xEF, 0xBB, 0xBF}
+	resultFile.Write(bom)
 	w := csv.NewWriter(resultFile)
 	err = w.WriteAll(result)
 	if err != nil {
