@@ -8,7 +8,9 @@ import (
 
 func Str2Number[T Number, U ~int](s string, move U) T {
 	a := strings.Split(s, "E")
-	f, err := strconv.ParseFloat(a[0], 64)
+	// 去除空白
+	b := strings.Replace(a[0], " ", "", -1)
+	f, err := strconv.ParseFloat(b, 64)
 	if len(a) == 1 {
 		n2 := math.Pow10(int(move))
 		return T(f * n2)
