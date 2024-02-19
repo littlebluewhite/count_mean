@@ -53,7 +53,7 @@ func fn1(r [][]string) {
 	fmt.Print("多少資料的平均(輸入數字): ")
 	fmt.Scanln(&n)
 	if l-1 < n || n < 1 {
-		fmt.Println("不要亂輸入! ^^")
+		fmt.Println("輸入錯誤QQ")
 		time.Sleep(5 * time.Second)
 	}
 	result := make([][]string, 0, 4)
@@ -235,26 +235,26 @@ func fn3(r [][]string) {
 		case 0:
 			row = append(row, "啟跳下蹲階段 最大值")
 			for j := 1; j < columnMax; j++ {
-				max, _ := util.ArrayMax[float64](count1[j])
-				row = append(row, fmt.Sprintf("%.10f", max/math.Pow10(10)))
+				m, _ := util.ArrayMax[float64](count1[j])
+				row = append(row, fmt.Sprintf("%.10f", m/math.Pow10(10)))
 			}
 		case 1:
 			row = append(row, "啟跳上升階段 最大值")
 			for j := 1; j < columnMax; j++ {
-				max, _ := util.ArrayMax[float64](count2[j])
-				row = append(row, fmt.Sprintf("%.10f", max/math.Pow10(10)))
+				m, _ := util.ArrayMax[float64](count2[j])
+				row = append(row, fmt.Sprintf("%.10f", m/math.Pow10(10)))
 			}
 		case 2:
 			row = append(row, "團身階段 最大值")
 			for j := 1; j < columnMax; j++ {
-				max, _ := util.ArrayMax[float64](count3[j])
-				row = append(row, fmt.Sprintf("%.10f", max/math.Pow10(10)))
+				m, _ := util.ArrayMax[float64](count3[j])
+				row = append(row, fmt.Sprintf("%.10f", m/math.Pow10(10)))
 			}
 		case 3:
 			row = append(row, "下降階段 最大值")
 			for j := 1; j < columnMax; j++ {
-				max, _ := util.ArrayMax[float64](count4[j])
-				row = append(row, fmt.Sprintf("%.10f", max/math.Pow10(10)))
+				m, _ := util.ArrayMax[float64](count4[j])
+				row = append(row, fmt.Sprintf("%.10f", m/math.Pow10(10)))
 			}
 		case 4:
 			row = append(row, "啟跳下蹲階段 平均值")
