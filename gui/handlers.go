@@ -3,7 +3,9 @@ package gui
 import (
 	"count_mean/internal/calculator"
 	"count_mean/internal/config"
+	"count_mean/internal/errors"
 	"count_mean/internal/io"
+	"count_mean/internal/logging"
 	"count_mean/internal/models"
 	"fmt"
 	"fyne.io/fyne/v2/widget"
@@ -14,48 +16,60 @@ import (
 
 // executeMaxMeanCalculation 執行最大平均值計算
 func (a *App) executeMaxMeanCalculation(mode, filePath, dirPath, windowSizeStr, startRangeStr, endRangeStr string) {
+	logger := a.logger.WithContext("operation", "max_mean_calculation")
+	logger.Info("開始執行最大平均值計算", map[string]interface{}{
+		"mode":            mode,
+		"file_path":       filePath,
+		"dir_path":        dirPath,
+		"window_size_str": windowSizeStr,
+		"start_range_str": startRangeStr,
+		"end_range_str":   endRangeStr,
+	})
+
 	a.updateStatus("執行計算中...")
 
-	// 解析窗口大小
-	windowSize, err := strconv.Atoi(windowSizeStr)
-	if err != nil || windowSize <= 0 {
-		a.showError("無效的窗口大小")
+	// 驗證窗口大小
+	windowSize, err := a.validator.ValidateWindowSize(windowSizeStr)
+	if err != nil {
+		a.handleValidationError("窗口大小驗證失敗", err, logger)
 		return
 	}
 
-	// 解析時間範圍
-	var startRange, endRange float64
-	var useCustomRange bool
-
-	if startRangeStr != "" {
-		startRange, err = strconv.ParseFloat(startRangeStr, 64)
-		if err != nil {
-			a.showError("無效的開始範圍秒數")
-			return
-		}
-		useCustomRange = true
-	}
-
-	if endRangeStr != "" {
-		endRange, err = strconv.ParseFloat(endRangeStr, 64)
-		if err != nil {
-			a.showError("無效的結束範圍秒數")
-			return
-		}
-		useCustomRange = true
+	// 驗證時間範圍
+	startRange, endRange, useCustomRange, err := a.validator.ValidateTimeRange(startRangeStr, endRangeStr)
+	if err != nil {
+		a.handleValidationError("時間範圍驗證失敗", err, logger)
+		return
 	}
 
 	if mode == "處理單一檔案" {
 		if filePath == "" {
-			a.showError("請選擇要處理的CSV檔案")
+			err := errors.NewValidationError("file_path", filePath, "請選擇要處理的CSV檔案")
+			a.handleValidationError("檔案路徑驗證失敗", err, logger)
 			return
 		}
+
+		// 驗證檔案名稱
+		filename := filepath.Base(filePath)
+		if validateErr := a.validator.ValidateFilename(filename); validateErr != nil {
+			a.handleValidationError("檔案名稱驗證失敗", validateErr, logger)
+			return
+		}
+
 		err = a.executeSingleFileCalculation(filePath, windowSize, startRange, endRange, useCustomRange)
 	} else {
 		if dirPath == "" {
-			a.showError("請選擇要處理的資料夾")
+			err := errors.NewValidationError("dir_path", dirPath, "請選擇要處理的資料夾")
+			a.handleValidationError("資料夾路徑驗證失敗", err, logger)
 			return
 		}
+
+		// 驗證目錄路徑
+		if validateErr := a.validator.ValidateDirectoryPath(dirPath); validateErr != nil {
+			a.handleValidationError("目錄路徑驗證失敗", validateErr, logger)
+			return
+		}
+
 		err = a.executeBatchCalculation(dirPath, windowSize, startRange, endRange, useCustomRange)
 	}
 
@@ -292,49 +306,49 @@ func (a *App) executePhaseAnalysis(dataFilePath, phaseFilePath string, phaseLabe
 
 // saveConfiguration 保存配置設定
 func (a *App) saveConfiguration(scalingFactorStr, precisionStr, outputFormat string, bomEnabled bool, phaseLabelsText, inputDir, outputDir, operateDir string) {
+	logger := a.logger.WithContext("operation", "save_configuration")
+	logger.Info("開始保存配置")
+
 	a.updateStatus("保存配置中...")
 
-	// 解析縮放因子
-	scalingFactor, err := strconv.Atoi(scalingFactorStr)
-	if err != nil || scalingFactor <= 0 {
-		a.showError("無效的縮放因子，必須是大於0的整數")
+	// 驗證縮放因子
+	scalingFactor, err := a.validator.ValidateScalingFactor(scalingFactorStr)
+	if err != nil {
+		a.handleValidationError("縮放因子驗證失敗", err, logger)
 		return
 	}
 
-	// 解析精度
-	precision, err := strconv.Atoi(precisionStr)
-	if err != nil || precision < 0 || precision > 15 {
-		a.showError("無效的精度，必須是0-15之間的整數")
+	// 驗證精度
+	precision, err := a.validator.ValidatePrecision(precisionStr)
+	if err != nil {
+		a.handleValidationError("精度驗證失敗", err, logger)
 		return
 	}
 
-	// 解析階段標籤
-	var phaseLabels []string
-	if strings.TrimSpace(phaseLabelsText) != "" {
-		lines := strings.Split(phaseLabelsText, "\n")
-		for _, line := range lines {
-			if trimmed := strings.TrimSpace(line); trimmed != "" {
-				phaseLabels = append(phaseLabels, trimmed)
-			}
-		}
-	}
-
-	if len(phaseLabels) == 0 {
-		a.showError("請至少輸入一個階段標籤")
+	// 驗證輸出格式
+	if err := a.validator.ValidateOutputFormat(outputFormat); err != nil {
+		a.handleValidationError("輸出格式驗證失敗", err, logger)
 		return
 	}
 
-	// 驗證目錄
-	if strings.TrimSpace(inputDir) == "" {
-		a.showError("輸入目錄不能為空")
+	// 驗證階段標籤
+	phaseLabels, err := a.validator.ValidatePhaseLabels(phaseLabelsText)
+	if err != nil {
+		a.handleValidationError("階段標籤驗證失敗", err, logger)
 		return
 	}
-	if strings.TrimSpace(outputDir) == "" {
-		a.showError("輸出目錄不能為空")
+
+	// 驗證目錄路徑
+	if err := a.validator.ValidateDirectoryPath(inputDir); err != nil {
+		a.handleValidationError("輸入目錄驗證失敗", err, logger)
 		return
 	}
-	if strings.TrimSpace(operateDir) == "" {
-		a.showError("操作目錄不能為空")
+	if err := a.validator.ValidateDirectoryPath(outputDir); err != nil {
+		a.handleValidationError("輸出目錄驗證失敗", err, logger)
+		return
+	}
+	if err := a.validator.ValidateDirectoryPath(operateDir); err != nil {
+		a.handleValidationError("操作目錄驗證失敗", err, logger)
 		return
 	}
 
@@ -391,4 +405,20 @@ func (a *App) resetToDefaults(scalingFactorEntry, precisionEntry *widget.Entry, 
 	operateDirEntry.SetText(defaultConfig.OperateDir)
 
 	a.updateStatus("已重置為默認配置")
+}
+
+// handleValidationError 處理驗證錯誤
+func (a *App) handleValidationError(context string, err error, logger *logging.Logger) {
+	logger.Error(context, err, map[string]interface{}{
+		"error_type": "validation_error",
+	})
+
+	// 檢查是否為結構化錯誤
+	if appErr, ok := err.(*errors.AppError); ok {
+		a.showError(appErr.Message)
+	} else if validationErr, ok := err.(*errors.ValidationError); ok {
+		a.showError(validationErr.Message)
+	} else {
+		a.showError(fmt.Sprintf("%s: %v", context, err))
+	}
 }

@@ -18,6 +18,15 @@ type AppConfig struct {
 	InputDir      string   `json:"input_dir"`
 	OutputDir     string   `json:"output_dir"`
 	OperateDir    string   `json:"operate_dir"`
+
+	// 日誌配置
+	LogLevel     string `json:"log_level"`     // debug, info, warn, error
+	LogFormat    string `json:"log_format"`    // text, json
+	LogDirectory string `json:"log_directory"` // 日誌目錄
+
+	// 國際化配置
+	Language        string `json:"language"`         // zh-TW, zh-CN, en-US, ja-JP
+	TranslationsDir string `json:"translations_dir"` // 翻譯文件目錄
 }
 
 // DefaultConfig 返回默認配置
@@ -36,6 +45,15 @@ func DefaultConfig() *AppConfig {
 		InputDir:     "./input",
 		OutputDir:    "./output",
 		OperateDir:   "./value_operate",
+
+		// 預設日誌配置
+		LogLevel:     "info",
+		LogFormat:    "text",
+		LogDirectory: "./logs",
+
+		// 預設國際化配置
+		Language:        "zh-TW",
+		TranslationsDir: "./translations",
 	}
 }
 
@@ -124,7 +142,7 @@ func (c *AppConfig) Validate() error {
 
 // EnsureDirectories 確保配置中的目錄存在
 func (c *AppConfig) EnsureDirectories() error {
-	dirs := []string{c.InputDir, c.OutputDir, c.OperateDir}
+	dirs := []string{c.InputDir, c.OutputDir, c.OperateDir, c.LogDirectory, c.TranslationsDir}
 
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {

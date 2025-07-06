@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Set Go path
+export PATH="$HOME/sdk/go1.24.4/bin:$PATH"
+
 # Get Go bin path
 GOBIN=$(go env GOBIN)
 if [ -z "$GOBIN" ]; then

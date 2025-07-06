@@ -1,36 +1,62 @@
 package calculator
 
 import (
+	"count_mean/internal/logging"
 	"count_mean/internal/models"
 	"count_mean/util"
 	"fmt"
+	"time"
 )
 
 // Normalizer 處理數據標準化
 type Normalizer struct {
 	scalingFactor int
+	logger        *logging.Logger
 }
 
 // NewNormalizer 創建新的標準化器
 func NewNormalizer(scalingFactor int) *Normalizer {
 	return &Normalizer{
 		scalingFactor: scalingFactor,
+		logger:        logging.GetLogger("normalizer"),
 	}
 }
 
 // Normalize 標準化數據集（每個值除以參考值）
 func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMGDataset) (*models.EMGDataset, error) {
+	startTime := time.Now()
+	n.logger.Info("開始數據標準化", map[string]interface{}{
+		"dataset_points":   len(dataset.Data),
+		"reference_points": len(reference.Data),
+		"scaling_factor":   n.scalingFactor,
+	})
+
 	if dataset == nil || reference == nil {
-		return nil, fmt.Errorf("數據集或參考數據集為空")
+		err := fmt.Errorf("數據集或參考數據集為空")
+		n.logger.Error("標準化輸入驗證失敗", err, map[string]interface{}{
+			"dataset_nil":   dataset == nil,
+			"reference_nil": reference == nil,
+		})
+		return nil, err
 	}
 
 	if len(dataset.Data) == 0 || len(reference.Data) == 0 {
-		return nil, fmt.Errorf("數據集或參考數據集為空")
+		err := fmt.Errorf("數據集或參考數據集為空")
+		n.logger.Error("標準化數據為空", err, map[string]interface{}{
+			"dataset_length":   len(dataset.Data),
+			"reference_length": len(reference.Data),
+		})
+		return nil, err
 	}
 
 	// 檢查通道數是否匹配
 	if len(dataset.Data[0].Channels) != len(reference.Data[0].Channels) {
-		return nil, fmt.Errorf("數據集和參考數據集的通道數不匹配")
+		err := fmt.Errorf("數據集和參考數據集的通道數不匹配")
+		n.logger.Error("通道數不匹配", err, map[string]interface{}{
+			"dataset_channels":   len(dataset.Data[0].Channels),
+			"reference_channels": len(reference.Data[0].Channels),
+		})
+		return nil, err
 	}
 
 	result := &models.EMGDataset{
@@ -43,11 +69,19 @@ func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMG
 
 	// 獲取參考值（使用第一行數據）
 	refValues := reference.Data[0].Channels
+	n.logger.Debug("使用參考值", map[string]interface{}{
+		"reference_values": refValues,
+	})
 
 	// 檢查是否有除以零的情況
 	for i, refVal := range refValues {
 		if refVal == 0 {
-			return nil, fmt.Errorf("參考值在通道 %d 為零，無法進行標準化", i+1)
+			err := fmt.Errorf("參考值在通道 %d 為零，無法進行標準化", i+1)
+			n.logger.Error("參考值為零", err, map[string]interface{}{
+				"channel_index":   i + 1,
+				"reference_value": refVal,
+			})
+			return nil, err
 		}
 	}
 
@@ -67,18 +101,32 @@ func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMG
 		result.Data = append(result.Data, normalizedData)
 	}
 
+	duration := time.Since(startTime)
+	n.logger.Info("數據標準化完成", map[string]interface{}{
+		"duration_ms":      duration.Milliseconds(),
+		"processed_points": len(result.Data),
+		"channel_count":    len(result.Data[0].Channels),
+	})
+
 	return result, nil
 }
 
 // NormalizeFromRawData 從原始字符串數據進行標準化
 func (n *Normalizer) NormalizeFromRawData(records [][]string, reference [][]string) (*models.EMGDataset, error) {
+	n.logger.Info("開始從原始數據進行標準化", map[string]interface{}{
+		"main_records":      len(records),
+		"reference_records": len(reference),
+	})
+
 	dataset, err := n.parseRawData(records)
 	if err != nil {
+		n.logger.Error("主數據解析失敗", err)
 		return nil, fmt.Errorf("解析主數據失敗: %w", err)
 	}
 
 	refDataset, err := n.parseRawData(reference)
 	if err != nil {
+		n.logger.Error("參考數據解析失敗", err)
 		return nil, fmt.Errorf("解析參考數據失敗: %w", err)
 	}
 
@@ -87,8 +135,17 @@ func (n *Normalizer) NormalizeFromRawData(records [][]string, reference [][]stri
 
 // parseRawData 解析原始字符串數據
 func (n *Normalizer) parseRawData(records [][]string) (*models.EMGDataset, error) {
+	n.logger.Debug("開始解析標準化原始數據", map[string]interface{}{
+		"record_count":   len(records),
+		"scaling_factor": n.scalingFactor,
+	})
+
 	if len(records) < 2 {
-		return nil, fmt.Errorf("數據至少需要包含標題行和一行數據")
+		err := fmt.Errorf("數據至少需要包含標題行和一行數據")
+		n.logger.Error("標準化原始數據結構驗證失敗", err, map[string]interface{}{
+			"record_count": len(records),
+		})
+		return nil, err
 	}
 
 	dataset := &models.EMGDataset{
@@ -129,6 +186,12 @@ func (n *Normalizer) parseRawData(records [][]string) (*models.EMGDataset, error
 
 		dataset.Data = append(dataset.Data, data)
 	}
+
+	n.logger.Debug("標準化原始數據解析完成", map[string]interface{}{
+		"parsed_records": len(dataset.Data),
+		"channel_count":  len(dataset.Data[0].Channels),
+		"header_count":   len(dataset.Headers),
+	})
 
 	return dataset, nil
 }

@@ -1,15 +1,17 @@
-package calculator
+package calculator_test
 
 import (
 	"count_mean/internal/models"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/calculator"
 )
 
 func TestPhaseAnalyzer_Analyze(t *testing.T) {
 	phaseLabels := []string{"啟跳下蹲階段", "啟跳上升階段", "團身階段", "下降階段"}
-	analyzer := NewPhaseAnalyzer(10, phaseLabels)
+	analyzer := calculator.NewPhaseAnalyzer(10, phaseLabels)
 
 	t.Run("NilDataset", func(t *testing.T) {
 		phases := []models.TimeRange{
@@ -196,7 +198,7 @@ func TestPhaseAnalyzer_Analyze(t *testing.T) {
 
 func TestPhaseAnalyzer_AnalyzeFromRawData(t *testing.T) {
 	phaseLabels := []string{"啟跳下蹲階段", "啟跳上升階段", "團身階段", "下降階段"}
-	analyzer := NewPhaseAnalyzer(10, phaseLabels)
+	analyzer := calculator.NewPhaseAnalyzer(10, phaseLabels)
 
 	t.Run("ValidRawData", func(t *testing.T) {
 		records := [][]string{
@@ -250,7 +252,7 @@ func TestPhaseAnalyzer_AnalyzeFromRawData(t *testing.T) {
 
 func TestPhaseAnalyzer_parsePhases(t *testing.T) {
 	phaseLabels := []string{"階段1", "階段2", "階段3"}
-	analyzer := NewPhaseAnalyzer(10, phaseLabels)
+	analyzer := calculator.NewPhaseAnalyzer(10, phaseLabels)
 
 	t.Run("ValidPhases", func(t *testing.T) {
 		phaseStrings := []string{"0.0", "1.0", "2.0", "3.0", "4.0"} // 5個時間點定義4個階段，但只使用前3個
@@ -293,7 +295,7 @@ func TestPhaseAnalyzer_parsePhases(t *testing.T) {
 
 func TestPhaseAnalyzer_parseRawData(t *testing.T) {
 	phaseLabels := []string{"階段1"}
-	analyzer := NewPhaseAnalyzer(6, phaseLabels)
+	analyzer := calculator.NewPhaseAnalyzer(6, phaseLabels)
 
 	t.Run("ScalingFactorApplication", func(t *testing.T) {
 		records := [][]string{

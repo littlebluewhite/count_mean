@@ -1,6 +1,5 @@
 [Details]
-Icon = ""
-Name = "EMG GUI Tool"
-ID = "com.emg.guitool"
-Version = "1.0.0"
-Build = 1
+  Name = "EMG GUI Tool"
+  ID = "com.emg.guitool"
+  Version = "1.0.0"
+  Build = 3

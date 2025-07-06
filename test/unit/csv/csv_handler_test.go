@@ -1,4 +1,4 @@
-package io
+package csv_test
 
 import (
 	"count_mean/internal/config"
@@ -9,18 +9,20 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/io"
 )
 
 func TestNewCSVHandler(t *testing.T) {
 	cfg := config.DefaultConfig()
-	handler := NewCSVHandler(cfg)
+	handler := io.NewCSVHandler(cfg)
 	require.NotNil(t, handler)
-	require.Equal(t, cfg, handler.config)
+	require.Equal(t, cfg, handler.Config)
 }
 
 func TestCSVHandler_ReadCSV(t *testing.T) {
 	cfg := config.DefaultConfig()
-	handler := NewCSVHandler(cfg)
+	handler := io.NewCSVHandler(cfg)
 
 	t.Run("FileNotExists", func(t *testing.T) {
 		records, err := handler.ReadCSV("nonexistent.csv")
@@ -92,7 +94,7 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 	t.Run("WriteWithBOM", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		cfg.BOMEnabled = true
-		handler := NewCSVHandler(cfg)
+		handler := io.NewCSVHandler(cfg)
 
 		tempDir := t.TempDir()
 		csvFile := filepath.Join(tempDir, "output_with_bom.csv")
@@ -112,7 +114,7 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 
 		// 檢查BOM
 		require.True(t, len(content) >= 3)
-		require.Equal(t, BOMBytes, content[:3])
+		require.Equal(t, io.io.BOMBytes, content[:3])
 
 		// 檢查CSV內容
 		csvContent := string(content[3:])
@@ -126,7 +128,7 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 	t.Run("WriteWithoutBOM", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		cfg.BOMEnabled = false
-		handler := NewCSVHandler(cfg)
+		handler := io.NewCSVHandler(cfg)
 
 		tempDir := t.TempDir()
 		csvFile := filepath.Join(tempDir, "output_without_bom.csv")
@@ -146,12 +148,12 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 		// 不應包含BOM
 		csvContent := string(content)
 		require.True(t, strings.HasPrefix(csvContent, "Time,Ch1"))
-		require.False(t, strings.HasPrefix(csvContent, string(BOMBytes)))
+		require.False(t, strings.HasPrefix(csvContent, string(io.io.BOMBytes)))
 	})
 
 	t.Run("InvalidDirectory", func(t *testing.T) {
 		cfg := config.DefaultConfig()
-		handler := NewCSVHandler(cfg)
+		handler := io.NewCSVHandler(cfg)
 
 		invalidPath := "/nonexistent/directory/output.csv"
 		data := [][]string{{"Time", "Ch1"}}
@@ -163,7 +165,7 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 
 	t.Run("EmptyData", func(t *testing.T) {
 		cfg := config.DefaultConfig()
-		handler := NewCSVHandler(cfg)
+		handler := io.NewCSVHandler(cfg)
 
 		tempDir := t.TempDir()
 		csvFile := filepath.Join(tempDir, "empty_data.csv")
@@ -179,7 +181,7 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 
 		// 如果啟用BOM，文件應只包含BOM
 		if cfg.BOMEnabled {
-			require.Equal(t, BOMBytes, content)
+			require.Equal(t, io.io.BOMBytes, content)
 		} else {
 			require.Empty(t, content)
 		}
@@ -192,7 +194,7 @@ func TestCSVHandler_ConvertMaxMeanResultsToCSV(t *testing.T) {
 		Precision:     2,
 		BOMEnabled:    true,
 	}
-	handler := NewCSVHandler(cfg)
+	handler := io.NewCSVHandler(cfg)
 
 	t.Run("ValidConversion", func(t *testing.T) {
 		headers := []string{"Time", "Ch1", "Ch2"}
@@ -253,7 +255,7 @@ func TestCSVHandler_ConvertMaxMeanResultsToCSV(t *testing.T) {
 			Precision:     4,
 			BOMEnabled:    true,
 		}
-		handler := NewCSVHandler(cfg)
+		handler := io.NewCSVHandler(cfg)
 
 		headers := []string{"Time", "Ch1"}
 		results := []models.MaxMeanResult{
@@ -273,7 +275,7 @@ func TestCSVHandler_ConvertNormalizedDataToCSV(t *testing.T) {
 	cfg := &config.AppConfig{
 		Precision: 3,
 	}
-	handler := NewCSVHandler(cfg)
+	handler := io.NewCSVHandler(cfg)
 
 	t.Run("ValidConversion", func(t *testing.T) {
 		dataset := &models.EMGDataset{
@@ -318,7 +320,7 @@ func TestCSVHandler_ConvertPhaseAnalysisToCSV(t *testing.T) {
 		ScalingFactor: 10,
 		Precision:     2,
 	}
-	handler := NewCSVHandler(cfg)
+	handler := io.NewCSVHandler(cfg)
 
 	t.Run("ValidConversion", func(t *testing.T) {
 		headers := []string{"Time", "Ch1", "Ch2"}
@@ -414,7 +416,7 @@ func TestCSVHandler_ConvertPhaseAnalysisToCSV(t *testing.T) {
 
 func TestCSVHandler_ReadCSVFromPrompt(t *testing.T) {
 	cfg := config.DefaultConfig()
-	handler := NewCSVHandler(cfg)
+	handler := io.NewCSVHandler(cfg)
 
 	// 注意：這個測試難以自動化，因為它需要標準輸入
 	// 在實際環境中，可以使用依賴注入來提供可測試的輸入源
@@ -425,6 +427,6 @@ func TestCSVHandler_ReadCSVFromPrompt(t *testing.T) {
 }
 
 func TestBOMBytes(t *testing.T) {
-	require.Equal(t, []byte{0xEF, 0xBB, 0xBF}, BOMBytes)
-	require.Len(t, BOMBytes, 3)
+	require.Equal(t, []byte{0xEF, 0xBB, 0xBF}, io.BOMBytes)
+	require.Len(t, io.BOMBytes, 3)
 }

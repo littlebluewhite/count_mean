@@ -1,14 +1,16 @@
-package calculator
+package calculator_test
 
 import (
 	"count_mean/internal/models"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/calculator"
 )
 
 func TestNormalizer_Normalize(t *testing.T) {
-	normalizer := NewNormalizer(10)
+	normalizer := calculator.NewNormalizer(10)
 
 	t.Run("NilDatasets", func(t *testing.T) {
 		result, err := normalizer.Normalize(nil, nil)
@@ -183,7 +185,7 @@ func TestNormalizer_Normalize(t *testing.T) {
 }
 
 func TestNormalizer_NormalizeFromRawData(t *testing.T) {
-	normalizer := NewNormalizer(10)
+	normalizer := calculator.NewNormalizer(10)
 
 	t.Run("ValidRawData", func(t *testing.T) {
 		records := [][]string{
@@ -252,7 +254,7 @@ func TestNormalizer_NormalizeFromRawData(t *testing.T) {
 }
 
 func TestNormalizer_parseRawData(t *testing.T) {
-	normalizer := NewNormalizer(6)
+	normalizer := calculator.NewNormalizer(6)
 
 	t.Run("ScientificNotation", func(t *testing.T) {
 		records := [][]string{

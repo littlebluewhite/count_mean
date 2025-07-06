@@ -1,38 +1,62 @@
 package calculator
 
 import (
+	"count_mean/internal/logging"
 	"count_mean/internal/models"
 	"count_mean/util"
 	"fmt"
 	"math"
+	"time"
 )
 
 // MaxMeanCalculator 處理最大平均值計算
 type MaxMeanCalculator struct {
 	scalingFactor int
+	logger        *logging.Logger
 }
 
 // NewMaxMeanCalculator 創建新的最大平均值計算器
 func NewMaxMeanCalculator(scalingFactor int) *MaxMeanCalculator {
 	return &MaxMeanCalculator{
 		scalingFactor: scalingFactor,
+		logger:        logging.GetLogger("max_mean_calculator"),
 	}
 }
 
 // Calculate 計算指定窗口大小的最大平均值
 func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int) ([]models.MaxMeanResult, error) {
+	startTime := time.Now()
+	c.logger.Info("開始最大平均值計算", map[string]interface{}{
+		"window_size":   windowSize,
+		"data_points":   len(dataset.Data),
+		"channel_count": len(dataset.Data[0].Channels),
+	})
+
 	if dataset == nil || len(dataset.Data) < windowSize {
-		return nil, fmt.Errorf("數據集無效或窗口大小過大")
+		err := fmt.Errorf("數據集無效或窗口大小過大")
+		c.logger.Error("計算參數驗證失敗", err, map[string]interface{}{
+			"dataset_nil": dataset == nil,
+			"data_length": len(dataset.Data),
+			"window_size": windowSize,
+		})
+		return nil, err
 	}
 
 	if windowSize < 1 {
-		return nil, fmt.Errorf("窗口大小必須大於 0")
+		err := fmt.Errorf("窗口大小必須大於 0")
+		c.logger.Error("窗口大小驗證失敗", err, map[string]interface{}{
+			"window_size": windowSize,
+		})
+		return nil, err
 	}
 
 	results := make([]models.MaxMeanResult, 0, len(dataset.Headers)-1)
 
 	// 對每個通道計算最大平均值
 	for channelIdx := 0; channelIdx < len(dataset.Data[0].Channels); channelIdx++ {
+		c.logger.Debug("計算通道最大平均值", map[string]interface{}{
+			"channel_index": channelIdx + 1,
+		})
 		maxMean := 0.0
 		bestStartIdx := 0
 
@@ -65,13 +89,26 @@ func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int
 		results = append(results, result)
 	}
 
+	duration := time.Since(startTime)
+	c.logger.Info("最大平均值計算完成", map[string]interface{}{
+		"duration_ms":   duration.Milliseconds(),
+		"channel_count": len(results),
+		"window_size":   windowSize,
+	})
+
 	return results, nil
 }
 
 // CalculateFromRawData 從原始字符串數據計算
 func (c *MaxMeanCalculator) CalculateFromRawData(records [][]string, windowSize int) ([]models.MaxMeanResult, error) {
+	c.logger.Info("開始從原始數據計算最大平均值", map[string]interface{}{
+		"record_count": len(records),
+		"window_size":  windowSize,
+	})
+
 	dataset, err := c.parseRawData(records)
 	if err != nil {
+		c.logger.Error("原始數據解析失敗", err)
 		return nil, fmt.Errorf("解析數據失敗: %w", err)
 	}
 
@@ -80,8 +117,16 @@ func (c *MaxMeanCalculator) CalculateFromRawData(records [][]string, windowSize 
 
 // CalculateFromRawDataWithRange 從原始字符串數據計算指定時間範圍內的最大平均值
 func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(records [][]string, windowSize int, startRange, endRange float64) ([]models.MaxMeanResult, error) {
+	c.logger.Info("開始從原始數據計算指定範圍內的最大平均值", map[string]interface{}{
+		"record_count": len(records),
+		"window_size":  windowSize,
+		"start_range":  startRange,
+		"end_range":    endRange,
+	})
+
 	dataset, err := c.parseRawData(records)
 	if err != nil {
+		c.logger.Error("原始數據解析失敗", err)
 		return nil, fmt.Errorf("解析數據失敗: %w", err)
 	}
 
@@ -90,12 +135,31 @@ func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(records [][]string, wi
 
 // CalculateWithRange 計算指定時間範圍內的最大平均值
 func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windowSize int, startRange, endRange float64) ([]models.MaxMeanResult, error) {
+	startTime := time.Now()
+	c.logger.Info("開始指定範圍內的最大平均值計算", map[string]interface{}{
+		"window_size":   windowSize,
+		"start_range":   startRange,
+		"end_range":     endRange,
+		"data_points":   len(dataset.Data),
+		"channel_count": len(dataset.Data[0].Channels),
+	})
+
 	if dataset == nil || len(dataset.Data) < windowSize {
-		return nil, fmt.Errorf("數據集無效或窗口大小過大")
+		err := fmt.Errorf("數據集無效或窗口大小過大")
+		c.logger.Error("範圍計算參數驗證失敗", err, map[string]interface{}{
+			"dataset_nil": dataset == nil,
+			"data_length": len(dataset.Data),
+			"window_size": windowSize,
+		})
+		return nil, err
 	}
 
 	if windowSize < 1 {
-		return nil, fmt.Errorf("窗口大小必須大於 0")
+		err := fmt.Errorf("窗口大小必須大於 0")
+		c.logger.Error("窗口大小驗證失敗", err, map[string]interface{}{
+			"window_size": windowSize,
+		})
+		return nil, err
 	}
 
 	// 轉換時間範圍為縮放後的值
@@ -116,8 +180,25 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 	}
 
 	if startIdx == -1 || endIdx == -1 || endIdx-startIdx+1 < windowSize {
-		return nil, fmt.Errorf("指定時間範圍內的數據不足以進行窗口分析")
+		err := fmt.Errorf("指定時間範圍內的數據不足以進行窗口分析")
+		c.logger.Error("時間範圍內數據不足", err, map[string]interface{}{
+			"start_idx":        startIdx,
+			"end_idx":          endIdx,
+			"available_points": endIdx - startIdx + 1,
+			"required_points":  windowSize,
+			"start_range":      startRange,
+			"end_range":        endRange,
+		})
+		return nil, err
 	}
+
+	c.logger.Debug("時間範圍分析完成", map[string]interface{}{
+		"start_idx":        startIdx,
+		"end_idx":          endIdx,
+		"available_points": endIdx - startIdx + 1,
+		"scaled_start":     scaledStartRange,
+		"scaled_end":       scaledEndRange,
+	})
 
 	results := make([]models.MaxMeanResult, 0, len(dataset.Headers)-1)
 
@@ -155,13 +236,32 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 		results = append(results, result)
 	}
 
+	duration := time.Since(startTime)
+	c.logger.Info("指定範圍內最大平均值計算完成", map[string]interface{}{
+		"duration_ms":      duration.Milliseconds(),
+		"channel_count":    len(results),
+		"window_size":      windowSize,
+		"start_range":      startRange,
+		"end_range":        endRange,
+		"processed_points": endIdx - startIdx + 1,
+	})
+
 	return results, nil
 }
 
 // parseRawData 解析原始字符串數據
 func (c *MaxMeanCalculator) parseRawData(records [][]string) (*models.EMGDataset, error) {
+	c.logger.Debug("開始解析原始數據", map[string]interface{}{
+		"record_count":   len(records),
+		"scaling_factor": c.scalingFactor,
+	})
+
 	if len(records) < 2 {
-		return nil, fmt.Errorf("數據至少需要包含標題行和一行數據")
+		err := fmt.Errorf("數據至少需要包含標題行和一行數據")
+		c.logger.Error("原始數據結構驗證失敗", err, map[string]interface{}{
+			"record_count": len(records),
+		})
+		return nil, err
 	}
 
 	dataset := &models.EMGDataset{
@@ -182,6 +282,10 @@ func (c *MaxMeanCalculator) parseRawData(records [][]string) (*models.EMGDataset
 		// 解析時間
 		timeVal, err := util.Str2Number[float64, int](row[0], c.scalingFactor)
 		if err != nil {
+			c.logger.Error("時間值解析失敗", err, map[string]interface{}{
+				"row_number": i + 1,
+				"time_value": row[0],
+			})
 			return nil, fmt.Errorf("解析時間值失敗在第 %d 行: %w", i+1, err)
 		}
 
@@ -190,6 +294,11 @@ func (c *MaxMeanCalculator) parseRawData(records [][]string) (*models.EMGDataset
 		for j := 1; j < len(row); j++ {
 			val, err := util.Str2Number[float64, int](row[j], c.scalingFactor)
 			if err != nil {
+				c.logger.Error("通道數據解析失敗", err, map[string]interface{}{
+					"row_number":    i + 1,
+					"column_number": j + 1,
+					"value":         row[j],
+				})
 				return nil, fmt.Errorf("解析數據失敗在第 %d 行第 %d 列: %w", i+1, j+1, err)
 			}
 			channels = append(channels, val)
@@ -202,6 +311,12 @@ func (c *MaxMeanCalculator) parseRawData(records [][]string) (*models.EMGDataset
 
 		dataset.Data = append(dataset.Data, data)
 	}
+
+	c.logger.Info("原始數據解析完成", map[string]interface{}{
+		"parsed_records": len(dataset.Data),
+		"channel_count":  len(dataset.Data[0].Channels),
+		"header_count":   len(dataset.Headers),
+	})
 
 	return dataset, nil
 }

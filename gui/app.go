@@ -4,6 +4,8 @@ import (
 	"count_mean/internal/calculator"
 	"count_mean/internal/config"
 	"count_mean/internal/io"
+	"count_mean/internal/logging"
+	"count_mean/internal/validation"
 	"fmt"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -23,6 +25,8 @@ type App struct {
 	maxMeanCalc   *calculator.MaxMeanCalculator
 	normalizer    *calculator.Normalizer
 	phaseAnalyzer *calculator.PhaseAnalyzer
+	validator     *validation.InputValidator
+	logger        *logging.Logger
 	statusLabel   *widget.Label
 }
 
@@ -40,6 +44,8 @@ func NewApp(cfg *config.AppConfig) *App {
 	maxMeanCalc := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
 	normalizer := calculator.NewNormalizer(cfg.ScalingFactor)
 	phaseAnalyzer := calculator.NewPhaseAnalyzer(cfg.ScalingFactor, cfg.PhaseLabels)
+	validator := validation.NewInputValidator()
+	logger := logging.GetLogger("gui")
 
 	return &App{
 		app:           myApp,
@@ -49,6 +55,8 @@ func NewApp(cfg *config.AppConfig) *App {
 		maxMeanCalc:   maxMeanCalc,
 		normalizer:    normalizer,
 		phaseAnalyzer: phaseAnalyzer,
+		validator:     validator,
+		logger:        logger,
 	}
 }
 
@@ -190,6 +198,36 @@ func (a *App) showFolderSelectDialog(dirPath *string, label *widget.Label) {
 	if inputURI := storage.NewFileURI(a.config.InputDir); inputURI != nil {
 		if listableURI, ok := inputURI.(fyne.ListableURI); ok {
 			folderDialog.SetLocation(listableURI)
+		}
+	}
+
+	folderDialog.Show()
+}
+
+// showDirectorySelectDialog 顯示目錄選擇對話框（用於配置設定）
+func (a *App) showDirectorySelectDialog(dirPath *string, entry *widget.Entry) {
+	// 創建資料夾選擇對話框
+	folderDialog := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
+		if err != nil {
+			a.showError(fmt.Sprintf("選擇資料夾時發生錯誤: %v", err))
+			return
+		}
+		if uri == nil {
+			// 用戶取消了選擇
+			return
+		}
+
+		*dirPath = uri.Path()
+		entry.SetText(*dirPath)
+		a.updateStatus("已選擇資料夾: " + uri.Name())
+	}, a.window)
+
+	// 設置初始位置
+	if *dirPath != "" {
+		if dirURI := storage.NewFileURI(*dirPath); dirURI != nil {
+			if listableURI, ok := dirURI.(fyne.ListableURI); ok {
+				folderDialog.SetLocation(listableURI)
+			}
 		}
 	}
 
@@ -467,20 +505,35 @@ func (a *App) showConfigDialog() {
 	phaseLabelsEntry := widget.NewMultiLineEntry()
 	phaseLabelsEntry.SetText(strings.Join(a.config.PhaseLabels, "\n"))
 	phaseLabelsEntry.SetPlaceHolder("階段標籤，每行一個")
-	phaseLabelsEntry.Resize(fyne.NewSize(400, 100))
+	phaseLabelsEntry.Resize(fyne.NewSize(580, 80))
 
-	// 目錄設定
+	// 目錄設定 - 添加資料夾選擇按鈕
 	inputDirEntry := widget.NewEntry()
 	inputDirEntry.SetText(a.config.InputDir)
 	inputDirEntry.SetPlaceHolder("輸入目錄")
+
+	inputDirBtn := widget.NewButton("瀏覽", func() {
+		a.showDirectorySelectDialog(&a.config.InputDir, inputDirEntry)
+	})
+	inputDirContainer := container.NewBorder(nil, nil, nil, inputDirBtn, inputDirEntry)
 
 	outputDirEntry := widget.NewEntry()
 	outputDirEntry.SetText(a.config.OutputDir)
 	outputDirEntry.SetPlaceHolder("輸出目錄")
 
+	outputDirBtn := widget.NewButton("瀏覽", func() {
+		a.showDirectorySelectDialog(&a.config.OutputDir, outputDirEntry)
+	})
+	outputDirContainer := container.NewBorder(nil, nil, nil, outputDirBtn, outputDirEntry)
+
 	operateDirEntry := widget.NewEntry()
 	operateDirEntry.SetText(a.config.OperateDir)
 	operateDirEntry.SetPlaceHolder("操作目錄")
+
+	operateDirBtn := widget.NewButton("瀏覽", func() {
+		a.showDirectorySelectDialog(&a.config.OperateDir, operateDirEntry)
+	})
+	operateDirContainer := container.NewBorder(nil, nil, nil, operateDirBtn, operateDirEntry)
 
 	// 創建按鈕
 	saveBtn := widget.NewButton("保存配置", func() {
@@ -498,10 +551,9 @@ func (a *App) showConfigDialog() {
 
 	cancelBtn := widget.NewButton("取消", nil)
 
-	// 創建表單佈局
-	form := container.NewVBox(
-		title,
-		widget.NewSeparator(),
+	// 創建滾動容器來解決版面問題
+	basicSettings := container.NewVBox(
+		widget.NewLabel("基本設定："),
 		container.NewGridWithColumns(2,
 			widget.NewLabel("縮放因子："), scalingFactorEntry,
 			widget.NewLabel("精度："), precisionEntry,
@@ -510,23 +562,58 @@ func (a *App) showConfigDialog() {
 		widget.NewLabel("輸出格式："),
 		outputFormatRadio,
 		bomCheck,
+	)
+
+	phaseSettings := container.NewVBox(
 		widget.NewSeparator(),
 		widget.NewLabel("階段標籤："),
 		phaseLabelsEntry,
+	)
+
+	directorySettings := container.NewVBox(
 		widget.NewSeparator(),
 		widget.NewLabel("目錄設定："),
-		container.NewGridWithColumns(2,
-			widget.NewLabel("輸入目錄："), inputDirEntry,
-			widget.NewLabel("輸出目錄："), outputDirEntry,
-			widget.NewLabel("操作目錄："), operateDirEntry,
+		container.NewVBox(
+			container.NewVBox(
+				widget.NewLabel("輸入目錄："),
+				inputDirContainer,
+			),
+			container.NewVBox(
+				widget.NewLabel("輸出目錄："),
+				outputDirContainer,
+			),
+			container.NewVBox(
+				widget.NewLabel("操作目錄："),
+				operateDirContainer,
+			),
 		),
+	)
+
+	// 按鈕區域固定在底部
+	buttonArea := container.NewVBox(
 		widget.NewSeparator(),
 		container.NewGridWithColumns(3, saveBtn, resetBtn, cancelBtn),
 	)
 
-	// 使用Fyne v2現代對話框API
-	dlg := dialog.NewCustom("配置設定", "取消", form, a.window)
-	dlg.Resize(fyne.NewSize(550, 700))
+	// 主要內容區域
+	content := container.NewVBox(
+		title,
+		widget.NewSeparator(),
+		basicSettings,
+		phaseSettings,
+		directorySettings,
+	)
+
+	// 創建滾動容器
+	scroll := container.NewScroll(content)
+	scroll.SetMinSize(fyne.NewSize(600, 500))
+
+	// 完整佈局
+	form := container.NewBorder(nil, buttonArea, nil, nil, scroll)
+
+	// 使用Fyne v2現代對話框API，增大視窗尺寸
+	dlg := dialog.NewCustom("配置設定", "關閉", form, a.window)
+	dlg.Resize(fyne.NewSize(650, 750))
 
 	// 設置取消按鈕功能
 	cancelBtn.OnTapped = func() {

@@ -11,5 +11,10 @@
   "bom_enabled": true,
   "input_dir": "./input",
   "output_dir": "./output",
-  "operate_dir": "./value_operate"
+  "operate_dir": "./value_operate",
+  "log_level": "info",
+  "log_format": "text",
+  "log_directory": "./logs",
+  "language": "zh-TW",
+  "translations_dir": "./translations"
 }

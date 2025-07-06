@@ -1,15 +1,18 @@
 package calculator
 
 import (
+	"count_mean/internal/logging"
 	"count_mean/internal/models"
 	"count_mean/util"
 	"fmt"
+	"time"
 )
 
 // PhaseAnalyzer 處理階段分析
 type PhaseAnalyzer struct {
 	scalingFactor int
 	phaseLabels   []string
+	logger        *logging.Logger
 }
 
 // NewPhaseAnalyzer 創建新的階段分析器
@@ -17,6 +20,7 @@ func NewPhaseAnalyzer(scalingFactor int, phaseLabels []string) *PhaseAnalyzer {
 	return &PhaseAnalyzer{
 		scalingFactor: scalingFactor,
 		phaseLabels:   phaseLabels,
+		logger:        logging.GetLogger("phase_analyzer"),
 	}
 }
 
@@ -28,12 +32,30 @@ type AnalyzeResult struct {
 
 // Analyze 分析不同階段的數據
 func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.TimeRange) (*AnalyzeResult, error) {
+	startTime := time.Now()
+	p.logger.Info("開始階段分析", map[string]interface{}{
+		"phase_count":    len(phases),
+		"data_points":    len(dataset.Data),
+		"channel_count":  len(dataset.Data[0].Channels),
+		"scaling_factor": p.scalingFactor,
+	})
+
 	if dataset == nil || len(dataset.Data) == 0 {
-		return nil, fmt.Errorf("數據集為空")
+		err := fmt.Errorf("數據集為空")
+		p.logger.Error("階段分析輸入驗證失敗", err, map[string]interface{}{
+			"dataset_nil": dataset == nil,
+			"data_length": len(dataset.Data),
+		})
+		return nil, err
 	}
 
 	if len(phases) != len(p.phaseLabels) {
-		return nil, fmt.Errorf("階段數量與標籤數量不匹配")
+		err := fmt.Errorf("階段數量與標籤數量不匹配")
+		p.logger.Error("階段配置不匹配", err, map[string]interface{}{
+			"phase_count": len(phases),
+			"label_count": len(p.phaseLabels),
+		})
+		return nil, err
 	}
 
 	channelCount := len(dataset.Data[0].Channels)
@@ -102,6 +124,13 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 		}
 	}
 
+	duration := time.Since(startTime)
+	p.logger.Info("階段分析完成", map[string]interface{}{
+		"duration_ms":   duration.Milliseconds(),
+		"phase_count":   len(results),
+		"channel_count": channelCount,
+	})
+
 	return &AnalyzeResult{
 		PhaseResults: results,
 		MaxTimeIndex: maxTimeIndex,
@@ -110,13 +139,20 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 
 // AnalyzeFromRawData 從原始字符串數據進行階段分析
 func (p *PhaseAnalyzer) AnalyzeFromRawData(records [][]string, phaseStrings []string) (*AnalyzeResult, error) {
+	p.logger.Info("開始從原始數據進行階段分析", map[string]interface{}{
+		"record_count":  len(records),
+		"phase_strings": phaseStrings,
+	})
+
 	dataset, err := p.parseRawData(records)
 	if err != nil {
+		p.logger.Error("階段分析數據解析失敗", err)
 		return nil, fmt.Errorf("解析數據失敗: %w", err)
 	}
 
 	phases, err := p.parsePhases(phaseStrings)
 	if err != nil {
+		p.logger.Error("階段配置解析失敗", err)
 		return nil, fmt.Errorf("解析階段失敗: %w", err)
 	}
 

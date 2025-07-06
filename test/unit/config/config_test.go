@@ -1,4 +1,4 @@
-package config
+package config_test
 
 import (
 	"os"
@@ -7,21 +7,23 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/config"
 )
 
 func TestDefaultConfig(t *testing.T) {
-	config := DefaultConfig()
-	require.NotNil(t, config)
-	require.Equal(t, 10, config.ScalingFactor)
-	require.Equal(t, []string{"啟跳下蹲階段", "啟跳上升階段", "團身階段", "下降階段"}, config.PhaseLabels)
-	require.Equal(t, 10, config.Precision)
-	require.Equal(t, "csv", config.OutputFormat)
-	require.True(t, config.BOMEnabled)
+	cfg := config.DefaultConfig()
+	require.NotNil(t, cfg)
+	require.Equal(t, 10, cfg.ScalingFactor)
+	require.Equal(t, []string{"啟跳下蹲階段", "啟跳上升階段", "團身階段", "下降階段"}, cfg.PhaseLabels)
+	require.Equal(t, 10, cfg.Precision)
+	require.Equal(t, "csv", cfg.OutputFormat)
+	require.True(t, cfg.BOMEnabled)
 }
 
 func TestAppConfig_Validate(t *testing.T) {
 	t.Run("ValidConfig", func(t *testing.T) {
-		config := &AppConfig{
+		config := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   []string{"階段1", "階段2"},
 			Precision:     5,
@@ -36,7 +38,7 @@ func TestAppConfig_Validate(t *testing.T) {
 	})
 
 	t.Run("InvalidScalingFactor_Zero", func(t *testing.T) {
-		config := &AppConfig{
+		config := &config.AppConfig{
 			ScalingFactor: 0,
 			PhaseLabels:   []string{"階段1"},
 			Precision:     5,
@@ -48,7 +50,7 @@ func TestAppConfig_Validate(t *testing.T) {
 	})
 
 	t.Run("InvalidScalingFactor_Negative", func(t *testing.T) {
-		config := &AppConfig{
+		config := &config.AppConfig{
 			ScalingFactor: -5,
 			PhaseLabels:   []string{"階段1"},
 			Precision:     5,
@@ -60,7 +62,7 @@ func TestAppConfig_Validate(t *testing.T) {
 	})
 
 	t.Run("EmptyPhaseLabels", func(t *testing.T) {
-		config := &AppConfig{
+		config := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   []string{},
 			Precision:     5,
@@ -72,7 +74,7 @@ func TestAppConfig_Validate(t *testing.T) {
 	})
 
 	t.Run("NilPhaseLabels", func(t *testing.T) {
-		config := &AppConfig{
+		config := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   nil,
 			Precision:     5,
@@ -84,7 +86,7 @@ func TestAppConfig_Validate(t *testing.T) {
 	})
 
 	t.Run("InvalidPrecision_Negative", func(t *testing.T) {
-		config := &AppConfig{
+		config := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   []string{"階段1"},
 			Precision:     -1,
@@ -96,7 +98,7 @@ func TestAppConfig_Validate(t *testing.T) {
 	})
 
 	t.Run("InvalidPrecision_TooHigh", func(t *testing.T) {
-		config := &AppConfig{
+		config := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   []string{"階段1"},
 			Precision:     16,
@@ -109,7 +111,7 @@ func TestAppConfig_Validate(t *testing.T) {
 
 	t.Run("ValidPrecision_Boundary", func(t *testing.T) {
 		// 測試邊界值
-		configs := []*AppConfig{
+		configs := []*config.AppConfig{
 			{ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 0, OutputFormat: "csv", InputDir: "./input", OutputDir: "./output", OperateDir: "./value_operate"},
 			{ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 15, OutputFormat: "csv", InputDir: "./input", OutputDir: "./output", OperateDir: "./value_operate"},
 		}
@@ -122,7 +124,7 @@ func TestAppConfig_Validate(t *testing.T) {
 	t.Run("ValidOutputFormats", func(t *testing.T) {
 		validFormats := []string{"csv", "json", "xlsx"}
 		for _, format := range validFormats {
-			config := &AppConfig{
+			config := &config.AppConfig{
 				ScalingFactor: 10,
 				PhaseLabels:   []string{"階段1"},
 				Precision:     5,
@@ -139,7 +141,7 @@ func TestAppConfig_Validate(t *testing.T) {
 	t.Run("InvalidOutputFormat", func(t *testing.T) {
 		invalidFormats := []string{"txt", "xml", "pdf", ""}
 		for _, format := range invalidFormats {
-			config := &AppConfig{
+			config := &config.AppConfig{
 				ScalingFactor: 10,
 				PhaseLabels:   []string{"階段1"},
 				Precision:     5,
@@ -153,7 +155,7 @@ func TestAppConfig_Validate(t *testing.T) {
 
 	t.Run("CaseSensitiveOutputFormat", func(t *testing.T) {
 		// 測試大小寫敏感性
-		config := &AppConfig{
+		config := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   []string{"階段1"},
 			Precision:     5,
@@ -167,16 +169,16 @@ func TestAppConfig_Validate(t *testing.T) {
 
 func TestLoadConfig(t *testing.T) {
 	t.Run("FileNotExists_ReturnDefault", func(t *testing.T) {
-		config, err := LoadConfig("nonexistent.json")
+		loadedConfig, err := config.LoadConfig("nonexistent.json")
 		require.NoError(t, err)
-		require.NotNil(t, config)
+		require.NotNil(t, loadedConfig)
 		// 應該返回默認配置
-		defaultConfig := DefaultConfig()
-		require.Equal(t, defaultConfig.ScalingFactor, config.ScalingFactor)
-		require.Equal(t, defaultConfig.PhaseLabels, config.PhaseLabels)
-		require.Equal(t, defaultConfig.Precision, config.Precision)
-		require.Equal(t, defaultConfig.OutputFormat, config.OutputFormat)
-		require.Equal(t, defaultConfig.BOMEnabled, config.BOMEnabled)
+		defaultConfig := config.DefaultConfig()
+		require.Equal(t, defaultConfig.ScalingFactor, loadedConfig.ScalingFactor)
+		require.Equal(t, defaultConfig.PhaseLabels, loadedConfig.PhaseLabels)
+		require.Equal(t, defaultConfig.Precision, loadedConfig.Precision)
+		require.Equal(t, defaultConfig.OutputFormat, loadedConfig.OutputFormat)
+		require.Equal(t, defaultConfig.BOMEnabled, loadedConfig.BOMEnabled)
 	})
 
 	t.Run("ValidJSONFile", func(t *testing.T) {
@@ -198,14 +200,14 @@ func TestLoadConfig(t *testing.T) {
 		err := os.WriteFile(configFile, []byte(validJSON), 0644)
 		require.NoError(t, err)
 
-		config, err := LoadConfig(configFile)
+		loadedConfig, err := config.LoadConfig(configFile)
 		require.NoError(t, err)
-		require.NotNil(t, config)
-		require.Equal(t, 20, config.ScalingFactor)
-		require.Equal(t, []string{"自定義階段1", "自定義階段2"}, config.PhaseLabels)
-		require.Equal(t, 8, config.Precision)
-		require.Equal(t, "json", config.OutputFormat)
-		require.False(t, config.BOMEnabled)
+		require.NotNil(t, loadedConfig)
+		require.Equal(t, 20, loadedConfig.ScalingFactor)
+		require.Equal(t, []string{"自定義階段1", "自定義階段2"}, loadedConfig.PhaseLabels)
+		require.Equal(t, 8, loadedConfig.Precision)
+		require.Equal(t, "json", loadedConfig.OutputFormat)
+		require.False(t, loadedConfig.BOMEnabled)
 	})
 
 	t.Run("InvalidJSON", func(t *testing.T) {
@@ -220,10 +222,10 @@ func TestLoadConfig(t *testing.T) {
 		err := os.WriteFile(configFile, []byte(invalidJSON), 0644)
 		require.NoError(t, err)
 
-		config, err := LoadConfig(configFile)
+		loadedConfig, err := config.LoadConfig(configFile)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "解析配置檔案失敗")
-		require.Nil(t, config)
+		require.Nil(t, loadedConfig)
 	})
 
 	t.Run("InvalidConfigValues", func(t *testing.T) {
@@ -241,10 +243,10 @@ func TestLoadConfig(t *testing.T) {
 		err := os.WriteFile(configFile, []byte(invalidConfig), 0644)
 		require.NoError(t, err)
 
-		config, err := LoadConfig(configFile)
+		loadedConfig, err := config.LoadConfig(configFile)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "配置檔案無效")
-		require.Nil(t, config)
+		require.Nil(t, loadedConfig)
 	})
 
 	t.Run("PermissionDenied", func(t *testing.T) {
@@ -260,10 +262,10 @@ func TestLoadConfig(t *testing.T) {
 		defer os.Chmod(restrictedDir, 0755) // 清理時恢復權限
 
 		configFile := filepath.Join(restrictedDir, "config.json")
-		config, err := LoadConfig(configFile)
+		loadedConfig, err := config.LoadConfig(configFile)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "無法開啟配置檔案")
-		require.Nil(t, config)
+		require.Nil(t, loadedConfig)
 	})
 }
 
@@ -272,7 +274,7 @@ func TestAppConfig_SaveConfig(t *testing.T) {
 		tempDir := t.TempDir()
 		configFile := filepath.Join(tempDir, "save_test.json")
 
-		config := &AppConfig{
+		config := &config.AppConfig{
 			ScalingFactor: 15,
 			PhaseLabels:   []string{"保存測試階段1", "保存測試階段2"},
 			Precision:     12,
@@ -291,20 +293,20 @@ func TestAppConfig_SaveConfig(t *testing.T) {
 		require.NoError(t, err)
 
 		// 重新載入並驗證
-		loadedConfig, err := LoadConfig(configFile)
+		reloadedConfig, err := config.LoadConfig(configFile)
 		require.NoError(t, err)
-		require.Equal(t, config.ScalingFactor, loadedConfig.ScalingFactor)
-		require.Equal(t, config.PhaseLabels, loadedConfig.PhaseLabels)
-		require.Equal(t, config.Precision, loadedConfig.Precision)
-		require.Equal(t, config.OutputFormat, loadedConfig.OutputFormat)
-		require.Equal(t, config.BOMEnabled, loadedConfig.BOMEnabled)
+		require.Equal(t, config.ScalingFactor, reloadedConfig.ScalingFactor)
+		require.Equal(t, config.PhaseLabels, reloadedConfig.PhaseLabels)
+		require.Equal(t, config.Precision, reloadedConfig.Precision)
+		require.Equal(t, config.OutputFormat, reloadedConfig.OutputFormat)
+		require.Equal(t, config.BOMEnabled, reloadedConfig.BOMEnabled)
 	})
 
 	t.Run("SaveLoadRoundTrip", func(t *testing.T) {
 		tempDir := t.TempDir()
 		configFile := filepath.Join(tempDir, "roundtrip_test.json")
 
-		originalConfig := DefaultConfig()
+		originalConfig := config.DefaultConfig()
 		originalConfig.ScalingFactor = 25
 		originalConfig.Precision = 6
 
@@ -313,7 +315,7 @@ func TestAppConfig_SaveConfig(t *testing.T) {
 		require.NoError(t, err)
 
 		// 載入
-		loadedConfig, err := LoadConfig(configFile)
+		loadedConfig, err := config.LoadConfig(configFile)
 		require.NoError(t, err)
 
 		// 比較
@@ -325,16 +327,16 @@ func TestAppConfig_SaveConfig(t *testing.T) {
 	})
 
 	t.Run("InvalidDirectory", func(t *testing.T) {
-		config := DefaultConfig()
+		cfg := config.DefaultConfig()
 		invalidPath := "/nonexistent/directory/config.json"
-		err := config.SaveConfig(invalidPath)
+		err := cfg.SaveConfig(invalidPath)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "無法創建配置檔案")
 	})
 }
 
 func TestAppConfig_ToAnalysisConfig(t *testing.T) {
-	config := &AppConfig{
+	config := &config.AppConfig{
 		ScalingFactor: 15,
 		PhaseLabels:   []string{"測試階段1", "測試階段2", "測試階段3"},
 		Precision:     8,
@@ -350,7 +352,7 @@ func TestAppConfig_ToAnalysisConfig(t *testing.T) {
 }
 
 func TestAppConfig_ProcessingOptions(t *testing.T) {
-	config := &AppConfig{
+	config := &config.AppConfig{
 		ScalingFactor: 10,
 		PhaseLabels:   []string{"階段1"},
 		Precision:     12,
