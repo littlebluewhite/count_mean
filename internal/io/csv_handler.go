@@ -45,6 +45,67 @@ func (h *CSVHandler) ListInputFiles() ([]string, error) {
 	return csvFiles, nil
 }
 
+// ListInputDirectories 列出輸入目錄中的子目錄
+func (h *CSVHandler) ListInputDirectories() ([]string, error) {
+	files, err := os.ReadDir(h.config.InputDir)
+	if err != nil {
+		return nil, fmt.Errorf("無法讀取輸入目錄 %s: %w", h.config.InputDir, err)
+	}
+
+	var directories []string
+	for _, file := range files {
+		if file.IsDir() {
+			directories = append(directories, file.Name())
+		}
+	}
+
+	return directories, nil
+}
+
+// ListCSVFilesInDirectory 列出指定目錄中的CSV文件
+func (h *CSVHandler) ListCSVFilesInDirectory(dirName string) ([]string, error) {
+	dirPath := filepath.Join(h.config.InputDir, dirName)
+	files, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("無法讀取目錄 %s: %w", dirPath, err)
+	}
+
+	var csvFiles []string
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".csv") {
+			csvFiles = append(csvFiles, file.Name())
+		}
+	}
+
+	return csvFiles, nil
+}
+
+// ReadCSVFromDirectory 從指定目錄讀取CSV檔案
+func (h *CSVHandler) ReadCSVFromDirectory(dirName, fileName string) ([][]string, error) {
+	// 如果沒有副檔名，添加.csv
+	if !strings.HasSuffix(fileName, ".csv") {
+		fileName += ".csv"
+	}
+
+	// 建構完整路徑
+	fullPath := filepath.Join(h.config.InputDir, dirName, fileName)
+
+	return h.ReadCSV(fullPath)
+}
+
+// WriteCSVToOutputDirectory 寫入CSV文件到輸出目錄的子目錄
+func (h *CSVHandler) WriteCSVToOutputDirectory(dirName, filename string, data [][]string) error {
+	// 確保輸出目錄存在
+	outputDir := filepath.Join(h.config.OutputDir, dirName)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("無法創建輸出目錄: %w", err)
+	}
+
+	// 建構完整輸出路徑
+	fullPath := filepath.Join(outputDir, filename)
+	return h.WriteCSV(fullPath, data)
+}
+
 // ReadCSVFromPrompt 從使用者輸入讀取 CSV 檔案
 func (h *CSVHandler) ReadCSVFromPrompt(prompt string) ([][]string, error) {
 	fmt.Print(prompt)
@@ -61,6 +122,31 @@ func (h *CSVHandler) ReadCSVFromPrompt(prompt string) ([][]string, error) {
 	fullPath := filepath.Join(h.config.InputDir, fileName)
 
 	return h.ReadCSV(fullPath)
+}
+
+// ReadCSVFromPromptWithName 從使用者輸入讀取 CSV 檔案並返回檔名
+func (h *CSVHandler) ReadCSVFromPromptWithName(prompt string) ([][]string, string, error) {
+	fmt.Print(prompt)
+	reader := bufio.NewReader(os.Stdin)
+	fileName, _ := reader.ReadString('\n')
+	fileName = strings.TrimSpace(fileName)
+
+	// 保存原始檔名（不含副檔名）
+	originalName := fileName
+
+	// 如果沒有副檔名，添加.csv
+	if !strings.HasSuffix(fileName, ".csv") {
+		fileName += ".csv"
+	} else {
+		// 如果已有.csv副檔名，移除它以獲得原始名稱
+		originalName = strings.TrimSuffix(fileName, ".csv")
+	}
+
+	// 建構完整路徑
+	fullPath := filepath.Join(h.config.InputDir, fileName)
+
+	records, err := h.ReadCSV(fullPath)
+	return records, originalName, err
 }
 
 // ReadCSV 讀取 CSV 檔案
@@ -129,30 +215,38 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) error {
 }
 
 // ConvertMaxMeanResultsToCSV 將最大平均值結果轉換為 CSV 格式
-func (h *CSVHandler) ConvertMaxMeanResultsToCSV(headers []string, results []models.MaxMeanResult) [][]string {
-	data := make([][]string, 0, 4)
+func (h *CSVHandler) ConvertMaxMeanResultsToCSV(headers []string, results []models.MaxMeanResult, startRange, endRange float64) [][]string {
+	data := make([][]string, 0, 6)
 
 	// 添加標題
 	data = append(data, headers)
 
 	// 創建結果行
+	startRangeTimes := make([]string, 1, len(headers))
+	endRangeTimes := make([]string, 1, len(headers))
 	startTimes := make([]string, 1, len(headers))
 	endTimes := make([]string, 1, len(headers))
 	maxMeans := make([]string, 1, len(headers))
 
-	startTimes[0] = "開始秒數"
-	endTimes[0] = "結束秒數"
+	startRangeTimes[0] = "開始範圍秒數"
+	endRangeTimes[0] = "結束範圍秒數"
+	startTimes[0] = "開始計算秒數"
+	endTimes[0] = "結束計算秒數"
 	maxMeans[0] = "最大平均值"
 
 	// 填充結果
 	for _, result := range results {
 		precision := fmt.Sprintf("%%.%df", h.config.Precision)
 
+		startRangeTimes = append(startRangeTimes, fmt.Sprintf("%.2f", startRange))
+		endRangeTimes = append(endRangeTimes, fmt.Sprintf("%.2f", endRange))
 		startTimes = append(startTimes, fmt.Sprintf("%.2f", result.StartTime))
 		endTimes = append(endTimes, fmt.Sprintf("%.2f", result.EndTime))
 		maxMeans = append(maxMeans, fmt.Sprintf(precision, result.MaxMean/math.Pow10(h.config.ScalingFactor)))
 	}
 
+	data = append(data, startRangeTimes)
+	data = append(data, endRangeTimes)
 	data = append(data, startTimes)
 	data = append(data, endTimes)
 	data = append(data, maxMeans)

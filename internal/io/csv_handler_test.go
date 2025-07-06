@@ -201,38 +201,50 @@ func TestCSVHandler_ConvertMaxMeanResultsToCSV(t *testing.T) {
 			{ColumnIndex: 2, StartTime: 1.5, EndTime: 2.5, MaxMean: 2000.0}, // 2000/10^10 = 0.20
 		}
 
-		data := handler.ConvertMaxMeanResultsToCSV(headers, results)
-		require.Len(t, data, 4) // 標題 + 3行結果
+		data := handler.ConvertMaxMeanResultsToCSV(headers, results, 0.5, 3.0)
+		require.Len(t, data, 6) // 標題 + 5行結果
 
 		// 檢查標題
 		require.Equal(t, headers, data[0])
 
-		// 檢查開始秒數行
-		require.Equal(t, "開始秒數", data[1][0])
-		require.Equal(t, "1.00", data[1][1])
-		require.Equal(t, "1.50", data[1][2])
+		// 檢查開始範圍秒數行
+		require.Equal(t, "開始範圍秒數", data[1][0])
+		require.Equal(t, "0.50", data[1][1])
+		require.Equal(t, "0.50", data[1][2])
 
-		// 檢查結束秒數行
-		require.Equal(t, "結束秒數", data[2][0])
-		require.Equal(t, "2.00", data[2][1])
-		require.Equal(t, "2.50", data[2][2])
+		// 檢查結束範圍秒數行
+		require.Equal(t, "結束範圍秒數", data[2][0])
+		require.Equal(t, "3.00", data[2][1])
+		require.Equal(t, "3.00", data[2][2])
+
+		// 檢查開始計算秒數行
+		require.Equal(t, "開始計算秒數", data[3][0])
+		require.Equal(t, "1.00", data[3][1])
+		require.Equal(t, "1.50", data[3][2])
+
+		// 檢查結束計算秒數行
+		require.Equal(t, "結束計算秒數", data[4][0])
+		require.Equal(t, "2.00", data[4][1])
+		require.Equal(t, "2.50", data[4][2])
 
 		// 檢查最大平均值行（應用縮放因子）
-		require.Equal(t, "最大平均值", data[3][0])
-		require.Equal(t, "0.00", data[3][1]) // 1500/10^10 = 0.00000000015 用精度2格式化為 0.00
-		require.Equal(t, "0.00", data[3][2]) // 2000/10^10 = 0.00000000020 用精度2格式化為 0.00
+		require.Equal(t, "最大平均值", data[5][0])
+		require.Equal(t, "0.00", data[5][1]) // 1500/10^10 = 0.00000000015 用精度2格式化為 0.00
+		require.Equal(t, "0.00", data[5][2]) // 2000/10^10 = 0.00000000020 用精度2格式化為 0.00
 	})
 
 	t.Run("EmptyResults", func(t *testing.T) {
 		headers := []string{"Time", "Ch1"}
 		results := []models.MaxMeanResult{}
 
-		data := handler.ConvertMaxMeanResultsToCSV(headers, results)
-		require.Len(t, data, 4) // 標題 + 3行（只有標籤）
+		data := handler.ConvertMaxMeanResultsToCSV(headers, results, 0.0, 10.0)
+		require.Len(t, data, 6) // 標題 + 5行（只有標籤）
 		require.Equal(t, headers, data[0])
-		require.Equal(t, []string{"開始秒數"}, data[1])
-		require.Equal(t, []string{"結束秒數"}, data[2])
-		require.Equal(t, []string{"最大平均值"}, data[3])
+		require.Equal(t, []string{"開始範圍秒數"}, data[1])
+		require.Equal(t, []string{"結束範圍秒數"}, data[2])
+		require.Equal(t, []string{"開始計算秒數"}, data[3])
+		require.Equal(t, []string{"結束計算秒數"}, data[4])
+		require.Equal(t, []string{"最大平均值"}, data[5])
 	})
 
 	t.Run("PrecisionFormatting", func(t *testing.T) {
@@ -248,10 +260,12 @@ func TestCSVHandler_ConvertMaxMeanResultsToCSV(t *testing.T) {
 			{ColumnIndex: 1, StartTime: 1.123456, EndTime: 2.987654, MaxMean: 123456.0},
 		}
 
-		data := handler.ConvertMaxMeanResultsToCSV(headers, results)
-		require.Equal(t, "1.12", data[1][1])   // 開始時間保持2位小數
-		require.Equal(t, "2.99", data[2][1])   // 結束時間保持2位小數
-		require.Equal(t, "0.1235", data[3][1]) // 最大平均值使用4位精度
+		data := handler.ConvertMaxMeanResultsToCSV(headers, results, 0.5, 4.0)
+		require.Equal(t, "0.50", data[1][1])   // 開始範圍
+		require.Equal(t, "4.00", data[2][1])   // 結束範圍
+		require.Equal(t, "1.12", data[3][1])   // 開始計算時間保持2位小數
+		require.Equal(t, "2.99", data[4][1])   // 結束計算時間保持2位小數
+		require.Equal(t, "0.1235", data[5][1]) // 最大平均值使用4位精度
 	})
 }
 

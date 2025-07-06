@@ -48,8 +48,8 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 	require.Len(t, results, 2) // 兩個通道
 
 	// 轉換結果為CSV格式
-	outputData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results)
-	require.Len(t, outputData, 4) // 標題 + 3行結果
+	outputData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, 0.1, 0.4)
+	require.Len(t, outputData, 6) // 標題 + 5行結果
 
 	// 寫入輸出文件
 	outputFile := filepath.Join(tempDir, "maxmean_result.csv")
@@ -61,11 +61,13 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 	require.NoError(t, err)
 
 	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
-	require.Len(t, lines, 4)
+	require.Len(t, lines, 6)
 	require.Equal(t, "Time,Ch1,Ch2", lines[0])
-	require.Contains(t, lines[1], "開始秒數")
-	require.Contains(t, lines[2], "結束秒數")
-	require.Contains(t, lines[3], "最大平均值")
+	require.Contains(t, lines[1], "開始範圍秒數")
+	require.Contains(t, lines[2], "結束範圍秒數")
+	require.Contains(t, lines[3], "開始計算秒數")
+	require.Contains(t, lines[4], "結束計算秒數")
+	require.Contains(t, lines[5], "最大平均值")
 }
 
 // TestFullWorkflow_DataNormalization 測試完整的數據標準化流程

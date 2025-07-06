@@ -4,6 +4,7 @@ import (
 	"count_mean/internal/models"
 	"count_mean/util"
 	"fmt"
+	"math"
 )
 
 // MaxMeanCalculator 處理最大平均值計算
@@ -75,6 +76,86 @@ func (c *MaxMeanCalculator) CalculateFromRawData(records [][]string, windowSize 
 	}
 
 	return c.Calculate(dataset, windowSize)
+}
+
+// CalculateFromRawDataWithRange 從原始字符串數據計算指定時間範圍內的最大平均值
+func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(records [][]string, windowSize int, startRange, endRange float64) ([]models.MaxMeanResult, error) {
+	dataset, err := c.parseRawData(records)
+	if err != nil {
+		return nil, fmt.Errorf("解析數據失敗: %w", err)
+	}
+
+	return c.CalculateWithRange(dataset, windowSize, startRange, endRange)
+}
+
+// CalculateWithRange 計算指定時間範圍內的最大平均值
+func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windowSize int, startRange, endRange float64) ([]models.MaxMeanResult, error) {
+	if dataset == nil || len(dataset.Data) < windowSize {
+		return nil, fmt.Errorf("數據集無效或窗口大小過大")
+	}
+
+	if windowSize < 1 {
+		return nil, fmt.Errorf("窗口大小必須大於 0")
+	}
+
+	// 轉換時間範圍為縮放後的值
+	scaledStartRange := startRange * math.Pow10(c.scalingFactor)
+	scaledEndRange := endRange * math.Pow10(c.scalingFactor)
+
+	// 找到時間範圍內的數據索引
+	startIdx := -1
+	endIdx := -1
+
+	for i, data := range dataset.Data {
+		if startIdx == -1 && data.Time >= scaledStartRange {
+			startIdx = i
+		}
+		if data.Time <= scaledEndRange {
+			endIdx = i
+		}
+	}
+
+	if startIdx == -1 || endIdx == -1 || endIdx-startIdx+1 < windowSize {
+		return nil, fmt.Errorf("指定時間範圍內的數據不足以進行窗口分析")
+	}
+
+	results := make([]models.MaxMeanResult, 0, len(dataset.Headers)-1)
+
+	// 對每個通道在指定範圍內計算最大平均值
+	for channelIdx := 0; channelIdx < len(dataset.Data[0].Channels); channelIdx++ {
+		maxMean := 0.0
+		bestStartIdx := startIdx
+
+		// 在指定範圍內滑動窗口計算
+		for winStartIdx := startIdx; winStartIdx <= endIdx-windowSize+1; winStartIdx++ {
+			values := make([]float64, 0, windowSize)
+
+			for i := winStartIdx; i < winStartIdx+windowSize; i++ {
+				if channelIdx < len(dataset.Data[i].Channels) {
+					values = append(values, dataset.Data[i].Channels[channelIdx])
+				}
+			}
+
+			if len(values) == windowSize {
+				mean := util.ArrayMean(values)
+				if mean > maxMean {
+					maxMean = mean
+					bestStartIdx = winStartIdx
+				}
+			}
+		}
+
+		result := models.MaxMeanResult{
+			ColumnIndex: channelIdx + 1, // +1 因為第一列是時間
+			StartTime:   dataset.Data[bestStartIdx].Time,
+			EndTime:     dataset.Data[bestStartIdx+windowSize-1].Time,
+			MaxMean:     maxMean,
+		}
+
+		results = append(results, result)
+	}
+
+	return results, nil
 }
 
 // parseRawData 解析原始字符串數據

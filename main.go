@@ -5,9 +5,11 @@ import (
 	"count_mean/internal/calculator"
 	"count_mean/internal/config"
 	"count_mean/internal/io"
+	"count_mean/internal/models"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -74,7 +76,26 @@ func main() {
 
 func handleMaxMeanCalculation(csvHandler *io.CSVHandler, calc *calculator.MaxMeanCalculator) error {
 	fmt.Println("\n=== 最大平均值計算 ===")
+	fmt.Println("1. 處理單一檔案")
+	fmt.Println("2. 批量處理資料夾")
+	fmt.Print("請選擇處理模式: ")
 
+	var mode int
+	if _, err := fmt.Scanf("%d", &mode); err != nil {
+		return fmt.Errorf("輸入處理模式失敗: %w", err)
+	}
+
+	switch mode {
+	case 1:
+		return handleSingleFileMaxMean(csvHandler, calc)
+	case 2:
+		return handleDirectoryMaxMean(csvHandler, calc)
+	default:
+		return fmt.Errorf("無效的處理模式")
+	}
+}
+
+func handleSingleFileMaxMean(csvHandler *io.CSVHandler, calc *calculator.MaxMeanCalculator) error {
 	// 顯示可用的輸入文件
 	files, err := csvHandler.ListInputFiles()
 	if err != nil {
@@ -87,11 +108,32 @@ func handleMaxMeanCalculation(csvHandler *io.CSVHandler, calc *calculator.MaxMea
 		fmt.Println()
 	}
 
-	// 讀取輸入檔案
-	records, err := csvHandler.ReadCSVFromPrompt("請輸入檔案名稱（不含.csv）: ")
+	// 讀取輸入檔案並獲取檔名
+	records, originalFileName, err := csvHandler.ReadCSVFromPromptWithName("請輸入檔案名稱（不含.csv）: ")
 	if err != nil {
 		return fmt.Errorf("讀取檔案失敗: %w", err)
 	}
+
+	return processSingleFileMaxMean(csvHandler, calc, records, "", originalFileName)
+}
+
+func handleDirectoryMaxMean(csvHandler *io.CSVHandler, calc *calculator.MaxMeanCalculator) error {
+	// 顯示可用的輸入資料夾
+	dirs, err := csvHandler.ListInputDirectories()
+	if err != nil {
+		fmt.Printf("警告：無法列出輸入目錄: %v\n", err)
+	} else if len(dirs) > 0 {
+		fmt.Println("可用的輸入資料夾:")
+		for i, dir := range dirs {
+			fmt.Printf("  %d. %s\n", i+1, dir)
+		}
+		fmt.Println()
+	}
+
+	fmt.Print("請輸入要處理的資料夾名稱: ")
+	reader := bufio.NewReader(os.Stdin)
+	dirName, _ := reader.ReadString('\n')
+	dirName = strings.TrimSpace(dirName)
 
 	// 獲取窗口大小
 	fmt.Print("請輸入窗口大小（資料點數）: ")
@@ -100,21 +142,179 @@ func handleMaxMeanCalculation(csvHandler *io.CSVHandler, calc *calculator.MaxMea
 		return fmt.Errorf("輸入窗口大小失敗: %w", err)
 	}
 
+	// 獲取時間範圍
+	var startRange, endRange float64
+	var useCustomRange bool
+
+	fmt.Print("請輸入開始範圍秒數（按Enter使用預設值）: ")
+	reader = bufio.NewReader(os.Stdin)
+	startStr, _ := reader.ReadString('\n')
+	startStr = strings.TrimSpace(startStr)
+
+	if startStr != "" {
+		startRange, err = strconv.ParseFloat(startStr, 64)
+		if err != nil {
+			return fmt.Errorf("解析開始範圍失敗: %w", err)
+		}
+		useCustomRange = true
+	}
+
+	fmt.Print("請輸入結束範圍秒數（按Enter使用預設值）: ")
+	endStr, _ := reader.ReadString('\n')
+	endStr = strings.TrimSpace(endStr)
+
+	if endStr != "" {
+		endRange, err = strconv.ParseFloat(endStr, 64)
+		if err != nil {
+			return fmt.Errorf("解析結束範圍失敗: %w", err)
+		}
+		useCustomRange = true
+	}
+
+	// 列出資料夾中的CSV文件
+	csvFiles, err := csvHandler.ListCSVFilesInDirectory(dirName)
+	if err != nil {
+		return fmt.Errorf("讀取資料夾失敗: %w", err)
+	}
+
+	if len(csvFiles) == 0 {
+		return fmt.Errorf("資料夾中沒有找到CSV文件")
+	}
+
+	fmt.Printf("找到 %d 個CSV文件，開始批量處理...\n", len(csvFiles))
+
+	// 處理每個文件
+	for i, fileName := range csvFiles {
+		fmt.Printf("處理文件 %d/%d: %s\n", i+1, len(csvFiles), fileName)
+
+		records, err := csvHandler.ReadCSVFromDirectory(dirName, fileName)
+		if err != nil {
+			fmt.Printf("跳過文件 %s：%v\n", fileName, err)
+			continue
+		}
+
+		// 提取檔名（不含.csv）
+		fileBaseName := strings.TrimSuffix(fileName, ".csv")
+		if err := processBatchFileMaxMean(csvHandler, calc, records, dirName, fileBaseName, windowSize, startRange, endRange, useCustomRange); err != nil {
+			fmt.Printf("處理文件 %s 失敗：%v\n", fileName, err)
+			continue
+		}
+	}
+
+	fmt.Printf("批量處理完成！結果已保存至 ./output/%s/\n", dirName)
+	return nil
+}
+
+func processSingleFileMaxMean(csvHandler *io.CSVHandler, calc *calculator.MaxMeanCalculator, records [][]string, dirName, originalFileName string) error {
+	// 獲取窗口大小
+	fmt.Print("請輸入窗口大小（資料點數）: ")
+	var windowSize int
+	if _, err := fmt.Scanf("%d", &windowSize); err != nil {
+		return fmt.Errorf("輸入窗口大小失敗: %w", err)
+	}
+	return processFileWithParams(csvHandler, calc, records, originalFileName, dirName, windowSize)
+}
+
+func processBatchFileMaxMean(csvHandler *io.CSVHandler, calc *calculator.MaxMeanCalculator, records [][]string, dirName, originalFileName string, windowSize int, startRange, endRange float64, useCustomRange bool) error {
+	// 如果沒有使用自定義範圍，從數據中獲取預設範圍
+	if !useCustomRange {
+		if len(records) > 1 && len(records[1]) > 0 {
+			startRange, _ = strconv.ParseFloat(records[1][0], 64)
+		}
+		if len(records) > 1 && len(records[len(records)-1]) > 0 {
+			endRange, _ = strconv.ParseFloat(records[len(records)-1][0], 64)
+		}
+	}
+
 	// 計算最大平均值
-	results, err := calc.CalculateFromRawData(records, windowSize)
+	var results []models.MaxMeanResult
+	var err error
+	if startRange == 0 && endRange == 0 {
+		// 使用原始方法（全範圍）
+		results, err = calc.CalculateFromRawData(records, windowSize)
+	} else {
+		// 使用指定範圍
+		results, err = calc.CalculateFromRawDataWithRange(records, windowSize, startRange, endRange)
+	}
+
 	if err != nil {
 		return fmt.Errorf("計算失敗: %w", err)
 	}
 
 	// 轉換為CSV格式並輸出
-	outputData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results)
-	outputFile := "maxmean_result.csv"
+	outputData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, startRange, endRange)
+	outputFile := fmt.Sprintf("%s_最大平均值計算.csv", originalFileName)
 
-	if err := csvHandler.WriteCSVToOutput(outputFile, outputData); err != nil {
+	// 批量處理模式，保存到對應的子目錄
+	if err := csvHandler.WriteCSVToOutputDirectory(dirName, outputFile, outputData); err != nil {
 		return fmt.Errorf("寫入輸出檔案失敗: %w", err)
 	}
 
+	return nil
+}
+
+func processFileWithParams(csvHandler *io.CSVHandler, calc *calculator.MaxMeanCalculator, records [][]string, originalFileName, dirName string, windowSize int) error {
+	// 獲取時間範圍
+	var startRange, endRange float64
+	var err error
+
+	fmt.Print("請輸入開始範圍秒數（按Enter使用預設值）: ")
+	reader := bufio.NewReader(os.Stdin)
+	startStr, _ := reader.ReadString('\n')
+	startStr = strings.TrimSpace(startStr)
+
+	if startStr != "" {
+		startRange, err = strconv.ParseFloat(startStr, 64)
+		if err != nil {
+			return fmt.Errorf("解析開始範圍失敗: %w", err)
+		}
+	} else {
+		// 使用第一筆資料的時間
+		if len(records) > 1 && len(records[1]) > 0 {
+			startRange, _ = strconv.ParseFloat(records[1][0], 64)
+		}
+	}
+
+	fmt.Print("請輸入結束範圍秒數（按Enter使用預設值）: ")
+	endStr, _ := reader.ReadString('\n')
+	endStr = strings.TrimSpace(endStr)
+
+	if endStr != "" {
+		endRange, err = strconv.ParseFloat(endStr, 64)
+		if err != nil {
+			return fmt.Errorf("解析結束範圍失敗: %w", err)
+		}
+	} else {
+		// 使用最後一筆資料的時間
+		if len(records) > 1 && len(records[len(records)-1]) > 0 {
+			endRange, _ = strconv.ParseFloat(records[len(records)-1][0], 64)
+		}
+	}
+
+	// 計算最大平均值
+	var results []models.MaxMeanResult
+	if startRange == 0 && endRange == 0 {
+		// 使用原始方法（全範圍）
+		results, err = calc.CalculateFromRawData(records, windowSize)
+	} else {
+		// 使用指定範圍
+		results, err = calc.CalculateFromRawDataWithRange(records, windowSize, startRange, endRange)
+	}
+
+	if err != nil {
+		return fmt.Errorf("計算失敗: %w", err)
+	}
+
+	// 轉換為CSV格式並輸出
+	outputData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, startRange, endRange)
+	outputFile := fmt.Sprintf("%s_最大平均值計算.csv", originalFileName)
+
+	// 單文件模式，保存到主輸出目錄
+	if err := csvHandler.WriteCSVToOutput(outputFile, outputData); err != nil {
+		return fmt.Errorf("寫入輸出檔案失敗: %w", err)
+	}
 	fmt.Printf("計算完成！結果已保存至 ./output/%s\n", outputFile)
+
 	return nil
 }
 

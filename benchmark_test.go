@@ -191,7 +191,7 @@ func BenchmarkFullWorkflow_MaxMean(b *testing.B) {
 		}
 
 		// 轉換為CSV格式
-		outputData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results)
+		outputData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, 0, 999)
 		if len(outputData) == 0 {
 			b.Fatal("No output data generated")
 		}
