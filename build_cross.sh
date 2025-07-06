@@ -23,11 +23,11 @@ fi
 
 # Build for Windows
 echo "Building for Windows (amd64)..."
-"$GOBIN/fyne-cross" windows -arch amd64 -output emg_gui_tool.exe .
+"$GOBIN/fyne-cross" windows -arch amd64 -output emg_gui_tool.exe -pull .
 
 # Build for Linux
 echo "Building for Linux (amd64)..."
-"$GOBIN/fyne-cross" linux -arch amd64 -output emg_gui_tool_linux .
+"$GOBIN/fyne-cross" linux -arch amd64 -output emg_gui_tool_linux -pull .
 
 # Build for macOS (current platform)
 echo "Building for macOS..."
