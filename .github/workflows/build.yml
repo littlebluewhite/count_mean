@@ -7,6 +7,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+  packages: read
+
 jobs:
   build:
     strategy:
@@ -59,12 +63,10 @@ jobs:
         path: ./artifacts
 
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ github.run_number }}
         name: Release v${{ github.run_number }}
-        files: ./artifacts/**/*
+        files: ./artifacts/*/**
         draft: false
         prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
