@@ -149,6 +149,13 @@ func (h *CSVHandler) ReadCSVFromPromptWithName(prompt string) ([][]string, strin
 	return records, originalName, err
 }
 
+// ReadCSVFromInput 從輸入目錄讀取CSV檔案
+func (h *CSVHandler) ReadCSVFromInput(filename string) ([][]string, error) {
+	// 建構完整路徑
+	fullPath := filepath.Join(h.config.InputDir, filename)
+	return h.ReadCSV(fullPath)
+}
+
 // ReadCSV 讀取 CSV 檔案
 func (h *CSVHandler) ReadCSV(filename string) ([][]string, error) {
 	file, err := os.Open(filename)

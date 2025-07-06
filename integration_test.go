@@ -223,6 +223,9 @@ func TestFullWorkflow_ConfigurationManagement(t *testing.T) {
 		BOMEnabled:    true,
 		OutputFormat:  "json",
 		PhaseLabels:   []string{"測試階段1", "測試階段2", "測試階段3"},
+		InputDir:      "./input",
+		OutputDir:     "./output",
+		OperateDir:    "./value_operate",
 	}
 
 	err := originalConfig.SaveConfig(configFile)

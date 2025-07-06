@@ -27,6 +27,9 @@ func TestAppConfig_Validate(t *testing.T) {
 			Precision:     5,
 			OutputFormat:  "csv",
 			BOMEnabled:    true,
+			InputDir:      "./input",
+			OutputDir:     "./output",
+			OperateDir:    "./value_operate",
 		}
 		err := config.Validate()
 		require.NoError(t, err)
@@ -107,8 +110,8 @@ func TestAppConfig_Validate(t *testing.T) {
 	t.Run("ValidPrecision_Boundary", func(t *testing.T) {
 		// 測試邊界值
 		configs := []*AppConfig{
-			{ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 0, OutputFormat: "csv"},
-			{ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 15, OutputFormat: "csv"},
+			{ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 0, OutputFormat: "csv", InputDir: "./input", OutputDir: "./output", OperateDir: "./value_operate"},
+			{ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 15, OutputFormat: "csv", InputDir: "./input", OutputDir: "./output", OperateDir: "./value_operate"},
 		}
 		for _, config := range configs {
 			err := config.Validate()
@@ -124,6 +127,9 @@ func TestAppConfig_Validate(t *testing.T) {
 				PhaseLabels:   []string{"階段1"},
 				Precision:     5,
 				OutputFormat:  format,
+				InputDir:      "./input",
+				OutputDir:     "./output",
+				OperateDir:    "./value_operate",
 			}
 			err := config.Validate()
 			require.NoError(t, err)
@@ -183,7 +189,10 @@ func TestLoadConfig(t *testing.T) {
 			"phase_labels": ["自定義階段1", "自定義階段2"],
 			"precision": 8,
 			"output_format": "json",
-			"bom_enabled": false
+			"bom_enabled": false,
+			"input_dir": "./input",
+			"output_dir": "./output",
+			"operate_dir": "./value_operate"
 		}`
 
 		err := os.WriteFile(configFile, []byte(validJSON), 0644)
@@ -269,6 +278,9 @@ func TestAppConfig_SaveConfig(t *testing.T) {
 			Precision:     12,
 			OutputFormat:  "xlsx",
 			BOMEnabled:    false,
+			InputDir:      "./input",
+			OutputDir:     "./output",
+			OperateDir:    "./value_operate",
 		}
 
 		err := config.SaveConfig(configFile)
