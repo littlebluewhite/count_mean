@@ -2,310 +2,293 @@ package main
 
 import (
 	"bufio"
-	"count_mean/util"
-	"encoding/csv"
+	"count_mean/internal/calculator"
+	"count_mean/internal/config"
+	"count_mean/internal/io"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"strings"
-	"time"
 )
 
 func main() {
-	var file string
-	fmt.Print("請輸入載入檔名: ")
-	reader := bufio.NewReader(os.Stdin)
-	file, _ = reader.ReadString('\n')
-	file = strings.TrimSpace(file)
-	f, err := os.Open(file + ".csv")
-	defer func(f *os.File) {
-		e := f.Close()
-		if e != nil {
-
-		}
-	}(f)
+	// 載入配置
+	cfg, err := config.LoadConfig("config.json")
 	if err != nil {
-		panic(err)
+		log.Printf("載入配置失敗，使用默認配置: %v", err)
+		cfg = config.DefaultConfig()
 	}
-	r := csv.NewReader(f)
-	records, err := r.ReadAll()
-	if err != nil {
-		panic(err)
-	}
-	var fn int
-	fmt.Print("1. 某幾筆數平均最大值\n2. 每一行同除一個值\n3. 分期處理\n選擇功能(輸入數字): ")
-	fmt.Scanln(&fn)
-	switch fn {
-	case 1:
-		fn1(records)
-	case 2:
-		fn2(records)
-	case 3:
-		fn3(records)
-	}
-}
 
-func fn1(r [][]string) {
-	l := len(r)
-	columnMax := len(r[0])
-	var n int
-	fmt.Print("多少資料的平均(輸入數字): ")
-	fmt.Scanln(&n)
-	if l-1 < n || n < 1 {
-		fmt.Println("輸入錯誤QQ")
-		time.Sleep(5 * time.Second)
+	// 確保必要的目錄存在
+	if err := cfg.EnsureDirectories(); err != nil {
+		log.Fatalf("無法創建必要目錄: %v", err)
 	}
-	result := make([][]string, 0, 4)
-	result = append(result, r[0])
-	count := make(map[int][]string)
-	for i := 1; i < columnMax; i++ {
-		maxMean := 0
-		from := 0
-		move := 10
-		for j := 1; j <= l-n; j++ {
-			numbers := make([]float64, 0, n)
-			for k := j; k < j+n; k++ {
-				numbers = append(numbers, util.Str2Number[float64, int](r[k][i], move))
-			}
-			m := int(util.ArrayMean(numbers))
-			if m > maxMean {
-				maxMean = m
-				from = j
-			}
+
+	// 創建模組實例
+	csvHandler := io.NewCSVHandler(cfg)
+	maxMeanCalc := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
+	normalizer := calculator.NewNormalizer(cfg.ScalingFactor)
+	phaseAnalyzer := calculator.NewPhaseAnalyzer(cfg.ScalingFactor, cfg.PhaseLabels)
+
+	for {
+		fmt.Println("EMG 資料分析工具")
+		fmt.Println("1. 最大平均值計算")
+		fmt.Println("2. 資料標準化")
+		fmt.Println("3. 階段分析")
+		fmt.Println("4. 設定配置")
+		fmt.Println("0. 退出")
+		fmt.Print("請選擇功能: ")
+
+		var choice int
+		if _, err := fmt.Scanf("%d", &choice); err != nil {
+			fmt.Printf("輸入錯誤: %v\n", err)
+			continue
 		}
-		count[i] = []string{r[from][0], r[from+n-1][0], fmt.Sprintf("%.10f", float64(maxMean)/math.Pow10(move))}
-	}
-	for i := 0; i < 3; i++ {
-		row := make([]string, 0, l)
-		switch i {
-		case 0:
-			row = append(row, "開始秒數")
+
+		switch choice {
 		case 1:
-			row = append(row, "結束秒數")
-		case 2:
-			row = append(row, "最大平均值")
-		}
-		for j := 1; j < columnMax; j++ {
-			row = append(row, count[j][i])
-		}
-		result = append(result, row)
-	}
-	file, err := os.Create("fn1_result.csv")
-	defer func(file *os.File) {
-		e := file.Close()
-		if e != nil {
-
-		}
-	}(file)
-	if err != nil {
-		log.Fatalln("failed to open file", err)
-	}
-
-	bom := []byte{0xEF, 0xBB, 0xBF}
-	file.Write(bom)
-	w := csv.NewWriter(file)
-	w.Comma = ','
-	err = w.WriteAll(result)
-	if err != nil {
-		log.Fatalln("failed to write result", err)
-	}
-}
-
-func fn2(r [][]string) {
-	columnMax := len(r[0])
-	move := 10
-
-	var file string
-	result := make([][]string, 0, len(r))
-	result = append(result, r[0])
-	fmt.Print("請輸入要相除的csv檔名: ")
-	reader := bufio.NewReader(os.Stdin)
-	file, _ = reader.ReadString('\n')
-	file = strings.TrimSpace(file)
-	f, err := os.Open(file + ".csv")
-	defer func(f *os.File) {
-		e := f.Close()
-		if e != nil {
-
-		}
-	}(f)
-	if err != nil {
-		panic(err)
-	}
-	o := csv.NewReader(f)
-	oValue, err := o.ReadAll()
-	if err != nil {
-		panic(err)
-	}
-	for i := 1; i < len(r); i++ {
-		row := make([]string, 0, columnMax)
-		row = append(row, r[i][0])
-		for j := 1; j < columnMax; j++ {
-			value := util.Str2Number[float64, int](r[i][j], move) / util.Str2Number[float64, int](oValue[1][j], move)
-			row = append(row, fmt.Sprintf("%.10f", value))
-		}
-		result = append(result, row)
-	}
-	resultFile, err := os.Create("fn2_result.csv")
-	defer func(file *os.File) {
-		e := file.Close()
-		if e != nil {
-
-		}
-	}(resultFile)
-	if err != nil {
-		log.Fatalln("failed to open file", err)
-	}
-
-	bom := []byte{0xEF, 0xBB, 0xBF}
-	resultFile.Write(bom)
-	w := csv.NewWriter(resultFile)
-	err = w.WriteAll(result)
-	if err != nil {
-		log.Fatalln("failed to write result", err)
-	}
-}
-
-func fn3(r [][]string) {
-	l := len(r)
-	columnMax := len(r[0])
-	move := 10
-
-	var file string
-	result := make([][]string, 0, len(r))
-	result = append(result, r[0])
-	fmt.Print("請輸入分期的csv檔名: ")
-	reader := bufio.NewReader(os.Stdin)
-	file, _ = reader.ReadString('\n')
-	file = strings.TrimSpace(file)
-	f, err := os.Open(file + ".csv")
-	defer func(f *os.File) {
-		e := f.Close()
-		if e != nil {
-
-		}
-	}(f)
-	if err != nil {
-		panic(err)
-	}
-	o := csv.NewReader(f)
-	oValue, err := o.ReadAll()
-	if err != nil {
-		panic(err)
-	}
-	operate := make([]string, 0, 5)
-	for i := 1; i < len(oValue); i++ {
-		operate = append(operate, oValue[i][1])
-	}
-	//fmt.Println(operate)
-	count1 := make(map[int][]float64)
-	count2 := make(map[int][]float64)
-	count3 := make(map[int][]float64)
-	count4 := make(map[int][]float64)
-	countAllMax := make(map[int][]float64)
-	for i := 1; i < l; i++ {
-		row := r[i]
-		t := util.Str2Number[float64, int](row[0], move)
-		switch {
-		case t > util.Str2Number[float64, int](operate[0], move) && t < util.Str2Number[float64, int](operate[1], move):
-			for j := 1; j < columnMax; j++ {
-				count1[j] = append(count1[j], util.Str2Number[float64, int](row[j], 10))
-			}
-		case t > util.Str2Number[float64, int](operate[1], move) && t < util.Str2Number[float64, int](operate[2], move):
-			for j := 1; j < columnMax; j++ {
-				count2[j] = append(count2[j], util.Str2Number[float64, int](row[j], 10))
-			}
-		case t > util.Str2Number[float64, int](operate[2], move) && t < util.Str2Number[float64, int](operate[3], move):
-			for j := 1; j < columnMax; j++ {
-				count3[j] = append(count3[j], util.Str2Number[float64, int](row[j], 10))
-			}
-		case t > util.Str2Number[float64, int](operate[3], move) && t < util.Str2Number[float64, int](operate[4], move):
-			for j := 1; j < columnMax; j++ {
-				count4[j] = append(count4[j], util.Str2Number[float64, int](row[j], 10))
-			}
-		}
-		for j := 1; j < columnMax; j++ {
-			countAllMax[j] = append(countAllMax[j], util.Str2Number[float64, int](row[j], 10))
-		}
-	}
-	for i := 0; i < 9; i++ {
-		row := make([]string, 0, columnMax)
-		switch i {
-		case 0:
-			row = append(row, "啟跳下蹲階段 最大值")
-			for j := 1; j < columnMax; j++ {
-				m, _ := util.ArrayMax[float64](count1[j])
-				row = append(row, fmt.Sprintf("%.10f", m/math.Pow10(10)))
-			}
-		case 1:
-			row = append(row, "啟跳上升階段 最大值")
-			for j := 1; j < columnMax; j++ {
-				m, _ := util.ArrayMax[float64](count2[j])
-				row = append(row, fmt.Sprintf("%.10f", m/math.Pow10(10)))
+			if err := handleMaxMeanCalculation(csvHandler, maxMeanCalc); err != nil {
+				fmt.Printf("最大平均值計算失敗: %v\n", err)
 			}
 		case 2:
-			row = append(row, "團身階段 最大值")
-			for j := 1; j < columnMax; j++ {
-				m, _ := util.ArrayMax[float64](count3[j])
-				row = append(row, fmt.Sprintf("%.10f", m/math.Pow10(10)))
+			if err := handleNormalization(csvHandler, normalizer); err != nil {
+				fmt.Printf("資料標準化失敗: %v\n", err)
 			}
 		case 3:
-			row = append(row, "下降階段 最大值")
-			for j := 1; j < columnMax; j++ {
-				m, _ := util.ArrayMax[float64](count4[j])
-				row = append(row, fmt.Sprintf("%.10f", m/math.Pow10(10)))
+			if err := handlePhaseAnalysis(csvHandler, phaseAnalyzer, cfg); err != nil {
+				fmt.Printf("階段分析失敗: %v\n", err)
 			}
 		case 4:
-			row = append(row, "啟跳下蹲階段 平均值")
-			for j := 1; j < columnMax; j++ {
-				mean := util.ArrayMean[float64](count1[j])
-				row = append(row, fmt.Sprintf("%.10f", mean/math.Pow10(10)))
+			if err := handleConfigSettings(cfg); err != nil {
+				fmt.Printf("配置設定失敗: %v\n", err)
 			}
-		case 5:
-			row = append(row, "啟跳上升階段 平均值")
-			for j := 1; j < columnMax; j++ {
-				mean := util.ArrayMean[float64](count2[j])
-				row = append(row, fmt.Sprintf("%.10f", mean/math.Pow10(10)))
-			}
-		case 6:
-			row = append(row, "團身階段 平均值")
-			for j := 1; j < columnMax; j++ {
-				mean := util.ArrayMean[float64](count3[j])
-				row = append(row, fmt.Sprintf("%.10f", mean/math.Pow10(10)))
-			}
-		case 7:
-			row = append(row, "下降階段 平均值")
-			for j := 1; j < columnMax; j++ {
-				mean := util.ArrayMean[float64](count4[j])
-				row = append(row, fmt.Sprintf("%.10f", mean/math.Pow10(10)))
-			}
-		case 8:
-			row = append(row, "整個階段最大值出現在_秒")
-			for j := 1; j < columnMax; j++ {
-				_, index := util.ArrayMax[float64](countAllMax[j])
-				row = append(row, fmt.Sprintf("%.2f", util.Str2Number[float64](r[index+1][0], 0)))
-			}
+		case 0:
+			fmt.Println("感謝使用！")
+			return
+		default:
+			fmt.Println("無效選擇，請重新輸入")
 		}
-		result = append(result, row)
+		fmt.Println()
 	}
+}
 
-	resultFile, err := os.Create("fn3_result.csv")
-	defer func(file *os.File) {
-		e := file.Close()
-		if e != nil {
+func handleMaxMeanCalculation(csvHandler *io.CSVHandler, calc *calculator.MaxMeanCalculator) error {
+	fmt.Println("\n=== 最大平均值計算 ===")
 
+	// 顯示可用的輸入文件
+	files, err := csvHandler.ListInputFiles()
+	if err != nil {
+		fmt.Printf("警告：無法列出輸入文件: %v\n", err)
+	} else if len(files) > 0 {
+		fmt.Println("可用的輸入文件:")
+		for i, file := range files {
+			fmt.Printf("  %d. %s\n", i+1, file)
 		}
-	}(resultFile)
-	if err != nil {
-		log.Fatalln("failed to open file", err)
+		fmt.Println()
 	}
 
-	bom := []byte{0xEF, 0xBB, 0xBF}
-	resultFile.Write(bom)
-	w := csv.NewWriter(resultFile)
-	err = w.WriteAll(result)
+	// 讀取輸入檔案
+	records, err := csvHandler.ReadCSVFromPrompt("請輸入檔案名稱（不含.csv）: ")
 	if err != nil {
-		log.Fatalln("failed to write result", err)
+		return fmt.Errorf("讀取檔案失敗: %w", err)
 	}
+
+	// 獲取窗口大小
+	fmt.Print("請輸入窗口大小（資料點數）: ")
+	var windowSize int
+	if _, err := fmt.Scanf("%d", &windowSize); err != nil {
+		return fmt.Errorf("輸入窗口大小失敗: %w", err)
+	}
+
+	// 計算最大平均值
+	results, err := calc.CalculateFromRawData(records, windowSize)
+	if err != nil {
+		return fmt.Errorf("計算失敗: %w", err)
+	}
+
+	// 轉換為CSV格式並輸出
+	outputData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results)
+	outputFile := "maxmean_result.csv"
+
+	if err := csvHandler.WriteCSVToOutput(outputFile, outputData); err != nil {
+		return fmt.Errorf("寫入輸出檔案失敗: %w", err)
+	}
+
+	fmt.Printf("計算完成！結果已保存至 ./output/%s\n", outputFile)
+	return nil
+}
+
+func handleNormalization(csvHandler *io.CSVHandler, normalizer *calculator.Normalizer) error {
+	fmt.Println("\n=== 資料標準化 ===")
+
+	// 顯示可用的輸入文件
+	files, err := csvHandler.ListInputFiles()
+	if err != nil {
+		fmt.Printf("警告：無法列出輸入文件: %v\n", err)
+	} else if len(files) > 0 {
+		fmt.Println("可用的輸入文件:")
+		for i, file := range files {
+			fmt.Printf("  %d. %s\n", i+1, file)
+		}
+		fmt.Println()
+	}
+
+	// 讀取主數據檔案
+	records, err := csvHandler.ReadCSVFromPrompt("請輸入主數據檔案名稱（不含.csv）: ")
+	if err != nil {
+		return fmt.Errorf("讀取主數據檔案失敗: %w", err)
+	}
+
+	// 讀取參考數據檔案
+	reference, err := csvHandler.ReadCSVFromPrompt("請輸入參考數據檔案名稱（不含.csv）: ")
+	if err != nil {
+		return fmt.Errorf("讀取參考數據檔案失敗: %w", err)
+	}
+
+	// 執行標準化
+	result, err := normalizer.NormalizeFromRawData(records, reference)
+	if err != nil {
+		return fmt.Errorf("標準化失敗: %w", err)
+	}
+
+	// 轉換為CSV格式並輸出
+	outputData := csvHandler.ConvertNormalizedDataToCSV(result)
+	outputFile := "normalized_result.csv"
+
+	if err := csvHandler.WriteCSVToOutput(outputFile, outputData); err != nil {
+		return fmt.Errorf("寫入輸出檔案失敗: %w", err)
+	}
+
+	fmt.Printf("標準化完成！結果已保存至 ./output/%s\n", outputFile)
+	return nil
+}
+
+func handlePhaseAnalysis(csvHandler *io.CSVHandler, analyzer *calculator.PhaseAnalyzer, cfg *config.AppConfig) error {
+	fmt.Println("\n=== 階段分析 ===")
+
+	// 顯示可用的輸入文件
+	files, err := csvHandler.ListInputFiles()
+	if err != nil {
+		fmt.Printf("警告：無法列出輸入文件: %v\n", err)
+	} else if len(files) > 0 {
+		fmt.Println("可用的輸入文件:")
+		for i, file := range files {
+			fmt.Printf("  %d. %s\n", i+1, file)
+		}
+		fmt.Println()
+	}
+
+	// 讀取數據檔案
+	records, err := csvHandler.ReadCSVFromPrompt("請輸入數據檔案名稱（不含.csv）: ")
+	if err != nil {
+		return fmt.Errorf("讀取數據檔案失敗: %w", err)
+	}
+
+	// 獲取階段時間點
+	fmt.Printf("請輸入 %d 個階段的時間點（共需 %d 個時間點）:\n", len(cfg.PhaseLabels), len(cfg.PhaseLabels)+1)
+	reader := bufio.NewReader(os.Stdin)
+	phaseStrings := make([]string, 0, len(cfg.PhaseLabels)+1)
+
+	for i := 0; i <= len(cfg.PhaseLabels); i++ {
+		fmt.Printf("時間點 %d: ", i+1)
+		timeStr, _ := reader.ReadString('\n')
+		phaseStrings = append(phaseStrings, strings.TrimSpace(timeStr))
+	}
+
+	// 執行階段分析
+	result, err := analyzer.AnalyzeFromRawData(records, phaseStrings)
+	if err != nil {
+		return fmt.Errorf("階段分析失敗: %w", err)
+	}
+
+	// 為每個階段生成輸出檔案
+	for i, phaseResult := range result.PhaseResults {
+		outputData := csvHandler.ConvertPhaseAnalysisToCSV(records[0], &phaseResult, result.MaxTimeIndex)
+		outputFile := fmt.Sprintf("phase_%d_%s.csv", i+1, strings.ReplaceAll(phaseResult.PhaseName, " ", "_"))
+
+		if err := csvHandler.WriteCSVToOutput(outputFile, outputData); err != nil {
+			return fmt.Errorf("寫入階段 %d 輸出檔案失敗: %w", i+1, err)
+		}
+
+		fmt.Printf("階段 %d (%s) 分析完成！結果已保存至 ./output/%s\n", i+1, phaseResult.PhaseName, outputFile)
+	}
+
+	return nil
+}
+
+func handleConfigSettings(cfg *config.AppConfig) error {
+	fmt.Println("\n=== 配置設定 ===")
+	fmt.Printf("目前配置:\n")
+	fmt.Printf("1. 縮放因子: %d\n", cfg.ScalingFactor)
+	fmt.Printf("2. 精度: %d\n", cfg.Precision)
+	fmt.Printf("3. 輸出格式: %s\n", cfg.OutputFormat)
+	fmt.Printf("4. BOM啟用: %t\n", cfg.BOMEnabled)
+	fmt.Printf("5. 階段標籤: %v\n", cfg.PhaseLabels)
+
+	fmt.Println("\n請選擇要修改的項目（0-5，0表示保存並退出）:")
+	var choice int
+	if _, err := fmt.Scanf("%d", &choice); err != nil {
+		return fmt.Errorf("輸入選擇失敗: %w", err)
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+
+	switch choice {
+	case 1:
+		fmt.Print("請輸入新的縮放因子: ")
+		var factor int
+		if _, err := fmt.Scanf("%d", &factor); err != nil {
+			return fmt.Errorf("輸入縮放因子失敗: %w", err)
+		}
+		cfg.ScalingFactor = factor
+	case 2:
+		fmt.Print("請輸入新的精度: ")
+		var precision int
+		if _, err := fmt.Scanf("%d", &precision); err != nil {
+			return fmt.Errorf("輸入精度失敗: %w", err)
+		}
+		cfg.Precision = precision
+	case 3:
+		fmt.Print("請輸入新的輸出格式 (csv/json/xlsx): ")
+		format, _ := reader.ReadString('\n')
+		cfg.OutputFormat = strings.TrimSpace(format)
+	case 4:
+		fmt.Print("啟用BOM? (true/false): ")
+		var enabled string
+		if _, err := fmt.Scanf("%s", &enabled); err != nil {
+			return fmt.Errorf("輸入BOM設定失敗: %w", err)
+		}
+		cfg.BOMEnabled = strings.ToLower(enabled) == "true"
+	case 5:
+		fmt.Print("請輸入階段標籤數量: ")
+		var count int
+		if _, err := fmt.Scanf("%d", &count); err != nil {
+			return fmt.Errorf("輸入標籤數量失敗: %w", err)
+		}
+
+		labels := make([]string, 0, count)
+		for i := 0; i < count; i++ {
+			fmt.Printf("階段 %d 標籤: ", i+1)
+			label, _ := reader.ReadString('\n')
+			labels = append(labels, strings.TrimSpace(label))
+		}
+		cfg.PhaseLabels = labels
+	case 0:
+		// 驗證配置
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("配置驗證失敗: %w", err)
+		}
+
+		// 保存配置
+		if err := cfg.SaveConfig("config.json"); err != nil {
+			return fmt.Errorf("保存配置失敗: %w", err)
+		}
+
+		fmt.Println("配置已保存！")
+		return nil
+	default:
+		fmt.Println("無效選擇")
+	}
+
+	return handleConfigSettings(cfg) // 遞迴調用繼續設定
 }

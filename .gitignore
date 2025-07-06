@@ -1,1 +1,5 @@
 /.idea/
+/.mcp.json
+/task
+/.claude/
+/logs/
