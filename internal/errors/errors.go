@@ -50,18 +50,25 @@ type AppError struct {
 func (e *AppError) Error() string {
 	var parts []string
 
-	parts = append(parts, fmt.Sprintf("[%s]", e.Code))
-	parts = append(parts, e.Message)
+	// Start with code and message without separator
+	result := fmt.Sprintf("[%s] %s", e.Code, e.Message)
 
+	// Add details if present
 	if e.Details != "" {
 		parts = append(parts, fmt.Sprintf("詳細: %s", e.Details))
 	}
 
+	// Add cause if present
 	if e.Cause != nil {
 		parts = append(parts, fmt.Sprintf("原因: %s", e.Cause.Error()))
 	}
 
-	return strings.Join(parts, " - ")
+	// Join additional parts with " - " separator
+	if len(parts) > 0 {
+		result += " - " + strings.Join(parts, " - ")
+	}
+
+	return result
 }
 
 // Unwrap returns the underlying cause error
@@ -91,7 +98,7 @@ func NewAppError(code ErrorCode, message string) *AppError {
 	return &AppError{
 		Code:        code,
 		Message:     message,
-		Recoverable: isRecoverable(code),
+		Recoverable: IsRecoverable(code),
 	}
 }
 
@@ -101,7 +108,7 @@ func NewAppErrorWithCause(code ErrorCode, message string, cause error) *AppError
 		Code:        code,
 		Message:     message,
 		Cause:       cause,
-		Recoverable: isRecoverable(code),
+		Recoverable: IsRecoverable(code),
 	}
 }
 
@@ -111,7 +118,7 @@ func NewAppErrorWithDetails(code ErrorCode, message, details string) *AppError {
 		Code:        code,
 		Message:     message,
 		Details:     details,
-		Recoverable: isRecoverable(code),
+		Recoverable: IsRecoverable(code),
 	}
 }
 
@@ -121,12 +128,12 @@ func WrapError(err error, code ErrorCode, message string) *AppError {
 		Code:        code,
 		Message:     message,
 		Cause:       err,
-		Recoverable: isRecoverable(code),
+		Recoverable: IsRecoverable(code),
 	}
 }
 
-// isRecoverable determines if an error type is recoverable
-func isRecoverable(code ErrorCode) bool {
+// IsRecoverable determines if an error type is recoverable
+func IsRecoverable(code ErrorCode) bool {
 	switch code {
 	case ErrCodeFileNotFound, ErrCodeFileFormat, ErrCodeDataValidation,
 		ErrCodeUserInput, ErrCodeConfigValidation, ErrCodeInsufficientData,
@@ -163,7 +170,7 @@ func NewProcessingError(code ErrorCode, message, file, operation, step string, c
 			Code:        code,
 			Message:     message,
 			Cause:       cause,
-			Recoverable: isRecoverable(code),
+			Recoverable: IsRecoverable(code),
 			Context: map[string]interface{}{
 				"file":      file,
 				"operation": operation,

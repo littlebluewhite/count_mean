@@ -4,27 +4,27 @@ import (
 	"errors"
 	"testing"
 
-	"count_mean/internal/errors"
+	apperrors "count_mean/internal/errors"
 )
 
 func TestAppError_Error(t *testing.T) {
 	tests := []struct {
 		name string
-		err  *errors.AppError
+		err  *apperrors.AppError
 		want string
 	}{
 		{
 			name: "simple error",
-			err: &errors.AppError{
-				Code:    errors.ErrCodeFileNotFound,
+			err: &apperrors.AppError{
+				Code:    apperrors.ErrCodeFileNotFound,
 				Message: "檔案未找到",
 			},
 			want: "[FILE_NOT_FOUND] 檔案未找到",
 		},
 		{
 			name: "error with details",
-			err: &errors.AppError{
-				Code:    errors.ErrCodeFileNotFound,
+			err: &apperrors.AppError{
+				Code:    apperrors.ErrCodeFileNotFound,
 				Message: "檔案未找到",
 				Details: "檔案可能已被刪除",
 			},
@@ -32,8 +32,8 @@ func TestAppError_Error(t *testing.T) {
 		},
 		{
 			name: "error with cause",
-			err: &errors.AppError{
-				Code:    errors.ErrCodeFileNotFound,
+			err: &apperrors.AppError{
+				Code:    apperrors.ErrCodeFileNotFound,
 				Message: "檔案未找到",
 				Cause:   errors.New("system error"),
 			},
@@ -41,8 +41,8 @@ func TestAppError_Error(t *testing.T) {
 		},
 		{
 			name: "error with details and cause",
-			err: &errors.AppError{
-				Code:    errors.ErrCodeFileNotFound,
+			err: &apperrors.AppError{
+				Code:    apperrors.ErrCodeFileNotFound,
 				Message: "檔案未找到",
 				Details: "檔案可能已被刪除",
 				Cause:   errors.New("system error"),
@@ -61,14 +61,14 @@ func TestAppError_Error(t *testing.T) {
 }
 
 func TestAppError_Is(t *testing.T) {
-	err1 := &errors.AppError{Code: errors.ErrCodeFileNotFound}
-	err2 := &errors.AppError{Code: errors.ErrCodeFileNotFound}
-	err3 := &errors.AppError{Code: errors.errors.errors.ErrCodeDataParsing}
+	err1 := &apperrors.AppError{Code: apperrors.ErrCodeFileNotFound}
+	err2 := &apperrors.AppError{Code: apperrors.ErrCodeFileNotFound}
+	err3 := &apperrors.AppError{Code: apperrors.ErrCodeDataParsing}
 	otherErr := errors.New("other error")
 
 	tests := []struct {
 		name   string
-		err    *errors.AppError
+		err    *apperrors.AppError
 		target error
 		want   bool
 	}{
@@ -102,8 +102,8 @@ func TestAppError_Is(t *testing.T) {
 }
 
 func TestAppError_WithContext(t *testing.T) {
-	err := &errors.AppError{
-		Code:    errors.ErrCodeFileNotFound,
+	err := &apperrors.AppError{
+		Code:    apperrors.ErrCodeFileNotFound,
 		Message: "檔案未找到",
 	}
 
@@ -124,10 +124,10 @@ func TestAppError_WithContext(t *testing.T) {
 }
 
 func TestNewAppError(t *testing.T) {
-	err := errors.NewAppError(errors.ErrCodeFileNotFound, "檔案未找到")
+	err := apperrors.NewAppError(apperrors.ErrCodeFileNotFound, "檔案未找到")
 
-	if err.Code != errors.ErrCodeFileNotFound {
-		t.Errorf("Code = %v, want %v", err.Code, errors.ErrCodeFileNotFound)
+	if err.Code != apperrors.ErrCodeFileNotFound {
+		t.Errorf("Code = %v, want %v", err.Code, apperrors.ErrCodeFileNotFound)
 	}
 
 	if err.Message != "檔案未找到" {
@@ -141,7 +141,7 @@ func TestNewAppError(t *testing.T) {
 
 func TestNewAppErrorWithCause(t *testing.T) {
 	cause := errors.New("underlying error")
-	err := errors.NewAppErrorWithCause(errors.ErrCodeFileNotFound, "檔案未找到", cause)
+	err := apperrors.NewAppErrorWithCause(apperrors.ErrCodeFileNotFound, "檔案未找到", cause)
 
 	if err.Cause != cause {
 		t.Errorf("Cause = %v, want %v", err.Cause, cause)
@@ -155,34 +155,34 @@ func TestNewAppErrorWithCause(t *testing.T) {
 func TestIsRecoverable(t *testing.T) {
 	tests := []struct {
 		name string
-		code errors.errors.errors.ErrorCode
+		code apperrors.ErrorCode
 		want bool
 	}{
 		{
 			name: "file not found is recoverable",
-			code: errors.ErrCodeFileNotFound,
+			code: apperrors.ErrCodeFileNotFound,
 			want: true,
 		},
 		{
 			name: "memory error is not recoverable",
-			code: errors.errors.errors.ErrCodeMemory,
+			code: apperrors.ErrCodeMemory,
 			want: false,
 		},
 		{
 			name: "validation error is recoverable",
-			code: ErrCodeDataValidation,
+			code: apperrors.ErrCodeDataValidation,
 			want: true,
 		},
 		{
 			name: "unknown error is recoverable by default",
-			code: ErrCodeUnknown,
+			code: apperrors.ErrCodeUnknown,
 			want: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isRecoverable(tt.code); got != tt.want {
+			if got := apperrors.IsRecoverable(tt.code); got != tt.want {
 				t.Errorf("isRecoverable() = %v, want %v", got, tt.want)
 			}
 		})
@@ -191,8 +191,8 @@ func TestIsRecoverable(t *testing.T) {
 
 func TestProcessingError_Error(t *testing.T) {
 	cause := errors.New("parse error")
-	err := NewProcessingError(
-		errors.errors.errors.ErrCodeDataParsing,
+	err := apperrors.NewProcessingError(
+		apperrors.ErrCodeDataParsing,
 		"解析失敗",
 		"test.csv",
 		"read_csv",
@@ -207,7 +207,7 @@ func TestProcessingError_Error(t *testing.T) {
 }
 
 func TestValidationError_Error(t *testing.T) {
-	err := NewValidationError("filename", "test.txt", "無效的檔案格式")
+	err := apperrors.NewValidationError("filename", "test.txt", "無效的檔案格式")
 
 	expectedPattern := "[DATA_VALIDATION] 欄位 'filename' 驗證失敗: 無效的檔案格式 (值: test.txt)"
 	if got := err.Error(); got != expectedPattern {

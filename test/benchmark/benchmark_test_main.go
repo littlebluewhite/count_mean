@@ -1,4 +1,4 @@
-package main
+package benchmark_test
 
 import (
 	"count_mean/internal/benchmark"
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func main() {
+func runBenchmarkTestMain() {
 	// 命令行參數
 	var (
 		logLevel   = flag.String("log-level", "info", "日誌級別 (debug, info, warn, error)")

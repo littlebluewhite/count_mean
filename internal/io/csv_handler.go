@@ -396,8 +396,8 @@ func (h *CSVHandler) ConvertMaxMeanResultsToCSV(headers []string, results []mode
 
 		startRangeTimes = append(startRangeTimes, fmt.Sprintf("%.2f", startRange))
 		endRangeTimes = append(endRangeTimes, fmt.Sprintf("%.2f", endRange))
-		startTimes = append(startTimes, fmt.Sprintf("%.2f", result.StartTime))
-		endTimes = append(endTimes, fmt.Sprintf("%.2f", result.EndTime))
+		startTimes = append(startTimes, fmt.Sprintf("%.2f", result.StartTime/math.Pow10(h.config.ScalingFactor)))
+		endTimes = append(endTimes, fmt.Sprintf("%.2f", result.EndTime/math.Pow10(h.config.ScalingFactor)))
 		maxMeans = append(maxMeans, fmt.Sprintf(precision, result.MaxMean/math.Pow10(h.config.ScalingFactor)))
 	}
 
@@ -423,7 +423,7 @@ func (h *CSVHandler) ConvertNormalizedDataToCSV(dataset *models.EMGDataset) [][]
 		row := make([]string, 0, len(dataset.Headers))
 
 		// 時間列
-		row = append(row, fmt.Sprintf("%.2f", emgData.Time))
+		row = append(row, fmt.Sprintf("%.2f", emgData.Time/math.Pow10(h.config.ScalingFactor)))
 
 		// 數據列
 		for _, val := range emgData.Channels {
@@ -489,7 +489,7 @@ func (h *CSVHandler) ConvertPhaseAnalysisToCSV(headers []string, result *models.
 		for j := 1; j < len(headers); j++ {
 			channelIdx := j - 1
 			if timeVal, exists := maxTimeIndex[channelIdx]; exists {
-				timeRow = append(timeRow, fmt.Sprintf("%.2f", timeVal))
+				timeRow = append(timeRow, fmt.Sprintf("%.2f", timeVal/math.Pow10(h.config.ScalingFactor)))
 			} else {
 				timeRow = append(timeRow, "N/A")
 			}

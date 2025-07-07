@@ -33,21 +33,26 @@ type AnalyzeResult struct {
 // Analyze 分析不同階段的數據
 func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.TimeRange) (*AnalyzeResult, error) {
 	startTime := time.Now()
+	
+	if dataset == nil || len(dataset.Data) == 0 {
+		err := fmt.Errorf("數據集為空")
+		dataLength := 0
+		if dataset != nil {
+			dataLength = len(dataset.Data)
+		}
+		p.logger.Error("階段分析輸入驗證失敗", err, map[string]interface{}{
+			"dataset_nil": dataset == nil,
+			"data_length": dataLength,
+		})
+		return nil, err
+	}
+	
 	p.logger.Info("開始階段分析", map[string]interface{}{
 		"phase_count":    len(phases),
 		"data_points":    len(dataset.Data),
 		"channel_count":  len(dataset.Data[0].Channels),
 		"scaling_factor": p.scalingFactor,
 	})
-
-	if dataset == nil || len(dataset.Data) == 0 {
-		err := fmt.Errorf("數據集為空")
-		p.logger.Error("階段分析輸入驗證失敗", err, map[string]interface{}{
-			"dataset_nil": dataset == nil,
-			"data_length": len(dataset.Data),
-		})
-		return nil, err
-	}
 
 	if len(phases) != len(p.phaseLabels) {
 		err := fmt.Errorf("階段數量與標籤數量不匹配")
@@ -181,9 +186,21 @@ func (p *PhaseAnalyzer) parseRawData(records [][]string) (*models.EMGDataset, er
 		}
 
 		// 解析時間
+		if row[0] == "" {
+			p.logger.Debug("跳過空白時間行", map[string]interface{}{
+				"row_number": i + 1,
+			})
+			continue // 跳過空白時間值的行
+		}
+		
 		timeVal, err := util.Str2Number[float64, int](row[0], p.scalingFactor)
 		if err != nil {
-			return nil, fmt.Errorf("解析時間值失敗在第 %d 行: %w", i+1, err)
+			p.logger.Warn("時間值解析失敗，跳過此行", map[string]interface{}{
+				"row_number": i + 1,
+				"time_value": row[0],
+				"error":      err.Error(),
+			})
+			continue // 跳過無法解析的行
 		}
 
 		// 解析通道數據

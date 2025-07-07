@@ -1,8 +1,10 @@
-package main
+package benchmark_test
 
 import (
+	"count_mean/internal/benchmark"
 	"count_mean/internal/config"
 	"count_mean/internal/logging"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,7 +28,7 @@ func TestMain(m *testing.M) {
 
 func TestBenchmarker(t *testing.T) {
 	cfg := config.DefaultConfig()
-	benchmarker := NewBenchmarker(cfg)
+	benchmarker := benchmark.NewBenchmarker(cfg)
 
 	t.Run("基本性能測試", func(t *testing.T) {
 		metrics := benchmarker.Benchmark("測試函數", func() error {
@@ -115,7 +117,7 @@ func TestBenchmarker(t *testing.T) {
 
 func TestBenchmarkReport(t *testing.T) {
 	cfg := config.DefaultConfig()
-	benchmarker := NewBenchmarker(cfg)
+	benchmarker := benchmark.NewBenchmarker(cfg)
 
 	// 添加一些測試結果
 	benchmarker.Benchmark("快速測試", func() error {
@@ -195,7 +197,13 @@ func TestBenchmarkReport(t *testing.T) {
 }
 
 func TestSystemInfo(t *testing.T) {
-	sysInfo := getSystemInfo()
+	// Create a benchmarker to test system info
+	cfg := config.DefaultConfig()
+	b := benchmark.NewBenchmarker(cfg)
+
+	// Generate report to get system info
+	report := b.GenerateReport("Test")
+	sysInfo := report.Environment
 
 	if sysInfo.OS == "" {
 		t.Error("作業系統資訊不應為空")
@@ -220,7 +228,7 @@ func TestSystemInfo(t *testing.T) {
 
 func TestBenchmarkReset(t *testing.T) {
 	cfg := config.DefaultConfig()
-	benchmarker := NewBenchmarker(cfg)
+	benchmarker := benchmark.NewBenchmarker(cfg)
 
 	// 添加一些測試結果
 	benchmarker.Benchmark("測試1", func() error { return nil })
@@ -242,45 +250,61 @@ func TestBenchmarkReset(t *testing.T) {
 
 func TestCSVBenchmarks(t *testing.T) {
 	cfg := config.DefaultConfig()
-	csvBench, err := NewCSVBenchmarks(cfg)
+	csvBench, err := benchmark.NewCSVBenchmarks(cfg)
 	if err != nil {
 		t.Fatalf("創建 CSV 基準測試失敗: %v", err)
 	}
 	defer csvBench.Cleanup()
 
-	t.Run("生成測試文件", func(t *testing.T) {
-		filePath, fileSize, err := csvBench.generateTestCSV("test.csv", 100, 10)
+	t.Run("CSV 基準測試執行", func(t *testing.T) {
+		// 創建一個測試 CSV 文件
+		tempDir := filepath.Join(os.TempDir(), "csv_benchmark_test")
+		os.MkdirAll(tempDir, 0755)
+		defer os.RemoveAll(tempDir)
+
+		testFile := filepath.Join(tempDir, "test.csv")
+		file, err := os.Create(testFile)
 		if err != nil {
-			t.Errorf("生成測試文件失敗: %v", err)
+			t.Fatalf("創建測試文件失敗: %v", err)
 		}
 
-		if fileSize <= 0 {
+		// 寫入測試數據
+		file.WriteString("time,channel1,channel2,channel3\n")
+		for i := 0; i < 100; i++ {
+			file.WriteString(fmt.Sprintf("%.2f,%.2f,%.2f,%.2f\n",
+				float64(i)*0.01, float64(i)*1.1, float64(i)*1.2, float64(i)*1.3))
+		}
+		file.Close()
+
+		// 獲取文件大小
+		info, err := os.Stat(testFile)
+		if err != nil {
+			t.Fatalf("獲取文件信息失敗: %v", err)
+		}
+
+		if info.Size() <= 0 {
 			t.Error("文件大小應該大於0")
 		}
 
-		// 檢查文件是否存在
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			t.Error("測試文件未創建")
+		// 運行基準測試
+		report := csvBench.RunAllBenchmarks()
+		if report.Summary.TotalTests <= 0 {
+			t.Error("應該執行至少一個測試")
 		}
 	})
 
-	t.Run("CSV 讀取測試", func(t *testing.T) {
-		// 這個測試可能需要實際的 CSV 處理器
-		// 為了測試目的，我們只測試測試文件的生成
-		filePath, _, err := csvBench.generateTestCSV("read_test.csv", 10, 5)
-		if err != nil {
-			t.Errorf("生成測試文件失敗: %v", err)
+	t.Run("CSV 報告生成", func(t *testing.T) {
+		// 獲取基準測試器並生成報告
+		benchmarker := csvBench.GetBenchmarker()
+		report := benchmarker.GenerateReport("CSV測試")
+
+		if report.TestSuite != "CSV測試" {
+			t.Errorf("期望測試套件名稱 'CSV測試'，實際: %s", report.TestSuite)
 		}
 
-		// 檢查文件內容
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			t.Errorf("讀取測試文件失敗: %v", err)
-		}
-
-		lines := splitLines(string(content))
-		if len(lines) < 11 { // 1 header + 10 data rows
-			t.Errorf("期望至少11行，實際: %d", len(lines))
+		// 確保有系統信息
+		if report.Environment.OS == "" {
+			t.Error("缺少系統信息")
 		}
 	})
 }

@@ -14,7 +14,7 @@ App 表示GUI應用程式
 
 
 ```go
-type App &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=289425) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140005ee1a0 <nil> 0 0x140005da330 <nil>})] %!s(token.Pos=0)}
+type App &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=21011) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400019dc40 <nil> 0 0x14000163b30 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -151,7 +151,7 @@ BenchmarkMetrics 性能測試指標
 
 
 ```go
-type BenchmarkMetrics &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=614808) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400025ac20 <nil> 0 0x1400024d320 <nil>})] %!s(token.Pos=0)}
+type BenchmarkMetrics &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=57356) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400024edc0 <nil> 0 0x1400024c4b0 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### BenchmarkResult
@@ -160,7 +160,7 @@ BenchmarkResult 基準測試結果
 
 
 ```go
-type BenchmarkResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=615703) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400025b120 <nil> 0 0x1400024d470 <nil>})] %!s(token.Pos=0)}
+type BenchmarkResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=58262) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400024f2c0 <nil> 0 0x1400024c600 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### BenchmarkSummary
@@ -169,7 +169,7 @@ BenchmarkSummary 測試摘要
 
 
 ```go
-type BenchmarkSummary &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=616481) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400025b580 <nil> 0 0x1400024d830 <nil>})] %!s(token.Pos=0)}
+type BenchmarkSummary &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=59025) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400024f720 <nil> 0 0x1400024c9c0 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### Benchmarker
@@ -178,7 +178,7 @@ Benchmarker 性能測試器
 
 
 ```go
-type Benchmarker &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=617281) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400025ba00 <nil> 0 0x1400024d8d8 <nil>})] %!s(token.Pos=0)}
+type Benchmarker &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=59825) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400024fba0 <nil> 0 0x1400024ca68 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -239,7 +239,7 @@ CSVBenchmarks CSV 相關性能測試
 
 
 ```go
-type CSVBenchmarks &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=634231) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400029c380 <nil> 0 0x1400028c9d8 <nil>})] %!s(token.Pos=0)}
+type CSVBenchmarks &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=68841) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400027e120 <nil> 0 0x140002765b8 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -300,44 +300,8 @@ SystemInfo 系統資訊
 
 
 ```go
-type SystemInfo &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=616132) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400025b360 <nil> 0 0x1400024d5a8 <nil>})] %!s(token.Pos=0)}
+type SystemInfo &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=58676) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400024f500 <nil> 0 0x1400024c738 <nil>})] %!s(token.Pos=0)}
 ```
-
-#### TestError
-
-TestError 測試錯誤類型
-
-
-```go
-type TestError &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=633362) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000291540 <nil> 0 0x1400028c870 <nil>})] %!s(token.Pos=0)}
-```
-
-##### 方法
-
-**Error**
-
-### 函數
-
-#### TestBenchmarkReport
-
-#### TestBenchmarkReset
-
-#### TestBenchmarker
-
-#### TestCSVBenchmarks
-
-#### TestMain
-
-#### TestSystemInfo
-
-#### containsString
-
-輔助函數
-
-
-#### findSubstring
-
-#### splitLines
 
 ---
 
@@ -351,7 +315,7 @@ AnalyzeResult 階段分析結果
 
 
 ```go
-type AnalyzeResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=678009) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000171c20 <nil> 0 0x1400000db48 <nil>})] %!s(token.Pos=0)}
+type AnalyzeResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=95450) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140002e9580 <nil> 0 0x140002e29c0 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### MaxMeanCalculator
@@ -360,7 +324,7 @@ MaxMeanCalculator 處理最大平均值計算
 
 
 ```go
-type MaxMeanCalculator &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=644024) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140002c46e0 <nil> 0 0x140002c2588 <nil>})] %!s(token.Pos=0)}
+type MaxMeanCalculator &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=78578) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400029c480 <nil> 0 0x1400029a168 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -396,7 +360,7 @@ Normalizer 處理數據標準化
 
 
 ```go
-type Normalizer &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=663608) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000090920 <nil> 0 0x140002c31e8 <nil>})] %!s(token.Pos=0)}
+type Normalizer &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=88983) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140002d2360 <nil> 0 0x1400029b7b8 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -422,7 +386,7 @@ PhaseAnalyzer 處理階段分析
 
 
 ```go
-type PhaseAnalyzer &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=677594) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000171860 <nil> 0 0x1400000da40 <nil>})] %!s(token.Pos=0)}
+type PhaseAnalyzer &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=95035) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140002e91c0 <nil> 0 0x140002e28b8 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -447,34 +411,6 @@ parsePhases 解析階段字符串為時間範圍
 parseRawData 解析原始字符串數據
 
 
-### 函數
-
-#### TestMaxMeanCalculator_Calculate
-
-#### TestMaxMeanCalculator_CalculateFromRawData
-
-#### TestMaxMeanCalculator_CalculateFromRawDataWithRange
-
-#### TestMaxMeanCalculator_CalculateWithRange
-
-#### TestMaxMeanCalculator_EdgeCases
-
-#### TestMaxMeanCalculator_parseRawData
-
-#### TestNormalizer_Normalize
-
-#### TestNormalizer_NormalizeFromRawData
-
-#### TestNormalizer_parseRawData
-
-#### TestPhaseAnalyzer_Analyze
-
-#### TestPhaseAnalyzer_AnalyzeFromRawData
-
-#### TestPhaseAnalyzer_parsePhases
-
-#### TestPhaseAnalyzer_parseRawData
-
 ---
 
 ## 套件: config
@@ -487,7 +423,7 @@ AppConfig 應用程式配置
 
 
 ```go
-type AppConfig &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=695049) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140002bb7a0 <nil> 0 0x140005fef30 <nil>})] %!s(token.Pos=0)}
+type AppConfig &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=101896) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000308e80 <nil> 0 0x140002e3938 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -517,20 +453,6 @@ ToAnalysisConfig 轉換為分析配置
 Validate 驗證配置
 
 
-### 函數
-
-#### TestAppConfig_ProcessingOptions
-
-#### TestAppConfig_SaveConfig
-
-#### TestAppConfig_ToAnalysisConfig
-
-#### TestAppConfig_Validate
-
-#### TestDefaultConfig
-
-#### TestLoadConfig
-
 ---
 
 ## 套件: errors
@@ -543,7 +465,7 @@ AppError represents a structured application error
 
 
 ```go
-type AppError &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=710924) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140000f02c0 <nil> 0 0x14000143788 <nil>})] %!s(token.Pos=0)}
+type AppError &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=107022) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003243c0 <nil> 0 0x1400031c3a8 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -574,7 +496,7 @@ ErrorCode represents different types of errors
 
 
 ```go
-type ErrorCode &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=709882) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140000e5ba0 <nil> 0 0x140000e5bc0 <nil>})] %!s(token.Pos=0)}
+type ErrorCode &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=106029) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000319ca0 <nil> 0 0x14000319cc0 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### ProcessingError
@@ -583,7 +505,7 @@ ProcessingError represents errors that occur during data processing
 
 
 ```go
-type ProcessingError &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=714109) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140000f2440 <nil> 0 0x14000143de8 <nil>})] %!s(token.Pos=0)}
+type ProcessingError &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=110433) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400032a520 <nil> 0 0x1400031ca68 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -599,7 +521,7 @@ ValidationError represents input validation errors
 
 
 ```go
-type ValidationError &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=715456) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140000f35e0 <nil> 0 0x14000168150 <nil>})] %!s(token.Pos=0)}
+type ValidationError &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=111773) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400032b6c0 <nil> 0 0x1400031cd50 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -611,25 +533,9 @@ Error returns a formatted error message for ValidationError
 
 ### 函數
 
-#### TestAppError_Error
+#### IsRecoverable
 
-#### TestAppError_Is
-
-#### TestAppError_WithContext
-
-#### TestIsRecoverable
-
-#### TestNewAppError
-
-#### TestNewAppErrorWithCause
-
-#### TestProcessingError_Error
-
-#### TestValidationError_Error
-
-#### isRecoverable
-
-isRecoverable determines if an error type is recoverable
+IsRecoverable determines if an error type is recoverable
 
 
 ---
@@ -644,7 +550,7 @@ I18n manages internationalization
 
 
 ```go
-type I18n &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=723885) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000153300 <nil> 0 0x140001690b0 <nil>})] %!s(token.Pos=0)}
+type I18n &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=115284) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000333840 <nil> 0 0x1400031d3b0 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -705,7 +611,7 @@ Locale represents a supported locale
 
 
 ```go
-type Locale &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=723601) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140001530e0 <nil> 0 0x14000153100 <nil>})] %!s(token.Pos=0)}
+type Locale &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=115000) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000333620 <nil> 0 0x14000333640 <nil>})] %!s(token.Pos=0)}
 ```
 
 ### 函數
@@ -724,22 +630,6 @@ InitI18n initializes the global i18n instance
 Global functions for convenience
 
 
-#### TestGlobalI18n
-
-#### TestI18n_Basic
-
-#### TestI18n_Fallback
-
-#### TestI18n_FileOperations
-
-#### TestI18n_LocaleDetection
-
-#### TestI18n_LocaleName
-
-#### TestI18n_SupportedLocales
-
-#### TestI18n_WithArgs
-
 ---
 
 ## 套件: io
@@ -752,7 +642,7 @@ CSVHandler 處理 CSV 檔案讀寫
 
 
 ```go
-type CSVHandler &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=750149) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140001df8a0 <nil> 0 0x1400024db78 <nil>})] %!s(token.Pos=0)}
+type CSVHandler &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=134190) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000368120 <nil> 0 0x1400034aac8 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -853,7 +743,7 @@ FileInfo 文件信息
 
 
 ```go
-type FileInfo &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=780408) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000242fe0 <nil> 0 0x14000231650 <nil>})] %!s(token.Pos=0)}
+type FileInfo &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=151768) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000393580 <nil> 0 0x1400037daa0 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### LargeFileHandler
@@ -862,7 +752,7 @@ LargeFileHandler 處理大文件的結構
 
 
 ```go
-type LargeFileHandler &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=779294) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000242720 <nil> 0 0x140002313f8 <nil>})] %!s(token.Pos=0)}
+type LargeFileHandler &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=150654) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000392cc0 <nil> 0 0x1400037d848 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -918,7 +808,7 @@ ProgressCallback 進度回調函數類型
 
 
 ```go
-type ProgressCallback &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=779171) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140002425e0 <nil> 0 0x140002426e0 <nil>})] %!s(token.Pos=0)}
+type ProgressCallback &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=150531) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000392b80 <nil> 0 0x14000392c80 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### StreamingResult
@@ -927,38 +817,8 @@ StreamingResult 流式處理結果
 
 
 ```go
-type StreamingResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=780660) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000243200 <nil> 0 0x140002316f8 <nil>})] %!s(token.Pos=0)}
+type StreamingResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=152020) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003937a0 <nil> 0 0x1400037db48 <nil>})] %!s(token.Pos=0)}
 ```
-
-### 函數
-
-#### TestBOMBytes
-
-#### TestCSVHandler_ConvertMaxMeanResultsToCSV
-
-#### TestCSVHandler_ConvertNormalizedDataToCSV
-
-#### TestCSVHandler_ConvertPhaseAnalysisToCSV
-
-#### TestCSVHandler_ReadCSV
-
-#### TestCSVHandler_ReadCSVFromPrompt
-
-#### TestCSVHandler_WriteCSV
-
-#### TestLargeFileHandler_ErrorHandling
-
-#### TestLargeFileHandler_GetFileInfo
-
-#### TestLargeFileHandler_MemoryManagement
-
-#### TestLargeFileHandler_ProcessLargeFileInChunks
-
-#### TestLargeFileHandler_ReadCSVStreaming
-
-#### TestLargeFileHandler_WriteCSVStreaming
-
-#### TestNewCSVHandler
 
 ---
 
@@ -972,7 +832,7 @@ LogEntry represents a structured log entry
 
 
 ```go
-type LogEntry &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=801846) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000311140 <nil> 0 0x14000304ab0 <nil>})] %!s(token.Pos=0)}
+type LogEntry &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=166267) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003d04e0 <nil> 0 0x140003a5f50 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### LogLevel
@@ -981,7 +841,7 @@ LogLevel represents the severity level of a log entry
 
 
 ```go
-type LogLevel &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=801381) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000310cc0 <nil> 0 0x14000310ce0 <nil>})] %!s(token.Pos=0)}
+type LogLevel &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=165802) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003d0060 <nil> 0 0x140003d0080 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -997,7 +857,7 @@ Logger provides structured logging functionality
 
 
 ```go
-type Logger &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=802435) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000311500 <nil> 0 0x14000304b28 <nil>})] %!s(token.Pos=0)}
+type Logger &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=166856) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003d08a0 <nil> 0 0x140003d4048 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -1075,30 +935,6 @@ Convenience functions using the default logger
 InitLogger initializes the default logger
 
 
-#### TestConvenienceFunctions
-
-#### TestGetLogger
-
-#### TestLogLevel_String
-
-#### TestLogger_DebugInfoWarnError
-
-#### TestLogger_ErrorWithAppError
-
-#### TestLogger_JSONFormat
-
-#### TestLogger_LogLevels
-
-#### TestLogger_TextFormat
-
-#### TestLogger_WithContext
-
-#### TestLogger_WithError
-
-#### TestLogger_WithModule
-
-#### TestNewLogger
-
 #### Warn
 
 ---
@@ -1113,7 +949,7 @@ AnalysisConfig 代表分析配置
 
 
 ```go
-type AnalysisConfig &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=817606) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000359920 <nil> 0 0x1400033f758 <nil>})] %!s(token.Pos=0)}
+type AnalysisConfig &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=174528) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8cc0 <nil> 0 0x140003d58f0 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### EMGData
@@ -1122,7 +958,7 @@ EMGData 代表 EMG 數據的結構
 
 
 ```go
-type EMGData &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=816857) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003593c0 <nil> 0 0x1400033f620 <nil>})] %!s(token.Pos=0)}
+type EMGData &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=173779) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8760 <nil> 0 0x140003d57b8 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### EMGDataset
@@ -1131,7 +967,7 @@ EMGDataset 代表完整的 EMG 數據集
 
 
 ```go
-type EMGDataset &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=816998) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003594c0 <nil> 0 0x1400033f668 <nil>})] %!s(token.Pos=0)}
+type EMGDataset &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=173920) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8860 <nil> 0 0x140003d5800 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### MaxMeanResult
@@ -1140,7 +976,7 @@ MaxMeanResult 代表最大平均值計算結果
 
 
 ```go
-type MaxMeanResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=817146) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003595c0 <nil> 0 0x1400033f6b0 <nil>})] %!s(token.Pos=0)}
+type MaxMeanResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=174068) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8960 <nil> 0 0x140003d5848 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### PhaseAnalysisResult
@@ -1149,7 +985,7 @@ PhaseAnalysisResult 代表階段分析結果
 
 
 ```go
-type PhaseAnalysisResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=817387) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000359780 <nil> 0 0x1400033f6f8 <nil>})] %!s(token.Pos=0)}
+type PhaseAnalysisResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=174309) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8b20 <nil> 0 0x140003d5890 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### ProcessingOptions
@@ -1158,7 +994,7 @@ ProcessingOptions 代表處理選項
 
 
 ```go
-type ProcessingOptions &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=818033) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000359c40 <nil> 0 0x1400033f7e8 <nil>})] %!s(token.Pos=0)}
+type ProcessingOptions &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=174955) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8fe0 <nil> 0 0x140003d5980 <nil>})] %!s(token.Pos=0)}
 ```
 
 #### TimeRange
@@ -1167,7 +1003,7 @@ TimeRange 代表時間範圍
 
 
 ```go
-type TimeRange &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=817908) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000359b60 <nil> 0 0x1400033f7a0 <nil>})] %!s(token.Pos=0)}
+type TimeRange &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=174830) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8f00 <nil> 0 0x140003d5938 <nil>})] %!s(token.Pos=0)}
 ```
 
 ---
@@ -1182,7 +1018,7 @@ PathValidator provides secure path validation functionality
 
 
 ```go
-type PathValidator &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=818328) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000359f00 <nil> 0 0x1400033f830 <nil>})] %!s(token.Pos=0)}
+type PathValidator &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=175250) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e9220 <nil> 0 0x140003d59c8 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -1212,16 +1048,6 @@ ValidateDirectoryPath validates that a directory path is within allowed director
 ValidateFilePath validates that a file path is within allowed directories
 
 
-### 函數
-
-#### TestPathValidator_GetSafePath
-
-#### TestPathValidator_IsCSVFile
-
-#### TestPathValidator_SanitizePath
-
-#### TestPathValidator_ValidateFilePath
-
 ---
 
 ## 套件: validation
@@ -1234,7 +1060,7 @@ InputValidator provides comprehensive input validation functionality
 
 
 ```go
-type InputValidator &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=824724) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003aea40 <nil> 0 0x1400038e2e8 <nil>})] %!s(token.Pos=0)}
+type InputValidator &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=178430) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140004031a0 <nil> 0 0x140004042a0 <nil>})] %!s(token.Pos=0)}
 ```
 
 ##### 方法
@@ -1309,19 +1135,73 @@ WithMaxFileSize sets the maximum allowed file size
 validateSinglePhaseLabel validates a single phase label
 
 
+---
+
+## 套件: main
+
 ### 函數
 
-#### TestInputValidator_SanitizeString
+#### createLargeTestFile
 
-#### TestInputValidator_ValidateCSVData
+createLargeTestFile 創建大型測試文件
 
-#### TestInputValidator_ValidateFilename
 
-#### TestInputValidator_ValidatePhaseLabels
+#### main
 
-#### TestInputValidator_ValidateTimeRange
+示範結構化日誌使用
 
-#### TestInputValidator_ValidateWindowSize
+
+---
+
+## 套件: integration
+
+### 函數
+
+#### TestBenchmarkIntegration
+
+性能基準測試整合測試
+
+
+#### TestFullWorkflow_ConfigurationManagement
+
+TestFullWorkflow_ConfigurationManagement 測試完整的配置管理流程
+
+
+#### TestFullWorkflow_DataNormalization
+
+TestFullWorkflow_DataNormalization 測試完整的數據標準化流程
+
+
+#### TestFullWorkflow_ErrorHandling
+
+TestFullWorkflow_ErrorHandling 測試完整流程的錯誤處理
+
+
+#### TestFullWorkflow_MaxMeanCalculation
+
+TestFullWorkflow_MaxMeanCalculation 測試完整的最大平均值計算流程
+
+
+#### TestFullWorkflow_Performance
+
+TestFullWorkflow_Performance 測試大數據集的性能
+
+
+#### TestFullWorkflow_PhaseAnalysis
+
+TestFullWorkflow_PhaseAnalysis 測試完整的階段分析流程
+
+
+#### TestI18nIntegration
+
+國際化集成測試
+
+
+#### TestIntegration_ConcurrentOperations
+
+#### TestIntegration_ErrorRecovery
+
+#### TestIntegration_FullWorkflow
 
 ---
 
@@ -1332,7 +1212,7 @@ validateSinglePhaseLabel validates a single phase label
 #### Number
 
 ```go
-type Number &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=1229655) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000336a80 <nil> 0 0x14000142870 <nil>})] %!s(token.Pos=0)}
+type Number &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=285634) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000304f60 <nil> 0 0x14000276a98 <nil>})] %!s(token.Pos=0)}
 ```
 
 ### 函數
@@ -1342,10 +1222,6 @@ type Number &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=1229655) type %!s(token
 #### ArrayMean
 
 #### Str2Number
-
-#### TestMean
-
-#### TestStr2int
 
 ---
 

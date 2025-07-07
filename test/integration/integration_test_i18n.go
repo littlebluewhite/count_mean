@@ -1,11 +1,10 @@
-package main
+package integration
 
 import (
 	"count_mean/internal/config"
 	"count_mean/internal/errors"
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
-	"fmt"
 	"os"
 	"testing"
 )
@@ -117,71 +116,4 @@ func TestI18nIntegration(t *testing.T) {
 	logger.Info("國際化集成測試完成")
 }
 
-// 如果直接運行此文件，執行測試
-func main() {
-	if len(os.Args) > 1 && os.Args[1] == "test" {
-		testing.Main(func(pat, str string) (bool, error) { return true, nil },
-			[]testing.InternalTest{
-				{"TestI18nIntegration", TestI18nIntegration},
-			},
-			[]testing.InternalBenchmark{},
-			[]testing.InternalExample{})
-	} else {
-		// 運行演示
-		runI18nDemo()
-	}
-}
 
-func runI18nDemo() {
-	fmt.Println("=== 國際化集成測試演示 ===")
-
-	// 初始化日誌
-	if err := logging.InitLogger(logging.LevelInfo, "./logs", false); err != nil {
-		fmt.Printf("日誌初始化失敗: %v\n", err)
-		return
-	}
-
-	// 初始化配置
-	cfg := config.DefaultConfig()
-
-	// 初始化國際化
-	if err := i18n.InitI18n(cfg.TranslationsDir); err != nil {
-		fmt.Printf("初始化國際化系統失敗: %v\n", err)
-		return
-	}
-
-	// 演示不同語言的錯誤訊息
-	locales := i18n.GetSupportedLocales()
-
-	fmt.Println("=== 多語言錯誤訊息演示 ===")
-	for _, locale := range locales {
-		i18n.SetLocale(locale)
-		fmt.Printf("\n語言: %s (%s)\n", i18n.GetLocaleName(locale), locale)
-
-		// 文件相關錯誤
-		fmt.Printf("  檔案未找到: %s\n", errors.GetI18nFileNotFoundError().Message)
-		fmt.Printf("  檔案過大: %s\n", errors.GetI18nFileTooLargeError().Message)
-		fmt.Printf("  無效CSV: %s\n", errors.GetI18nInvalidCSVError().Message)
-
-		// 計算相關錯誤
-		fmt.Printf("  計算失敗: %s\n", errors.GetI18nCalculationFailedError().Message)
-		fmt.Printf("  資料不足: %s\n", errors.GetI18nInsufficientDataError().Message)
-		fmt.Printf("  記憶體不足: %s\n", errors.GetI18nMemoryLimitError().Message)
-	}
-
-	fmt.Println("\n=== 多語言界面元素演示 ===")
-	for _, locale := range locales {
-		i18n.SetLocale(locale)
-		fmt.Printf("\n語言: %s\n", i18n.GetLocaleName(locale))
-		fmt.Printf("  按鈕: %s, %s, %s\n",
-			i18n.T("button.calculate"),
-			i18n.T("button.save"),
-			i18n.T("button.cancel"))
-		fmt.Printf("  狀態: %s\n", i18n.T("status.processing"))
-		fmt.Printf("  對話框: %s, %s\n",
-			i18n.T("dialog.error"),
-			i18n.T("dialog.success"))
-	}
-
-	fmt.Println("\n國際化集成測試演示完成！")
-}

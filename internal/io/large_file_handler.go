@@ -369,8 +369,11 @@ func (h *LargeFileHandler) ProcessLargeFileInChunks(filename string, windowSize 
 
 			// 保持緩衝區大小，移除最舊的數據
 			if len(dataBuffer) > windowSize*2 {
-				copy(dataBuffer, dataBuffer[h.chunkSize:])
-				dataBuffer = dataBuffer[:len(dataBuffer)-h.chunkSize]
+				removeCount := len(dataBuffer) - windowSize
+				if removeCount > 0 && removeCount < len(dataBuffer) {
+					copy(dataBuffer, dataBuffer[removeCount:])
+					dataBuffer = dataBuffer[:len(dataBuffer)-removeCount]
+				}
 			}
 		}
 

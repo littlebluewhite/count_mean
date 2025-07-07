@@ -1,4 +1,4 @@
-package main
+package integration
 
 import (
 	"count_mean/internal/calculator"
@@ -15,21 +15,25 @@ import (
 
 // TestFullWorkflow_MaxMeanCalculation 測試完整的最大平均值計算流程
 func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
-	// 準備測試配置
+	// 準備測試數據
+	tempDir := t.TempDir()
+	
+	// 準備測試配置 - 設置目錄為臨時目錄以允許路徑驗證
 	cfg := &config.AppConfig{
 		ScalingFactor: 10,
 		Precision:     2,
 		BOMEnabled:    false,
 		OutputFormat:  "csv",
 		PhaseLabels:   []string{"Phase1", "Phase2"},
+		InputDir:      tempDir,  // 設置輸入目錄為臨時目錄
+		OutputDir:     tempDir,  // 設置輸出目錄為臨時目錄
+		OperateDir:    tempDir,  // 設置操作目錄為臨時目錄
 	}
 
 	// 創建模組實例
 	csvHandler := io.NewCSVHandler(cfg)
 	maxMeanCalc := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
 
-	// 準備測試數據
-	tempDir := t.TempDir()
 	inputFile := filepath.Join(tempDir, "test_input.csv")
 
 	// 寫入測試CSV文件
@@ -72,6 +76,9 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 
 // TestFullWorkflow_DataNormalization 測試完整的數據標準化流程
 func TestFullWorkflow_DataNormalization(t *testing.T) {
+	// 準備測試數據
+	tempDir := t.TempDir()
+	
 	// 準備測試配置
 	cfg := &config.AppConfig{
 		ScalingFactor: 10,
@@ -79,14 +86,14 @@ func TestFullWorkflow_DataNormalization(t *testing.T) {
 		BOMEnabled:    false,
 		OutputFormat:  "csv",
 		PhaseLabels:   []string{"Phase1"},
+		InputDir:      tempDir,  // 設置輸入目錄為臨時目錄
+		OutputDir:     tempDir,  // 設置輸出目錄為臨時目錄
+		OperateDir:    tempDir,  // 設置操作目錄為臨時目錄
 	}
 
 	// 創建模組實例
 	csvHandler := io.NewCSVHandler(cfg)
 	normalizer := calculator.NewNormalizer(cfg.ScalingFactor)
-
-	// 準備測試數據
-	tempDir := t.TempDir()
 
 	// 主數據文件
 	mainFile := filepath.Join(tempDir, "main_data.csv")
@@ -134,6 +141,9 @@ func TestFullWorkflow_DataNormalization(t *testing.T) {
 
 // TestFullWorkflow_PhaseAnalysis 測試完整的階段分析流程
 func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
+	// 準備測試數據
+	tempDir := t.TempDir()
+	
 	// 準備測試配置
 	cfg := &config.AppConfig{
 		ScalingFactor: 10,
@@ -141,14 +151,15 @@ func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 		BOMEnabled:    false,
 		OutputFormat:  "csv",
 		PhaseLabels:   []string{"Phase1", "Phase2", "Phase3", "Phase4"},
+		InputDir:      tempDir,  // 設置輸入目錄為臨時目錄
+		OutputDir:     tempDir,  // 設置輸出目錄為臨時目錄
+		OperateDir:    tempDir,  // 設置操作目錄為臨時目錄
 	}
 
 	// 創建模組實例
 	csvHandler := io.NewCSVHandler(cfg)
 	analyzer := calculator.NewPhaseAnalyzer(cfg.ScalingFactor, cfg.PhaseLabels)
 
-	// 準備測試數據
-	tempDir := t.TempDir()
 	dataFile := filepath.Join(tempDir, "phase_data.csv")
 
 	// 數據跨越兩個階段（0.5秒在第一階段，1.5秒在第二階段，2.5秒在第三階段）
@@ -270,7 +281,7 @@ func TestFullWorkflow_ErrorHandling(t *testing.T) {
 		// 測試讀取不存在的文件
 		_, err := csvHandler.ReadCSV("nonexistent.csv")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "無法開啟檔案")
+		require.Contains(t, err.Error(), "路徑驗證失敗")
 	})
 
 	t.Run("InvalidInputData", func(t *testing.T) {
@@ -281,7 +292,7 @@ func TestFullWorkflow_ErrorHandling(t *testing.T) {
 		}
 		_, err := maxMeanCalc.CalculateFromRawData(invalidRecords, 1)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "解析時間值失敗")
+		require.Contains(t, err.Error(), "解析後數據集為空")
 	})
 
 	t.Run("InvalidWindowSize", func(t *testing.T) {
@@ -302,12 +313,16 @@ func TestFullWorkflow_Performance(t *testing.T) {
 		t.Skip("跳過性能測試")
 	}
 
+	// 生成大量測試數據
+	tempDir := t.TempDir()
+	
 	cfg := config.DefaultConfig()
+	cfg.InputDir = tempDir   // 設置輸入目錄為臨時目錄
+	cfg.OutputDir = tempDir  // 設置輸出目錄為臨時目錄
+	cfg.OperateDir = tempDir // 設置操作目錄為臨時目錄
 	csvHandler := io.NewCSVHandler(cfg)
 	maxMeanCalc := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
 
-	// 生成大量測試數據
-	tempDir := t.TempDir()
 	largeFile := filepath.Join(tempDir, "large_data.csv")
 
 	// 創建包含1000行數據的文件

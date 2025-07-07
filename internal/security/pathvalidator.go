@@ -35,6 +35,11 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 		return fmt.Errorf("路徑不能為空")
 	}
 
+	// Check for suspicious patterns in the original path before cleaning
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("路徑包含非法字符 '..'")
+	}
+
 	// Clean the path to resolve any ./ or ../ components
 	cleanPath := filepath.Clean(path)
 
@@ -42,11 +47,6 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 	absPath, err := filepath.Abs(cleanPath)
 	if err != nil {
 		return fmt.Errorf("無法解析路徑 '%s': %w", path, err)
-	}
-
-	// Check for suspicious patterns
-	if strings.Contains(absPath, "..") {
-		return fmt.Errorf("路徑包含非法字符 '..'")
 	}
 
 	// Verify the path is within allowed base paths

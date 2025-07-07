@@ -1,4 +1,4 @@
-package main
+package benchmark_test
 
 import (
 	"count_mean/internal/benchmark"
@@ -11,7 +11,7 @@ import (
 )
 
 // 性能基準測試演示程序
-func main() {
+func runBenchmarkDemo() {
 	fmt.Println("=== EMG 數據分析工具 - 性能基準測試演示 ===")
 	fmt.Printf("開始時間: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
 

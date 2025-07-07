@@ -23,7 +23,7 @@ func TestDefaultConfig(t *testing.T) {
 
 func TestAppConfig_Validate(t *testing.T) {
 	t.Run("ValidConfig", func(t *testing.T) {
-		config := &config.AppConfig{
+		cfg := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   []string{"階段1", "階段2"},
 			Precision:     5,
@@ -33,78 +33,78 @@ func TestAppConfig_Validate(t *testing.T) {
 			OutputDir:     "./output",
 			OperateDir:    "./value_operate",
 		}
-		err := config.Validate()
+		err := cfg.Validate()
 		require.NoError(t, err)
 	})
 
 	t.Run("InvalidScalingFactor_Zero", func(t *testing.T) {
-		config := &config.AppConfig{
+		cfg := &config.AppConfig{
 			ScalingFactor: 0,
 			PhaseLabels:   []string{"階段1"},
 			Precision:     5,
 			OutputFormat:  "csv",
 		}
-		err := config.Validate()
+		err := cfg.Validate()
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "縮放因子必須大於 0")
 	})
 
 	t.Run("InvalidScalingFactor_Negative", func(t *testing.T) {
-		config := &config.AppConfig{
+		cfg := &config.AppConfig{
 			ScalingFactor: -5,
 			PhaseLabels:   []string{"階段1"},
 			Precision:     5,
 			OutputFormat:  "csv",
 		}
-		err := config.Validate()
+		err := cfg.Validate()
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "縮放因子必須大於 0")
 	})
 
 	t.Run("EmptyPhaseLabels", func(t *testing.T) {
-		config := &config.AppConfig{
+		cfg := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   []string{},
 			Precision:     5,
 			OutputFormat:  "csv",
 		}
-		err := config.Validate()
+		err := cfg.Validate()
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "階段標籤不能為空")
 	})
 
 	t.Run("NilPhaseLabels", func(t *testing.T) {
-		config := &config.AppConfig{
+		cfg := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   nil,
 			Precision:     5,
 			OutputFormat:  "csv",
 		}
-		err := config.Validate()
+		err := cfg.Validate()
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "階段標籤不能為空")
 	})
 
 	t.Run("InvalidPrecision_Negative", func(t *testing.T) {
-		config := &config.AppConfig{
+		cfg := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   []string{"階段1"},
 			Precision:     -1,
 			OutputFormat:  "csv",
 		}
-		err := config.Validate()
+		err := cfg.Validate()
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "精度必須在 0-15 之間")
 	})
 
 	t.Run("InvalidPrecision_TooHigh", func(t *testing.T) {
-		config := &config.AppConfig{
+		cfg := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   []string{"階段1"},
 			Precision:     16,
 			OutputFormat:  "csv",
 		}
-		err := config.Validate()
+		err := cfg.Validate()
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "精度必須在 0-15 之間")
 	})
@@ -115,8 +115,8 @@ func TestAppConfig_Validate(t *testing.T) {
 			{ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 0, OutputFormat: "csv", InputDir: "./input", OutputDir: "./output", OperateDir: "./value_operate"},
 			{ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 15, OutputFormat: "csv", InputDir: "./input", OutputDir: "./output", OperateDir: "./value_operate"},
 		}
-		for _, config := range configs {
-			err := config.Validate()
+		for _, cfg := range configs {
+			err := cfg.Validate()
 			require.NoError(t, err)
 		}
 	})
@@ -124,7 +124,7 @@ func TestAppConfig_Validate(t *testing.T) {
 	t.Run("ValidOutputFormats", func(t *testing.T) {
 		validFormats := []string{"csv", "json", "xlsx"}
 		for _, format := range validFormats {
-			config := &config.AppConfig{
+			cfg := &config.AppConfig{
 				ScalingFactor: 10,
 				PhaseLabels:   []string{"階段1"},
 				Precision:     5,
@@ -133,7 +133,7 @@ func TestAppConfig_Validate(t *testing.T) {
 				OutputDir:     "./output",
 				OperateDir:    "./value_operate",
 			}
-			err := config.Validate()
+			err := cfg.Validate()
 			require.NoError(t, err)
 		}
 	})
@@ -141,13 +141,13 @@ func TestAppConfig_Validate(t *testing.T) {
 	t.Run("InvalidOutputFormat", func(t *testing.T) {
 		invalidFormats := []string{"txt", "xml", "pdf", ""}
 		for _, format := range invalidFormats {
-			config := &config.AppConfig{
+			cfg := &config.AppConfig{
 				ScalingFactor: 10,
 				PhaseLabels:   []string{"階段1"},
 				Precision:     5,
 				OutputFormat:  format,
 			}
-			err := config.Validate()
+			err := cfg.Validate()
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "不支援的輸出格式")
 		}
@@ -155,13 +155,13 @@ func TestAppConfig_Validate(t *testing.T) {
 
 	t.Run("CaseSensitiveOutputFormat", func(t *testing.T) {
 		// 測試大小寫敏感性
-		config := &config.AppConfig{
+		cfg := &config.AppConfig{
 			ScalingFactor: 10,
 			PhaseLabels:   []string{"階段1"},
 			Precision:     5,
 			OutputFormat:  "CSV", // 大寫應該失敗
 		}
-		err := config.Validate()
+		err := cfg.Validate()
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "不支援的輸出格式: CSV")
 	})
@@ -274,7 +274,7 @@ func TestAppConfig_SaveConfig(t *testing.T) {
 		tempDir := t.TempDir()
 		configFile := filepath.Join(tempDir, "save_test.json")
 
-		config := &config.AppConfig{
+		cfg := &config.AppConfig{
 			ScalingFactor: 15,
 			PhaseLabels:   []string{"保存測試階段1", "保存測試階段2"},
 			Precision:     12,
@@ -285,7 +285,7 @@ func TestAppConfig_SaveConfig(t *testing.T) {
 			OperateDir:    "./value_operate",
 		}
 
-		err := config.SaveConfig(configFile)
+		err := cfg.SaveConfig(configFile)
 		require.NoError(t, err)
 
 		// 檢查文件是否存在
@@ -295,11 +295,11 @@ func TestAppConfig_SaveConfig(t *testing.T) {
 		// 重新載入並驗證
 		reloadedConfig, err := config.LoadConfig(configFile)
 		require.NoError(t, err)
-		require.Equal(t, config.ScalingFactor, reloadedConfig.ScalingFactor)
-		require.Equal(t, config.PhaseLabels, reloadedConfig.PhaseLabels)
-		require.Equal(t, config.Precision, reloadedConfig.Precision)
-		require.Equal(t, config.OutputFormat, reloadedConfig.OutputFormat)
-		require.Equal(t, config.BOMEnabled, reloadedConfig.BOMEnabled)
+		require.Equal(t, cfg.ScalingFactor, reloadedConfig.ScalingFactor)
+		require.Equal(t, cfg.PhaseLabels, reloadedConfig.PhaseLabels)
+		require.Equal(t, cfg.Precision, reloadedConfig.Precision)
+		require.Equal(t, cfg.OutputFormat, reloadedConfig.OutputFormat)
+		require.Equal(t, cfg.BOMEnabled, reloadedConfig.BOMEnabled)
 	})
 
 	t.Run("SaveLoadRoundTrip", func(t *testing.T) {
@@ -336,7 +336,7 @@ func TestAppConfig_SaveConfig(t *testing.T) {
 }
 
 func TestAppConfig_ToAnalysisConfig(t *testing.T) {
-	config := &config.AppConfig{
+	cfg := &config.AppConfig{
 		ScalingFactor: 15,
 		PhaseLabels:   []string{"測試階段1", "測試階段2", "測試階段3"},
 		Precision:     8,
@@ -344,15 +344,15 @@ func TestAppConfig_ToAnalysisConfig(t *testing.T) {
 		BOMEnabled:    true,
 	}
 
-	analysisConfig := config.ToAnalysisConfig()
+	analysisConfig := cfg.ToAnalysisConfig()
 	require.NotNil(t, analysisConfig)
-	require.Equal(t, config.ScalingFactor, analysisConfig.ScalingFactor)
-	require.Equal(t, config.PhaseLabels, analysisConfig.PhaseLabels)
+	require.Equal(t, cfg.ScalingFactor, analysisConfig.ScalingFactor)
+	require.Equal(t, cfg.PhaseLabels, analysisConfig.PhaseLabels)
 	require.WithinDuration(t, time.Now(), analysisConfig.CreatedAt, time.Second)
 }
 
 func TestAppConfig_ProcessingOptions(t *testing.T) {
-	config := &config.AppConfig{
+	cfg := &config.AppConfig{
 		ScalingFactor: 10,
 		PhaseLabels:   []string{"階段1"},
 		Precision:     12,
@@ -360,9 +360,9 @@ func TestAppConfig_ProcessingOptions(t *testing.T) {
 		BOMEnabled:    false,
 	}
 
-	options := config.ProcessingOptions()
+	options := cfg.ProcessingOptions()
 	require.NotNil(t, options)
 	require.True(t, options.ValidateInput)
-	require.Equal(t, config.Precision, options.Precision)
-	require.Equal(t, config.OutputFormat, options.OutputFormat)
+	require.Equal(t, cfg.Precision, options.Precision)
+	require.Equal(t, cfg.OutputFormat, options.OutputFormat)
 }

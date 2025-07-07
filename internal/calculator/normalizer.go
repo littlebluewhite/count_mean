@@ -25,12 +25,7 @@ func NewNormalizer(scalingFactor int) *Normalizer {
 // Normalize 標準化數據集（每個值除以參考值）
 func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMGDataset) (*models.EMGDataset, error) {
 	startTime := time.Now()
-	n.logger.Info("開始數據標準化", map[string]interface{}{
-		"dataset_points":   len(dataset.Data),
-		"reference_points": len(reference.Data),
-		"scaling_factor":   n.scalingFactor,
-	})
-
+	
 	if dataset == nil || reference == nil {
 		err := fmt.Errorf("數據集或參考數據集為空")
 		n.logger.Error("標準化輸入驗證失敗", err, map[string]interface{}{
@@ -39,6 +34,12 @@ func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMG
 		})
 		return nil, err
 	}
+	
+	n.logger.Info("開始數據標準化", map[string]interface{}{
+		"dataset_points":   len(dataset.Data),
+		"reference_points": len(reference.Data),
+		"scaling_factor":   n.scalingFactor,
+	})
 
 	if len(dataset.Data) == 0 || len(reference.Data) == 0 {
 		err := fmt.Errorf("數據集或參考數據集為空")
@@ -164,9 +165,21 @@ func (n *Normalizer) parseRawData(records [][]string) (*models.EMGDataset, error
 		}
 
 		// 解析時間
+		if row[0] == "" {
+			n.logger.Debug("跳過空白時間行", map[string]interface{}{
+				"row_number": i + 1,
+			})
+			continue // 跳過空白時間值的行
+		}
+		
 		timeVal, err := util.Str2Number[float64, int](row[0], n.scalingFactor)
 		if err != nil {
-			return nil, fmt.Errorf("解析時間值失敗在第 %d 行: %w", i+1, err)
+			n.logger.Warn("時間值解析失敗，跳過此行", map[string]interface{}{
+				"row_number": i + 1,
+				"time_value": row[0],
+				"error":      err.Error(),
+			})
+			continue // 跳過無法解析的行
 		}
 
 		// 解析通道數據
@@ -185,6 +198,11 @@ func (n *Normalizer) parseRawData(records [][]string) (*models.EMGDataset, error
 		}
 
 		dataset.Data = append(dataset.Data, data)
+	}
+
+	// 檢查是否有有效數據
+	if len(dataset.Data) == 0 {
+		return nil, fmt.Errorf("解析後數據集為空，所有行都被跳過")
 	}
 
 	n.logger.Debug("標準化原始數據解析完成", map[string]interface{}{

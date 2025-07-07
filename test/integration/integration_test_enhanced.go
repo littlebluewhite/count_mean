@@ -1,4 +1,4 @@
-package main
+package integration
 
 import (
 	"count_mean/internal/calculator"
@@ -8,9 +8,9 @@ import (
 	"count_mean/internal/logging"
 	"count_mean/internal/security"
 	"count_mean/internal/validation"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -245,14 +245,14 @@ func TestIntegration_ErrorRecovery(t *testing.T) {
 		// Create CSV with inconsistent columns
 		badData := [][]string{
 			{"Time", "Ch1", "Ch2"},
-			{"0.1", "100"},    // Missing column
+			{"0.1", "100"}, // Missing column
 			{"0.2", "120", "50"},
 			{"0.3", "110", "55", "extra"}, // Extra column
 		}
 
 		csvHandler := io.NewCSVHandler(cfg)
 		badFilePath := filepath.Join(inputDir, "bad_data.csv")
-		
+
 		// Write bad data (this should work)
 		err := csvHandler.WriteCSV(badFilePath, badData)
 		require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestIntegration_ErrorRecovery(t *testing.T) {
 		invalidData := [][]string{
 			{"Time", "Ch1"},
 			{"0.1", "100"},
-			{"invalid", "120"}, // Invalid time
+			{"invalid", "120"},      // Invalid time
 			{"0.3", "not_a_number"}, // Invalid channel data
 		}
 
@@ -313,7 +313,7 @@ func TestIntegration_ConcurrentOperations(t *testing.T) {
 
 	t.Run("ConcurrentFileOperations", func(t *testing.T) {
 		csvHandler := io.NewCSVHandler(cfg)
-		
+
 		// Create multiple test files concurrently
 		const numFiles = 5
 		done := make(chan bool, numFiles)
@@ -345,6 +345,3 @@ func TestIntegration_ConcurrentOperations(t *testing.T) {
 		}
 	})
 }
-
-// Helper function for fmt.Sprintf (since we're not importing fmt in the original import)
-import "fmt"
