@@ -83,8 +83,26 @@ func (a *App) executeMaxMeanCalculation(mode, filePath, dirPath, windowSizeStr, 
 
 // executeSingleFileCalculation 執行單檔案計算
 func (a *App) executeSingleFileCalculation(filePath string, windowSize int, startRange, endRange float64, useCustomRange bool) error {
-	// 讀取檔案
-	records, err := a.csvHandler.ReadCSV(filePath)
+	// 檢查檔案是否在允許的目錄範圍內，決定使用哪種讀取方法
+	var records [][]string
+	var err error
+
+	// 檢查檔案是否為絕對路徑且在輸入目錄外
+	if filepath.IsAbs(filePath) {
+		fileDir := filepath.Dir(filePath)
+		relPath, relErr := filepath.Rel(a.config.InputDir, fileDir)
+		if relErr != nil || strings.HasPrefix(relPath, "..") {
+			// 檔案在輸入目錄外，使用外部讀取方法（跳過路徑驗證）
+			records, err = a.csvHandler.ReadCSVExternal(filePath)
+		} else {
+			// 檔案在輸入目錄內，使用正常讀取方法
+			records, err = a.csvHandler.ReadCSV(filePath)
+		}
+	} else {
+		// 相對路徑，使用正常讀取方法
+		records, err = a.csvHandler.ReadCSV(filePath)
+	}
+
 	if err != nil {
 		return fmt.Errorf("讀取檔案失敗: %w", err)
 	}
