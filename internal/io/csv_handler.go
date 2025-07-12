@@ -177,6 +177,109 @@ func (h *CSVHandler) ReadCSVFromInput(filename string) ([][]string, error) {
 	return h.ReadCSV(fullPath)
 }
 
+// ReadCSVExternal 讀取外部 CSV 檔案（跳過路徑驗證，用於批量處理外部目錄）
+func (h *CSVHandler) ReadCSVExternal(filename string) ([][]string, error) {
+	h.logger.Debug("開始讀取外部 CSV 檔案", map[string]interface{}{
+		"filename": filename,
+	})
+
+	// 檢查文件大小並決定處理方式
+	fileInfo, err := h.largeFileHandler.GetFileInfo(filename)
+	if err != nil {
+		// 如果無法獲取文件信息，使用傳統方式
+		h.logger.Warn("無法獲取文件信息，使用傳統讀取方式", map[string]interface{}{
+			"filename": filename,
+			"error":    err.Error(),
+		})
+	} else if fileInfo.IsLarge {
+		h.logger.Info("檢測到大文件，使用流式讀取", map[string]interface{}{
+			"filename":   filename,
+			"file_size":  fileInfo.Size,
+			"line_count": fileInfo.LineCount,
+		})
+		// 對於大文件，返回錯誤提示用戶使用專門的大文件處理方法
+		return nil, errors.NewAppErrorWithDetails(
+			errors.ErrCodeFileTooLarge,
+			"文件過大，請使用大文件處理功能",
+			fmt.Sprintf("文件 %s 過大 (%d bytes)，建議使用流式處理", filename, fileInfo.Size),
+		)
+	}
+
+	// 清理路徑（基本清理，不進行路徑驗證）
+	cleanPath := filepath.Clean(filename)
+
+	// Check if it's a CSV file
+	if !strings.HasSuffix(strings.ToLower(cleanPath), ".csv") {
+		err := errors.NewAppErrorWithDetails(
+			errors.ErrCodeFileFormat,
+			"檔案格式無效",
+			fmt.Sprintf("檔案 '%s' 不是有效的 CSV 檔案", cleanPath),
+		)
+		h.logger.Error("檔案格式驗證失敗", err, map[string]interface{}{
+			"path": cleanPath,
+		})
+		return nil, err
+	}
+
+	file, err := os.Open(cleanPath)
+	if err != nil {
+		appErr := errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟檔案")
+		h.logger.Error("檔案開啟失敗", appErr, map[string]interface{}{
+			"path": cleanPath,
+		})
+		return nil, appErr
+	}
+
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			h.logger.Warn("關閉檔案時發生錯誤", map[string]interface{}{
+				"file":  file.Name(),
+				"error": closeErr.Error(),
+			})
+		}
+	}()
+
+	r := csv.NewReader(file)
+	records, err := r.ReadAll()
+	if err != nil {
+		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "無法讀取 CSV 資料")
+		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]interface{}{
+			"path": cleanPath,
+		})
+		return nil, appErr
+	}
+
+	// 驗證數據
+	if len(records) < 2 {
+		err := errors.NewAppErrorWithDetails(
+			errors.ErrCodeInsufficientData,
+			"資料不足",
+			"檔案至少需要包含標題行和一行數據",
+		)
+		h.logger.Error("CSV 資料驗證失敗", err, map[string]interface{}{
+			"path":         cleanPath,
+			"record_count": len(records),
+		})
+		return nil, err
+	}
+
+	// 驗證 CSV 資料結構
+	if err := h.validator.ValidateCSVData(records, cleanPath); err != nil {
+		h.logger.Error("CSV 資料結構驗證失敗", err, map[string]interface{}{
+			"path": cleanPath,
+		})
+		return nil, err
+	}
+
+	h.logger.Info("外部 CSV 檔案讀取成功", map[string]interface{}{
+		"path":         cleanPath,
+		"record_count": len(records),
+		"column_count": len(records[0]),
+	})
+
+	return records, nil
+}
+
 // ReadCSV 讀取 CSV 檔案（自動檢測大文件並使用相應處理方式）
 func (h *CSVHandler) ReadCSV(filename string) ([][]string, error) {
 	h.logger.Debug("開始讀取 CSV 檔案", map[string]interface{}{

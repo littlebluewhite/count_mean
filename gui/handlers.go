@@ -124,25 +124,47 @@ func (a *App) executeSingleFileCalculation(filePath string, windowSize int, star
 
 // executeBatchCalculation 執行批量計算
 func (a *App) executeBatchCalculation(dirPath string, windowSize int, startRange, endRange float64, useCustomRange bool) error {
-	// 列出資料夾中的CSV文件
-	files, err := filepath.Glob(filepath.Join(dirPath, "*.csv"))
-	if err != nil {
-		return fmt.Errorf("搜尋CSV文件失敗: %w", err)
+	// 取得資料夾名稱（相對於輸入目錄）
+	var dirName string
+	var csvFiles []string
+	var err error
+
+	// 檢查是否為輸入目錄的子目錄
+	if filepath.IsAbs(dirPath) {
+		// 如果是絕對路徑，檢查是否在輸入目錄下
+		relPath, err := filepath.Rel(a.config.InputDir, dirPath)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			// 不在輸入目錄下，直接使用目錄中的文件
+			files, err := filepath.Glob(filepath.Join(dirPath, "*.csv"))
+			if err != nil {
+				return fmt.Errorf("搜尋CSV文件失敗: %w", err)
+			}
+			if len(files) == 0 {
+				return fmt.Errorf("資料夾中沒有找到CSV文件")
+			}
+			// 對於外部目錄，直接處理文件
+			return a.executeBatchCalculationDirect(files, filepath.Base(dirPath), windowSize, startRange, endRange, useCustomRange)
+		}
+		dirName = relPath
+	} else {
+		dirName = dirPath
 	}
 
-	if len(files) == 0 {
+	// 使用CSV處理器的目錄方法列出文件
+	csvFiles, err = a.csvHandler.ListCSVFilesInDirectory(dirName)
+	if err != nil {
+		return fmt.Errorf("列出CSV文件失敗: %w", err)
+	}
+
+	if len(csvFiles) == 0 {
 		return fmt.Errorf("資料夾中沒有找到CSV文件")
 	}
 
-	// 取得資料夾名稱
-	dirName := filepath.Base(dirPath)
-
 	// 處理每個文件
-	for _, fullPath := range files {
-		fileName := filepath.Base(fullPath)
+	for _, fileName := range csvFiles {
 		fileBaseName := strings.TrimSuffix(fileName, ".csv")
 
-		records, err := a.csvHandler.ReadCSV(fullPath)
+		records, err := a.csvHandler.ReadCSVFromDirectory(dirName, fileName)
 		if err != nil {
 			continue // 跳過有錯誤的文件
 		}
@@ -174,7 +196,52 @@ func (a *App) executeBatchCalculation(dirPath string, windowSize int, startRange
 		outputData := a.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, actualStartRange, actualEndRange)
 		outputFile := fmt.Sprintf("%s_最大平均值計算.csv", fileBaseName)
 
-		a.csvHandler.WriteCSVToOutputDirectory(dirName, outputFile, outputData)
+		a.csvHandler.WriteCSVToOutputDirectory(filepath.Base(dirName), outputFile, outputData)
+	}
+
+	return nil
+}
+
+// executeBatchCalculationDirect 直接處理外部目錄的文件
+func (a *App) executeBatchCalculationDirect(files []string, outputDirName string, windowSize int, startRange, endRange float64, useCustomRange bool) error {
+	// 處理每個文件
+	for _, fullPath := range files {
+		fileName := filepath.Base(fullPath)
+		fileBaseName := strings.TrimSuffix(fileName, ".csv")
+
+		records, err := a.csvHandler.ReadCSVExternal(fullPath)
+		if err != nil {
+			continue // 跳過有錯誤的文件
+		}
+
+		// 如果沒有使用自定義範圍，從數據中獲取預設範圍
+		actualStartRange, actualEndRange := startRange, endRange
+		if !useCustomRange {
+			if len(records) > 1 && len(records[1]) > 0 {
+				actualStartRange, _ = strconv.ParseFloat(records[1][0], 64)
+			}
+			if len(records) > 1 && len(records[len(records)-1]) > 0 {
+				actualEndRange, _ = strconv.ParseFloat(records[len(records)-1][0], 64)
+			}
+		}
+
+		// 計算最大平均值
+		var results []models.MaxMeanResult
+		if actualStartRange == 0 && actualEndRange == 0 {
+			results, err = a.maxMeanCalc.CalculateFromRawData(records, windowSize)
+		} else {
+			results, err = a.maxMeanCalc.CalculateFromRawDataWithRange(records, windowSize, actualStartRange, actualEndRange)
+		}
+
+		if err != nil {
+			continue // 跳過計算失敗的文件
+		}
+
+		// 輸出結果
+		outputData := a.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, actualStartRange, actualEndRange)
+		outputFile := fmt.Sprintf("%s_最大平均值計算.csv", fileBaseName)
+
+		a.csvHandler.WriteCSVToOutputDirectory(outputDirName, outputFile, outputData)
 	}
 
 	return nil

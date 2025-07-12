@@ -51,13 +51,20 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 
 	// Verify the path is within allowed base paths
 	for _, basePath := range pv.allowedBasePaths {
-		// Use filepath.Rel to check if the target is within the base
-		rel, err := filepath.Rel(basePath, absPath)
+		// Get absolute base path
+		absBasePath, err := filepath.Abs(basePath)
 		if err != nil {
 			continue
 		}
 
-		// If the relative path doesn't start with "..", it's within the base path
+		// Use filepath.Rel to check if the target is within the base
+		rel, err := filepath.Rel(absBasePath, absPath)
+		if err != nil {
+			continue
+		}
+
+		// If the relative path doesn't start with ".." and doesn't start with "/",
+		// it's within the base path (including subdirectories)
 		if !strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, "/") {
 			return nil
 		}
