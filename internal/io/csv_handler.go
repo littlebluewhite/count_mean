@@ -497,10 +497,10 @@ func (h *CSVHandler) ConvertMaxMeanResultsToCSV(headers []string, results []mode
 	for _, result := range results {
 		precision := fmt.Sprintf("%%.%df", h.config.Precision)
 
-		startRangeTimes = append(startRangeTimes, fmt.Sprintf("%.2f", startRange))
-		endRangeTimes = append(endRangeTimes, fmt.Sprintf("%.2f", endRange))
-		startTimes = append(startTimes, fmt.Sprintf("%.2f", result.StartTime/math.Pow10(h.config.ScalingFactor)))
-		endTimes = append(endTimes, fmt.Sprintf("%.2f", result.EndTime/math.Pow10(h.config.ScalingFactor)))
+		startRangeTimes = append(startRangeTimes, fmt.Sprintf(precision, startRange))
+		endRangeTimes = append(endRangeTimes, fmt.Sprintf(precision, endRange))
+		startTimes = append(startTimes, fmt.Sprintf(precision, result.StartTime/math.Pow10(h.config.ScalingFactor)))
+		endTimes = append(endTimes, fmt.Sprintf(precision, result.EndTime/math.Pow10(h.config.ScalingFactor)))
 		maxMeans = append(maxMeans, fmt.Sprintf(precision, result.MaxMean/math.Pow10(h.config.ScalingFactor)))
 	}
 
@@ -520,17 +520,19 @@ func (h *CSVHandler) ConvertNormalizedDataToCSV(dataset *models.EMGDataset) [][]
 	// 添加標題
 	data = append(data, dataset.Headers)
 
-	// 添加數據
-	precision := fmt.Sprintf("%%.%df", h.config.Precision)
+	// 時間列使用原始精度，數據列使用配置精度
+	timePrecision := fmt.Sprintf("%%.%df", dataset.OriginalTimePrecision)
+	dataPrecision := fmt.Sprintf("%%.%df", h.config.Precision)
+
 	for _, emgData := range dataset.Data {
 		row := make([]string, 0, len(dataset.Headers))
 
-		// 時間列
-		row = append(row, fmt.Sprintf("%.2f", emgData.Time/math.Pow10(h.config.ScalingFactor)))
+		// 時間列 - 使用原始檔案的時間精度
+		row = append(row, fmt.Sprintf(timePrecision, emgData.Time/math.Pow10(h.config.ScalingFactor)))
 
-		// 數據列
+		// 數據列 - 使用配置的精度
 		for _, val := range emgData.Channels {
-			row = append(row, fmt.Sprintf(precision, val))
+			row = append(row, fmt.Sprintf(dataPrecision, val))
 		}
 
 		data = append(data, row)
@@ -592,7 +594,7 @@ func (h *CSVHandler) ConvertPhaseAnalysisToCSV(headers []string, result *models.
 		for j := 1; j < len(headers); j++ {
 			channelIdx := j - 1
 			if timeVal, exists := maxTimeIndex[channelIdx]; exists {
-				timeRow = append(timeRow, fmt.Sprintf("%.2f", timeVal/math.Pow10(h.config.ScalingFactor)))
+				timeRow = append(timeRow, fmt.Sprintf(fmt.Sprintf("%%.%df", h.config.Precision), timeVal/math.Pow10(h.config.ScalingFactor)))
 			} else {
 				timeRow = append(timeRow, "N/A")
 			}
@@ -635,4 +637,45 @@ func (h *CSVHandler) WriteLargeCSVStreaming(filename string, data [][]string, ca
 	})
 
 	return h.largeFileHandler.WriteCSVStreaming(filename, data, callback)
+}
+
+// detectTimePrecision 檢測時間欄位的小數位數
+func (h *CSVHandler) detectTimePrecision(records [][]string) int {
+	if len(records) < 2 {
+		return 2 // 預設精度
+	}
+
+	maxPrecision := 0
+	// 檢查前幾行數據來確定時間精度
+	for i := 1; i < len(records) && i <= 10; i++ {
+		if len(records[i]) > 0 {
+			timeStr := records[i][0]
+			precision := h.getDecimalPrecision(timeStr)
+			if precision > maxPrecision {
+				maxPrecision = precision
+			}
+		}
+	}
+
+	// 如果檢測不到小數位數，預設為 2
+	if maxPrecision == 0 {
+		maxPrecision = 2
+	}
+
+	return maxPrecision
+}
+
+// getDecimalPrecision 獲取字串中小數點後的位數
+func (h *CSVHandler) getDecimalPrecision(numStr string) int {
+	// 移除空白字元
+	numStr = strings.TrimSpace(numStr)
+
+	// 找到小數點位置
+	dotIndex := strings.Index(numStr, ".")
+	if dotIndex == -1 {
+		return 0 // 沒有小數點
+	}
+
+	// 計算小數點後的位數
+	return len(numStr) - dotIndex - 1
 }

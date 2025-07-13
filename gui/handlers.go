@@ -2,6 +2,7 @@ package gui
 
 import (
 	"count_mean/internal/calculator"
+	"count_mean/internal/chart"
 	"count_mean/internal/config"
 	"count_mean/internal/errors"
 	"count_mean/internal/io"
@@ -9,6 +10,7 @@ import (
 	"count_mean/internal/models"
 	"fmt"
 	"fyne.io/fyne/v2/widget"
+	"gonum.org/v1/plot/vg"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -265,8 +267,24 @@ func (a *App) executeBatchCalculationDirect(files []string, outputDirName string
 	return nil
 }
 
+// executeNormalizationWithCallback 執行資料標準化（帶回調）
+func (a *App) executeNormalizationWithCallback(mainFilePath, refFilePath, outputName string, callback func(success bool)) {
+	success := false
+	defer func() {
+		callback(success)
+	}()
+
+	a.executeNormalizationInternal(mainFilePath, refFilePath, outputName, &success)
+}
+
 // executeNormalization 執行資料標準化
 func (a *App) executeNormalization(mainFilePath, refFilePath, outputName string) {
+	success := false
+	a.executeNormalizationInternal(mainFilePath, refFilePath, outputName, &success)
+}
+
+// executeNormalizationInternal 執行資料標準化內部實現
+func (a *App) executeNormalizationInternal(mainFilePath, refFilePath, outputName string, success *bool) {
 	a.updateStatus("執行標準化中...")
 
 	// 驗證輸入
@@ -322,6 +340,7 @@ func (a *App) executeNormalization(mainFilePath, refFilePath, outputName string)
 
 	a.updateStatus("標準化完成！")
 	a.showInfo("資料標準化成功完成，結果已保存到輸出目錄")
+	*success = true
 }
 
 // executePhaseAnalysis 執行階段分析
@@ -506,4 +525,131 @@ func (a *App) handleValidationError(context string, err error, logger *logging.L
 	} else {
 		a.showError(fmt.Sprintf("%s: %v", context, err))
 	}
+}
+
+// executeChartGeneration 執行圖表生成（直接保存）
+func (a *App) executeChartGeneration(filePath string, selectedColumns []string, chartTitle string) {
+	a.updateStatus("正在生成圖表...")
+
+	dataset, chartConfig, err := a.prepareChartData(filePath, selectedColumns, chartTitle)
+	if err != nil {
+		a.showError(err.Error())
+		return
+	}
+
+	// 生成輸出檔案名
+	baseName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+	outputFileName := fmt.Sprintf("%s_圖表.png", baseName)
+	outputPath := filepath.Join(a.config.OutputDir, outputFileName)
+
+	// 生成圖表
+	err = a.chartGen.GenerateLineChart(dataset, chartConfig, outputPath)
+	if err != nil {
+		a.showError(fmt.Sprintf("生成圖表失敗: %v", err))
+		return
+	}
+
+	a.updateStatus("圖表生成完成！")
+	a.showInfo(fmt.Sprintf("圖表已保存到: %s", outputPath))
+}
+
+// executeChartPreview 執行圖表預覽
+func (a *App) executeChartPreview(filePath string, selectedColumns []string, chartTitle string) {
+	a.updateStatus("正在生成圖表預覽...")
+
+	dataset, chartConfig, err := a.prepareChartData(filePath, selectedColumns, chartTitle)
+	if err != nil {
+		a.showError(err.Error())
+		return
+	}
+
+	// 生成圖表圖像
+	img, err := a.chartGen.GenerateLineChartImage(dataset, chartConfig)
+	if err != nil {
+		a.showError(fmt.Sprintf("生成圖表預覽失敗: %v", err))
+		return
+	}
+
+	// 顯示預覽視窗
+	a.showChartPreview(img, filePath, selectedColumns, chartTitle, dataset, chartConfig)
+}
+
+// prepareChartData 準備圖表數據
+func (a *App) prepareChartData(filePath string, selectedColumns []string, chartTitle string) (*models.EMGDataset, chart.ChartConfig, error) {
+	// 驗證輸入
+	if filePath == "" {
+		return nil, chart.ChartConfig{}, fmt.Errorf("請選擇CSV檔案")
+	}
+	if len(selectedColumns) == 0 {
+		return nil, chart.ChartConfig{}, fmt.Errorf("請至少選擇一個數據列")
+	}
+
+	// 讀取CSV檔案
+	records, err := a.csvHandler.ReadCSV(filePath)
+	if err != nil {
+		return nil, chart.ChartConfig{}, fmt.Errorf("讀取CSV檔案失敗: %v", err)
+	}
+
+	if len(records) < 2 {
+		return nil, chart.ChartConfig{}, fmt.Errorf("CSV檔案格式無效：需要至少包含標題和一行數據")
+	}
+
+	// 創建 EMG 數據集
+	dataset := &models.EMGDataset{
+		Headers: make([]string, len(records[0])),
+		Data:    make([]models.EMGData, 0, len(records)-1),
+	}
+
+	// 複製標題
+	copy(dataset.Headers, records[0])
+
+	// 手動解析數據（簡化版本）
+	for i := 1; i < len(records); i++ {
+		row := records[i]
+		if len(row) < 2 {
+			continue
+		}
+
+		// 解析時間
+		timeVal := float64(i - 1) // 使用索引作為時間
+		if len(row) > 0 && row[0] != "" {
+			// 嘗試解析實際時間值
+			var parseErr error
+			if timeVal, parseErr = strconv.ParseFloat(row[0], 64); parseErr != nil {
+				timeVal = float64(i - 1) // 回退到索引
+			}
+		}
+
+		// 解析通道數據
+		channels := make([]float64, 0, len(row)-1)
+		for j := 1; j < len(row); j++ {
+			if val, err := strconv.ParseFloat(row[j], 64); err == nil {
+				channels = append(channels, val)
+			} else {
+				channels = append(channels, 0.0) // 默認值
+			}
+		}
+
+		data := models.EMGData{
+			Time:     timeVal,
+			Channels: channels,
+		}
+		dataset.Data = append(dataset.Data, data)
+	}
+
+	if len(dataset.Data) == 0 {
+		return nil, chart.ChartConfig{}, fmt.Errorf("解析後數據集為空")
+	}
+
+	// 創建圖表配置
+	chartConfig := chart.ChartConfig{
+		Title:      chartTitle,
+		XAxisLabel: "時間 (秒)",
+		YAxisLabel: "數值",
+		Width:      vg.Points(800),
+		Height:     vg.Points(600),
+		Columns:    selectedColumns,
+	}
+
+	return dataset, chartConfig, nil
 }

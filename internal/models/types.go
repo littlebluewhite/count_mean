@@ -10,8 +10,9 @@ type EMGData struct {
 
 // EMGDataset 代表完整的 EMG 數據集
 type EMGDataset struct {
-	Headers []string  `json:"headers"`
-	Data    []EMGData `json:"data"`
+	Headers               []string  `json:"headers"`
+	Data                  []EMGData `json:"data"`
+	OriginalTimePrecision int       `json:"original_time_precision"` // 原始時間欄位的小數位數
 }
 
 // MaxMeanResult 代表最大平均值計算結果

@@ -5,6 +5,7 @@ import (
 	"count_mean/internal/models"
 	"count_mean/util"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -61,8 +62,9 @@ func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMG
 	}
 
 	result := &models.EMGDataset{
-		Headers: make([]string, len(dataset.Headers)),
-		Data:    make([]models.EMGData, 0, len(dataset.Data)),
+		Headers:               make([]string, len(dataset.Headers)),
+		Data:                  make([]models.EMGData, 0, len(dataset.Data)),
+		OriginalTimePrecision: dataset.OriginalTimePrecision,
 	}
 
 	// 複製標題
@@ -150,8 +152,9 @@ func (n *Normalizer) parseRawData(records [][]string) (*models.EMGDataset, error
 	}
 
 	dataset := &models.EMGDataset{
-		Headers: make([]string, len(records[0])),
-		Data:    make([]models.EMGData, 0, len(records)-1),
+		Headers:               make([]string, len(records[0])),
+		Data:                  make([]models.EMGData, 0, len(records)-1),
+		OriginalTimePrecision: n.detectTimePrecision(records),
 	}
 
 	// 複製標題
@@ -278,4 +281,49 @@ func (n *Normalizer) parseReferenceData(records [][]string) (*models.EMGDataset,
 	})
 
 	return dataset, nil
+}
+
+// detectTimePrecision 檢測時間欄位的小數位數
+func (n *Normalizer) detectTimePrecision(records [][]string) int {
+	if len(records) < 2 {
+		return 2 // 預設精度
+	}
+
+	maxPrecision := 0
+	// 檢查前幾行數據來確定時間精度
+	for i := 1; i < len(records) && i <= 10; i++ {
+		if len(records[i]) > 0 {
+			timeStr := records[i][0]
+			precision := n.getDecimalPrecision(timeStr)
+			if precision > maxPrecision {
+				maxPrecision = precision
+			}
+		}
+	}
+
+	// 如果檢測不到小數位數，預設為 2
+	if maxPrecision == 0 {
+		maxPrecision = 2
+	}
+
+	n.logger.Debug("檢測到時間精度", map[string]interface{}{
+		"detected_precision": maxPrecision,
+	})
+
+	return maxPrecision
+}
+
+// getDecimalPrecision 獲取字串中小數點後的位數
+func (n *Normalizer) getDecimalPrecision(numStr string) int {
+	// 移除空白字元
+	numStr = strings.TrimSpace(numStr)
+
+	// 找到小數點位置
+	dotIndex := strings.Index(numStr, ".")
+	if dotIndex == -1 {
+		return 0 // 沒有小數點
+	}
+
+	// 計算小數點後的位數
+	return len(numStr) - dotIndex - 1
 }
