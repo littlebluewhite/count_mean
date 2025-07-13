@@ -927,7 +927,7 @@ func (a *App) showChartPreview(img image.Image, filePath string, selectedColumns
 	mainControls := container.NewGridWithColumns(2, downloadBtn, closeBtn)
 
 	// 創建說明標籤
-	instructionLabel := widget.NewLabel("操作說明: 雙擊縮放到該點 | 滾輪縮放")
+	instructionLabel := widget.NewLabel("操作說明: 滾輪縮放")
 	instructionLabel.Alignment = fyne.TextAlignCenter
 	instructionLabel.TextStyle = fyne.TextStyle{Italic: true}
 

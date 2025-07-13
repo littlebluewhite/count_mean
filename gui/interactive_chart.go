@@ -131,9 +131,9 @@ func (c *InteractiveChart) Tapped(event *fyne.PointEvent) {
 	// 可以在這裡處理單擊事件
 }
 
-// DoubleTapped 處理雙擊事件（用於縮放）
+// DoubleTapped 處理雙擊事件
 func (c *InteractiveChart) DoubleTapped(event *fyne.PointEvent) {
-	c.zoomToPoint(event.Position.X, event.Position.Y)
+	// 雙擊功能已移除
 }
 
 // Scrolled 處理滾輪事件（用於縮放）
@@ -151,26 +151,6 @@ func (c *InteractiveChart) Scrolled(event *fyne.ScrollEvent) {
 	} else if event.Scrolled.DY < 0 {
 		c.zoomOut(mouseX)
 	}
-}
-
-// zoomToPoint 縮放到指定點
-func (c *InteractiveChart) zoomToPoint(mouseX, mouseY float32) {
-	// 如果有雙擊回調，先執行回調（用於狀態更新等）
-	if c.onDoubleClick != nil {
-		chartSize := c.chartImage.Size()
-		if chartSize.Width > 0 {
-			// 計算點擊的時間位置
-			leftMargin := chartSize.Width * 0.1
-			plotWidth := chartSize.Width * 0.8
-			relativeX := (mouseX - leftMargin) / plotWidth
-			dataX := c.displayStartX + float64(relativeX)*(c.displayEndX-c.displayStartX)
-
-			c.onDoubleClick(float64(dataX), float64(mouseY))
-		}
-	}
-
-	// 執行縮放操作，使用鼠標點擊位置作為縮放中心
-	c.zoomIn(mouseX)
 }
 
 // ZoomIn 放大 (公開方法)
