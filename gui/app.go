@@ -920,20 +920,16 @@ func (a *App) showChartPreview(img image.Image, filePath string, selectedColumns
 	mainControls := container.NewGridWithColumns(2, downloadBtn, closeBtn)
 
 	// 創建說明標籤
-	instructionLabel := widget.NewLabel("操作說明: 鼠標懸停顯示數值 | 雙擊縮放到該點 | 滾輪縮放")
+	instructionLabel := widget.NewLabel("操作說明: 雙擊縮放到該點 | 滾輪縮放")
 	instructionLabel.Alignment = fyne.TextAlignCenter
 	instructionLabel.TextStyle = fyne.TextStyle{Italic: true}
 
-	// 創建圖表容器
+	// 創建圖表容器，直接使用InteractiveChart不包裝在滾動容器中
 	chartContainer := container.NewVBox(
 		instructionLabel,
 		widget.NewSeparator(),
 		interactiveChart,
 	)
-
-	// 創建滾動容器來顯示圖表
-	scroll := container.NewScroll(chartContainer)
-	scroll.SetMinSize(fyne.NewSize(820, 600))
 
 	// 添加控制按鈕區域
 	controlArea := container.NewVBox(
@@ -945,7 +941,7 @@ func (a *App) showChartPreview(img image.Image, filePath string, selectedColumns
 	)
 
 	// 創建主容器，確保按鈕不會覆蓋圖表
-	content := container.NewBorder(nil, controlArea, nil, nil, scroll)
+	content := container.NewBorder(nil, controlArea, nil, nil, chartContainer)
 
 	// 創建預覽視窗
 	previewWindow := a.app.NewWindow("圖表預覽 - " + chartTitle)

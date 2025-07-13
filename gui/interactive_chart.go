@@ -31,6 +31,10 @@ type InteractiveChart struct {
 
 	// 已移除懸停功能
 
+	// 鼠標位置跟蹤（用於滾輪縮放）
+	lastMouseX float32
+	lastMouseY float32
+
 	// 點擊處理
 	onDoubleClick func(x, y float64)
 }
@@ -44,6 +48,8 @@ func NewInteractiveChart(img image.Image, dataset *models.EMGDataset, config cha
 		chartGen:    chart.NewChartGenerator(),
 		zoomFactor:  1.0,
 		xOffset:     0.0,
+		lastMouseX:  0.0,
+		lastMouseY:  0.0,
 	}
 
 	// 計算初始X軸範圍
@@ -68,6 +74,8 @@ func NewInteractiveChartWithGenerator(img image.Image, dataset *models.EMGDatase
 		chartGen:    chartGen,
 		zoomFactor:  1.0,
 		xOffset:     0.0,
+		lastMouseX:  0.0,
+		lastMouseY:  0.0,
 	}
 
 	// 計算初始X軸範圍
@@ -85,7 +93,6 @@ func NewInteractiveChartWithGenerator(img image.Image, dataset *models.EMGDatase
 
 // CreateRenderer 創建渲染器
 func (c *InteractiveChart) CreateRenderer() fyne.WidgetRenderer {
-	// 確保chartImage可以接收點擊事件
 	return &interactiveChartRenderer{
 		chart:   c,
 		objects: []fyne.CanvasObject{c.chartImage},
@@ -104,7 +111,9 @@ func (c *InteractiveChart) MouseOut() {
 
 // MouseMoved 處理鼠標移動事件
 func (c *InteractiveChart) MouseMoved(event *desktop.MouseEvent) {
-	// 已移除hover功能
+	// 跟蹤鼠標位置，用於滾輪縮放
+	c.lastMouseX = event.Position.X
+	c.lastMouseY = event.Position.Y
 }
 
 // MouseDown 處理鼠標按下事件
@@ -119,34 +128,28 @@ func (c *InteractiveChart) MouseUp(event *desktop.MouseEvent) {
 
 // Tapped 處理單擊事件
 func (c *InteractiveChart) Tapped(event *fyne.PointEvent) {
-	// 調試：檢查單擊事件是否被觸發
-	if c.onDoubleClick != nil {
-		c.onDoubleClick(1, 1) // 測試單擊
-	}
+	// 可以在這裡處理單擊事件
 }
 
 // DoubleTapped 處理雙擊事件（用於縮放）
 func (c *InteractiveChart) DoubleTapped(event *fyne.PointEvent) {
-	// 調試：檢查雙擊事件是否被觸發
-	if c.onDoubleClick != nil {
-		c.onDoubleClick(2, 2) // 測試雙擊
-	}
 	c.zoomToPoint(event.Position.X, event.Position.Y)
 }
 
 // Scrolled 處理滾輪事件（用於縮放）
 func (c *InteractiveChart) Scrolled(event *fyne.ScrollEvent) {
-	// 調試：測試滾輪事件是否工作
-	if c.onDoubleClick != nil {
-		c.onDoubleClick(999, 999) // 測試滾輪事件觸發
+	// 根據滾輪方向調整縮放，使用鼠標所在位置作為縮放點
+	mouseX := c.lastMouseX
+
+	// 如果沒有鼠標位置記錄，使用圖表中心
+	if mouseX == 0 {
+		mouseX = c.chartImage.Size().Width / 2
 	}
 
-	// 根據滾輪方向調整縮放，使用圖表中心作為縮放點
-	centerX := c.chartImage.Size().Width / 2
 	if event.Scrolled.DY > 0 {
-		c.zoomIn(centerX)
+		c.zoomIn(mouseX)
 	} else if event.Scrolled.DY < 0 {
-		c.zoomOut(centerX)
+		c.zoomOut(mouseX)
 	}
 }
 
@@ -166,7 +169,7 @@ func (c *InteractiveChart) zoomToPoint(mouseX, mouseY float32) {
 		}
 	}
 
-	// 總是執行縮放操作
+	// 執行縮放操作，使用鼠標點擊位置作為縮放中心
 	c.zoomIn(mouseX)
 }
 
@@ -186,12 +189,7 @@ func (c *InteractiveChart) zoomIn(centerX float32) {
 		return // 限制最大縮放倍數
 	}
 
-	// 調試：記錄縮放操作
-	oldZoom := c.zoomFactor
 	c.zoomFactor *= 2.0
-	if c.onDoubleClick != nil {
-		c.onDoubleClick(float64(oldZoom), float64(c.zoomFactor)) // 用回調顯示縮放變化
-	}
 	c.updateZoom(centerX)
 }
 
@@ -241,11 +239,6 @@ func (c *InteractiveChart) updateZoom(centerX float32) {
 
 	c.displayStartX = newStart
 	c.displayEndX = newEnd
-
-	// 調試：記錄範圍變化
-	if c.onDoubleClick != nil {
-		c.onDoubleClick(newStart, newEnd) // 用回調顯示新範圍
-	}
 
 	// 重新生成圖表（這裡需要重新繪製縮放後的圖表）
 	c.regenerateChart()
@@ -303,7 +296,9 @@ func (c *InteractiveChart) regenerateChart() {
 
 	// 更新圖表圖像
 	c.chartImage.Resource = nil
-	c.chartImage.Image = img
+	c.chartImage.Image = nil // 先清空圖像
+	c.chartImage.Refresh()
+	c.chartImage.Image = img // 然後設置新圖像
 	c.chartImage.Refresh()
 	c.Refresh()
 }
@@ -328,11 +323,18 @@ func (c *InteractiveChart) ResetZoom() {
 type interactiveChartRenderer struct {
 	chart   *InteractiveChart
 	objects []fyne.CanvasObject
+	overlay *canvas.Rectangle
 }
 
 func (r *interactiveChartRenderer) Layout(size fyne.Size) {
 	r.chart.chartImage.Resize(size)
 	r.chart.chartImage.Move(fyne.NewPos(0, 0))
+
+	// 設置透明覆蓋層覆蓋整個圖表
+	if r.overlay != nil {
+		r.overlay.Resize(size)
+		r.overlay.Move(fyne.NewPos(0, 0))
+	}
 }
 
 func (r *interactiveChartRenderer) MinSize() fyne.Size {
