@@ -26,7 +26,7 @@ func NewMaxMeanCalculator(scalingFactor int) *MaxMeanCalculator {
 // Calculate 計算指定窗口大小的最大平均值
 func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int) ([]models.MaxMeanResult, error) {
 	startTime := time.Now()
-	
+
 	if dataset == nil || len(dataset.Data) == 0 {
 		err := fmt.Errorf("數據集為空")
 		dataLength := 0
@@ -39,7 +39,7 @@ func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int
 		})
 		return nil, err
 	}
-	
+
 	c.logger.Info("開始最大平均值計算", map[string]interface{}{
 		"window_size":   windowSize,
 		"data_points":   len(dataset.Data),
@@ -149,7 +149,7 @@ func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(records [][]string, wi
 // CalculateWithRange 計算指定時間範圍內的最大平均值
 func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windowSize int, startRange, endRange float64) ([]models.MaxMeanResult, error) {
 	startTime := time.Now()
-	
+
 	if dataset == nil || len(dataset.Data) < windowSize {
 		err := fmt.Errorf("數據集無效或窗口大小過大")
 		dataLength := 0
@@ -163,7 +163,7 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 		})
 		return nil, err
 	}
-	
+
 	c.logger.Info("開始指定範圍內的最大平均值計算", map[string]interface{}{
 		"window_size":   windowSize,
 		"start_range":   startRange,
@@ -188,12 +188,23 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 	startIdx := -1
 	endIdx := -1
 
-	for i, data := range dataset.Data {
-		if startIdx == -1 && data.Time >= scaledStartRange {
-			startIdx = i
+	// 如果 endRange 為 0，表示使用所有數據直到最後
+	if endRange == 0 {
+		endIdx = len(dataset.Data) - 1
+		for i, data := range dataset.Data {
+			if startIdx == -1 && data.Time >= scaledStartRange {
+				startIdx = i
+				break
+			}
 		}
-		if data.Time <= scaledEndRange {
-			endIdx = i
+	} else {
+		for i, data := range dataset.Data {
+			if startIdx == -1 && data.Time >= scaledStartRange {
+				startIdx = i
+			}
+			if data.Time <= scaledEndRange {
+				endIdx = i
+			}
 		}
 	}
 
@@ -304,7 +315,7 @@ func (c *MaxMeanCalculator) parseRawData(records [][]string) (*models.EMGDataset
 			})
 			continue // 跳過空白時間值的行
 		}
-		
+
 		timeVal, err := util.Str2Number[float64, int](row[0], c.scalingFactor)
 		if err != nil {
 			c.logger.Warn("時間值解析失敗，跳過此行", map[string]interface{}{
