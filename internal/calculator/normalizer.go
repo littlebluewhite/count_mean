@@ -25,7 +25,7 @@ func NewNormalizer(scalingFactor int) *Normalizer {
 // Normalize 標準化數據集（每個值除以參考值）
 func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMGDataset) (*models.EMGDataset, error) {
 	startTime := time.Now()
-	
+
 	if dataset == nil || reference == nil {
 		err := fmt.Errorf("數據集或參考數據集為空")
 		n.logger.Error("標準化輸入驗證失敗", err, map[string]interface{}{
@@ -34,7 +34,7 @@ func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMG
 		})
 		return nil, err
 	}
-	
+
 	n.logger.Info("開始數據標準化", map[string]interface{}{
 		"dataset_points":   len(dataset.Data),
 		"reference_points": len(reference.Data),
@@ -125,7 +125,7 @@ func (n *Normalizer) NormalizeFromRawData(records [][]string, reference [][]stri
 		return nil, fmt.Errorf("解析主數據失敗: %w", err)
 	}
 
-	refDataset, err := n.parseRawData(reference)
+	refDataset, err := n.parseReferenceData(reference)
 	if err != nil {
 		n.logger.Error("參考數據解析失敗", err)
 		return nil, fmt.Errorf("解析參考數據失敗: %w", err)
@@ -171,7 +171,7 @@ func (n *Normalizer) parseRawData(records [][]string) (*models.EMGDataset, error
 			})
 			continue // 跳過空白時間值的行
 		}
-		
+
 		timeVal, err := util.Str2Number[float64, int](row[0], n.scalingFactor)
 		if err != nil {
 			n.logger.Warn("時間值解析失敗，跳過此行", map[string]interface{}{
@@ -206,6 +206,72 @@ func (n *Normalizer) parseRawData(records [][]string) (*models.EMGDataset, error
 	}
 
 	n.logger.Debug("標準化原始數據解析完成", map[string]interface{}{
+		"parsed_records": len(dataset.Data),
+		"channel_count":  len(dataset.Data[0].Channels),
+		"header_count":   len(dataset.Headers),
+	})
+
+	return dataset, nil
+}
+
+// parseReferenceData 解析參考數據（特殊格式，第一列是標籤而非時間）
+func (n *Normalizer) parseReferenceData(records [][]string) (*models.EMGDataset, error) {
+	n.logger.Debug("開始解析參考數據", map[string]interface{}{
+		"record_count": len(records),
+	})
+
+	if len(records) < 2 {
+		err := fmt.Errorf("參考數據至少需要包含標題行和一行數據")
+		n.logger.Error("參考數據結構驗證失敗", err, map[string]interface{}{
+			"record_count": len(records),
+		})
+		return nil, err
+	}
+
+	dataset := &models.EMGDataset{
+		Headers: make([]string, len(records[0])),
+		Data:    make([]models.EMGData, 0, len(records)-1),
+	}
+
+	// 複製標題
+	copy(dataset.Headers, records[0])
+
+	// 解析數據行（跳過標題）
+	for i := 1; i < len(records); i++ {
+		row := records[i]
+		if len(row) < 2 {
+			continue // 跳過無效行
+		}
+
+		// 參考數據不需要時間值，使用索引作為時間
+		data := models.EMGData{
+			Time:     float64(i - 1), // 使用行索引作為時間
+			Channels: make([]float64, 0, len(row)-1),
+		}
+
+		// 解析通道數據（從第二列開始，跳過標籤列）
+		for j := 1; j < len(row); j++ {
+			val, err := util.Str2Number[float64, int](row[j], n.scalingFactor)
+			if err != nil {
+				n.logger.Error("參考數據通道值解析失敗", err, map[string]interface{}{
+					"row_number":    i + 1,
+					"column_number": j + 1,
+					"value":         row[j],
+				})
+				return nil, fmt.Errorf("解析參考數據失敗在行 %d 列 %d: %w", i+1, j+1, err)
+			}
+			data.Channels = append(data.Channels, val)
+		}
+
+		dataset.Data = append(dataset.Data, data)
+	}
+
+	// 檢查是否有有效數據
+	if len(dataset.Data) == 0 {
+		return nil, fmt.Errorf("參考數據解析後為空")
+	}
+
+	n.logger.Debug("參考數據解析完成", map[string]interface{}{
 		"parsed_records": len(dataset.Data),
 		"channel_count":  len(dataset.Data[0].Channels),
 		"header_count":   len(dataset.Headers),

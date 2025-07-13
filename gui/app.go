@@ -32,7 +32,7 @@ type App struct {
 
 // NewApp 創建新的GUI應用程式
 func NewApp(cfg *config.AppConfig) *App {
-	myApp := app.New()
+	myApp := app.NewWithID("com.emgtool.analysis")
 	myApp.SetIcon(nil) // 可以稍後添加圖標
 
 	window := myApp.NewWindow("EMG 資料分析工具")
@@ -77,6 +77,7 @@ func (a *App) setupUI() {
 	normalizationBtn := widget.NewButton("資料標準化", func() {
 		a.showNormalizationDialog()
 	})
+	normalizationBtn.Importance = widget.HighImportance
 
 	phaseAnalysisBtn := widget.NewButton("階段分析", func() {
 		a.showPhaseAnalysisDialog()
