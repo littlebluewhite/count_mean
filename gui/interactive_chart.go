@@ -308,6 +308,37 @@ func (c *InteractiveChart) SetOnDoubleClick(callback func(x, y float64)) {
 	c.onDoubleClick = callback
 }
 
+// GetCurrentDisplayedDataset 獲取當前顯示範圍的數據集
+func (c *InteractiveChart) GetCurrentDisplayedDataset() *models.EMGDataset {
+	if c.dataset == nil {
+		return nil
+	}
+
+	// 創建過濾後的數據集，只包含當前顯示範圍的數據
+	filteredDataset := &models.EMGDataset{
+		Headers: make([]string, len(c.dataset.Headers)),
+		Data:    make([]models.EMGData, 0),
+	}
+
+	// 複製headers
+	copy(filteredDataset.Headers, c.dataset.Headers)
+
+	// 過濾數據到當前顯示範圍
+	for _, dataPoint := range c.dataset.Data {
+		if dataPoint.Time >= c.displayStartX && dataPoint.Time <= c.displayEndX {
+			filteredDataset.Data = append(filteredDataset.Data, dataPoint)
+		}
+	}
+
+	// 如果沒有數據在範圍內，使用完整數據集
+	if len(filteredDataset.Data) == 0 {
+		filteredDataset.Data = make([]models.EMGData, len(c.dataset.Data))
+		copy(filteredDataset.Data, c.dataset.Data)
+	}
+
+	return filteredDataset
+}
+
 // ResetZoom 重置縮放
 func (c *InteractiveChart) ResetZoom() {
 	if len(c.dataset.Data) > 0 {

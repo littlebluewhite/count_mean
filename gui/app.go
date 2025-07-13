@@ -901,8 +901,15 @@ func (a *App) showChartPreview(img image.Image, filePath string, selectedColumns
 		outputFileName := fmt.Sprintf("%s_圖表.png", baseName)
 		outputPath := filepath.Join(a.config.OutputDir, outputFileName)
 
-		// 保存圖表
-		err := a.chartGen.GenerateLineChart(dataset, config, outputPath)
+		// 獲取當前顯示的數據範圍
+		currentDataset := interactiveChart.GetCurrentDisplayedDataset()
+		if currentDataset == nil {
+			a.showError("無法獲取當前顯示的數據")
+			return
+		}
+
+		// 保存當前顯示的圖表
+		err := a.chartGen.GenerateLineChart(currentDataset, config, outputPath)
 		if err != nil {
 			a.showError(fmt.Sprintf("保存圖表失敗: %v", err))
 			return
