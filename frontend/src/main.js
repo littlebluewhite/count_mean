@@ -14,7 +14,10 @@ import {
     GenerateChart,
     AnalyzePhases,
     GetCSVHeaders,
-    GenerateInteractiveChart
+    GenerateInteractiveChart,
+    LoadPhaseManifest,
+    GetAvailablePhases,
+    AnalyzePhaseSync
 } from '../wailsjs/go/new_gui/App.js';
 import { OnFileDrop } from '../wailsjs/runtime/runtime.js';
 
@@ -115,6 +118,9 @@ class EMGAnalysisApp {
                 break;
             case 'phase':
                 this.showPhasePanel();
+                break;
+            case 'phaseSync':
+                this.showPhaseSyncPanel();
                 break;
             case 'config':
                 this.showConfigPanel();
@@ -945,6 +951,231 @@ class EMGAnalysisApp {
         } catch (err) {
             console.error('預覽生成失敗:', err);
             await ShowError('錯誤', `即時預覽失敗：${err}`);
+        }
+    }
+    // 分期同步分析面板
+    showPhaseSyncPanel() {
+        const panel = document.getElementById('functionPanel');
+        panel.innerHTML = `
+            <div class="panel-header">
+                <h2>分期同步分析</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+            </div>
+            
+            <div class="form-group">
+                <label>1. 選擇分期總檔案</label>
+                <div class="input-group drop-zone" data-drop-target="phaseSyncManifest" style="--wails-drop-target: drop;">
+                    <input type="text" id="phaseSyncManifest" class="form-control" placeholder="選擇或拖放分期總檔案 (.csv)" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectPhaseSyncManifest()">瀏覽</button>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>2. 選擇數據資料夾</label>
+                <div class="input-group">
+                    <input type="text" id="phaseSyncDataFolder" class="form-control" placeholder="選擇包含所有數據檔案的資料夾" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectPhaseSyncDataFolder()">瀏覽</button>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>3. 選擇分析主題</label>
+                <select id="phaseSyncSubject" class="form-control" disabled>
+                    <option value="">請先載入分期總檔案</option>
+                </select>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group col-md-6">
+                    <label>4. 開始分期點</label>
+                    <select id="phaseSyncStartPhase" class="form-control">
+                        <option value="">請選擇</option>
+                    </select>
+                </div>
+                <div class="form-group col-md-6">
+                    <label>結束分期點</label>
+                    <select id="phaseSyncEndPhase" class="form-control">
+                        <option value="">請選擇</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="button-group">
+                <button class="btn btn-primary" onclick="app.executePhaseSyncAnalysis()">開始分析</button>
+                <button class="btn btn-secondary" onclick="app.showMainMenu()">返回</button>
+            </div>
+            
+            <div id="phaseSyncResult" class="result-section" style="display: none;">
+                <h3>分析結果</h3>
+                <div id="phaseSyncResultContent"></div>
+            </div>
+        `;
+        
+        this.showPanel(panel);
+        this.loadAvailablePhases();
+    }
+    
+    // 選擇分期總檔案
+    async selectPhaseSyncManifest() {
+        try {
+            const filters = [{
+                displayName: 'CSV Files (*.csv)',
+                pattern: '*.csv'
+            }];
+            const file = await SelectFile('選擇分期總檔案', filters, 'open');
+            
+            if (file) {
+                document.getElementById('phaseSyncManifest').value = file;
+                await this.loadManifestSubjects(file);
+            }
+        } catch (err) {
+            console.error('選擇檔案失敗:', err);
+            await ShowError('錯誤', err.toString());
+        }
+    }
+    
+    // 載入分期總檔案的主題
+    async loadManifestSubjects(manifestPath) {
+        try {
+            const subjects = await LoadPhaseManifest(manifestPath);
+            const select = document.getElementById('phaseSyncSubject');
+            
+            select.innerHTML = '<option value="">請選擇主題</option>';
+            subjects.forEach((subject, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = subject;
+                select.appendChild(option);
+            });
+            
+            select.disabled = false;
+            this.updateStatus(`已載入 ${subjects.length} 個主題`);
+        } catch (err) {
+            console.error('載入主題失敗:', err);
+            await ShowError('錯誤', `載入主題失敗: ${err}`);
+        }
+    }
+    
+    // 選擇數據資料夾
+    async selectPhaseSyncDataFolder() {
+        try {
+            const folder = await SelectDirectory('選擇數據資料夾');
+            if (folder) {
+                document.getElementById('phaseSyncDataFolder').value = folder;
+            }
+        } catch (err) {
+            console.error('選擇資料夾失敗:', err);
+            await ShowError('錯誤', err.toString());
+        }
+    }
+    
+    // 載入可用的分期點
+    async loadAvailablePhases() {
+        try {
+            const phases = await GetAvailablePhases();
+            
+            // 填充開始分期點
+            const startSelect = document.getElementById('phaseSyncStartPhase');
+            startSelect.innerHTML = '<option value="">請選擇</option>';
+            phases.start.forEach(phase => {
+                const option = document.createElement('option');
+                option.value = phase;
+                option.textContent = phase;
+                startSelect.appendChild(option);
+            });
+            
+            // 填充結束分期點
+            const endSelect = document.getElementById('phaseSyncEndPhase');
+            endSelect.innerHTML = '<option value="">請選擇</option>';
+            phases.end.forEach(phase => {
+                const option = document.createElement('option');
+                option.value = phase;
+                option.textContent = phase;
+                endSelect.appendChild(option);
+            });
+        } catch (err) {
+            console.error('載入分期點失敗:', err);
+        }
+    }
+    
+    // 執行分期同步分析
+    async executePhaseSyncAnalysis() {
+        try {
+            const manifestFile = document.getElementById('phaseSyncManifest').value;
+            const dataFolder = document.getElementById('phaseSyncDataFolder').value;
+            const subjectIndex = parseInt(document.getElementById('phaseSyncSubject').value);
+            const startPhase = document.getElementById('phaseSyncStartPhase').value;
+            const endPhase = document.getElementById('phaseSyncEndPhase').value;
+            
+            // 驗證輸入
+            if (!manifestFile || !dataFolder || isNaN(subjectIndex) || !startPhase || !endPhase) {
+                await ShowError('錯誤', '請填寫所有必要欄位');
+                return;
+            }
+            
+            this.updateStatus('正在進行分期同步分析...');
+            
+            const result = await AnalyzePhaseSync({
+                manifestFile,
+                dataFolder,
+                subjectIndex,
+                startPhase,
+                endPhase
+            });
+            
+            if (result.success) {
+                await this.showPhaseSyncResult(result);
+                await ShowMessage('成功', `分析完成！結果已保存至：${result.outputPath}`);
+            } else {
+                await ShowError('錯誤', result.message);
+            }
+            
+            this.updateStatus('分析完成');
+        } catch (err) {
+            console.error('分期同步分析失敗:', err);
+            await ShowError('錯誤', `分析失敗: ${err}`);
+            this.updateStatus('分析失敗');
+        }
+    }
+    
+    // 顯示分期同步分析結果
+    async showPhaseSyncResult(result) {
+        const resultDiv = document.getElementById('phaseSyncResult');
+        const contentDiv = document.getElementById('phaseSyncResultContent');
+        
+        let html = `
+            <div class="result-info">
+                <p><strong>主題：</strong>${result.subject}</p>
+                <p><strong>分析區間：</strong>${result.startPhase} (${result.startTime.toFixed(3)}s) → ${result.endPhase} (${result.endTime.toFixed(3)}s)</p>
+                <p><strong>輸出檔案：</strong>${result.outputPath}</p>
+            </div>
+            
+            <div class="result-report">
+                <h4>分析報告</h4>
+                <pre class="result-pre">${result.report}</pre>
+            </div>
+            
+            <div class="button-group">
+                <button class="btn btn-primary" onclick="app.openOutputFolder()">開啟輸出資料夾</button>
+            </div>
+        `;
+        
+        contentDiv.innerHTML = html;
+        resultDiv.style.display = 'block';
+    }
+    
+    // 開啟輸出資料夾
+    async openOutputFolder() {
+        try {
+            const config = await GetConfig();
+            if (config && config.outputDir) {
+                // 使用系統預設程式開啟資料夾
+                // 注意：這裡需要通過後端 API 來執行
+                await ShowMessage('提示', `輸出檔案已保存至：${config.outputDir}`);
+            }
+        } catch (err) {
+            console.error('無法開啟輸出資料夾:', err);
+            await ShowError('錯誤', '無法開啟輸出資料夾');
         }
     }
 }

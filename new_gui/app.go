@@ -9,6 +9,8 @@ import (
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
+	"count_mean/internal/phase_sync"
+	"count_mean/internal/synchronizer"
 	"count_mean/internal/validation"
 	"encoding/base64"
 	"fmt"
@@ -23,15 +25,16 @@ import (
 
 // App struct
 type App struct {
-	ctx           context.Context
-	config        *config.AppConfig
-	logger        *logging.Logger
-	csvHandler    *io.CSVHandler
-	maxMeanCalc   *calculator.MaxMeanCalculator
-	normalizer    *calculator.Normalizer
-	phaseAnalyzer *calculator.PhaseAnalyzer
-	chartGen      *chart.EChartsGenerator
-	validator     *validation.InputValidator
+	ctx               context.Context
+	config            *config.AppConfig
+	logger            *logging.Logger
+	csvHandler        *io.CSVHandler
+	maxMeanCalc       *calculator.MaxMeanCalculator
+	normalizer        *calculator.Normalizer
+	phaseAnalyzer     *calculator.PhaseAnalyzer
+	chartGen          *chart.EChartsGenerator
+	validator         *validation.InputValidator
+	phaseSyncAnalyzer *phase_sync.PhaseSyncAnalyzer
 }
 
 // NewApp creates a new App application struct
@@ -44,16 +47,18 @@ func NewApp(cfg *config.AppConfig) *App {
 	chartGen := chart.NewEChartsGenerator()
 	validator := validation.NewInputValidator()
 	logger := logging.GetLogger("app")
+	phaseSyncAnalyzer := phase_sync.NewPhaseSyncAnalyzer()
 
 	return &App{
-		config:        cfg,
-		logger:        logger,
-		csvHandler:    csvHandler,
-		maxMeanCalc:   maxMeanCalc,
-		normalizer:    normalizer,
-		phaseAnalyzer: phaseAnalyzer,
-		chartGen:      chartGen,
-		validator:     validator,
+		config:            cfg,
+		logger:            logger,
+		csvHandler:        csvHandler,
+		maxMeanCalc:       maxMeanCalc,
+		normalizer:        normalizer,
+		phaseAnalyzer:     phaseAnalyzer,
+		chartGen:          chartGen,
+		validator:         validator,
+		phaseSyncAnalyzer: phaseSyncAnalyzer,
 	}
 }
 
@@ -1007,4 +1012,118 @@ type PhaseAnalysis struct {
 	Average    []float64 `json:"average"`
 	MaxValues  []float64 `json:"maxValues"`
 	MinValues  []float64 `json:"minValues"`
+}
+
+// PhaseSyncParams 分期同步分析參數
+type PhaseSyncParams struct {
+	ManifestFile string `json:"manifestFile"`
+	DataFolder   string `json:"dataFolder"`
+	StartPhase   string `json:"startPhase"`
+	EndPhase     string `json:"endPhase"`
+	SubjectIndex int    `json:"subjectIndex"`
+}
+
+// PhaseSyncResult 分期同步分析結果
+type PhaseSyncResult struct {
+	OutputPath   string             `json:"outputPath"`
+	Subject      string             `json:"subject"`
+	StartPhase   string             `json:"startPhase"`
+	StartTime    float64            `json:"startTime"`
+	EndPhase     string             `json:"endPhase"`
+	EndTime      float64            `json:"endTime"`
+	ChannelNames []string           `json:"channelNames"`
+	ChannelMeans map[string]float64 `json:"channelMeans"`
+	ChannelMaxes map[string]float64 `json:"channelMaxes"`
+	Report       string             `json:"report"`
+	Success      bool               `json:"success"`
+	Message      string             `json:"message"`
+}
+
+// LoadPhaseManifest 載入分期總檔案的主題列表
+func (a *App) LoadPhaseManifest(manifestPath string) ([]string, error) {
+	a.logger.Info("載入分期總檔案", map[string]interface{}{"path": manifestPath})
+
+	subjects, err := a.phaseSyncAnalyzer.LoadManifestSubjects(manifestPath)
+	if err != nil {
+		a.logger.Error("載入分期總檔案失敗", err, map[string]interface{}{})
+		return nil, err
+	}
+
+	a.logger.Info("成功載入分期總檔案", map[string]interface{}{"subjects": len(subjects)})
+	return subjects, nil
+}
+
+// GetAvailablePhases 獲取可用的分期點列表
+func (a *App) GetAvailablePhases() map[string][]string {
+	return map[string][]string{
+		"start": synchronizer.GetAvailableStartPhases(),
+		"end":   synchronizer.GetAvailableEndPhases(),
+	}
+}
+
+// AnalyzePhaseSync 執行分期同步分析
+func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (*PhaseSyncResult, error) {
+	a.logger.Info("開始分期同步分析", map[string]interface{}{"params": params})
+
+	// 參數驗證
+	if params.ManifestFile == "" {
+		return nil, fmt.Errorf("請選擇分期總檔案")
+	}
+	if params.DataFolder == "" {
+		return nil, fmt.Errorf("請選擇數據資料夾")
+	}
+	if params.StartPhase == "" || params.EndPhase == "" {
+		return nil, fmt.Errorf("請選擇開始和結束分期點")
+	}
+
+	// 創建分析參數
+	analysisParams := &models.AnalysisParams{
+		ManifestFile: params.ManifestFile,
+		DataFolder:   params.DataFolder,
+		StartPhase:   params.StartPhase,
+		EndPhase:     params.EndPhase,
+		SubjectIndex: params.SubjectIndex,
+	}
+
+	// 執行分析
+	stats, err := a.phaseSyncAnalyzer.AnalyzePhaseSync(analysisParams)
+	if err != nil {
+		a.logger.Error("分期同步分析失敗", err, map[string]interface{}{})
+		return &PhaseSyncResult{
+			Success: false,
+			Message: fmt.Sprintf("分析失敗: %v", err),
+		}, nil
+	}
+
+	// 導出結果
+	outputPath, err := a.phaseSyncAnalyzer.ExportResults(stats, a.config.OutputDir)
+	if err != nil {
+		a.logger.Error("導出結果失敗", err, map[string]interface{}{})
+		return &PhaseSyncResult{
+			Success: false,
+			Message: fmt.Sprintf("導出失敗: %v", err),
+		}, nil
+	}
+
+	// 生成報告
+	report := phase_sync.GenerateAnalysisReport(stats)
+
+	// 返回結果
+	result := &PhaseSyncResult{
+		OutputPath:   outputPath,
+		Subject:      stats.Subject,
+		StartPhase:   stats.StartPhase,
+		StartTime:    stats.StartTime,
+		EndPhase:     stats.EndPhase,
+		EndTime:      stats.EndTime,
+		ChannelNames: stats.ChannelNames,
+		ChannelMeans: stats.ChannelMeans,
+		ChannelMaxes: stats.ChannelMaxes,
+		Report:       report,
+		Success:      true,
+		Message:      "分析完成",
+	}
+
+	a.logger.Info("分期同步分析完成", map[string]interface{}{"outputPath": outputPath})
+	return result, nil
 }

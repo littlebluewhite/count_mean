@@ -1,0 +1,4 @@
+Subject,motion file,Force Plate file,EMG file,EMG第一筆時間對應Motion的時間index值,P0,P1,P2,S啟動瞬間,C下蹲加速減速轉換瞬間,D下蹲結束時間,T0正沖涼結束時間,T起跳瞬間,O展體轉間,L著地瞬間
+NSF1,NSF_1.1_BTS_1.5_ok_20250419.data.csv,NSF2_BTS_4.anc,NSF_1.1_BTS_1.5_RMS0.020_0.019.csv,741,3.012,3.298,3.774,3.946,4.229,1573,4.573,4.595,1683,5.208
+NSF2,NSF2_BTS_4_ok_20250419.data.csv,NSF2_BTS_4.anc,NSF_2_BTS_4_RMS0.020_0.019.csv,600,2.667,3.029,3.237,3.384,3.651,1173,3.992,4.025,1363,4.61
+Test1,test_motion.csv,test_force.anc,test_emg.csv,100,1.0,1.5,2.0,2.5,3.0,800,3.5,4.0,1000,4.5
