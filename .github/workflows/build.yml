@@ -71,7 +71,9 @@ jobs:
     - name: List build output
       run: |
         echo "Build directory contents:"
-        ls -la build/bin/ || echo "Build directory not found"
+        find build/ -type f -name "*" 2>/dev/null || echo "Build directory not found"
+        echo "Current directory contents:"
+        ls -la
 
     - name: Prepare artifacts (Linux/macOS)
       if: runner.os != 'Windows'
@@ -81,23 +83,25 @@ jobs:
           if [ -f "build/bin/EMG_tool" ]; then
             mv build/bin/EMG_tool artifacts/EMG_tool-linux-amd64
           else
-            echo "Linux binary not found"
+            echo "Linux binary not found in build/bin/"
+            echo "Looking for binary in all build subdirectories:"
+            find build/ -name "EMG_tool" -type f 2>/dev/null || echo "No EMG_tool binary found"
             exit 1
           fi
-        elif [ "${{ matrix.platform.target }}" = "darwin/amd64" ]; then
-          if [ -d "build/bin/EMG_tool.app" ]; then
-            mv build/bin/EMG_tool.app artifacts/EMG_tool-darwin-amd64.app
-            cd artifacts && zip -r EMG_tool-darwin-amd64.zip EMG_tool-darwin-amd64.app
+        elif [ "${{ matrix.platform.target }}" = "darwin/amd64" ] || [ "${{ matrix.platform.target }}" = "darwin/arm64" ]; then
+          APP_NAME="EMG_tool.app"
+          if [ -d "build/bin/$APP_NAME" ]; then
+            if [ "${{ matrix.platform.target }}" = "darwin/amd64" ]; then
+              mv "build/bin/$APP_NAME" "artifacts/EMG_tool-darwin-amd64.app"
+              cd artifacts && zip -r EMG_tool-darwin-amd64.zip EMG_tool-darwin-amd64.app
+            else
+              mv "build/bin/$APP_NAME" "artifacts/EMG_tool-darwin-arm64.app"
+              cd artifacts && zip -r EMG_tool-darwin-arm64.zip EMG_tool-darwin-arm64.app
+            fi
           else
-            echo "macOS app not found"
-            exit 1
-          fi
-        elif [ "${{ matrix.platform.target }}" = "darwin/arm64" ]; then
-          if [ -d "build/bin/EMG_tool.app" ]; then
-            mv build/bin/EMG_tool.app artifacts/EMG_tool-darwin-arm64.app
-            cd artifacts && zip -r EMG_tool-darwin-arm64.zip EMG_tool-darwin-arm64.app
-          else
-            echo "macOS ARM64 app not found"
+            echo "macOS app not found at build/bin/$APP_NAME"
+            echo "Looking for .app in all build subdirectories:"
+            find build/ -name "*.app" -type d 2>/dev/null || echo "No .app bundle found"
             exit 1
           fi
         fi
