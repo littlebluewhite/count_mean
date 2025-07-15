@@ -1,18 +1,25 @@
 package main
 
 import (
-	"count_mean/gui"
 	"count_mean/internal/config"
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
-	"os"
+	"count_mean/new_gui"
+	"embed"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
 )
 
+//go:embed all:frontend/dist
+var assets embed.FS
+
 func main() {
-	// 載入配置（首先嘗試載入配置以獲取日誌設定）
-	cfg, err := config.LoadConfig("config.json")
+	// 載入配置
+	cfg, err := config.LoadConfig("./config.json")
 	if err != nil {
-		// 如果無法載入配置，使用默認配置
+		logging.Error("無法載入配置", err)
 		cfg = config.DefaultConfig()
 	}
 
@@ -34,7 +41,6 @@ func main() {
 	// 初始化日誌系統
 	jsonFormat := cfg.LogFormat == "json"
 	if err := logging.InitLogger(logLevel, cfg.LogDirectory, jsonFormat); err != nil {
-		// 如果無法初始化日誌，使用stderr fallback
 		logging.Error("無法初始化日誌系統", err)
 	}
 
@@ -42,41 +48,34 @@ func main() {
 	if err := i18n.InitI18n(cfg.TranslationsDir); err != nil {
 		logging.Error("初始化國際化系統失敗", err)
 	} else {
-		// 設置配置中指定的語言
 		i18n.SetLocale(i18n.Locale(cfg.Language))
 	}
 
-	logger := logging.GetLogger("main")
-	logger.Info("應用程序啟動", map[string]interface{}{
-		"log_level":        cfg.LogLevel,
-		"log_format":       cfg.LogFormat,
-		"log_directory":    cfg.LogDirectory,
-		"language":         cfg.Language,
-		"translations_dir": cfg.TranslationsDir,
+	// 創建應用實例
+	app := new_gui.NewApp(cfg)
+
+	// 創建 Wails 應用
+	err = wails.Run(&options.App{
+		Title:            "EMG 資料分析工具",
+		Width:            1024,
+		Height:           768,
+		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+		},
+		OnStartup: app.Startup,
+		Bind: []interface{}{
+			app,
+		},
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop:     true,
+			DisableWebViewDrop: false,
+			CSSDropProperty:    "--wails-drop-target",
+			CSSDropValue:       "drop",
+		},
 	})
 
 	if err != nil {
-		logger.Warn("載入配置失敗，使用默認配置", map[string]interface{}{
-			"error": err.Error(),
-		})
-	} else {
-		logger.Info("配置載入成功")
+		println("Error:", err.Error())
 	}
-
-	// 確保必要的目錄存在
-	if err := cfg.EnsureDirectories(); err != nil {
-		logger.Fatal("無法創建必要目錄", err)
-		os.Exit(1)
-	}
-
-	logger.Info("目錄初始化完成", map[string]interface{}{
-		"input_dir":   cfg.InputDir,
-		"output_dir":  cfg.OutputDir,
-		"operate_dir": cfg.OperateDir,
-	})
-
-	// 創建並運行GUI應用程式
-	logger.Info("啟動 GUI 應用程序")
-	app := gui.NewApp(cfg)
-	app.Run()
 }

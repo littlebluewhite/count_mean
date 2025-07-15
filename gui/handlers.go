@@ -473,7 +473,7 @@ func (a *App) saveConfiguration(scalingFactorStr, precisionStr, outputFormat str
 	}
 
 	// 保存到檔案
-	if err := a.config.SaveConfig("config.json"); err != nil {
+	if err := a.config.SaveConfig("./config.json"); err != nil {
 		a.showError(fmt.Sprintf("保存配置檔案失敗: %v", err))
 		return
 	}

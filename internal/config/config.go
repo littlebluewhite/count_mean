@@ -10,23 +10,23 @@ import (
 
 // AppConfig 應用程式配置
 type AppConfig struct {
-	ScalingFactor int      `json:"scaling_factor"`
-	PhaseLabels   []string `json:"phase_labels"`
+	ScalingFactor int      `json:"scalingFactor"`
+	PhaseLabels   []string `json:"phaseLabels"`
 	Precision     int      `json:"precision"`
-	OutputFormat  string   `json:"output_format"`
-	BOMEnabled    bool     `json:"bom_enabled"`
-	InputDir      string   `json:"input_dir"`
-	OutputDir     string   `json:"output_dir"`
-	OperateDir    string   `json:"operate_dir"`
+	OutputFormat  string   `json:"outputFormat"`
+	BOMEnabled    bool     `json:"bomEnabled"`
+	InputDir      string   `json:"inputDir"`
+	OutputDir     string   `json:"outputDir"`
+	OperateDir    string   `json:"operateDir"`
 
 	// 日誌配置
-	LogLevel     string `json:"log_level"`     // debug, info, warn, error
-	LogFormat    string `json:"log_format"`    // text, json
-	LogDirectory string `json:"log_directory"` // 日誌目錄
+	LogLevel     string `json:"logLevel"`     // debug, info, warn, error
+	LogFormat    string `json:"logFormat"`    // text, json
+	LogDirectory string `json:"logDirectory"` // 日誌目錄
 
 	// 國際化配置
-	Language        string `json:"language"`         // zh-TW, zh-CN, en-US, ja-JP
-	TranslationsDir string `json:"translations_dir"` // 翻譯文件目錄
+	Language        string `json:"language"`        // zh-TW, zh-CN, en-US, ja-JP
+	TranslationsDir string `json:"translationsDir"` // 翻譯文件目錄
 }
 
 // DefaultConfig 返回默認配置
@@ -44,7 +44,7 @@ func DefaultConfig() *AppConfig {
 		BOMEnabled:   true,
 		InputDir:     "./input",
 		OutputDir:    "./output",
-		OperateDir:   "./value_operate",
+		OperateDir:   "./operate",
 
 		// 預設日誌配置
 		LogLevel:     "info",

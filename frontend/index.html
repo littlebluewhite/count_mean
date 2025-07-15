@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EMG 資料分析工具</title>
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>EMG 資料分析工具</h1>
+            <p class="subtitle">選擇要執行的分析功能</p>
+        </header>
+
+        <main>
+            <!-- 主選單 -->
+            <div id="mainMenu" class="menu-grid">
+                <button class="menu-button primary" data-action="maxMean">
+                    <span class="icon">📊</span>
+                    <span class="title">最大平均值計算</span>
+                    <span class="description">計算EMG數據的最大平均值</span>
+                </button>
+                
+                <button class="menu-button primary" data-action="normalize">
+                    <span class="icon">📈</span>
+                    <span class="title">資料標準化</span>
+                    <span class="description">使用參考值標準化數據</span>
+                </button>
+                
+                <button class="menu-button primary" data-action="chart">
+                    <span class="icon">📉</span>
+                    <span class="title">資料做圖</span>
+                    <span class="description">生成數據視覺化圖表</span>
+                </button>
+                
+                <button class="menu-button" data-action="phase">
+                    <span class="icon">🔍</span>
+                    <span class="title">階段分析</span>
+                    <span class="description">分析不同運動階段的數據</span>
+                </button>
+                
+                <button class="menu-button secondary" data-action="config">
+                    <span class="icon">⚙️</span>
+                    <span class="title">系統配置</span>
+                    <span class="description">設定預設路徑和參數</span>
+                </button>
+            </div>
+
+            <!-- 功能面板容器 -->
+            <div id="functionPanel" class="function-panel hidden">
+                <!-- 動態載入的功能內容 -->
+            </div>
+
+            <!-- 圖表顯示區 -->
+            <div id="chartContainer" class="chart-container hidden">
+                <div class="chart-header">
+                    <h3 id="chartTitle">圖表標題</h3>
+                    <button class="btn-close" onclick="app.closeChart()">✕</button>
+                </div>
+                <div id="chartContent" class="chart-content">
+                    <!-- 圖表內容 -->
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <div id="statusBar" class="status-bar">
+                <span id="statusText">就緒</span>
+            </div>
+        </footer>
+    </div>
+    <script type="module" src="./src/main.js"></script>
+</body>
+</html>
