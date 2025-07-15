@@ -70,12 +70,22 @@ jobs:
       run: |
         wails build -platform ${{ matrix.platform.target }} -clean
 
-    - name: List build output
+    - name: List build output (Unix)
+      if: runner.os != 'Windows'
       run: |
         echo "Build directory contents:"
         find build/ -type f -name "*" 2>/dev/null || echo "Build directory not found"
         echo "Current directory contents:"
         ls -la
+
+    - name: List build output (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        echo "Build directory contents:"
+        if (Test-Path "build") { Get-ChildItem build -Recurse -File | Select-Object FullName } else { echo "Build directory not found" }
+        echo "Current directory contents:"
+        Get-ChildItem | Select-Object Name, Length
+      shell: powershell
 
     - name: Prepare artifacts (Linux/macOS)
       if: runner.os != 'Windows'
