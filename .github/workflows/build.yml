@@ -48,7 +48,9 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgl1-mesa-dev xorg-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+        sudo apt-get install -y libgl1-mesa-dev xorg-dev libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+        # Create symlink for compatibility with older webkit2gtk naming
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc
 
     - name: Install system dependencies (Windows)
       if: runner.os == 'Windows'
