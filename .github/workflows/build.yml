@@ -80,16 +80,18 @@ jobs:
       run: |
         mkdir -p artifacts
         if [ "${{ matrix.platform.target }}" = "linux/amd64" ]; then
-          if [ -f "build/bin/EMG_tool" ]; then
+          if [ -f "build/bin/count_mean" ]; then
+            mv build/bin/count_mean artifacts/EMG_tool-linux-amd64
+          elif [ -f "build/bin/EMG_tool" ]; then
             mv build/bin/EMG_tool artifacts/EMG_tool-linux-amd64
           else
             echo "Linux binary not found in build/bin/"
             echo "Looking for binary in all build subdirectories:"
-            find build/ -name "EMG_tool" -type f 2>/dev/null || echo "No EMG_tool binary found"
+            find build/ -type f -executable 2>/dev/null || echo "No executable binary found"
             exit 1
           fi
         elif [ "${{ matrix.platform.target }}" = "darwin/amd64" ] || [ "${{ matrix.platform.target }}" = "darwin/arm64" ]; then
-          APP_NAME="EMG_tool.app"
+          APP_NAME="count_mean.app"
           if [ -d "build/bin/$APP_NAME" ]; then
             if [ "${{ matrix.platform.target }}" = "darwin/amd64" ]; then
               mv "build/bin/$APP_NAME" "artifacts/EMG_tool-darwin-amd64.app"
@@ -110,10 +112,13 @@ jobs:
       if: runner.os == 'Windows'
       run: |
         mkdir artifacts
-        if (Test-Path "build\bin\EMG_tool.exe") {
+        if (Test-Path "build\bin\count_mean.exe") {
+          move build\bin\count_mean.exe artifacts\EMG_tool-windows-amd64.exe
+        } elseif (Test-Path "build\bin\EMG_tool.exe") {
           move build\bin\EMG_tool.exe artifacts\EMG_tool-windows-amd64.exe
         } else {
           echo "Windows executable not found"
+          Get-ChildItem build\ -Recurse -Name "*.exe" | Write-Host
           exit 1
         }
       shell: powershell
