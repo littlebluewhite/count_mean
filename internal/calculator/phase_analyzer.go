@@ -33,7 +33,7 @@ type AnalyzeResult struct {
 // Analyze 分析不同階段的數據
 func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.TimeRange) (*AnalyzeResult, error) {
 	startTime := time.Now()
-	
+
 	if dataset == nil || len(dataset.Data) == 0 {
 		err := fmt.Errorf("數據集為空")
 		dataLength := 0
@@ -46,7 +46,7 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 		})
 		return nil, err
 	}
-	
+
 	p.logger.Info("開始階段分析", map[string]interface{}{
 		"phase_count":    len(phases),
 		"data_points":    len(dataset.Data),
@@ -192,7 +192,7 @@ func (p *PhaseAnalyzer) parseRawData(records [][]string) (*models.EMGDataset, er
 			})
 			continue // 跳過空白時間值的行
 		}
-		
+
 		timeVal, err := util.Str2Number[float64, int](row[0], p.scalingFactor)
 		if err != nil {
 			p.logger.Warn("時間值解析失敗，跳過此行", map[string]interface{}{

@@ -70,6 +70,12 @@ func (calc *EMGStatisticsCalculator) ExportToCSV(
 	}
 	defer file.Close()
 
+	// 寫入 UTF-8 BOM 以確保 Excel 正確顯示
+	bomBytes := []byte{0xEF, 0xBB, 0xBF}
+	if _, err := file.Write(bomBytes); err != nil {
+		return fmt.Errorf("無法寫入 BOM: %w", err)
+	}
+
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 

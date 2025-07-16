@@ -18,7 +18,7 @@ import {
     LoadPhaseManifest,
     GetAvailablePhases,
     AnalyzePhaseSync
-} from '../wailsjs/go/new_gui/App.js';
+} from '../wailsjs/go/gui/App.js';
 import { OnFileDrop } from '../wailsjs/runtime/runtime.js';
 
 // 應用程序主類

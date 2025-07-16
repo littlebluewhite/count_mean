@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -56,20 +57,22 @@ type LogEntry struct {
 
 // Logger provides structured logging functionality
 type Logger struct {
-	level       LogLevel
-	output      io.Writer
-	jsonFormat  bool
-	module      string
-	contextData map[string]interface{}
+	level             LogLevel
+	output            io.Writer
+	jsonFormat        bool
+	module            string
+	contextData       map[string]interface{}
+	sensitivePatterns []*regexp.Regexp
 }
 
 // NewLogger creates a new logger instance
 func NewLogger(level LogLevel, output io.Writer, jsonFormat bool) *Logger {
 	return &Logger{
-		level:       level,
-		output:      output,
-		jsonFormat:  jsonFormat,
-		contextData: make(map[string]interface{}),
+		level:             level,
+		output:            output,
+		jsonFormat:        jsonFormat,
+		contextData:       make(map[string]interface{}),
+		sensitivePatterns: initSensitivePatterns(),
 	}
 }
 
@@ -81,7 +84,7 @@ func NewFileLogger(level LogLevel, logDir, filename string, jsonFormat bool) (*L
 	}
 
 	logPath := filepath.Join(logDir, filename)
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
 	if err != nil {
 		return nil, fmt.Errorf("無法創建日誌檔案: %w", err)
 	}
@@ -97,6 +100,7 @@ func (l *Logger) WithModule(module string) *Logger {
 	for k, v := range l.contextData {
 		newLogger.contextData[k] = v
 	}
+	newLogger.sensitivePatterns = l.sensitivePatterns
 	return &newLogger
 }
 
@@ -108,7 +112,142 @@ func (l *Logger) WithContext(key string, value interface{}) *Logger {
 		newLogger.contextData[k] = v
 	}
 	newLogger.contextData[key] = value
+	newLogger.sensitivePatterns = l.sensitivePatterns
 	return &newLogger
+}
+
+// initSensitivePatterns initializes patterns for sensitive data detection
+func initSensitivePatterns() []*regexp.Regexp {
+	patterns := []string{
+		// Passwords and secrets
+		`(?i)password\s*[=:]\s*[^\s]+`,
+		`(?i)passwd\s*[=:]\s*[^\s]+`,
+		`(?i)secret\s*[=:]\s*[^\s]+`,
+		`(?i)token\s*[=:]\s*[^\s]+`,
+		`(?i)key\s*[=:]\s*[^\s]+`,
+		`(?i)auth\s*[=:]\s*[^\s]+`,
+		`(?i)credential\s*[=:]\s*[^\s]+`,
+
+		// API keys and tokens
+		`(?i)api[-_]?key\s*[=:]\s*[^\s]+`,
+		`(?i)access[-_]?token\s*[=:]\s*[^\s]+`,
+		`(?i)refresh[-_]?token\s*[=:]\s*[^\s]+`,
+		`(?i)bearer\s+[a-zA-Z0-9\-_\.]+`,
+
+		// Database connection strings
+		`(?i)connection[-_]?string\s*[=:]\s*[^\s]+`,
+		`(?i)database[-_]?url\s*[=:]\s*[^\s]+`,
+		`(?i)db[-_]?password\s*[=:]\s*[^\s]+`,
+
+		// Credit card numbers (basic pattern)
+		`\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b`,
+
+		// Social security numbers (basic pattern)
+		`\b\d{3}-\d{2}-\d{4}\b`,
+
+		// Email addresses (partial masking)
+		`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
+
+		// IP addresses (optional masking)
+		`\b(?:\d{1,3}\.){3}\d{1,3}\b`,
+
+		// File paths that might contain sensitive info
+		`(?i)[\\/].*(?:password|secret|key|token|credential).*[\\/]`,
+
+		// Common sensitive keywords in various formats
+		`(?i)"[^"]*(?:password|secret|key|token|credential)[^"]*"`,
+		`(?i)'[^']*(?:password|secret|key|token|credential)[^']*'`,
+
+		// Context value patterns
+		`(?i)\btoken\b[^=:]*[=:][^,}\s]+`,
+		`(?i)\bbearer_token[^=:]*[=:][^,}\s]+`,
+	}
+
+	var compiledPatterns []*regexp.Regexp
+	for _, pattern := range patterns {
+		if re, err := regexp.Compile(pattern); err == nil {
+			compiledPatterns = append(compiledPatterns, re)
+		}
+	}
+
+	return compiledPatterns
+}
+
+// sanitizeMessage removes sensitive information from log messages
+func (l *Logger) sanitizeMessage(message string) string {
+	if l.sensitivePatterns == nil {
+		return message
+	}
+
+	sanitized := message
+	for _, pattern := range l.sensitivePatterns {
+		sanitized = pattern.ReplaceAllStringFunc(sanitized, func(match string) string {
+			return l.maskSensitiveData(match)
+		})
+	}
+
+	return sanitized
+}
+
+// sanitizeContextValue removes sensitive information from context values
+func (l *Logger) sanitizeContextValue(value interface{}) interface{} {
+	if value == nil {
+		return nil
+	}
+
+	switch v := value.(type) {
+	case string:
+		return l.sanitizeMessage(v)
+	case map[string]interface{}:
+		sanitized := make(map[string]interface{})
+		for k, val := range v {
+			sanitized[k] = l.sanitizeContextValue(val)
+		}
+		return sanitized
+	case []interface{}:
+		sanitized := make([]interface{}, len(v))
+		for i, val := range v {
+			sanitized[i] = l.sanitizeContextValue(val)
+		}
+		return sanitized
+	default:
+		// For other types, convert to string and sanitize
+		return l.sanitizeMessage(fmt.Sprintf("%v", value))
+	}
+}
+
+// maskSensitiveData masks sensitive data with asterisks
+func (l *Logger) maskSensitiveData(data string) string {
+	if len(data) <= 4 {
+		return "****"
+	}
+
+	// Look for key=value pattern
+	parts := strings.Split(data, "=")
+	if len(parts) == 2 {
+		key := parts[0]
+		value := parts[1]
+
+		if len(value) <= 4 {
+			return key + "=****"
+		}
+
+		// For longer values, show first 2 and last 2 characters
+		if len(value) > 8 {
+			return key + "=" + value[:2] + "****" + value[len(value)-2:]
+		}
+
+		// For medium values, show first character
+		return key + "=" + value[:1] + "****"
+	}
+
+	// For non-key=value patterns, apply general masking
+	if len(data) > 8 {
+		return data[:2] + "****" + data[len(data)-2:]
+	}
+
+	// For medium strings, show first character
+	return data[:1] + "****"
 }
 
 // WithError adds error context to the logger
@@ -125,7 +264,7 @@ func (l *Logger) log(level LogLevel, message string, err error, context map[stri
 	entry := LogEntry{
 		Timestamp: time.Now(),
 		Level:     level.String(),
-		Message:   message,
+		Message:   l.sanitizeMessage(message),
 		Module:    l.module,
 		Context:   make(map[string]interface{}),
 	}
@@ -141,7 +280,7 @@ func (l *Logger) log(level LogLevel, message string, err error, context map[stri
 
 	// Add error information
 	if err != nil {
-		entry.Error = err.Error()
+		entry.Error = l.sanitizeMessage(err.Error())
 
 		// Add structured error information if it's an AppError
 		if appErr, ok := err.(*errors.AppError); ok {
@@ -149,7 +288,7 @@ func (l *Logger) log(level LogLevel, message string, err error, context map[stri
 			entry.Context["recoverable"] = appErr.Recoverable
 			if appErr.Context != nil {
 				for k, v := range appErr.Context {
-					entry.Context[k] = v
+					entry.Context[k] = l.sanitizeContextValue(v)
 				}
 			}
 		}
@@ -157,12 +296,12 @@ func (l *Logger) log(level LogLevel, message string, err error, context map[stri
 
 	// Add logger context
 	for k, v := range l.contextData {
-		entry.Context[k] = v
+		entry.Context[k] = l.sanitizeContextValue(v)
 	}
 
 	// Add additional context
 	for k, v := range context {
-		entry.Context[k] = v
+		entry.Context[k] = l.sanitizeContextValue(v)
 	}
 
 	// Write the log entry
@@ -215,7 +354,9 @@ func (l *Logger) writeText(entry LogEntry) {
 	if len(entry.Context) > 0 {
 		var contextParts []string
 		for k, v := range entry.Context {
-			contextParts = append(contextParts, fmt.Sprintf("%s=%v", k, v))
+			// Additional sanitization for context formatting
+			contextStr := fmt.Sprintf("%s=%v", k, v)
+			contextParts = append(contextParts, l.sanitizeMessage(contextStr))
 		}
 		parts = append(parts, fmt.Sprintf("context=[%s]", strings.Join(contextParts, " ")))
 	}

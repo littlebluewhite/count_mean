@@ -1,11 +1,12 @@
 package main
 
 import (
+	"count_mean/gui"
 	"count_mean/internal/config"
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
-	"count_mean/new_gui"
 	"embed"
+
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
 	"github.com/wailsapp/wails/v2"
@@ -52,7 +53,7 @@ func main() {
 	}
 
 	// 創建應用實例
-	app := new_gui.NewApp(cfg)
+	app := gui.NewApp(cfg)
 
 	// 創建 Wails 應用
 	err = wails.Run(&options.App{

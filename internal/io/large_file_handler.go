@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 )
 
@@ -32,6 +33,9 @@ type LargeFileHandler struct {
 	memoryLimit int64 // 記憶體限制 (bytes)
 	bufferSize  int   // 讀取緩衝區大小
 	maxFileSize int64 // 最大文件大小 (bytes)
+
+	// 緩衝區池
+	bufferPool *BufferPool
 }
 
 // NewLargeFileHandler 創建大文件處理器
@@ -53,6 +57,9 @@ func NewLargeFileHandler(config *config.AppConfig) *LargeFileHandler {
 		memoryLimit: 512 * 1024 * 1024,      // 512MB 記憶體限制
 		bufferSize:  64 * 1024,              // 64KB 緩衝區
 		maxFileSize: 2 * 1024 * 1024 * 1024, // 2GB 最大文件大小
+
+		// 緩衝區池
+		bufferPool: NewBufferPool(),
 	}
 }
 
@@ -208,8 +215,12 @@ func (h *LargeFileHandler) ReadCSVStreaming(filename string, callback ProgressCa
 	}
 
 	processedLines := int64(1) // 已處理標題行
-	chunk := make([][]string, 0, h.chunkSize)
+	chunk := h.bufferPool.GetStringArray()
+	defer h.bufferPool.PutStringArray(chunk)
 	chunk = append(chunk, headers) // 添加標題行
+
+	lastProgressReport := int64(0)
+	progressInterval := int64(h.chunkSize)
 
 	// 流式處理
 	for {
@@ -217,8 +228,20 @@ func (h *LargeFileHandler) ReadCSVStreaming(filename string, callback ProgressCa
 		if err := h.checkMemoryUsage(); err != nil {
 			h.logger.Warn("記憶體使用過高，觸發垃圾回收", map[string]interface{}{
 				"processed_lines": processedLines,
+				"error":           err.Error(),
 			})
 			runtime.GC()
+
+			// 如果記憶體仍然過高，減少塊大小
+			if err := h.checkMemoryUsage(); err != nil {
+				progressInterval = progressInterval / 2
+				if progressInterval < 100 {
+					progressInterval = 100
+				}
+				h.logger.Warn("減少進度報告間隔", map[string]interface{}{
+					"new_interval": progressInterval,
+				})
+			}
 		}
 
 		record, err := reader.Read()
@@ -230,6 +253,7 @@ func (h *LargeFileHandler) ReadCSVStreaming(filename string, callback ProgressCa
 				"error": err.Error(),
 				"line":  processedLines + 1,
 			})
+			processedLines++ // 仍然計數，確保進度追蹤準確
 			continue
 		}
 
@@ -240,21 +264,42 @@ func (h *LargeFileHandler) ReadCSVStreaming(filename string, callback ProgressCa
 				"actual_columns":   len(record),
 				"line":             processedLines + 1,
 			})
+			processedLines++ // 仍然計數，確保進度追蹤準確
 			continue
 		}
 
-		chunk = append(chunk, record)
+		// 深拷貝記錄以避免引用問題
+		recordCopy := make([]string, len(record))
+		copy(recordCopy, record)
+		chunk = append(chunk, recordCopy)
 		processedLines++
 
-		// 當塊達到指定大小時，進行進度回調
-		if len(chunk)-1 >= h.chunkSize { // -1 因為包含標題行
+		// 當處理的行數達到進度報告間隔時，進行進度回調
+		if processedLines-lastProgressReport >= progressInterval {
 			if callback != nil {
 				percentage := float64(processedLines) / float64(fileInfo.LineCount) * 100
+				if percentage > 100 {
+					percentage = 100
+				}
 				callback(processedLines, fileInfo.LineCount, percentage)
 			}
+			lastProgressReport = processedLines
 
-			// 清理塊數據以釋放記憶體
-			chunk = chunk[:1] // 保留標題行
+			// 記錄緩衝區池統計
+			poolStats := h.bufferPool.GetStats()
+			h.logger.Debug("緩衝區池統計", map[string]interface{}{
+				"reuse_ratio":       poolStats.ReuseRatio,
+				"string_array_gets": poolStats.StringArrayGets,
+				"string_array_puts": poolStats.StringArrayPuts,
+			})
+
+			// 定期清理塊數據以釋放記憶體（保留標題行）
+			if len(chunk) > h.chunkSize+1 { // +1 因為包含標題行
+				// 保留標題行並重新開始
+				headers := chunk[0]
+				chunk = chunk[:1]
+				chunk[0] = headers
+			}
 		}
 	}
 
@@ -315,11 +360,13 @@ func (h *LargeFileHandler) ProcessLargeFileInChunks(filename string, windowSize 
 	}
 
 	processedLines := int64(1) // 已處理標題行
-	chunk := make([][]string, 0, h.chunkSize)
+	chunk := h.bufferPool.GetStringArray()
+	defer h.bufferPool.PutStringArray(chunk)
 	chunk = append(chunk, headers) // 添加標題行
 
 	// 累積數據用於計算（使用滑動視窗）
-	dataBuffer := make([]models.EMGData, 0, windowSize*2)
+	dataBuffer := h.bufferPool.GetEMGDataSlice()
+	defer h.bufferPool.PutEMGDataSlice(dataBuffer)
 	scalingFactor := h.config.ScalingFactor
 
 	channelMaxMeans := make([]float64, len(headers)-1)     // 存儲每個通道的最大平均值
@@ -368,11 +415,20 @@ func (h *LargeFileHandler) ProcessLargeFileInChunks(filename string, windowSize 
 			h.calculateSlidingWindow(dataBuffer, windowSize, channelMaxMeans, channelBestTimes)
 
 			// 保持緩衝區大小，移除最舊的數據
-			if len(dataBuffer) > windowSize*2 {
-				removeCount := len(dataBuffer) - windowSize
-				if removeCount > 0 && removeCount < len(dataBuffer) {
-					copy(dataBuffer, dataBuffer[removeCount:])
-					dataBuffer = dataBuffer[:len(dataBuffer)-removeCount]
+			// 改進：更安全的緩衝區管理，防止數據丟失
+			bufferLimit := windowSize * 3 // 增加緩衝區限制以提供更多重疊
+			if len(dataBuffer) >= bufferLimit {
+				keepCount := windowSize * 2 // 保留更多數據以確保連續性
+				if keepCount < len(dataBuffer) {
+					// 使用安全的切片操作，避免數據丟失
+					copy(dataBuffer, dataBuffer[len(dataBuffer)-keepCount:])
+					dataBuffer = dataBuffer[:keepCount]
+
+					h.logger.Debug("緩衝區清理", map[string]interface{}{
+						"new_size":     len(dataBuffer),
+						"keep_count":   keepCount,
+						"buffer_limit": bufferLimit,
+					})
 				}
 			}
 		}
@@ -407,14 +463,39 @@ func (h *LargeFileHandler) ProcessLargeFileInChunks(filename string, windowSize 
 	result.Duration = endTime.Sub(startTime)
 	result.MemoryUsed = h.getMemoryUsage()
 
+	// 獲取最終統計信息
+	finalPoolStats := h.bufferPool.GetStats()
+	finalMemStats := h.getDetailedMemoryStats()
+
 	h.logger.Info("分塊處理完成", map[string]interface{}{
-		"processed_lines": processedLines,
-		"duration_ms":     result.Duration.Milliseconds(),
-		"memory_used_mb":  result.MemoryUsed / 1024 / 1024,
-		"results_count":   len(result.Results),
+		"processed_lines":          processedLines,
+		"duration_ms":              result.Duration.Milliseconds(),
+		"memory_used_mb":           result.MemoryUsed / 1024 / 1024,
+		"results_count":            len(result.Results),
+		"buffer_reuse_ratio":       finalPoolStats.ReuseRatio,
+		"buffer_gets":              finalPoolStats.StringArrayGets + finalPoolStats.EMGDataGets + finalPoolStats.Float64Gets,
+		"buffer_puts":              finalPoolStats.StringArrayPuts + finalPoolStats.EMGDataPuts + finalPoolStats.Float64Puts,
+		"final_memory_usage_ratio": finalMemStats.UsageRatio,
+		"gc_count":                 finalMemStats.NumGC,
 	})
 
 	return result, nil
+}
+
+// GetBufferPoolStats 獲取緩衝區池統計信息
+func (h *LargeFileHandler) GetBufferPoolStats() BufferPoolStats {
+	return h.bufferPool.GetStats()
+}
+
+// GetMemoryStats 獲取記憶體統計信息
+func (h *LargeFileHandler) GetMemoryStats() *MemoryStats {
+	return h.getDetailedMemoryStats()
+}
+
+// ResetBufferPool 重置緩衝區池
+func (h *LargeFileHandler) ResetBufferPool() {
+	h.bufferPool = NewBufferPool()
+	h.logger.Info("緩衝區池已重置")
 }
 
 // parseDataRow 解析數據行
@@ -430,10 +511,12 @@ func (h *LargeFileHandler) parseDataRow(record []string, scalingFactor int) (*mo
 	}
 
 	// 解析通道數據
-	channels := make([]float64, 0, len(record)-1)
+	channels := h.bufferPool.GetFloat64Slice()
+	// 注意：這裡不能使用defer，因為channels需要返回給調用者
 	for i := 1; i < len(record); i++ {
 		val, err := util.Str2Number[float64, int](record[i], scalingFactor)
 		if err != nil {
+			h.bufferPool.PutFloat64Slice(channels) // 出錯時歸還緩衝區
 			return nil, fmt.Errorf("解析通道 %d 失敗: %w", i, err)
 		}
 		channels = append(channels, val)
@@ -475,13 +558,275 @@ func (h *LargeFileHandler) calculateSlidingWindow(data []models.EMGData, windowS
 	}
 }
 
-// checkMemoryUsage 檢查記憶體使用
-func (h *LargeFileHandler) checkMemoryUsage() error {
+// MemoryStats 記憶體統計信息
+type MemoryStats struct {
+	Alloc         uint64  `json:"alloc"`           // 當前分配的記憶體
+	TotalAlloc    uint64  `json:"total_alloc"`     // 總分配記憶體
+	Sys           uint64  `json:"sys"`             // 系統記憶體
+	Lookups       uint64  `json:"lookups"`         // 查找次數
+	Mallocs       uint64  `json:"mallocs"`         // 分配次數
+	Frees         uint64  `json:"frees"`           // 釋放次數
+	HeapAlloc     uint64  `json:"heap_alloc"`      // 堆分配
+	HeapSys       uint64  `json:"heap_sys"`        // 堆系統記憶體
+	HeapIdle      uint64  `json:"heap_idle"`       // 堆空閒記憶體
+	HeapInuse     uint64  `json:"heap_inuse"`      // 堆使用記憶體
+	HeapReleased  uint64  `json:"heap_released"`   // 堆釋放記憶體
+	HeapObjects   uint64  `json:"heap_objects"`    // 堆對象數
+	StackInuse    uint64  `json:"stack_inuse"`     // 棧使用記憶體
+	StackSys      uint64  `json:"stack_sys"`       // 棧系統記憶體
+	MSpanInuse    uint64  `json:"mspan_inuse"`     // MSpan使用記憶體
+	MSpanSys      uint64  `json:"mspan_sys"`       // MSpan系統記憶體
+	MCacheInuse   uint64  `json:"mcache_inuse"`    // MCache使用記憶體
+	MCacheSys     uint64  `json:"mcache_sys"`      // MCache系統記憶體
+	BuckHashSys   uint64  `json:"buckhash_sys"`    // BuckHash系統記憶體
+	GCSys         uint64  `json:"gc_sys"`          // GC系統記憶體
+	OtherSys      uint64  `json:"other_sys"`       // 其他系統記憶體
+	NextGC        uint64  `json:"next_gc"`         // 下次GC閾值
+	LastGC        uint64  `json:"last_gc"`         // 上次GC時間
+	PauseTotalNs  uint64  `json:"pause_total"`     // GC暫停總時間
+	PauseNs       uint64  `json:"pause_ns"`        // 最近GC暫停時間
+	NumGC         uint32  `json:"num_gc"`          // GC次數
+	NumForcedGC   uint32  `json:"num_forced_gc"`   // 強制GC次數
+	GCCPUFraction float64 `json:"gc_cpu_fraction"` // GC CPU比例
+	UsageRatio    float64 `json:"usage_ratio"`     // 使用率
+	IsOverLimit   bool    `json:"is_over_limit"`   // 是否超過限制
+}
+
+// BufferPool 緩衝區池管理
+type BufferPool struct {
+	stringArrayPool *sync.Pool // 字符串陣列池
+	emgDataPool     *sync.Pool // EMG數據池
+	float64Pool     *sync.Pool // float64 切片池
+	mutex           sync.RWMutex
+	stats           BufferPoolStats
+}
+
+// BufferPoolStats 緩衝區池統計
+type BufferPoolStats struct {
+	StringArrayGets int64   `json:"string_array_gets"`
+	StringArrayPuts int64   `json:"string_array_puts"`
+	EMGDataGets     int64   `json:"emg_data_gets"`
+	EMGDataPuts     int64   `json:"emg_data_puts"`
+	Float64Gets     int64   `json:"float64_gets"`
+	Float64Puts     int64   `json:"float64_puts"`
+	ReuseRatio      float64 `json:"reuse_ratio"`
+}
+
+// NewBufferPool 創建緩衝區池
+func NewBufferPool() *BufferPool {
+	return &BufferPool{
+		stringArrayPool: &sync.Pool{
+			New: func() interface{} {
+				return make([][]string, 0, 1000) // 預分配1000個元素的容量
+			},
+		},
+		emgDataPool: &sync.Pool{
+			New: func() interface{} {
+				return make([]models.EMGData, 0, 2000) // 預分配2000個元素的容量
+			},
+		},
+		float64Pool: &sync.Pool{
+			New: func() interface{} {
+				return make([]float64, 0, 100) // 預分配100個元素的容量
+			},
+		},
+	}
+}
+
+// GetStringArray 獲取字符串陣列
+func (bp *BufferPool) GetStringArray() [][]string {
+	bp.mutex.Lock()
+	bp.stats.StringArrayGets++
+	bp.mutex.Unlock()
+
+	arr := bp.stringArrayPool.Get().([][]string)
+	return arr[:0] // 重置長度但保留容量
+}
+
+// PutStringArray 歸還字符串陣列
+func (bp *BufferPool) PutStringArray(arr [][]string) {
+	if cap(arr) > 0 {
+		bp.mutex.Lock()
+		bp.stats.StringArrayPuts++
+		bp.mutex.Unlock()
+
+		// 清空引用以避免記憶體洩漏
+		for i := range arr {
+			arr[i] = nil
+		}
+		bp.stringArrayPool.Put(arr[:0])
+	}
+}
+
+// GetEMGDataSlice 獲取EMG數據切片
+func (bp *BufferPool) GetEMGDataSlice() []models.EMGData {
+	bp.mutex.Lock()
+	bp.stats.EMGDataGets++
+	bp.mutex.Unlock()
+
+	slice := bp.emgDataPool.Get().([]models.EMGData)
+	return slice[:0] // 重置長度但保留容量
+}
+
+// PutEMGDataSlice 歸還EMG數據切片
+func (bp *BufferPool) PutEMGDataSlice(slice []models.EMGData) {
+	if cap(slice) > 0 {
+		bp.mutex.Lock()
+		bp.stats.EMGDataPuts++
+		bp.mutex.Unlock()
+
+		// 清空數據以避免記憶體洩漏
+		for i := range slice {
+			slice[i] = models.EMGData{}
+		}
+		bp.emgDataPool.Put(slice[:0])
+	}
+}
+
+// GetFloat64Slice 獲取float64切片
+func (bp *BufferPool) GetFloat64Slice() []float64 {
+	bp.mutex.Lock()
+	bp.stats.Float64Gets++
+	bp.mutex.Unlock()
+
+	slice := bp.float64Pool.Get().([]float64)
+	return slice[:0] // 重置長度但保留容量
+}
+
+// PutFloat64Slice 歸還float64切片
+func (bp *BufferPool) PutFloat64Slice(slice []float64) {
+	if cap(slice) > 0 {
+		bp.mutex.Lock()
+		bp.stats.Float64Puts++
+		bp.mutex.Unlock()
+
+		bp.float64Pool.Put(slice[:0])
+	}
+}
+
+// GetStats 獲取緩衝區池統計
+func (bp *BufferPool) GetStats() BufferPoolStats {
+	bp.mutex.RLock()
+	defer bp.mutex.RUnlock()
+
+	stats := bp.stats
+
+	// 計算重用率
+	totalGets := stats.StringArrayGets + stats.EMGDataGets + stats.Float64Gets
+	totalPuts := stats.StringArrayPuts + stats.EMGDataPuts + stats.Float64Puts
+
+	if totalGets > 0 {
+		stats.ReuseRatio = float64(totalPuts) / float64(totalGets)
+	}
+
+	return stats
+}
+
+// getDetailedMemoryStats 獲取詳細記憶體統計信息
+func (h *LargeFileHandler) getDetailedMemoryStats() *MemoryStats {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	if int64(m.Alloc) > h.memoryLimit {
-		return fmt.Errorf("記憶體使用超過限制: %d > %d", m.Alloc, h.memoryLimit)
+	stats := &MemoryStats{
+		Alloc:         m.Alloc,
+		TotalAlloc:    m.TotalAlloc,
+		Sys:           m.Sys,
+		Lookups:       m.Lookups,
+		Mallocs:       m.Mallocs,
+		Frees:         m.Frees,
+		HeapAlloc:     m.HeapAlloc,
+		HeapSys:       m.HeapSys,
+		HeapIdle:      m.HeapIdle,
+		HeapInuse:     m.HeapInuse,
+		HeapReleased:  m.HeapReleased,
+		HeapObjects:   m.HeapObjects,
+		StackInuse:    m.StackInuse,
+		StackSys:      m.StackSys,
+		MSpanInuse:    m.MSpanInuse,
+		MSpanSys:      m.MSpanSys,
+		MCacheInuse:   m.MCacheInuse,
+		MCacheSys:     m.MCacheSys,
+		BuckHashSys:   m.BuckHashSys,
+		GCSys:         m.GCSys,
+		OtherSys:      m.OtherSys,
+		NextGC:        m.NextGC,
+		LastGC:        m.LastGC,
+		PauseTotalNs:  m.PauseTotalNs,
+		NumGC:         m.NumGC,
+		NumForcedGC:   m.NumForcedGC,
+		GCCPUFraction: m.GCCPUFraction,
+		UsageRatio:    float64(m.Alloc) / float64(h.memoryLimit),
+		IsOverLimit:   int64(m.Alloc) > h.memoryLimit,
+	}
+
+	// 計算最近的GC暫停時間
+	if m.NumGC > 0 {
+		stats.PauseNs = m.PauseNs[(m.NumGC+255)%256]
+	}
+
+	return stats
+}
+
+// checkMemoryUsage 檢查記憶體使用
+func (h *LargeFileHandler) checkMemoryUsage() error {
+	stats := h.getDetailedMemoryStats()
+
+	// 記錄詳細的記憶體信息
+	h.logger.Debug("記憶體使用統計", map[string]interface{}{
+		"alloc_mb":        stats.Alloc / 1024 / 1024,
+		"total_alloc_mb":  stats.TotalAlloc / 1024 / 1024,
+		"sys_mb":          stats.Sys / 1024 / 1024,
+		"heap_alloc_mb":   stats.HeapAlloc / 1024 / 1024,
+		"heap_sys_mb":     stats.HeapSys / 1024 / 1024,
+		"heap_idle_mb":    stats.HeapIdle / 1024 / 1024,
+		"heap_inuse_mb":   stats.HeapInuse / 1024 / 1024,
+		"heap_objects":    stats.HeapObjects,
+		"stack_inuse_mb":  stats.StackInuse / 1024 / 1024,
+		"usage_ratio":     stats.UsageRatio,
+		"num_gc":          stats.NumGC,
+		"num_forced_gc":   stats.NumForcedGC,
+		"gc_cpu_fraction": stats.GCCPUFraction,
+		"next_gc_mb":      stats.NextGC / 1024 / 1024,
+		"limit_mb":        h.memoryLimit / 1024 / 1024,
+	})
+
+	// 多級記憶體檢查
+	if stats.IsOverLimit {
+		h.logger.Warn("記憶體使用超過限制", map[string]interface{}{
+			"current_mb":  stats.Alloc / 1024 / 1024,
+			"limit_mb":    h.memoryLimit / 1024 / 1024,
+			"usage_ratio": stats.UsageRatio,
+		})
+		return fmt.Errorf("記憶體使用超過限制: %d MB > %d MB (%.2f%%)",
+			stats.Alloc/1024/1024, h.memoryLimit/1024/1024, stats.UsageRatio*100)
+	}
+
+	// 檢查是否接近限制 (90%)
+	if stats.UsageRatio > 0.9 {
+		h.logger.Warn("記憶體使用接近限制", map[string]interface{}{
+			"current_mb":  stats.Alloc / 1024 / 1024,
+			"limit_mb":    h.memoryLimit / 1024 / 1024,
+			"usage_ratio": stats.UsageRatio,
+		})
+
+		// 建議執行GC
+		if stats.UsageRatio > 0.95 {
+			h.logger.Info("記憶體使用率超過95%，建議執行GC")
+			return fmt.Errorf("記憶體使用率過高: %.2f%%", stats.UsageRatio*100)
+		}
+	}
+
+	// 檢查堆碎片化
+	if stats.HeapSys > 0 {
+		heapEfficiency := float64(stats.HeapInuse) / float64(stats.HeapSys)
+		if heapEfficiency < 0.6 {
+			h.logger.Warn("堆記憶體效率低", map[string]interface{}{
+				"heap_efficiency": heapEfficiency,
+				"heap_inuse_mb":   stats.HeapInuse / 1024 / 1024,
+				"heap_sys_mb":     stats.HeapSys / 1024 / 1024,
+				"heap_idle_mb":    stats.HeapIdle / 1024 / 1024,
+			})
+		}
 	}
 
 	return nil

@@ -1,8 +1,9 @@
 package util_test
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"count_mean/util"
 )

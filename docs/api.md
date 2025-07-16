@@ -1,1227 +1,1227 @@
-# API 文檔
+# EMG 數據分析工具 API 文檔
 
 ## 概述
 
-EMG 數據分析工具的 API 文檔，包含所有公開的函數、結構體和接口。
-
-## 套件: gui
-
-### 類型定義
-
-#### App
-
-App 表示GUI應用程式
-
-
-```go
-type App &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=21011) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400019dc40 <nil> 0 0x14000163b30 <nil>})] %!s(token.Pos=0)}
-```
-
-##### 方法
-
-**Run**
-
-Run 啟動GUI應用程式
-
-
-**checkAndHandleLargeFile**
-
-checkAndHandleLargeFile 檢查並處理大文件
-
-
-**executeBatchCalculation**
-
-executeBatchCalculation 執行批量計算
-
-
-**executeMaxMeanCalculation**
-
-executeMaxMeanCalculation 執行最大平均值計算
-
-
-**executeNormalization**
-
-executeNormalization 執行資料標準化
-
-
-**executePhaseAnalysis**
-
-executePhaseAnalysis 執行階段分析
-
-
-**executeSingleFileCalculation**
-
-executeSingleFileCalculation 執行單檔案計算
-
-
-**handleLargeFileError**
-
-handleLargeFileError 處理大文件錯誤
-
-
-**handleValidationError**
-
-handleValidationError 處理驗證錯誤
-
-
-**processBatchLargeFile**
-
-processBatchLargeFile 批處理大文件
-
-
-**processLargeFile**
-
-processLargeFile 處理大文件
-
-
-**resetToDefaults**
-
-resetToDefaults 重置為默認配置
-
-
-**saveConfiguration**
-
-saveConfiguration 保存配置設定
-
-
-**setupUI**
-
-setupUI 設置用戶界面
-
-
-**showConfigDialog**
-
-showConfigDialog 顯示配置設定對話框
-
-
-**showDirectorySelectDialog**
-
-showDirectorySelectDialog 顯示目錄選擇對話框（用於配置設定）
-
-
-**showError**
-
-showError 顯示錯誤對話框
-
-
-**showFileSelectDialog**
-
-showFileSelectDialog 顯示文件選擇對話框
-
-
-**showFolderSelectDialog**
-
-showFolderSelectDialog 顯示資料夾選擇對話框
-
-
-**showInfo**
-
-showInfo 顯示信息對話框
-
-
-**showMaxMeanCalculationDialog**
-
-showMaxMeanCalculationDialog 顯示最大平均值計算對話框
-
-
-**showNormalizationDialog**
-
-showNormalizationDialog 顯示資料標準化對話框
-
-
-**showPhaseAnalysisDialog**
-
-showPhaseAnalysisDialog 顯示階段分析對話框
-
-
-**updateStatus**
-
-updateStatus 更新狀態顯示
-
+本文檔提供 EMG 數據分析工具的完整 API 參考，包含所有公開的函數、結構體和接口，以及詳細的使用示例和最佳實踐指南。
+
+## 目錄
+
+- [核心計算模組](#核心計算模組)
+  - [最大平均值計算](#最大平均值計算)
+  - [數據標準化](#數據標準化)
+  - [階段分析](#階段分析)
+- [I/O 操作](#io-操作)
+  - [CSV 處理](#csv-處理)
+  - [大文件處理](#大文件處理)
+- [圖表生成](#圖表生成)
+  - [基本圖表](#基本圖表)
+  - [互動式圖表](#互動式圖表)
+- [配置管理](#配置管理)
+- [錯誤處理](#錯誤處理)
+- [日誌記錄](#日誌記錄)
+- [安全驗證](#安全驗證)
+- [工具函數](#工具函數)
 
 ---
 
-## 套件: benchmark
+## 核心計算模組
 
-### 類型定義
-
-#### BenchmarkMetrics
-
-BenchmarkMetrics 性能測試指標
-
-
-```go
-type BenchmarkMetrics &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=57356) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400024edc0 <nil> 0 0x1400024c4b0 <nil>})] %!s(token.Pos=0)}
-```
-
-#### BenchmarkResult
-
-BenchmarkResult 基準測試結果
-
-
-```go
-type BenchmarkResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=58262) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400024f2c0 <nil> 0 0x1400024c600 <nil>})] %!s(token.Pos=0)}
-```
-
-#### BenchmarkSummary
-
-BenchmarkSummary 測試摘要
-
-
-```go
-type BenchmarkSummary &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=59025) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400024f720 <nil> 0 0x1400024c9c0 <nil>})] %!s(token.Pos=0)}
-```
-
-#### Benchmarker
-
-Benchmarker 性能測試器
-
-
-```go
-type Benchmarker &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=59825) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400024fba0 <nil> 0 0x1400024ca68 <nil>})] %!s(token.Pos=0)}
-```
-
-##### 方法
-
-**Benchmark**
-
-Benchmark 執行性能測試
-
-
-**BenchmarkOperations**
-
-BenchmarkOperations 執行操作次數性能測試
-
-
-**BenchmarkWithData**
-
-BenchmarkWithData 執行帶數據量的性能測試
-
-
-**GenerateReport**
-
-GenerateReport 生成完整的測試報告
-
-
-**GetResults**
-
-GetResults 獲取測試結果
-
-
-**PrintSummary**
-
-PrintSummary 打印測試摘要
-
-
-**Reset**
-
-Reset 重置測試結果
-
-
-**SaveReportToFile**
-
-SaveReportToFile 保存報告到文件
-
-
-**calculateSummary**
-
-calculateSummary 計算測試摘要
-
-
-**formatReportAsJSON**
-
-formatReportAsJSON 格式化報告為 JSON
-
-
-#### CSVBenchmarks
-
-CSVBenchmarks CSV 相關性能測試
-
-
-```go
-type CSVBenchmarks &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=68841) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400027e120 <nil> 0 0x140002765b8 <nil>})] %!s(token.Pos=0)}
-```
-
-##### 方法
-
-**BenchmarkCSVReading**
-
-BenchmarkCSVReading 測試 CSV 讀取性能
-
-
-**BenchmarkConcurrentProcessing**
-
-BenchmarkConcurrentProcessing 測試並發處理性能
-
-
-**BenchmarkLargeFileProcessing**
-
-BenchmarkLargeFileProcessing 測試大文件處理性能
-
-
-**BenchmarkMaxMeanCalculation**
-
-BenchmarkMaxMeanCalculation 測試最大均值計算性能
-
-
-**BenchmarkMemoryUsage**
-
-BenchmarkMemoryUsage 測試記憶體使用性能
-
-
-**BenchmarkNormalization**
-
-BenchmarkNormalization 測試數據正規化性能
-
-
-**Cleanup**
-
-Cleanup 清理臨時文件
-
-
-**GetBenchmarker**
-
-GetBenchmarker 獲取基準測試器
-
-
-**RunAllBenchmarks**
-
-RunAllBenchmarks 執行所有 CSV 相關的性能測試
-
-
-**generateTestCSV**
-
-generateTestCSV 生成測試用的 CSV 文件
-
-
-#### SystemInfo
-
-SystemInfo 系統資訊
-
-
-```go
-type SystemInfo &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=58676) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400024f500 <nil> 0 0x1400024c738 <nil>})] %!s(token.Pos=0)}
-```
-
----
-
-## 套件: calculator
-
-### 類型定義
-
-#### AnalyzeResult
-
-AnalyzeResult 階段分析結果
-
-
-```go
-type AnalyzeResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=95450) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140002e9580 <nil> 0 0x140002e29c0 <nil>})] %!s(token.Pos=0)}
-```
+### 最大平均值計算
 
 #### MaxMeanCalculator
 
-MaxMeanCalculator 處理最大平均值計算
-
+`MaxMeanCalculator` 提供滑動窗口最大平均值計算功能，是系統的核心計算元件。
 
 ```go
-type MaxMeanCalculator &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=78578) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400029c480 <nil> 0 0x1400029a168 <nil>})] %!s(token.Pos=0)}
+type MaxMeanCalculator struct {
+    logger *logging.Logger
+}
 ```
 
 ##### 方法
+
+**NewMaxMeanCalculator**
+
+```go
+func NewMaxMeanCalculator() *MaxMeanCalculator
+```
+
+創建新的最大平均值計算器實例。
+
+**示例：**
+```go
+calculator := calculator.NewMaxMeanCalculator()
+```
 
 **Calculate**
 
-Calculate 計算指定窗口大小的最大平均值
+```go
+func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int) ([]models.MaxMeanResult, error)
+```
 
+計算指定窗口大小的最大平均值。
 
-**CalculateFromRawData**
+**參數：**
+- `dataset` (*models.EMGDataset): EMG 數據集
+- `windowSize` (int): 滑動窗口大小，範圍：1-10000，建議值：50-200
 
-CalculateFromRawData 從原始字符串數據計算
+**返回值：**
+- `[]models.MaxMeanResult`: 各通道的最大平均值結果
+- `error`: 錯誤信息
 
+**示例：**
+```go
+// 讀取 EMG 數據
+csvHandler := io.NewCSVHandler()
+dataset, err := csvHandler.ReadCSV("emg_data.csv")
+if err != nil {
+    log.Fatal(err)
+}
 
-**CalculateFromRawDataWithRange**
+// 計算最大平均值
+calculator := calculator.NewMaxMeanCalculator()
+results, err := calculator.Calculate(dataset, 100)
+if err != nil {
+    log.Fatal(err)
+}
 
-CalculateFromRawDataWithRange 從原始字符串數據計算指定時間範圍內的最大平均值
-
+// 處理結果
+for _, result := range results {
+    fmt.Printf("通道 %d: 最大平均值 = %.6f, 時間範圍 = %.3f-%.3f\n",
+        result.ColumnIndex, result.MaxMean, result.StartTime, result.EndTime)
+}
+```
 
 **CalculateWithRange**
 
-CalculateWithRange 計算指定時間範圍內的最大平均值
+```go
+func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windowSize int, startTime, endTime float64) ([]models.MaxMeanResult, error)
+```
 
+計算指定時間範圍內的最大平均值。
 
-**parseRawData**
+**參數：**
+- `dataset` (*models.EMGDataset): EMG 數據集
+- `windowSize` (int): 滑動窗口大小，範圍：1-10000
+- `startTime` (float64): 開始時間（秒），範圍：≥0
+- `endTime` (float64): 結束時間（秒），範圍：>startTime
 
-parseRawData 解析原始字符串數據
+**示例：**
+```go
+// 計算特定時間範圍的最大平均值
+results, err := calculator.CalculateWithRange(dataset, 100, 2.0, 5.0)
+if err != nil {
+    log.Fatal(err)
+}
 
+fmt.Printf("時間範圍 2.0-5.0 秒內的最大平均值：\n")
+for _, result := range results {
+    fmt.Printf("通道 %d: %.6f\n", result.ColumnIndex, result.MaxMean)
+}
+```
+
+**CalculateFromRawData**
+
+```go
+func (c *MaxMeanCalculator) CalculateFromRawData(rawData string, windowSize int) ([]models.MaxMeanResult, error)
+```
+
+從原始 CSV 字符串數據計算最大平均值。
+
+**參數：**
+- `rawData` (string): 原始 CSV 數據字符串
+- `windowSize` (int): 滑動窗口大小
+
+**示例：**
+```go
+csvData := `Time,Channel1,Channel2,Channel3
+0.000,0.001,0.002,0.003
+0.001,0.002,0.003,0.004
+0.002,0.003,0.004,0.005`
+
+results, err := calculator.CalculateFromRawData(csvData, 2)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+---
+
+### 數據標準化
 
 #### Normalizer
 
-Normalizer 處理數據標準化
-
+`Normalizer` 提供數據標準化功能，支持多種標準化方法。
 
 ```go
-type Normalizer &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=88983) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140002d2360 <nil> 0 0x1400029b7b8 <nil>})] %!s(token.Pos=0)}
+type Normalizer struct {
+    logger *logging.Logger
+}
 ```
 
-##### 方法
+**NewNormalizer**
+
+```go
+func NewNormalizer() *Normalizer
+```
+
+**示例：**
+```go
+normalizer := calculator.NewNormalizer()
+```
 
 **Normalize**
 
-Normalize 標準化數據集（每個值除以參考值）
+```go
+func (n *Normalizer) Normalize(dataset *models.EMGDataset, referenceValues []float64) (*models.EMGDataset, error)
+```
 
+標準化數據集，每個值除以對應的參考值。
+
+**參數：**
+- `dataset` (*models.EMGDataset): 原始數據集
+- `referenceValues` ([]float64): 參考值陣列，長度必須與數據通道數相同
+
+**示例：**
+```go
+// 使用 MVIC 值進行標準化
+mvicValues := []float64{0.5, 0.6, 0.7} // 各通道的 MVIC 值
+
+normalizedData, err := normalizer.Normalize(dataset, mvicValues)
+if err != nil {
+    log.Fatal(err)
+}
+
+// 保存標準化結果
+csvHandler := io.NewCSVHandler()
+err = csvHandler.WriteCSVToOutput(normalizedData, "normalized_data.csv")
+if err != nil {
+    log.Fatal(err)
+}
+```
 
 **NormalizeFromRawData**
 
-NormalizeFromRawData 從原始字符串數據進行標準化
+```go
+func (n *Normalizer) NormalizeFromRawData(rawData string, referenceValues []float64) (*models.EMGDataset, error)
+```
 
+從原始 CSV 字符串數據進行標準化。
 
-**parseRawData**
+**示例：**
+```go
+csvData := `Time,Channel1,Channel2
+0.000,0.1,0.2
+0.001,0.2,0.3`
 
-parseRawData 解析原始字符串數據
+referenceValues := []float64{1.0, 1.5}
+normalizedData, err := normalizer.NormalizeFromRawData(csvData, referenceValues)
+```
 
+---
+
+### 階段分析
 
 #### PhaseAnalyzer
 
-PhaseAnalyzer 處理階段分析
-
+`PhaseAnalyzer` 提供階段分析功能，可以分析不同階段的數據特徵。
 
 ```go
-type PhaseAnalyzer &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=95035) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140002e91c0 <nil> 0 0x140002e28b8 <nil>})] %!s(token.Pos=0)}
+type PhaseAnalyzer struct {
+    logger *logging.Logger
+}
 ```
 
-##### 方法
+**NewPhaseAnalyzer**
+
+```go
+func NewPhaseAnalyzer() *PhaseAnalyzer
+```
 
 **Analyze**
 
-Analyze 分析不同階段的數據
+```go
+func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.TimeRange, phaseLabels []string) ([]models.PhaseAnalysisResult, error)
+```
 
+分析不同階段的數據特徵。
 
-**AnalyzeFromRawData**
+**參數：**
+- `dataset` (*models.EMGDataset): EMG 數據集
+- `phases` ([]models.TimeRange): 階段時間範圍陣列
+- `phaseLabels` ([]string): 階段標籤陣列
 
-AnalyzeFromRawData 從原始字符串數據進行階段分析
+**示例：**
+```go
+// 定義階段
+phases := []models.TimeRange{
+    {Start: 0.0, End: 1.0},   // 準備階段
+    {Start: 1.0, End: 3.0},   // 動作階段
+    {Start: 3.0, End: 4.0},   // 恢復階段
+}
 
+phaseLabels := []string{"準備", "動作", "恢復"}
 
-**parsePhases**
+// 執行階段分析
+analyzer := calculator.NewPhaseAnalyzer()
+results, err := analyzer.Analyze(dataset, phases, phaseLabels)
+if err != nil {
+    log.Fatal(err)
+}
 
-parsePhases 解析階段字符串為時間範圍
-
-
-**parseRawData**
-
-parseRawData 解析原始字符串數據
-
+// 顯示結果
+for _, result := range results {
+    fmt.Printf("階段：%s\n", result.PhaseName)
+    fmt.Printf("  最大值：%v\n", result.MaxValues)
+    fmt.Printf("  平均值：%v\n", result.MeanValues)
+}
+```
 
 ---
 
-## 套件: config
+## I/O 操作
 
-### 類型定義
-
-#### AppConfig
-
-AppConfig 應用程式配置
-
-
-```go
-type AppConfig &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=101896) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000308e80 <nil> 0 0x140002e3938 <nil>})] %!s(token.Pos=0)}
-```
-
-##### 方法
-
-**EnsureDirectories**
-
-EnsureDirectories 確保配置中的目錄存在
-
-
-**ProcessingOptions**
-
-ProcessingOptions 獲取處理選項
-
-
-**SaveConfig**
-
-SaveConfig 保存配置到檔案
-
-
-**ToAnalysisConfig**
-
-ToAnalysisConfig 轉換為分析配置
-
-
-**Validate**
-
-Validate 驗證配置
-
-
----
-
-## 套件: errors
-
-### 類型定義
-
-#### AppError
-
-AppError represents a structured application error
-
-
-```go
-type AppError &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=107022) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003243c0 <nil> 0 0x1400031c3a8 <nil>})] %!s(token.Pos=0)}
-```
-
-##### 方法
-
-**Error**
-
-Error implements the error interface
-
-
-**Is**
-
-Is checks if the error matches the target error code
-
-
-**Unwrap**
-
-Unwrap returns the underlying cause error
-
-
-**WithContext**
-
-WithContext adds context information to the error
-
-
-#### ErrorCode
-
-ErrorCode represents different types of errors
-
-
-```go
-type ErrorCode &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=106029) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000319ca0 <nil> 0 0x14000319cc0 <nil>})] %!s(token.Pos=0)}
-```
-
-#### ProcessingError
-
-ProcessingError represents errors that occur during data processing
-
-
-```go
-type ProcessingError &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=110433) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400032a520 <nil> 0 0x1400031ca68 <nil>})] %!s(token.Pos=0)}
-```
-
-##### 方法
-
-**Error**
-
-Error returns a formatted error message for ProcessingError
-
-
-#### ValidationError
-
-ValidationError represents input validation errors
-
-
-```go
-type ValidationError &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=111773) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x1400032b6c0 <nil> 0 0x1400031cd50 <nil>})] %!s(token.Pos=0)}
-```
-
-##### 方法
-
-**Error**
-
-Error returns a formatted error message for ValidationError
-
-
-### 函數
-
-#### IsRecoverable
-
-IsRecoverable determines if an error type is recoverable
-
-
----
-
-## 套件: i18n
-
-### 類型定義
-
-#### I18n
-
-I18n manages internationalization
-
-
-```go
-type I18n &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=115284) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000333840 <nil> 0 0x1400031d3b0 <nil>})] %!s(token.Pos=0)}
-```
-
-##### 方法
-
-**DetectSystemLocale**
-
-DetectSystemLocale attempts to detect the system locale
-
-
-**GetLocale**
-
-GetLocale returns the current locale
-
-
-**GetLocaleName**
-
-GetLocaleName returns the display name of a locale
-
-
-**GetSupportedLocales**
-
-GetSupportedLocales returns list of supported locales
-
-
-**LoadTranslations**
-
-LoadTranslations loads translation files from a directory
-
-
-**SaveTranslations**
-
-SaveTranslations saves current translations to files
-
-
-**SetLocale**
-
-SetLocale sets the current locale
-
-
-**T**
-
-T translates a message key
-
-
-**getBuiltinTranslations**
-
-getBuiltinTranslations returns built-in translations for a locale
-
-
-**parseLocale**
-
-parseLocale parses locale string and returns supported locale
-
-
-#### Locale
-
-Locale represents a supported locale
-
-
-```go
-type Locale &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=115000) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000333620 <nil> 0 0x14000333640 <nil>})] %!s(token.Pos=0)}
-```
-
-### 函數
-
-#### GetLocaleName
-
-#### InitI18n
-
-InitI18n initializes the global i18n instance
-
-
-#### SetLocale
-
-#### T
-
-Global functions for convenience
-
-
----
-
-## 套件: io
-
-### 類型定義
+### CSV 處理
 
 #### CSVHandler
 
-CSVHandler 處理 CSV 檔案讀寫
-
+`CSVHandler` 提供 CSV 文件讀寫功能，支持大文件自動處理。
 
 ```go
-type CSVHandler &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=134190) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000368120 <nil> 0 0x1400034aac8 <nil>})] %!s(token.Pos=0)}
+type CSVHandler struct {
+    logger           *logging.Logger
+    largeFileHandler *LargeFileHandler
+    pathValidator    *security.PathValidator
+}
 ```
 
-##### 方法
+**NewCSVHandler**
 
-**ConvertMaxMeanResultsToCSV**
-
-ConvertMaxMeanResultsToCSV 將最大平均值結果轉換為 CSV 格式
-
-
-**ConvertNormalizedDataToCSV**
-
-ConvertNormalizedDataToCSV 將標準化數據轉換為 CSV 格式
-
-
-**ConvertPhaseAnalysisToCSV**
-
-ConvertPhaseAnalysisToCSV 將階段分析結果轉換為 CSV 格式
-
-
-**GetFileInfo**
-
-GetFileInfo 獲取文件信息
-
-
-**ListCSVFilesInDirectory**
-
-ListCSVFilesInDirectory 列出指定目錄中的CSV文件
-
-
-**ListInputDirectories**
-
-ListInputDirectories 列出輸入目錄中的子目錄
-
-
-**ListInputFiles**
-
-ListInputFiles 列出輸入目錄中的CSV文件
-
-
-**ProcessLargeFile**
-
-ProcessLargeFile 處理大文件
-
+```go
+func NewCSVHandler() *CSVHandler
+```
 
 **ReadCSV**
 
-ReadCSV 讀取 CSV 檔案（自動檢測大文件並使用相應處理方式）
+```go
+func (h *CSVHandler) ReadCSV(filePath string) (*models.EMGDataset, error)
+```
 
+讀取 CSV 文件，自動檢測大文件並使用適當的處理方式。
 
-**ReadCSVFromDirectory**
+**參數：**
+- `filePath` (string): CSV 文件路徑
 
-ReadCSVFromDirectory 從指定目錄讀取CSV檔案
+**示例：**
+```go
+handler := io.NewCSVHandler()
 
+// 讀取 CSV 文件
+dataset, err := handler.ReadCSV("data/emg_data.csv")
+if err != nil {
+    log.Fatal(err)
+}
 
-**ReadCSVFromInput**
-
-ReadCSVFromInput 從輸入目錄讀取CSV檔案
-
-
-**ReadCSVFromPrompt**
-
-ReadCSVFromPrompt 從使用者輸入讀取 CSV 檔案
-
-
-**ReadCSVFromPromptWithName**
-
-ReadCSVFromPromptWithName 從使用者輸入讀取 CSV 檔案並返回檔名
-
-
-**ReadLargeCSVStreaming**
-
-ReadLargeCSVStreaming 流式讀取大 CSV 文件
-
+fmt.Printf("讀取成功：%d 筆數據，%d 個通道\n", 
+    len(dataset.Data), len(dataset.Headers)-1)
+```
 
 **WriteCSV**
 
-WriteCSV 寫入 CSV 檔案
+```go
+func (h *CSVHandler) WriteCSV(dataset *models.EMGDataset, filePath string) error
+```
 
+寫入 CSV 文件。
+
+**參數：**
+- `dataset` (*models.EMGDataset): 要寫入的數據集
+- `filePath` (string): 輸出文件路徑
+
+**示例：**
+```go
+// 寫入處理後的數據
+err := handler.WriteCSV(processedData, "output/processed_data.csv")
+if err != nil {
+    log.Fatal(err)
+}
+```
 
 **WriteCSVToOutput**
 
-WriteCSVToOutput 寫入CSV文件到輸出目錄
+```go
+func (h *CSVHandler) WriteCSVToOutput(dataset *models.EMGDataset, filename string) error
+```
 
+寫入 CSV 文件到預設輸出目錄。
 
-**WriteCSVToOutputDirectory**
+**參數：**
+- `dataset` (*models.EMGDataset): 數據集
+- `filename` (string): 文件名稱
 
-WriteCSVToOutputDirectory 寫入CSV文件到輸出目錄的子目錄
+**示例：**
+```go
+// 寫入到輸出目錄
+err := handler.WriteCSVToOutput(results, "max_mean_results.csv")
+```
 
-
-**WriteLargeCSVStreaming**
-
-WriteLargeCSVStreaming 流式寫入大 CSV 文件
-
-
-#### FileInfo
-
-FileInfo 文件信息
-
+**ConvertMaxMeanResultsToCSV**
 
 ```go
-type FileInfo &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=151768) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000393580 <nil> 0 0x1400037daa0 <nil>})] %!s(token.Pos=0)}
+func (h *CSVHandler) ConvertMaxMeanResultsToCSV(results []models.MaxMeanResult) (*models.EMGDataset, error)
 ```
+
+將最大平均值結果轉換為 CSV 格式。
+
+**示例：**
+```go
+// 轉換計算結果為 CSV 格式
+csvData, err := handler.ConvertMaxMeanResultsToCSV(maxMeanResults)
+if err != nil {
+    log.Fatal(err)
+}
+
+// 保存結果
+err = handler.WriteCSVToOutput(csvData, "max_mean_results.csv")
+```
+
+---
+
+### 大文件處理
 
 #### LargeFileHandler
 
-LargeFileHandler 處理大文件的結構
-
+`LargeFileHandler` 專門處理大型 CSV 文件，提供流式讀寫功能。
 
 ```go
-type LargeFileHandler &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=150654) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000392cc0 <nil> 0 0x1400037d848 <nil>})] %!s(token.Pos=0)}
+type LargeFileHandler struct {
+    logger        *logging.Logger
+    maxMemoryUsage int64
+    chunkSize     int
+}
 ```
 
-##### 方法
+**NewLargeFileHandler**
 
-**GetFileInfo**
+```go
+func NewLargeFileHandler(maxMemoryUsage int64, chunkSize int) *LargeFileHandler
+```
 
-GetFileInfo 獲取文件基本信息
+**參數：**
+- `maxMemoryUsage` (int64): 最大記憶體使用量（字節），建議值：500MB-2GB
+- `chunkSize` (int): 處理塊大小，建議值：1000-10000
 
-
-**ProcessLargeFileInChunks**
-
-ProcessLargeFileInChunks 分塊處理大文件
-
+**示例：**
+```go
+// 創建大文件處理器（最大記憶體 1GB，塊大小 5000）
+handler := io.NewLargeFileHandler(1024*1024*1024, 5000)
+```
 
 **ReadCSVStreaming**
 
-ReadCSVStreaming 流式讀取大 CSV 文件
+```go
+func (h *LargeFileHandler) ReadCSVStreaming(filePath string, callback func(chunk []models.EMGData) error) (*models.EMGDataset, error)
+```
 
+流式讀取大型 CSV 文件。
+
+**參數：**
+- `filePath` (string): CSV 文件路徑
+- `callback` (func(chunk []models.EMGData) error): 數據塊處理回調函數
+
+**示例：**
+```go
+var totalRecords int
+
+// 定義數據塊處理回調
+processChunk := func(chunk []models.EMGData) error {
+    totalRecords += len(chunk)
+    fmt.Printf("處理了 %d 筆數據，總計：%d\n", len(chunk), totalRecords)
+    
+    // 在這裡處理數據塊
+    for _, data := range chunk {
+        // 處理每筆數據
+    }
+    
+    return nil
+}
+
+// 流式讀取大文件
+dataset, err := handler.ReadCSVStreaming("large_file.csv", processChunk)
+if err != nil {
+    log.Fatal(err)
+}
+```
 
 **WriteCSVStreaming**
 
-WriteCSVStreaming 流式寫入 CSV 文件
-
-
-**calculateSlidingWindow**
-
-calculateSlidingWindow 計算滑動視窗
-
-
-**checkMemoryUsage**
-
-checkMemoryUsage 檢查記憶體使用
-
-
-**getMemoryUsage**
-
-getMemoryUsage 獲取當前記憶體使用
-
-
-**parseDataRow**
-
-parseDataRow 解析數據行
-
-
-**scanFileStructure**
-
-scanFileStructure 快速掃描文件結構
-
-
-#### ProgressCallback
-
-ProgressCallback 進度回調函數類型
-
-
 ```go
-type ProgressCallback &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=150531) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000392b80 <nil> 0 0x14000392c80 <nil>})] %!s(token.Pos=0)}
+func (h *LargeFileHandler) WriteCSVStreaming(dataset *models.EMGDataset, filePath string, callback func(progress float64)) error
 ```
 
-#### StreamingResult
+流式寫入大型 CSV 文件。
 
-StreamingResult 流式處理結果
-
-
+**示例：**
 ```go
-type StreamingResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=152020) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003937a0 <nil> 0 0x1400037db48 <nil>})] %!s(token.Pos=0)}
+// 定義進度回調
+progressCallback := func(progress float64) {
+    fmt.Printf("寫入進度：%.2f%%\n", progress*100)
+}
+
+// 流式寫入大文件
+err := handler.WriteCSVStreaming(largeDataset, "output_large.csv", progressCallback)
 ```
 
 ---
 
-## 套件: logging
+## 圖表生成
 
-### 類型定義
+### 基本圖表
 
-#### LogEntry
+#### ChartGenerator
 
-LogEntry represents a structured log entry
-
-
-```go
-type LogEntry &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=166267) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003d04e0 <nil> 0 0x140003a5f50 <nil>})] %!s(token.Pos=0)}
-```
-
-#### LogLevel
-
-LogLevel represents the severity level of a log entry
-
+`ChartGenerator` 提供基本的圖表生成功能，生成 PNG 格式的圖表。
 
 ```go
-type LogLevel &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=165802) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003d0060 <nil> 0 0x140003d0080 <nil>})] %!s(token.Pos=0)}
+type ChartGenerator struct {
+    logger *logging.Logger
+}
 ```
 
-##### 方法
-
-**String**
-
-String returns the string representation of the log level
-
-
-#### Logger
-
-Logger provides structured logging functionality
-
+**NewChartGenerator**
 
 ```go
-type Logger &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=166856) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003d08a0 <nil> 0 0x140003d4048 <nil>})] %!s(token.Pos=0)}
+func NewChartGenerator() *ChartGenerator
 ```
 
-##### 方法
+**GenerateLineChart**
 
-**Debug**
+```go
+func (c *ChartGenerator) GenerateLineChart(dataset *models.EMGDataset, config ChartConfig, outputPath string) error
+```
 
-Debug logs a debug message
+生成折線圖並保存為 PNG 文件。
 
+**參數：**
+- `dataset` (*models.EMGDataset): EMG 數據集
+- `config` (ChartConfig): 圖表配置
+- `outputPath` (string): 輸出文件路徑
 
-**Error**
+**ChartConfig 結構：**
+```go
+type ChartConfig struct {
+    Title      string      // 圖表標題
+    XAxisLabel string      // X 軸標籤
+    YAxisLabel string      // Y 軸標籤
+    Width      vg.Length   // 圖表寬度
+    Height     vg.Length   // 圖表高度
+    Columns    []string    // 要繪製的通道名稱
+}
+```
 
-Error logs an error message
+**示例：**
+```go
+generator := chart.NewChartGenerator()
 
+// 配置圖表
+config := chart.ChartConfig{
+    Title:      "EMG 數據分析圖表",
+    XAxisLabel: "時間 (秒)",
+    YAxisLabel: "EMG 值",
+    Width:      vg.Points(800),
+    Height:     vg.Points(600),
+    Columns:    []string{"Channel1", "Channel2", "Channel3"},
+}
 
-**Fatal**
+// 生成圖表
+err := generator.GenerateLineChart(dataset, config, "output/emg_chart.png")
+if err != nil {
+    log.Fatal(err)
+}
+```
 
-Fatal logs a fatal message and exits
+**GenerateLineChartImage**
 
+```go
+func (c *ChartGenerator) GenerateLineChartImage(dataset *models.EMGDataset, config ChartConfig) (image.Image, error)
+```
 
-**Info**
+生成折線圖並返回圖像對象。
 
-Info logs an info message
+**示例：**
+```go
+// 生成圖像對象
+img, err := generator.GenerateLineChartImage(dataset, config)
+if err != nil {
+    log.Fatal(err)
+}
 
+// 保存圖像
+file, err := os.Create("chart.png")
+if err != nil {
+    log.Fatal(err)
+}
+defer file.Close()
 
-**Warn**
+png.Encode(file, img)
+```
 
-Warn logs a warning message
+---
 
+### 互動式圖表
+
+#### EChartsGenerator
+
+`EChartsGenerator` 提供互動式圖表生成功能，生成 HTML 格式的圖表。
+
+```go
+type EChartsGenerator struct {
+    logger *logging.Logger
+}
+```
+
+**NewEChartsGenerator**
+
+```go
+func NewEChartsGenerator() *EChartsGenerator
+```
+
+**GenerateInteractiveChart**
+
+```go
+func (e *EChartsGenerator) GenerateInteractiveChart(dataset *models.EMGDataset, config InteractiveChartConfig, outputPath string) error
+```
+
+生成互動式圖表並保存為 HTML 文件。
+
+**InteractiveChartConfig 結構：**
+```go
+type InteractiveChartConfig struct {
+    Title           string   // 圖表標題
+    XAxisLabel      string   // X 軸標籤
+    YAxisLabel      string   // Y 軸標籤
+    SelectedColumns []int    // 要顯示的通道索引
+    ColumnNames     []string // 對應的通道名稱
+    ShowAllColumns  bool     // 是否顯示所有通道
+    Width           string   // 圖表寬度
+    Height          string   // 圖表高度
+}
+```
+
+**示例：**
+```go
+generator := chart.NewEChartsGenerator()
+
+// 配置互動式圖表
+config := chart.InteractiveChartConfig{
+    Title:           "EMG 互動式數據分析",
+    XAxisLabel:      "時間 (秒)",
+    YAxisLabel:      "EMG 值",
+    SelectedColumns: []int{1, 2, 3},
+    ColumnNames:     []string{"右腿", "左腿", "腹部"},
+    ShowAllColumns:  false,
+    Width:           "1200px",
+    Height:          "800px",
+}
+
+// 生成互動式圖表
+err := generator.GenerateInteractiveChart(dataset, config, "output/interactive_chart.html")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+**GetAvailableColumns**
+
+```go
+func (e *EChartsGenerator) GetAvailableColumns(dataset *models.EMGDataset) []ColumnInfo
+```
+
+獲取數據集的可用通道信息。
+
+**ColumnInfo 結構：**
+```go
+type ColumnInfo struct {
+    Index      int     `json:"index"`      // 通道索引
+    Name       string  `json:"name"`       // 通道名稱
+    DataPoints int     `json:"dataPoints"` // 數據點數
+    Min        float64 `json:"min"`        // 最小值
+    Max        float64 `json:"max"`        // 最大值
+    Mean       float64 `json:"mean"`       // 平均值
+}
+```
+
+**示例：**
+```go
+// 獲取通道信息
+columns := generator.GetAvailableColumns(dataset)
+
+fmt.Println("可用通道：")
+for _, col := range columns {
+    fmt.Printf("  %s: %d 個數據點，範圍 %.6f - %.6f，平均值 %.6f\n",
+        col.Name, col.DataPoints, col.Min, col.Max, col.Mean)
+}
+```
+
+**BatchExportCharts**
+
+```go
+func (e *EChartsGenerator) BatchExportCharts(dataset *models.EMGDataset, columnGroups [][]int, baseConfig InteractiveChartConfig, outputDir string) error
+```
+
+批量導出多個圖表。
+
+**示例：**
+```go
+// 定義通道組合
+columnGroups := [][]int{
+    {1, 2},    // 腿部肌群
+    {3, 4},    // 腹部肌群
+    {5, 6},    // 背部肌群
+}
+
+// 批量導出
+err := generator.BatchExportCharts(dataset, columnGroups, baseConfig, "output/charts/")
+```
+
+---
+
+## 配置管理
+
+### AppConfig
+
+`AppConfig` 提供應用程序配置管理功能。
+
+```go
+type AppConfig struct {
+    ScalingFactor      int      `json:"scaling_factor"`       // 縮放因子
+    WindowSize         int      `json:"window_size"`          // 視窗大小
+    InputDirectory     string   `json:"input_directory"`      // 輸入目錄
+    OutputDirectory    string   `json:"output_directory"`     // 輸出目錄
+    PhaseLabels        []string `json:"phase_labels"`         // 階段標籤
+    MaxMemoryUsage     int64    `json:"max_memory_usage"`     // 最大記憶體使用量
+    ChunkSize          int      `json:"chunk_size"`           // 塊大小
+    LogLevel           string   `json:"log_level"`            // 日誌級別
+    EnableGUI          bool     `json:"enable_gui"`           // 啟用 GUI
+    Language           string   `json:"language"`             // 語言設定
+}
+```
+
+**LoadConfig**
+
+```go
+func LoadConfig(configPath string) (*AppConfig, error)
+```
+
+從配置文件加載配置。
+
+**示例：**
+```go
+// 加載配置
+config, err := config.LoadConfig("config.json")
+if err != nil {
+    log.Fatal(err)
+}
+
+// 使用配置
+fmt.Printf("輸入目錄：%s\n", config.InputDirectory)
+fmt.Printf("輸出目錄：%s\n", config.OutputDirectory)
+fmt.Printf("視窗大小：%d\n", config.WindowSize)
+```
+
+**SaveConfig**
+
+```go
+func (c *AppConfig) SaveConfig(configPath string) error
+```
+
+保存配置到文件。
+
+**示例：**
+```go
+// 修改配置
+config.WindowSize = 100
+config.ScalingFactor = 1000
+
+// 保存配置
+err := config.SaveConfig("config.json")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+**Validate**
+
+```go
+func (c *AppConfig) Validate() error
+```
+
+驗證配置的有效性。
+
+**示例：**
+```go
+// 驗證配置
+if err := config.Validate(); err != nil {
+    log.Printf("配置驗證失敗：%v", err)
+    return err
+}
+```
+
+---
+
+## 錯誤處理
+
+### 錯誤類型
+
+系統定義了多種錯誤類型以提供詳細的錯誤信息。
+
+#### AppError
+
+```go
+type AppError struct {
+    Code    ErrorCode              `json:"code"`
+    Message string                 `json:"message"`
+    Cause   error                  `json:"cause,omitempty"`
+    Context map[string]interface{} `json:"context,omitempty"`
+}
+```
+
+**ErrorCode 類型：**
+```go
+const (
+    ErrFileNotFound     ErrorCode = "FILE_NOT_FOUND"
+    ErrInvalidFormat    ErrorCode = "INVALID_FORMAT"
+    ErrPermissionDenied ErrorCode = "PERMISSION_DENIED"
+    ErrMemoryLimit      ErrorCode = "MEMORY_LIMIT"
+    ErrInvalidInput     ErrorCode = "INVALID_INPUT"
+    ErrProcessingFailed ErrorCode = "PROCESSING_FAILED"
+)
+```
+
+**示例：**
+```go
+// 創建應用程序錯誤
+err := &errors.AppError{
+    Code:    errors.ErrFileNotFound,
+    Message: "找不到指定的 CSV 文件",
+    Context: map[string]interface{}{
+        "file_path": filePath,
+        "operation": "read_csv",
+    },
+}
+
+// 檢查錯誤類型
+if appErr, ok := err.(*errors.AppError); ok {
+    switch appErr.Code {
+    case errors.ErrFileNotFound:
+        // 處理文件不存在錯誤
+    case errors.ErrInvalidFormat:
+        // 處理格式錯誤
+    }
+}
+```
+
+#### ValidationError
+
+```go
+type ValidationError struct {
+    Field   string `json:"field"`
+    Message string `json:"message"`
+    Value   string `json:"value,omitempty"`
+}
+```
+
+**示例：**
+```go
+// 創建驗證錯誤
+err := &errors.ValidationError{
+    Field:   "window_size",
+    Message: "視窗大小必須在 1-10000 之間",
+    Value:   "15000",
+}
+
+fmt.Printf("驗證錯誤：%v\n", err)
+```
+
+**IsRecoverable**
+
+```go
+func IsRecoverable(err error) bool
+```
+
+判斷錯誤是否可恢復。
+
+**示例：**
+```go
+if err := processFile(filePath); err != nil {
+    if errors.IsRecoverable(err) {
+        // 嘗試恢復操作
+        log.Printf("錯誤可恢復，嘗試重試：%v", err)
+    } else {
+        // 嚴重錯誤，停止處理
+        log.Fatal("不可恢復的錯誤：", err)
+    }
+}
+```
+
+---
+
+## 日誌記錄
+
+### Logger
+
+`Logger` 提供結構化日誌記錄功能。
+
+```go
+type Logger struct {
+    module string
+    level  LogLevel
+    writer io.Writer
+}
+```
+
+**LogLevel 類型：**
+```go
+const (
+    LogLevelDebug LogLevel = iota
+    LogLevelInfo
+    LogLevelWarn
+    LogLevelError
+    LogLevelFatal
+)
+```
+
+**GetLogger**
+
+```go
+func GetLogger(module string) *Logger
+```
+
+獲取指定模組的日誌記錄器。
+
+**示例：**
+```go
+// 獲取模組日誌記錄器
+logger := logging.GetLogger("calculator")
+
+// 記錄不同級別的日誌
+logger.Debug("開始計算過程", map[string]interface{}{
+    "window_size": 100,
+    "data_points": 1000,
+})
+
+logger.Info("計算完成", map[string]interface{}{
+    "results_count": 5,
+    "duration": "2.5s",
+})
+
+logger.Warn("記憶體使用率較高", map[string]interface{}{
+    "usage_percent": 85,
+    "threshold": 80,
+})
+
+logger.Error("計算失敗", err, map[string]interface{}{
+    "file_path": filePath,
+    "operation": "max_mean_calculation",
+})
+```
 
 **WithContext**
 
-WithContext adds context data to the logger
-
-
-**WithError**
-
-WithError adds error context to the logger
-
-
-**WithModule**
-
-WithModule returns a logger with a specific module context
-
-
-**log**
-
-log writes a log entry
-
-
-**writeJSON**
-
-writeJSON writes the log entry in JSON format
-
-
-**writeText**
-
-writeText writes the log entry in human-readable text format
-
-
-### 函數
-
-#### Debug
-
-Convenience functions using the default logger
-
-
-#### Error
-
-#### Fatal
-
-#### Info
-
-#### InitLogger
-
-InitLogger initializes the default logger
-
-
-#### Warn
-
----
-
-## 套件: models
-
-### 類型定義
-
-#### AnalysisConfig
-
-AnalysisConfig 代表分析配置
-
-
 ```go
-type AnalysisConfig &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=174528) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8cc0 <nil> 0 0x140003d58f0 <nil>})] %!s(token.Pos=0)}
+func (l *Logger) WithContext(context map[string]interface{}) *Logger
 ```
 
-#### EMGData
+為日誌記錄器添加上下文信息。
 
-EMGData 代表 EMG 數據的結構
-
-
+**示例：**
 ```go
-type EMGData &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=173779) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8760 <nil> 0 0x140003d57b8 <nil>})] %!s(token.Pos=0)}
-```
+// 添加上下文信息
+contextLogger := logger.WithContext(map[string]interface{}{
+    "user_id": "user123",
+    "session_id": "session456",
+})
 
-#### EMGDataset
-
-EMGDataset 代表完整的 EMG 數據集
-
-
-```go
-type EMGDataset &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=173920) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8860 <nil> 0 0x140003d5800 <nil>})] %!s(token.Pos=0)}
-```
-
-#### MaxMeanResult
-
-MaxMeanResult 代表最大平均值計算結果
-
-
-```go
-type MaxMeanResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=174068) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8960 <nil> 0 0x140003d5848 <nil>})] %!s(token.Pos=0)}
-```
-
-#### PhaseAnalysisResult
-
-PhaseAnalysisResult 代表階段分析結果
-
-
-```go
-type PhaseAnalysisResult &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=174309) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8b20 <nil> 0 0x140003d5890 <nil>})] %!s(token.Pos=0)}
-```
-
-#### ProcessingOptions
-
-ProcessingOptions 代表處理選項
-
-
-```go
-type ProcessingOptions &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=174955) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8fe0 <nil> 0 0x140003d5980 <nil>})] %!s(token.Pos=0)}
-```
-
-#### TimeRange
-
-TimeRange 代表時間範圍
-
-
-```go
-type TimeRange &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=174830) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e8f00 <nil> 0 0x140003d5938 <nil>})] %!s(token.Pos=0)}
+// 使用帶上下文的日誌記錄器
+contextLogger.Info("用戶操作", map[string]interface{}{
+    "action": "calculate_max_mean",
+    "file_name": "data.csv",
+})
 ```
 
 ---
 
-## 套件: security
+## 安全驗證
 
-### 類型定義
+### PathValidator
 
-#### PathValidator
-
-PathValidator provides secure path validation functionality
-
+`PathValidator` 提供路徑安全驗證功能。
 
 ```go
-type PathValidator &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=175250) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140003e9220 <nil> 0 0x140003d59c8 <nil>})] %!s(token.Pos=0)}
+type PathValidator struct {
+    allowedDirectories []string
+    maxPathLength      int
+}
 ```
 
-##### 方法
+**NewPathValidator**
 
-**GetSafePath**
+```go
+func NewPathValidator(allowedDirectories []string) *PathValidator
+```
 
-GetSafePath returns a safe path within the allowed directories
-
-
-**IsCSVFile**
-
-IsCSVFile checks if the file has a .csv extension
-
-
-**SanitizePath**
-
-SanitizePath sanitizes a file path by removing dangerous characters
-
-
-**ValidateDirectoryPath**
-
-ValidateDirectoryPath validates that a directory path is within allowed directories
-
+**示例：**
+```go
+// 創建路徑驗證器
+validator := security.NewPathValidator([]string{
+    "/app/input",
+    "/app/output",
+    "/app/config",
+})
+```
 
 **ValidateFilePath**
 
-ValidateFilePath validates that a file path is within allowed directories
-
-
----
-
-## 套件: validation
-
-### 類型定義
-
-#### InputValidator
-
-InputValidator provides comprehensive input validation functionality
-
-
 ```go
-type InputValidator &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=178430) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x140004031a0 <nil> 0 0x140004042a0 <nil>})] %!s(token.Pos=0)}
+func (v *PathValidator) ValidateFilePath(filePath string) error
 ```
 
-##### 方法
+驗證文件路徑是否安全。
 
-**SanitizeString**
+**示例：**
+```go
+// 驗證文件路徑
+if err := validator.ValidateFilePath(userInputPath); err != nil {
+    log.Printf("路徑驗證失敗：%v", err)
+    return err
+}
 
-SanitizeString removes dangerous characters from string input
+// 路徑安全，可以繼續處理
+```
 
+**SanitizePath**
+
+```go
+func (v *PathValidator) SanitizePath(path string) string
+```
+
+清理路徑中的危險字符。
+
+**示例：**
+```go
+// 清理用戶輸入的路徑
+safePath := validator.SanitizePath(userInputPath)
+```
+
+### InputValidator
+
+`InputValidator` 提供輸入驗證功能。
+
+```go
+type InputValidator struct {
+    maxFileSize        int64
+    allowedExtensions  []string
+}
+```
+
+**NewInputValidator**
+
+```go
+func NewInputValidator() *InputValidator
+```
 
 **ValidateCSVData**
 
-ValidateCSVData validates CSV data structure
+```go
+func (v *InputValidator) ValidateCSVData(dataset *models.EMGDataset) error
+```
 
+驗證 CSV 數據的有效性。
 
-**ValidateDirectoryPath**
+**示例：**
+```go
+validator := validation.NewInputValidator()
 
-ValidateDirectoryPath validates directory path input
-
-
-**ValidateEmail**
-
-ValidateEmail validates email address format
-
-
-**ValidateFilename**
-
-ValidateFilename validates a filename for safety and correctness
-
-
-**ValidateOutputFormat**
-
-ValidateOutputFormat validates output format selection
-
-
-**ValidatePhaseLabels**
-
-ValidatePhaseLabels validates phase label input
-
-
-**ValidatePrecision**
-
-ValidatePrecision validates the precision parameter
-
-
-**ValidateScalingFactor**
-
-ValidateScalingFactor validates the scaling factor parameter
-
-
-**ValidateTimeRange**
-
-ValidateTimeRange validates time range parameters
-
+// 驗證 CSV 數據
+if err := validator.ValidateCSVData(dataset); err != nil {
+    log.Printf("數據驗證失敗：%v", err)
+    return err
+}
+```
 
 **ValidateWindowSize**
 
-ValidateWindowSize validates the window size parameter
-
-
-**WithAllowedExtensions**
-
-WithAllowedExtensions sets the allowed file extensions
-
-
-**WithMaxFileSize**
-
-WithMaxFileSize sets the maximum allowed file size
-
-
-**validateSinglePhaseLabel**
-
-validateSinglePhaseLabel validates a single phase label
-
-
----
-
-## 套件: main
-
-### 函數
-
-#### createLargeTestFile
-
-createLargeTestFile 創建大型測試文件
-
-
-#### main
-
-示範結構化日誌使用
-
-
----
-
-## 套件: integration
-
-### 函數
-
-#### TestBenchmarkIntegration
-
-性能基準測試整合測試
-
-
-#### TestFullWorkflow_ConfigurationManagement
-
-TestFullWorkflow_ConfigurationManagement 測試完整的配置管理流程
-
-
-#### TestFullWorkflow_DataNormalization
-
-TestFullWorkflow_DataNormalization 測試完整的數據標準化流程
-
-
-#### TestFullWorkflow_ErrorHandling
-
-TestFullWorkflow_ErrorHandling 測試完整流程的錯誤處理
-
-
-#### TestFullWorkflow_MaxMeanCalculation
-
-TestFullWorkflow_MaxMeanCalculation 測試完整的最大平均值計算流程
-
-
-#### TestFullWorkflow_Performance
-
-TestFullWorkflow_Performance 測試大數據集的性能
-
-
-#### TestFullWorkflow_PhaseAnalysis
-
-TestFullWorkflow_PhaseAnalysis 測試完整的階段分析流程
-
-
-#### TestI18nIntegration
-
-國際化集成測試
-
-
-#### TestIntegration_ConcurrentOperations
-
-#### TestIntegration_ErrorRecovery
-
-#### TestIntegration_FullWorkflow
-
----
-
-## 套件: util
-
-### 類型定義
-
-#### Number
-
 ```go
-type Number &{%!s(*ast.CommentGroup=<nil>) %!s(token.Pos=285634) type %!s(token.Pos=0) [%!s(*ast.TypeSpec=&{<nil> 0x14000304f60 <nil> 0 0x14000276a98 <nil>})] %!s(token.Pos=0)}
+func (v *InputValidator) ValidateWindowSize(windowSize int) error
 ```
 
-### 函數
+驗證視窗大小參數。
 
-#### ArrayMax
-
-#### ArrayMean
-
-#### Str2Number
+**示例：**
+```go
+// 驗證視窗大小
+if err := validator.ValidateWindowSize(windowSize); err != nil {
+    return fmt.Errorf("視窗大小無效：%w", err)
+}
+```
 
 ---
 
+## 工具函數
+
+### 數學計算
+
+**ArrayMean**
+
+```go
+func ArrayMean(arr []float64) float64
+```
+
+計算陣列的平均值。
+
+**示例：**
+```go
+data := []float64{1.0, 2.0, 3.0, 4.0, 5.0}
+mean := util.ArrayMean(data)
+fmt.Printf("平均值：%.2f\n", mean) // 輸出：平均值：3.00
+```
+
+**ArrayMax**
+
+```go
+func ArrayMax(arr []float64) float64
+```
+
+找出陣列的最大值。
+
+**示例：**
+```go
+data := []float64{1.0, 5.0, 3.0, 2.0, 4.0}
+max := util.ArrayMax(data)
+fmt.Printf("最大值：%.2f\n", max) // 輸出：最大值：5.00
+```
+
+**Str2Number**
+
+```go
+func Str2Number(str string) (float64, error)
+```
+
+將字符串轉換為數字。
+
+**示例：**
+```go
+// 轉換字符串為數字
+value, err := util.Str2Number("123.456")
+if err != nil {
+    log.Printf("轉換失敗：%v", err)
+} else {
+    fmt.Printf("轉換結果：%.3f\n", value)
+}
+```
+
+---
+
+## 性能優化建議
+
+### 記憶體管理
+
+1. **使用合適的塊大小**
+   ```go
+   // 對於大文件，使用較大的塊大小
+   handler := io.NewLargeFileHandler(1024*1024*1024, 10000)
+   ```
+
+2. **及時釋放資源**
+   ```go
+   defer file.Close()
+   ```
+
+3. **監控記憶體使用**
+   ```go
+   // 在處理大文件時監控記憶體
+   runtime.GC()
+   ```
+
+### 並行處理
+
+1. **使用 goroutine 進行並行計算**
+   ```go
+   // 並行處理多個通道
+   var wg sync.WaitGroup
+   for i, channel := range channels {
+       wg.Add(1)
+       go func(idx int, ch []float64) {
+           defer wg.Done()
+           // 處理通道數據
+       }(i, channel)
+   }
+   wg.Wait()
+   ```
+
+### 錯誤處理
+
+1. **使用結構化錯誤**
+   ```go
+   if err != nil {
+       return &errors.AppError{
+           Code:    errors.ErrProcessingFailed,
+           Message: "處理失敗",
+           Cause:   err,
+       }
+   }
+   ```
+
+2. **記錄詳細的錯誤信息**
+   ```go
+   logger.Error("操作失敗", err, map[string]interface{}{
+       "operation": "calculate_max_mean",
+       "file_path": filePath,
+   })
+   ```
+
+---
+
+## 常見問題
+
+### Q: 如何處理大文件？
+A: 使用 `LargeFileHandler` 進行流式處理：
+```go
+handler := io.NewLargeFileHandler(1024*1024*1024, 5000)
+dataset, err := handler.ReadCSVStreaming(filePath, processChunk)
+```
+
+### Q: 如何自定義圖表樣式？
+A: 使用 `ChartConfig` 或 `InteractiveChartConfig` 進行配置：
+```go
+config := chart.ChartConfig{
+    Title:      "自定義標題",
+    XAxisLabel: "時間",
+    YAxisLabel: "值",
+    Width:      vg.Points(1200),
+    Height:     vg.Points(800),
+}
+```
+
+### Q: 如何處理多語言支持？
+A: 使用 `i18n` 模組：
+```go
+i18n.InitI18n()
+i18n.SetLocale("zh-TW")
+message := i18n.T("error.file_not_found")
+```
+
+---
+
+## 更新日誌
+
+### v1.0.0 (2025-07-16)
+- 完整的 API 文檔
+- 詳細的使用示例
+- 參數說明和類型定義
+- 錯誤處理指南
+- 性能優化建議
+
+---
+
+本文檔將持續更新，如有問題請參考源代碼或聯繫開發團隊。

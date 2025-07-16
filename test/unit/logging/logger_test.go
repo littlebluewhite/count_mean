@@ -354,3 +354,106 @@ func TestConvenienceFunctions(t *testing.T) {
 	logging.Warn("global warn test")
 	logging.Error("global error test", nil)
 }
+
+func TestLogger_SensitiveDataFiltering(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.NewLogger(logging.LevelInfo, &buf, false)
+
+	// Test password filtering
+	logger.Info("User login with password=secret123")
+	output := buf.String()
+	if strings.Contains(output, "secret123") {
+		t.Error("output should not contain password")
+	}
+	if !strings.Contains(output, "****") {
+		t.Error("output should contain masked password")
+	}
+
+	// Reset buffer
+	buf.Reset()
+
+	// Test API key filtering
+	logger.Info("Using api_key=abcd1234efgh5678")
+	output = buf.String()
+	if strings.Contains(output, "abcd1234efgh5678") {
+		t.Error("output should not contain API key")
+	}
+	if !strings.Contains(output, "****") {
+		t.Error("output should contain masked API key")
+	}
+
+	// Reset buffer
+	buf.Reset()
+
+	// Test error message filtering
+	testErr := errors.NewAppError(errors.ErrCodeFileNotFound, "Authentication failed: password=mysecret")
+	logger.Error("Login failed", testErr)
+	output = buf.String()
+	if strings.Contains(output, "mysecret") {
+		t.Error("output should not contain password in error message")
+	}
+	if !strings.Contains(output, "****") {
+		t.Error("output should contain masked password in error message")
+	}
+
+	// Reset buffer
+	buf.Reset()
+
+	// Test context value filtering
+	logger.Info("Processing request", map[string]interface{}{
+		"user_id": "12345",
+		"token":   "bearer_token_abc123",
+	})
+	output = buf.String()
+	if strings.Contains(output, "bearer_token_abc123") {
+		t.Error("output should not contain token in context")
+	}
+	if !strings.Contains(output, "****") {
+		t.Error("output should contain masked token in context")
+	}
+
+	// Reset buffer
+	buf.Reset()
+
+	// Test credit card filtering
+	logger.Info("Processing payment for card 1234-5678-9012-3456")
+	output = buf.String()
+	if strings.Contains(output, "1234-5678-9012-3456") {
+		t.Error("output should not contain full credit card number")
+	}
+	if !strings.Contains(output, "****") {
+		t.Error("output should contain masked credit card number")
+	}
+}
+
+func TestLogger_SensitiveDataMasking(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.NewLogger(logging.LevelInfo, &buf, false)
+
+	// Test various data lengths
+	testCases := []struct {
+		input    string
+		expected string
+	}{
+		{"password=ab", "****"},
+		{"password=abc", "****"},
+		{"password=abcd", "****"},
+		{"password=abcde", "a****"},
+		{"password=abcdefgh", "a****"},
+		{"password=abcdefghijkl", "ab****kl"},
+	}
+
+	for _, tc := range testCases {
+		buf.Reset()
+		logger.Info(tc.input)
+		output := buf.String()
+
+		if strings.Contains(output, tc.input) {
+			t.Errorf("output should not contain original input: %s", tc.input)
+		}
+
+		if !strings.Contains(output, tc.expected) {
+			t.Errorf("output should contain masked version: %s, got: %s", tc.expected, output)
+		}
+	}
+}

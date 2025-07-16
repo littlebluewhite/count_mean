@@ -475,7 +475,7 @@ type ExportConfig struct {
 func (e *EChartsGenerator) GenerateExportScript(config ExportConfig) string {
 	return fmt.Sprintf(`
 		function exportChart() {
-			const myChart = %MY_ECHARTS%;
+			const myChart = %%MY_ECHARTS%%;
 			if (!myChart) return;
 			
 			// 獲取當前圖表配置

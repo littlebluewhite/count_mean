@@ -115,5 +115,3 @@ func TestI18nIntegration(t *testing.T) {
 
 	logger.Info("國際化集成測試完成")
 }
-
-

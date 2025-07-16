@@ -238,5 +238,3 @@ func TestBenchmarkIntegration(t *testing.T) {
 
 	logger.Info("性能基準測試整合測試完成")
 }
-
-

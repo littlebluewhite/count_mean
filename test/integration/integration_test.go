@@ -17,7 +17,7 @@ import (
 func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 	// 準備測試數據
 	tempDir := t.TempDir()
-	
+
 	// 準備測試配置 - 設置目錄為臨時目錄以允許路徑驗證
 	cfg := &config.AppConfig{
 		ScalingFactor: 10,
@@ -25,9 +25,9 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 		BOMEnabled:    false,
 		OutputFormat:  "csv",
 		PhaseLabels:   []string{"Phase1", "Phase2"},
-		InputDir:      tempDir,  // 設置輸入目錄為臨時目錄
-		OutputDir:     tempDir,  // 設置輸出目錄為臨時目錄
-		OperateDir:    tempDir,  // 設置操作目錄為臨時目錄
+		InputDir:      tempDir, // 設置輸入目錄為臨時目錄
+		OutputDir:     tempDir, // 設置輸出目錄為臨時目錄
+		OperateDir:    tempDir, // 設置操作目錄為臨時目錄
 	}
 
 	// 創建模組實例
@@ -78,7 +78,7 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 func TestFullWorkflow_DataNormalization(t *testing.T) {
 	// 準備測試數據
 	tempDir := t.TempDir()
-	
+
 	// 準備測試配置
 	cfg := &config.AppConfig{
 		ScalingFactor: 10,
@@ -86,9 +86,9 @@ func TestFullWorkflow_DataNormalization(t *testing.T) {
 		BOMEnabled:    false,
 		OutputFormat:  "csv",
 		PhaseLabels:   []string{"Phase1"},
-		InputDir:      tempDir,  // 設置輸入目錄為臨時目錄
-		OutputDir:     tempDir,  // 設置輸出目錄為臨時目錄
-		OperateDir:    tempDir,  // 設置操作目錄為臨時目錄
+		InputDir:      tempDir, // 設置輸入目錄為臨時目錄
+		OutputDir:     tempDir, // 設置輸出目錄為臨時目錄
+		OperateDir:    tempDir, // 設置操作目錄為臨時目錄
 	}
 
 	// 創建模組實例
@@ -143,7 +143,7 @@ func TestFullWorkflow_DataNormalization(t *testing.T) {
 func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 	// 準備測試數據
 	tempDir := t.TempDir()
-	
+
 	// 準備測試配置
 	cfg := &config.AppConfig{
 		ScalingFactor: 10,
@@ -151,9 +151,9 @@ func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 		BOMEnabled:    false,
 		OutputFormat:  "csv",
 		PhaseLabels:   []string{"Phase1", "Phase2", "Phase3", "Phase4"},
-		InputDir:      tempDir,  // 設置輸入目錄為臨時目錄
-		OutputDir:     tempDir,  // 設置輸出目錄為臨時目錄
-		OperateDir:    tempDir,  // 設置操作目錄為臨時目錄
+		InputDir:      tempDir, // 設置輸入目錄為臨時目錄
+		OutputDir:     tempDir, // 設置輸出目錄為臨時目錄
+		OperateDir:    tempDir, // 設置操作目錄為臨時目錄
 	}
 
 	// 創建模組實例
@@ -315,7 +315,7 @@ func TestFullWorkflow_Performance(t *testing.T) {
 
 	// 生成大量測試數據
 	tempDir := t.TempDir()
-	
+
 	cfg := config.DefaultConfig()
 	cfg.InputDir = tempDir   // 設置輸入目錄為臨時目錄
 	cfg.OutputDir = tempDir  // 設置輸出目錄為臨時目錄
