@@ -79,10 +79,10 @@ class EMGAnalysisApp {
     handleFileDrop(dropTarget, filePath) {
         const targetId = dropTarget.getAttribute('data-drop-target');
         const inputElement = document.getElementById(targetId);
-        
+
         if (inputElement) {
             inputElement.value = filePath;
-            
+
             // 觸發相應的處理邏輯
             if (targetId === 'chartFile') {
                 this.loadChartColumns(filePath);
@@ -91,6 +91,9 @@ class EMGAnalysisApp {
                     btn.style.display = '';
                     btn.disabled = false;
                 }
+            } else if (targetId === 'phaseSyncManifest') {
+                // 分期同步分析：載入主題
+                this.loadManifestSubjects(filePath);
             }
         }
     }

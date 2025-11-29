@@ -2,6 +2,7 @@ package csv_test
 
 import (
 	"count_mean/internal/config"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,6 +186,47 @@ func TestLargeFileHandler_ProcessLargeFileInChunks(t *testing.T) {
 	}
 }
 
+func TestLargeFileHandler_ProcessLargeFileInChunks_NegativeValues(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ScalingFactor = 1
+	testDir := t.TempDir()
+	cfg.InputDir = testDir
+
+	handler := io.NewLargeFileHandler(cfg)
+
+	testFile := filepath.Join(testDir, "negative.csv")
+	testData := []string{
+		"Time,Ch1,Ch2",
+		"0.1,-10,-5",
+		"0.2,-8,-6",
+		"0.3,-9,-7",
+	}
+
+	if err := os.WriteFile(testFile, []byte(strings.Join(testData, "\n")), 0644); err != nil {
+		t.Fatalf("無法創建測試文件: %v", err)
+	}
+
+	result, err := handler.ProcessLargeFileInChunks(testFile, 2, nil)
+	if err != nil {
+		t.Fatalf("ProcessLargeFileInChunks 失敗: %v", err)
+	}
+
+	if len(result.Results) != 2 {
+		t.Fatalf("期望 2 個通道結果，實際 %d", len(result.Results))
+	}
+
+	// 確認全負值時不會回傳 0（預設值）
+	if result.Results[0].MaxMean >= 0 || result.Results[1].MaxMean >= 0 {
+		t.Fatalf("全負值資料應產生負的最大平均值，得到 %+v", result.Results)
+	}
+
+	// 確認最大平均值取自正確窗口（縮放因子 1 -> 數值放大 10 倍）
+	expectedCh1 := -85.0 // (-8 + -9)/2 * 10
+	if math.Abs(result.Results[0].MaxMean-expectedCh1) > 1e-9 {
+		t.Fatalf("Ch1 最大平均值錯誤，期望 %f，實際 %f", expectedCh1, result.Results[0].MaxMean)
+	}
+}
+
 func TestLargeFileHandler_WriteCSVStreaming(t *testing.T) {
 	// 創建測試配置
 	cfg := config.DefaultConfig()
@@ -276,4 +318,68 @@ func TestLargeFileHandler_ErrorHandling(t *testing.T) {
 	if err == nil {
 		t.Errorf("期望處理不存在文件時返回錯誤")
 	}
+}
+
+func TestLargeFileHandler_NegativeSignals(t *testing.T) {
+	// Test the fix for negative signal handling
+	// This verifies that channelMaxMeans is initialized correctly with negative infinity
+	cfg := config.DefaultConfig()
+	cfg.ScalingFactor = 1
+	testDir := "./test_temp"
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("無法創建測試目錄: %v", err)
+	}
+	defer os.RemoveAll(testDir)
+
+	cfg.InputDir = testDir
+	handler := io.NewLargeFileHandler(cfg)
+
+	testFile := filepath.Join(testDir, "test_negative.csv")
+	// All values are negative to test the fix
+	testData := []string{
+		"Time,Ch1,Ch2",
+		"0.1,-100,-50",
+		"0.2,-120,-55",
+		"0.3,-110,-52",
+		"0.4,-90,-48",
+		"0.5,-95,-49",
+		"0.6,-105,-51",
+	}
+
+	content := strings.Join(testData, "\n")
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatalf("無法創建測試文件: %v", err)
+	}
+
+	// Process with a window size of 3
+	windowSize := 3
+	result, err := handler.ProcessLargeFileInChunks(testFile, windowSize, nil)
+	if err != nil {
+		t.Fatalf("ProcessLargeFileInChunks 失敗: %v", err)
+	}
+
+	if len(result.Results) != 2 {
+		t.Fatalf("期望 2 個結果（2個通道），實際 %d", len(result.Results))
+	}
+
+	// Verify that all results have negative MaxMean values (not zero)
+	for i, res := range result.Results {
+		if res.MaxMean >= 0 {
+			t.Errorf("通道 %d: 對於負信號，MaxMean 應該為負值，實際為 %f", i, res.MaxMean)
+		}
+		if res.StartTime <= 0 || res.EndTime <= 0 {
+			t.Errorf("通道 %d: 時間範圍無效: 開始=%f, 結束=%f", i, res.StartTime, res.EndTime)
+		}
+		if res.StartTime >= res.EndTime {
+			t.Errorf("通道 %d: 開始時間應該小於結束時間", i)
+		}
+	}
+
+	// For Ch1, the window with highest mean should be around -90, -95, -105 (mean = -96.67)
+	// or -95, -105, -100 depending on data order
+	// The key is that it should be negative, not zero
+	t.Logf("通道 0 (Ch1): MaxMean=%f, 時間範圍=[%f, %f]",
+		result.Results[0].MaxMean, result.Results[0].StartTime, result.Results[0].EndTime)
+	t.Logf("通道 1 (Ch2): MaxMean=%f, 時間範圍=[%f, %f]",
+		result.Results[1].MaxMean, result.Results[1].StartTime, result.Results[1].EndTime)
 }

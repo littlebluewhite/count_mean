@@ -12,6 +12,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"runtime"
 	"sync"
@@ -371,6 +372,14 @@ func (h *LargeFileHandler) ProcessLargeFileInChunks(filename string, windowSize 
 
 	channelMaxMeans := make([]float64, len(headers)-1)     // 存儲每個通道的最大平均值
 	channelBestTimes := make([][2]float64, len(headers)-1) // 存儲最優時間範圍
+	for i := range channelMaxMeans {
+		channelMaxMeans[i] = math.Inf(-1) // 支援全負值資料集
+	}
+
+	// Initialize channelMaxMeans to negative infinity to handle negative signals correctly
+	for i := range channelMaxMeans {
+		channelMaxMeans[i] = math.Inf(-1)
+	}
 
 	// 流式處理每一行
 	for {

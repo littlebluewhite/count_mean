@@ -70,6 +70,7 @@ func (p *PhaseManifestParser) ParseFile(filepath string) ([]models.PhaseManifest
 // parseRecord 解析單行記錄
 func (p *PhaseManifestParser) parseRecord(record []string, lineNum int) (models.PhaseManifest, error) {
 	var manifest models.PhaseManifest
+	var err error
 
 	// 基本欄位
 	manifest.Subject = strings.TrimSpace(record[0])
@@ -78,11 +79,10 @@ func (p *PhaseManifestParser) parseRecord(record []string, lineNum int) (models.
 	manifest.EMGFile = strings.TrimSpace(record[3])
 
 	// EMG Motion Offset
-	offset, err := strconv.Atoi(strings.TrimSpace(record[4]))
+	manifest.EMGMotionOffset, err = parseInt(record[4], "EMGMotionOffset")
 	if err != nil {
-		return manifest, fmt.Errorf("無法解析 EMGMotionOffset: %w", err)
+		return manifest, err
 	}
-	manifest.EMGMotionOffset = offset
 
 	// 分期點解析
 	phasePoints := models.PhasePoints{}

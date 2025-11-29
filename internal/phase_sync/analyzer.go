@@ -8,6 +8,7 @@ import (
 	"count_mean/internal/calculator"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
+	"count_mean/internal/security"
 	"count_mean/internal/synchronizer"
 )
 
@@ -19,6 +20,7 @@ type PhaseSyncAnalyzer struct {
 	ancParser       *parsers.ANCParser
 	phaseCalculator *synchronizer.PhaseCalculator
 	statsCalculator *calculator.EMGStatisticsCalculator
+	pathValidator   *security.PathValidator
 }
 
 // NewPhaseSyncAnalyzer 創建新的分期同步分析器
@@ -30,18 +32,22 @@ func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 		ancParser:       parsers.NewANCParser(),
 		phaseCalculator: synchronizer.NewPhaseCalculator(),
 		statsCalculator: calculator.NewEMGStatisticsCalculator(6),
+		pathValidator:   security.NewPathValidator([]string{}),
 	}
 }
 
 // AnalyzePhaseSync 執行分期同步分析
 func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParams) (*models.EMGStatistics, error) {
-	// 1. 解析分期總檔案
+	// 1. 設置允許的基礎路徑為數據資料夾
+	analyzer.pathValidator.SetAllowedBasePaths([]string{params.DataFolder})
+
+	// 2. 解析分期總檔案
 	manifests, err := analyzer.manifestParser.ParseFile(params.ManifestFile)
 	if err != nil {
 		return nil, fmt.Errorf("解析分期總檔案失敗: %w", err)
 	}
 
-	// 2. 驗證主題索引
+	// 3. 驗證主題索引
 	if params.SubjectIndex < 0 || params.SubjectIndex >= len(manifests) {
 		return nil, fmt.Errorf("無效的主題索引: %d (共有 %d 個主題)",
 			params.SubjectIndex, len(manifests))
@@ -49,38 +55,49 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 
 	manifest := manifests[params.SubjectIndex]
 
-	// 3. 驗證分期總檔案數據
+	// 4. 驗證分期總檔案數據
 	if err := parsers.ValidatePhaseManifest(manifest); err != nil {
 		return nil, fmt.Errorf("分期總檔案數據驗證失敗: %w", err)
 	}
 
-	// 4. 驗證分期點順序
+	// 5. 驗證分期點順序
 	if err := analyzer.phaseCalculator.ValidatePhaseOrder(params.StartPhase, params.EndPhase); err != nil {
 		return nil, err
 	}
 
-	// 5. 構建檔案路徑
-	var emgFilePath string
+	// 6. 構建並驗證 EMG 檔案路徑（限制於資料夾範圍內）
+	baseFolder := params.DataFolder
+	if resolvedBase, err := filepath.EvalSymlinks(baseFolder); err == nil {
+		baseFolder = resolvedBase
+	}
 
-	// 檢查是否為絕對路徑
-	if filepath.IsAbs(manifest.EMGFile) {
-		// 如果是絕對路徑，直接使用
-		emgFilePath = manifest.EMGFile
-	} else {
-		// 如果是相對路徑，與資料夾組合
-		emgFilePath = filepath.Join(params.DataFolder, manifest.EMGFile)
+	analyzer.pathValidator.SetAllowedBasePaths([]string{baseFolder})
+
+	emgFilePath, err := analyzer.pathValidator.GetSafePath(baseFolder, manifest.EMGFile)
+	if err != nil {
+		return nil, fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
+	}
+
+	// 解析符號連結並再次驗證，避免透過 symlink 繞過目錄限制
+	if resolvedPath, err := filepath.EvalSymlinks(emgFilePath); err == nil {
+		if err := analyzer.pathValidator.ValidateFilePath(resolvedPath); err != nil {
+			return nil, fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
+		}
+		emgFilePath = resolvedPath
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("EMG 檔案路徑解析失敗: %w", err)
 	}
 
 	// motionFilePath := filepath.Join(params.DataFolder, manifest.MotionFile)
 	// forceFilePath := filepath.Join(params.DataFolder, manifest.ForceFile)
 
-	// 6. 解析 EMG 檔案
+	// 7. 解析 EMG 檔案
 	emgData, err := analyzer.emgParser.ParseFile(emgFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
 	}
 
-	// 7. 計算分期時間範圍
+	// 8. 計算分期時間範圍
 	phaseTimeRange, err := analyzer.phaseCalculator.GetPhaseTimeRange(
 		manifest.PhasePoints,
 		params.StartPhase,
@@ -91,7 +108,7 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 		return nil, fmt.Errorf("計算分期時間範圍失敗: %w", err)
 	}
 
-	// 8. 提取指定時間範圍的 EMG 數據
+	// 9. 提取指定時間範圍的 EMG 數據
 	rangeEMGData, err := analyzer.emgParser.GetDataInTimeRange(
 		emgData,
 		phaseTimeRange.StartTime,
@@ -101,7 +118,7 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 		return nil, fmt.Errorf("提取 EMG 時間範圍數據失敗: %w", err)
 	}
 
-	// 9. 計算統計信息
+	// 10. 計算統計信息
 	stats, err := analyzer.statsCalculator.CalculateStatistics(
 		rangeEMGData,
 		params.StartPhase,

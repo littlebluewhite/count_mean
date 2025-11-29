@@ -186,11 +186,10 @@ func (h *CSVHandler) ReadCSVExternal(filename string) ([][]string, error) {
 	// 檢查文件大小並決定處理方式
 	fileInfo, err := h.largeFileHandler.GetFileInfo(filename)
 	if err != nil {
-		// 如果無法獲取文件信息，使用傳統方式
-		h.logger.Warn("無法獲取文件信息，使用傳統讀取方式", map[string]interface{}{
+		h.logger.Error("外部檔案路徑驗證失敗", err, map[string]interface{}{
 			"filename": filename,
-			"error":    err.Error(),
 		})
+		return nil, err
 	} else if fileInfo.IsLarge {
 		h.logger.Info("檢測到大文件，使用流式讀取", map[string]interface{}{
 			"filename":   filename,
@@ -205,29 +204,8 @@ func (h *CSVHandler) ReadCSVExternal(filename string) ([][]string, error) {
 		)
 	}
 
-	// 添加基本路徑驗證 - 清理路徑並檢查基本安全性
-	cleanPath := h.pathValidator.SanitizePath(filename)
-
-	// 獲取絕對路徑用於安全檢查
-	absPath, err := filepath.Abs(cleanPath)
-	if err != nil {
-		h.logger.Error("無法解析絕對路徑", err, map[string]interface{}{
-			"original_path": filename,
-			"cleaned_path":  cleanPath,
-		})
-		return nil, errors.WrapError(err, errors.ErrCodePathValidation, "路徑解析失敗")
-	}
-
-	// 創建臨時路徑驗證器進行基本安全檢查（不使用白名單）
-	tempValidator := security.NewPathValidator([]string{})
-	if err := tempValidator.ValidateFilePath(cleanPath); err != nil {
-		h.logger.Error("外部路徑安全驗證失敗", err, map[string]interface{}{
-			"original_path": filename,
-			"cleaned_path":  cleanPath,
-			"absolute_path": absPath,
-		})
-		return nil, errors.WrapError(err, errors.ErrCodePathValidation, "路徑安全驗證失敗")
-	}
+	// 使用經過 GetFileInfo 檢查的安全路徑（尊重白名單配置）
+	cleanPath := fileInfo.Path
 
 	// Check if it's a CSV file
 	if !strings.HasSuffix(strings.ToLower(cleanPath), ".csv") {
