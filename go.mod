@@ -5,7 +5,7 @@ go 1.25
 require (
 	github.com/go-echarts/go-echarts/v2 v2.6.7
 	github.com/stretchr/testify v1.11.1
-	github.com/wailsapp/wails/v2 v2.10.2
+	github.com/wailsapp/wails/v2 v2.11.0
 	golang.org/x/exp v0.0.0-20251125195548-87e1e737ad39
 	gonum.org/v1/plot v0.16.0
 )
