@@ -1,6 +1,7 @@
 package parsers
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 )
 
 func TestNewANCParser(t *testing.T) {
@@ -398,10 +400,10 @@ func TestANCParser_Integration(t *testing.T) {
 2	Board_Type:	OR6-5-1000
 3	Trial_Name:	INTEGRATION_TEST	Trial#:	99	Duration(Sec.):	1.000	#Channels:	6
 4	BitDepth:	16	PreciseRate:	1000.000
-5	
-6	
-7	
-8	
+5
+6
+7
+8
 9	Name	Fx	Fy	Fz	Mx	My	Mz
 10	Rate	1000	1000	1000	1000	1000	1000
 11	Range	2000	2000	5000	200	200	200
@@ -443,4 +445,268 @@ func TestANCParser_Integration(t *testing.T) {
 		err = parsers.ValidateForceData(rangeData)
 		assert.NoError(t, err)
 	})
+}
+
+// ==================== XLSX 格式測試 ====================
+
+// createTestXLSXFile 創建測試用的 xlsx 檔案
+func createTestXLSXFile(t *testing.T, headers []string, data [][]string) string {
+	t.Helper()
+
+	f := excelize.NewFile()
+	sheetName := f.GetSheetName(0)
+
+	// 寫入標題行
+	for colIdx, header := range headers {
+		cell, err := excelize.CoordinatesToCellName(colIdx+1, 1)
+		require.NoError(t, err)
+		err = f.SetCellValue(sheetName, cell, header)
+		require.NoError(t, err)
+	}
+
+	// 寫入數據行
+	for rowIdx, row := range data {
+		for colIdx, value := range row {
+			cell, err := excelize.CoordinatesToCellName(colIdx+1, rowIdx+2)
+			require.NoError(t, err)
+			err = f.SetCellValue(sheetName, cell, value)
+			require.NoError(t, err)
+		}
+	}
+
+	// 保存到臨時文件
+	tmpFile, err := os.CreateTemp("", "test_anc_*.xlsx")
+	require.NoError(t, err)
+	tmpFile.Close()
+
+	err = f.SaveAs(tmpFile.Name())
+	require.NoError(t, err)
+	err = f.Close()
+	require.NoError(t, err)
+
+	return tmpFile.Name()
+}
+
+func TestANCParser_ParseXLSXFile(t *testing.T) {
+	t.Run("valid xlsx file", func(t *testing.T) {
+		headers := []string{"Time", "Fx", "Fy", "Fz"}
+		data := [][]string{
+			{"0.000", "1.1", "2.2", "3.3"},
+			{"0.001", "1.2", "2.3", "3.4"},
+			{"0.002", "1.3", "2.4", "3.5"},
+		}
+
+		xlsxPath := createTestXLSXFile(t, headers, data)
+		defer os.Remove(xlsxPath)
+
+		parser := parsers.NewANCParser()
+		forceData, err := parser.ParseFile(xlsxPath)
+
+		require.NoError(t, err)
+		assert.NotNil(t, forceData)
+		assert.Len(t, forceData.Time, 3)
+		assert.Equal(t, 0.0, forceData.Time[0])
+		assert.Equal(t, 0.001, forceData.Time[1])
+		assert.Equal(t, 0.002, forceData.Time[2])
+
+		assert.Len(t, forceData.Headers, 3) // Fx, Fy, Fz
+		assert.Equal(t, []string{"Fx", "Fy", "Fz"}, forceData.Headers)
+
+		assert.Len(t, forceData.Forces, 3)
+		assert.Equal(t, 1.1, forceData.Forces["Fx"][0])
+		assert.Equal(t, 2.2, forceData.Forces["Fy"][0])
+		assert.Equal(t, 3.3, forceData.Forces["Fz"][0])
+	})
+
+	t.Run("xlsx file with many data points", func(t *testing.T) {
+		headers := []string{"Time", "Fx", "Fy", "Fz", "Mx", "My", "Mz"}
+		var data [][]string
+
+		// 創建 1000 個數據點（模擬 1 秒的 1000Hz 數據）
+		for i := 0; i < 1000; i++ {
+			time := float64(i) / 1000.0
+			row := []string{
+				formatFloat(time),
+				"1.0", "2.0", "3.0", "4.0", "5.0", "6.0",
+			}
+			data = append(data, row)
+		}
+
+		xlsxPath := createTestXLSXFile(t, headers, data)
+		defer os.Remove(xlsxPath)
+
+		parser := parsers.NewANCParser()
+		forceData, err := parser.ParseFile(xlsxPath)
+
+		require.NoError(t, err)
+		assert.Len(t, forceData.Time, 1000)
+		assert.Len(t, forceData.Headers, 6)
+		assert.Len(t, forceData.Forces, 6)
+
+		// 驗證時間範圍
+		assert.InDelta(t, 0.0, forceData.Time[0], 0.0001)
+		assert.InDelta(t, 0.999, forceData.Time[999], 0.0001)
+	})
+
+	t.Run("xlsx file with .anc.xlsx extension", func(t *testing.T) {
+		headers := []string{"Time", "Fx", "Fy"}
+		data := [][]string{
+			{"0.0", "10.0", "20.0"},
+			{"1.0", "11.0", "21.0"},
+		}
+
+		// 創建臨時 xlsx 文件
+		f := excelize.NewFile()
+		sheetName := f.GetSheetName(0)
+		for colIdx, header := range headers {
+			cell, _ := excelize.CoordinatesToCellName(colIdx+1, 1)
+			f.SetCellValue(sheetName, cell, header)
+		}
+		for rowIdx, row := range data {
+			for colIdx, value := range row {
+				cell, _ := excelize.CoordinatesToCellName(colIdx+1, rowIdx+2)
+				f.SetCellValue(sheetName, cell, value)
+			}
+		}
+
+		// 使用 .anc.xlsx 副檔名
+		tmpFile, err := os.CreateTemp("", "test_*.anc.xlsx")
+		require.NoError(t, err)
+		tmpFile.Close()
+		defer os.Remove(tmpFile.Name())
+
+		err = f.SaveAs(tmpFile.Name())
+		require.NoError(t, err)
+		f.Close()
+
+		parser := parsers.NewANCParser()
+		forceData, err := parser.ParseFile(tmpFile.Name())
+
+		require.NoError(t, err)
+		assert.Len(t, forceData.Time, 2)
+		assert.Equal(t, 0.0, forceData.Time[0])
+		assert.Equal(t, 1.0, forceData.Time[1])
+	})
+
+	t.Run("xlsx file with empty rows", func(t *testing.T) {
+		headers := []string{"Time", "Fx", "Fy"}
+		data := [][]string{
+			{"0.0", "1.0", "2.0"},
+			{"", "", ""},            // 空行
+			{"0.002", "3.0", "4.0"}, // 有效行
+		}
+
+		xlsxPath := createTestXLSXFile(t, headers, data)
+		defer os.Remove(xlsxPath)
+
+		parser := parsers.NewANCParser()
+		forceData, err := parser.ParseFile(xlsxPath)
+
+		require.NoError(t, err)
+		// 應該只有 2 個有效數據點（跳過空行）
+		assert.Len(t, forceData.Time, 2)
+	})
+
+	t.Run("xlsx file with missing column values", func(t *testing.T) {
+		headers := []string{"Time", "Fx", "Fy", "Fz"}
+		data := [][]string{
+			{"0.0", "1.0"},                 // 缺少 Fy 和 Fz
+			{"0.001", "2.0", "3.0"},        // 缺少 Fz
+			{"0.002", "4.0", "5.0", "6.0"}, // 完整
+		}
+
+		xlsxPath := createTestXLSXFile(t, headers, data)
+		defer os.Remove(xlsxPath)
+
+		parser := parsers.NewANCParser()
+		forceData, err := parser.ParseFile(xlsxPath)
+
+		require.NoError(t, err)
+		assert.Len(t, forceData.Time, 3)
+
+		// 缺失的值應該被填充為 0
+		assert.Equal(t, 0.0, forceData.Forces["Fy"][0])
+		assert.Equal(t, 0.0, forceData.Forces["Fz"][0])
+		assert.Equal(t, 0.0, forceData.Forces["Fz"][1])
+		assert.Equal(t, 6.0, forceData.Forces["Fz"][2])
+	})
+
+	t.Run("xlsx file not found", func(t *testing.T) {
+		parser := parsers.NewANCParser()
+		_, err := parser.ParseFile("nonexistent_file.xlsx")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "無法開啟 Excel 檔案")
+	})
+
+	t.Run("xlsx file with only header row", func(t *testing.T) {
+		headers := []string{"Time", "Fx", "Fy"}
+		data := [][]string{} // 沒有數據
+
+		xlsxPath := createTestXLSXFile(t, headers, data)
+		defer os.Remove(xlsxPath)
+
+		parser := parsers.NewANCParser()
+		_, err := parser.ParseFile(xlsxPath)
+
+		assert.Error(t, err)
+		// 錯誤訊息可能是 "數據不足" 或 "沒有有效的數據行"
+		assert.True(t, strings.Contains(err.Error(), "數據不足") ||
+			strings.Contains(err.Error(), "沒有有效的數據行"),
+			"Expected error message about insufficient data, got: %s", err.Error())
+	})
+}
+
+func TestANCParser_ParseXLSXFile_Validation(t *testing.T) {
+	t.Run("validate parsed xlsx data", func(t *testing.T) {
+		headers := []string{"Time", "Fx", "Fy", "Fz"}
+		data := [][]string{
+			{"0.0", "1.0", "2.0", "3.0"},
+			{"0.001", "1.1", "2.1", "3.1"},
+			{"0.002", "1.2", "2.2", "3.2"},
+		}
+
+		xlsxPath := createTestXLSXFile(t, headers, data)
+		defer os.Remove(xlsxPath)
+
+		parser := parsers.NewANCParser()
+		forceData, err := parser.ParseFile(xlsxPath)
+		require.NoError(t, err)
+
+		// 使用 ValidateForceData 驗證
+		err = parsers.ValidateForceData(forceData)
+		assert.NoError(t, err)
+	})
+
+	t.Run("xlsx time range query", func(t *testing.T) {
+		headers := []string{"Time", "Fx", "Fy"}
+		data := [][]string{
+			{"0.0", "1.0", "2.0"},
+			{"0.5", "1.5", "2.5"},
+			{"1.0", "2.0", "3.0"},
+			{"1.5", "2.5", "3.5"},
+			{"2.0", "3.0", "4.0"},
+		}
+
+		xlsxPath := createTestXLSXFile(t, headers, data)
+		defer os.Remove(xlsxPath)
+
+		parser := parsers.NewANCParser()
+		forceData, err := parser.ParseFile(xlsxPath)
+		require.NoError(t, err)
+
+		// 獲取時間範圍內的數據
+		rangeData, err := parser.GetDataInTimeRange(forceData, 0.5, 1.5)
+		require.NoError(t, err)
+
+		assert.Len(t, rangeData.Time, 3) // 0.5, 1.0, 1.5
+		assert.Equal(t, 0.5, rangeData.Time[0])
+		assert.Equal(t, 1.5, rangeData.Time[2])
+	})
+}
+
+// formatFloat 將浮點數格式化為字符串
+func formatFloat(f float64) string {
+	return strings.TrimRight(strings.TrimRight(
+		fmt.Sprintf("%.6f", f), "0"), ".")
 }

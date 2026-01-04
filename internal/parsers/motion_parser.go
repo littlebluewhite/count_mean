@@ -12,17 +12,21 @@ import (
 
 // MotionParser Motion檔案解析器
 type MotionParser struct {
-	frequency float64 // 採樣頻率 Hz
-	headerRow int     // 標題所在行（從0開始）
-	dataRow   int     // 數據開始行（從0開始）
+	frequency   float64 // 採樣頻率 Hz
+	categoryRow int     // 類別行（從0開始）- 如 "Trunk Angle"
+	subcatRow   int     // 子類別行（從0開始）- 如 "Trunk Flexion / Extension..."
+	headerRow   int     // 標題所在行（從0開始）- 如 "Series"
+	dataRow     int     // 數據開始行（從0開始）
 }
 
 // NewMotionParser 創建新的 Motion 解析器
 func NewMotionParser() *MotionParser {
 	return &MotionParser{
-		frequency: 250.0, // 250Hz
-		headerRow: 3,     // 第4行是標題
-		dataRow:   4,     // 第5行開始是數據
+		frequency:   250.0, // 250Hz
+		categoryRow: 1,     // 第2行是類別（如 Trunk Angle, Hip Angle）
+		subcatRow:   2,     // 第3行是子類別（詳細描述）
+		headerRow:   3,     // 第4行是標題（通常是重複的 Series）
+		dataRow:     4,     // 第5行開始是數據
 	}
 }
 
@@ -48,12 +52,21 @@ func (p *MotionParser) ParseFile(filepath string) (*models.MotionData, error) {
 		return nil, fmt.Errorf("Motion 檔案格式錯誤：數據行不足")
 	}
 
-	// 解析標題行
+	// 解析標題行 - 使用類別行和子類別行組合成唯一的欄位名稱
 	if p.headerRow >= len(records) {
 		return nil, fmt.Errorf("Motion 檔案格式錯誤：找不到標題行")
 	}
 
-	headers := p.parseHeaders(records[p.headerRow])
+	// 獲取類別行和子類別行（如果存在）
+	var categoryRow, subcatRow []string
+	if p.categoryRow < len(records) {
+		categoryRow = records[p.categoryRow]
+	}
+	if p.subcatRow < len(records) {
+		subcatRow = records[p.subcatRow]
+	}
+
+	headers := p.buildUniqueHeaders(records[p.headerRow], categoryRow, subcatRow)
 	if len(headers) < 2 { // 至少需要 index 列和一個數據列
 		return nil, fmt.Errorf("Motion 檔案標題不足：至少需要 index 列和一個數據列")
 	}
@@ -118,7 +131,73 @@ func (p *MotionParser) ParseFile(filepath string) (*models.MotionData, error) {
 	return motionData, nil
 }
 
-// parseHeaders 解析標題行
+// buildUniqueHeaders 使用類別行和子類別行組合成唯一的欄位名稱
+// Motion 檔案格式：
+//
+//	Row 1: [Data],,,
+//	Row 2 (categoryRow): ,Trunk Angle,Hip Angle,Knee Angle
+//	Row 3 (subcatRow):   ,Trunk Flexion/Extension...,Hip Flexion/Extension...,Knee Flexion/Extension...
+//	Row 4 (headerRow):   Index,Series,Series,Series  <-- 重複的 Series
+//
+// 解決方案：優先使用 categoryRow，如果為空則使用 subcatRow，最後加上索引確保唯一性
+func (p *MotionParser) buildUniqueHeaders(headerRow, categoryRow, subcatRow []string) []string {
+	headers := make([]string, 0, len(headerRow))
+	usedNames := make(map[string]int) // 追蹤已使用的名稱及其出現次數
+
+	for i, h := range headerRow {
+		trimmed := strings.TrimSpace(h)
+		if trimmed == "" {
+			continue
+		}
+
+		// 第一列通常是 "Index"，直接使用
+		if i == 0 {
+			headers = append(headers, trimmed)
+			continue
+		}
+
+		// 嘗試從 categoryRow 獲取唯一名稱
+		var uniqueName string
+		if i < len(categoryRow) {
+			cat := strings.TrimSpace(categoryRow[i])
+			if cat != "" {
+				uniqueName = cat
+			}
+		}
+
+		// 如果 categoryRow 為空，嘗試從 subcatRow 獲取
+		if uniqueName == "" && i < len(subcatRow) {
+			subcat := strings.TrimSpace(subcatRow[i])
+			if subcat != "" {
+				// 子類別可能很長，嘗試提取括號前的部分
+				if idx := strings.Index(subcat, "("); idx > 0 {
+					uniqueName = strings.TrimSpace(subcat[:idx])
+				} else {
+					uniqueName = subcat
+				}
+			}
+		}
+
+		// 如果都為空，使用原始的 header 名稱
+		if uniqueName == "" {
+			uniqueName = trimmed
+		}
+
+		// 確保名稱唯一性：如果名稱已存在，加上索引
+		if count, exists := usedNames[uniqueName]; exists {
+			usedNames[uniqueName] = count + 1
+			uniqueName = fmt.Sprintf("%s_%d", uniqueName, count+1)
+		} else {
+			usedNames[uniqueName] = 1
+		}
+
+		headers = append(headers, uniqueName)
+	}
+
+	return headers
+}
+
+// parseHeaders 解析標題行（保留向後兼容）
 func (p *MotionParser) parseHeaders(headerRow []string) []string {
 	headers := make([]string, 0, len(headerRow))
 	for _, h := range headerRow {

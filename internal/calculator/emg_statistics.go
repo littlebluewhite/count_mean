@@ -124,6 +124,16 @@ func (calc *EMGStatisticsCalculator) ExportToCSV(
 		return fmt.Errorf("寫入結束時間失敗: %w", err)
 	}
 
+	// 寫入時間差值（結束時間 - 開始時間）
+	row = []string{"時間差值"}
+	timeDiffStr := calc.formatFloat(stats.EndTime - stats.StartTime)
+	for range stats.ChannelNames {
+		row = append(row, timeDiffStr)
+	}
+	if err := writer.Write(row); err != nil {
+		return fmt.Errorf("寫入時間差值失敗: %w", err)
+	}
+
 	// 寫入平均值
 	row = []string{"平均值"}
 	for _, channelName := range stats.ChannelNames {

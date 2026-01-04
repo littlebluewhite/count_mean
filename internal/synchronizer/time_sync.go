@@ -74,17 +74,24 @@ func (ts *TimeSynchronizer) MotionIndexToForceTime(motionIndex int) float64 {
 }
 
 // ForceTimeToEMGTime 將力板時間轉換為 EMG 時間
+// Force Plate 和 Motion 同步開始，都從 0 秒開始
+// EMGMotionOffset 表示 EMG 第 0 秒對應的 Motion index
+// 因此：EMG時間 = ForceTime - (EMGMotionOffset - 1) / MotionFreq
 func (ts *TimeSynchronizer) ForceTimeToEMGTime(forceTime float64, emgMotionOffset int) float64 {
-	// 先轉換為 Motion index，再轉換為 EMG 時間
-	motionIndex := ts.ForceTimeToMotionIndex(forceTime)
-	return ts.MotionIndexToEMGTime(motionIndex, emgMotionOffset)
+	// EMGMotionOffset 是 EMG 0秒對應的 Motion index
+	// Motion index 1 對應 Motion 時間 0 秒
+	// 所以 Motion 時間 = (index - 1) / 250
+	// EMG 0 秒對應 Motion 時間 = (EMGMotionOffset - 1) / 250
+	// EMG 時間 = Force 時間 - (EMGMotionOffset - 1) / 250
+	emgTimeOffset := float64(emgMotionOffset-1) / ts.motionFreq
+	return forceTime - emgTimeOffset
 }
 
 // EMGTimeToForceTime 將 EMG 時間轉換為力板時間
+// Force 時間 = EMG 時間 + (EMGMotionOffset - 1) / MotionFreq
 func (ts *TimeSynchronizer) EMGTimeToForceTime(emgTime float64, emgMotionOffset int) float64 {
-	// 先轉換為 Motion index，再轉換為力板時間
-	motionIndex := ts.EMGTimeToMotionIndex(emgTime, emgMotionOffset)
-	return ts.MotionIndexToForceTime(motionIndex)
+	emgTimeOffset := float64(emgMotionOffset-1) / ts.motionFreq
+	return emgTime + emgTimeOffset
 }
 
 // GetSyncedTimeRange 獲取同步的時間範圍

@@ -388,12 +388,12 @@ TestSubject,motion.csv,force.csv,emg.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350
 		SubjectIndex: 0,
 	}
 
-	// This will fail because the EMG file doesn't exist, but it tests the flow
+	// This will fail because the Motion file doesn't exist (validated first before EMG)
 	stats, err := analyzer.AnalyzePhaseSync(params)
 	assert.Error(t, err)
 	assert.Nil(t, stats)
-	// The error should be about parsing the EMG file since it doesn't exist
-	assert.Contains(t, err.Error(), "解析 EMG 檔案失敗")
+	// The error should be about Motion file validation since it's checked before EMG
+	assert.Contains(t, err.Error(), "Motion 檔案不存在")
 }
 
 func TestPhaseSyncAnalyzer_AnalyzePhaseSync_AbsolutePath(t *testing.T) {
@@ -403,9 +403,10 @@ func TestPhaseSyncAnalyzer_AnalyzePhaseSync_AbsolutePath(t *testing.T) {
 	// Create a manifest with absolute path
 	tmpDir := t.TempDir()
 	emgFile := filepath.Join(tmpDir, "emg.csv")
+	motionFile := filepath.Join(tmpDir, "motion.csv")
 
 	manifestContent := fmt.Sprintf(`Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
-TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, emgFile)
+TestSubject,%s,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, motionFile, emgFile)
 
 	manifestFile := createTempFile(t, manifestContent, ".csv")
 
@@ -417,12 +418,12 @@ TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 		SubjectIndex: 0,
 	}
 
-	// This will fail because the EMG file doesn't exist, but it tests the absolute path handling
+	// This will fail because the Motion file doesn't exist (validated first)
 	stats, err := analyzer.AnalyzePhaseSync(params)
 	assert.Error(t, err)
 	assert.Nil(t, stats)
-	// The error should mention the absolute path
-	assert.Contains(t, err.Error(), emgFile)
+	// The error should mention the Motion file path since it's validated first
+	assert.Contains(t, err.Error(), "Motion 檔案不存在")
 }
 
 // Benchmark test

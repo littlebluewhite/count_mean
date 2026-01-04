@@ -88,8 +88,91 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 		return nil, fmt.Errorf("EMG 檔案路徑解析失敗: %w", err)
 	}
 
-	// motionFilePath := filepath.Join(params.DataFolder, manifest.MotionFile)
-	// forceFilePath := filepath.Join(params.DataFolder, manifest.ForceFile)
+	// 6.1 構建並驗證 Motion 檔案路徑及內容
+	if manifest.MotionFile != "" {
+		motionFilePath, err := analyzer.pathValidator.GetSafePath(baseFolder, manifest.MotionFile)
+		if err != nil {
+			return nil, fmt.Errorf("Motion 檔案路徑驗證失敗: %w", err)
+		}
+		if _, err := os.Stat(motionFilePath); os.IsNotExist(err) {
+			return nil, fmt.Errorf("Motion 檔案不存在: %s", motionFilePath)
+		}
+
+		// 解析 Motion 檔案內容進行驗證
+		motionData, err := analyzer.motionParser.ParseFile(motionFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("解析 Motion 檔案失敗: %w", err)
+		}
+
+		// 獲取最大 Motion index
+		maxMotionIndex := 0
+		if len(motionData.Indices) > 0 {
+			maxMotionIndex = motionData.Indices[len(motionData.Indices)-1]
+		}
+
+		// 驗證 D 分期點 (motion index 類型)
+		if manifest.PhasePoints.D > 0 && manifest.PhasePoints.D > maxMotionIndex {
+			return nil, fmt.Errorf("D 分期點 index %d 超出 Motion 數據範圍 (最大: %d)",
+				manifest.PhasePoints.D, maxMotionIndex)
+		}
+
+		// 驗證 O 分期點 (motion index 類型)
+		if manifest.PhasePoints.O > 0 && manifest.PhasePoints.O > maxMotionIndex {
+			return nil, fmt.Errorf("O 分期點 index %d 超出 Motion 數據範圍 (最大: %d)",
+				manifest.PhasePoints.O, maxMotionIndex)
+		}
+
+		// 驗證 EMGMotionOffset 是否在 Motion 數據範圍內
+		if manifest.EMGMotionOffset > 0 && manifest.EMGMotionOffset > maxMotionIndex {
+			return nil, fmt.Errorf("EMGMotionOffset %d 超出 Motion 數據範圍 (最大: %d)",
+				manifest.EMGMotionOffset, maxMotionIndex)
+		}
+	}
+
+	// 6.2 構建並驗證 Force Plate 檔案路徑及內容
+	if manifest.ForceFile != "" {
+		forceFilePath, err := analyzer.pathValidator.GetSafePath(baseFolder, manifest.ForceFile)
+		if err != nil {
+			return nil, fmt.Errorf("Force Plate 檔案路徑驗證失敗: %w", err)
+		}
+		if _, err := os.Stat(forceFilePath); os.IsNotExist(err) {
+			return nil, fmt.Errorf("Force Plate 檔案不存在: %s", forceFilePath)
+		}
+
+		// 解析 Force Plate 檔案內容進行驗證
+		forceData, err := analyzer.ancParser.ParseFile(forceFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("解析 Force Plate 檔案失敗: %w", err)
+		}
+
+		// 獲取最大時間
+		maxForceTime := 0.0
+		if len(forceData.Time) > 0 {
+			maxForceTime = forceData.Time[len(forceData.Time)-1]
+		}
+
+		// 驗證各個 Force Plate 時間點
+		forceTimePoints := []struct {
+			name  string
+			value float64
+		}{
+			{"P0", manifest.PhasePoints.P0},
+			{"P1", manifest.PhasePoints.P1},
+			{"P2", manifest.PhasePoints.P2},
+			{"S", manifest.PhasePoints.S},
+			{"C", manifest.PhasePoints.C},
+			{"T0", manifest.PhasePoints.T0},
+			{"T", manifest.PhasePoints.T},
+			{"L", manifest.PhasePoints.L},
+		}
+
+		for _, point := range forceTimePoints {
+			if point.value > 0 && point.value > maxForceTime {
+				return nil, fmt.Errorf("%s 分期點時間 %.3f 超出 Force Plate 數據範圍 (最大: %.3f)",
+					point.name, point.value, maxForceTime)
+			}
+		}
+	}
 
 	// 7. 解析 EMG 檔案
 	emgData, err := analyzer.emgParser.ParseFile(emgFilePath)
@@ -106,6 +189,23 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 	)
 	if err != nil {
 		return nil, fmt.Errorf("計算分期時間範圍失敗: %w", err)
+	}
+
+	// 8.1 驗證計算出的 EMG 時間範圍是否在 EMG 數據範圍內
+	emgMinTime := 0.0
+	emgMaxTime := 0.0
+	if len(emgData.Time) > 0 {
+		emgMinTime = emgData.Time[0]
+		emgMaxTime = emgData.Time[len(emgData.Time)-1]
+	}
+
+	if phaseTimeRange.StartTime < emgMinTime {
+		return nil, fmt.Errorf("計算出的 EMG 開始時間 %.3f 小於 EMG 數據最小時間 %.3f (EMGMotionOffset: %d)",
+			phaseTimeRange.StartTime, emgMinTime, manifest.EMGMotionOffset)
+	}
+	if phaseTimeRange.EndTime > emgMaxTime {
+		return nil, fmt.Errorf("計算出的 EMG 結束時間 %.3f 超出 EMG 數據範圍 (最大: %.3f, EMGMotionOffset: %d)",
+			phaseTimeRange.EndTime, emgMaxTime, manifest.EMGMotionOffset)
 	}
 
 	// 9. 提取指定時間範圍的 EMG 數據

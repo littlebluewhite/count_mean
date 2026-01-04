@@ -523,6 +523,147 @@ func TestMotionParser_GetSampleInterval(t *testing.T) {
 	assert.Equal(t, 0.004, interval) // 250Hz = 0.004s
 }
 
+func TestMotionParser_DuplicateSeriesHeaders(t *testing.T) {
+	// 測試重複 "Series" 欄位名稱的處理
+	// 這是真實 Motion 檔案的格式
+	tests := []struct {
+		name            string
+		csvContent      string
+		wantErr         bool
+		expectedHeaders []string
+		checkData       func(*testing.T, *models.MotionData)
+	}{
+		{
+			name: "duplicate Series with category row",
+			csvContent: `[Data],,,
+,Trunk Angle,Hip Angle,Knee Angle
+,Trunk Flexion / Extension Joint Angle (deg),Hip Flexion / Extension Joint Angle (deg),Knee Flexion / Extension Joint Angle (deg)
+Index,Series,Series,Series
+1,-10.040299,-4.25116,3.056281
+2,-10.036259,-4.27678,3.095674
+3,-9.987208,-4.447137,3.01922`,
+			wantErr:         false,
+			expectedHeaders: []string{"Trunk Angle", "Hip Angle", "Knee Angle"},
+			checkData: func(t *testing.T, data *models.MotionData) {
+				assert.Len(t, data.Indices, 3)
+				assert.Equal(t, []int{1, 2, 3}, data.Indices)
+
+				// 檢查欄位名稱是否正確使用類別行
+				assert.Len(t, data.Headers, 3)
+				assert.Contains(t, data.Headers, "Trunk Angle")
+				assert.Contains(t, data.Headers, "Hip Angle")
+				assert.Contains(t, data.Headers, "Knee Angle")
+
+				// 檢查數據
+				assert.InDelta(t, -10.040299, data.Data["Trunk Angle"][0], 0.0001)
+				assert.InDelta(t, -4.25116, data.Data["Hip Angle"][0], 0.0001)
+				assert.InDelta(t, 3.056281, data.Data["Knee Angle"][0], 0.0001)
+			},
+		},
+		{
+			name: "duplicate Series with empty category row - use subcat row",
+			csvContent: `[Data],,,
+,,,
+,Trunk Flexion,Hip Flexion,Knee Flexion
+Index,Series,Series,Series
+1,10.5,20.3,30.8
+2,11.2,21.7,31.2`,
+			wantErr:         false,
+			expectedHeaders: []string{"Trunk Flexion", "Hip Flexion", "Knee Flexion"},
+			checkData: func(t *testing.T, data *models.MotionData) {
+				assert.Len(t, data.Headers, 3)
+				assert.Contains(t, data.Headers, "Trunk Flexion")
+				assert.Contains(t, data.Headers, "Hip Flexion")
+				assert.Contains(t, data.Headers, "Knee Flexion")
+			},
+		},
+		{
+			name: "duplicate Series with all empty rows - use indexed names",
+			csvContent: `[Data],,,
+,,,
+,,,
+Index,Series,Series,Series
+1,10.5,20.3,30.8
+2,11.2,21.7,31.2`,
+			wantErr: false,
+			checkData: func(t *testing.T, data *models.MotionData) {
+				assert.Len(t, data.Headers, 3)
+				// 第一個 Series 保持不變，之後的加上索引
+				assert.Contains(t, data.Headers, "Series")
+				assert.Contains(t, data.Headers, "Series_2")
+				assert.Contains(t, data.Headers, "Series_3")
+			},
+		},
+		{
+			name: "mixed duplicate headers",
+			csvContent: `[Data],,,,
+,Angle A,Angle B,Angle A,Angle C
+,Detail 1,Detail 2,Detail 3,Detail 4
+Index,Series,Series,Series,Series
+1,10.5,20.3,30.8,40.1
+2,11.2,21.7,31.2,41.5`,
+			wantErr: false,
+			checkData: func(t *testing.T, data *models.MotionData) {
+				assert.Len(t, data.Headers, 4)
+				// 檢查重複的 "Angle A" 是否被處理
+				assert.Contains(t, data.Headers, "Angle A")
+				assert.Contains(t, data.Headers, "Angle B")
+				assert.Contains(t, data.Headers, "Angle A_2") // 第二個 Angle A
+				assert.Contains(t, data.Headers, "Angle C")
+			},
+		},
+		{
+			name: "subcat row with parentheses - extract short name",
+			csvContent: `[Data],,,
+,,,
+,Trunk Flexion / Extension (deg),Hip Flexion / Extension (deg),Knee Flexion / Extension (deg)
+Index,Series,Series,Series
+1,10.5,20.3,30.8`,
+			wantErr: false,
+			checkData: func(t *testing.T, data *models.MotionData) {
+				assert.Len(t, data.Headers, 3)
+				// 括號前的部分應該被提取
+				assert.Contains(t, data.Headers, "Trunk Flexion / Extension")
+				assert.Contains(t, data.Headers, "Hip Flexion / Extension")
+				assert.Contains(t, data.Headers, "Knee Flexion / Extension")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 創建臨時測試文件
+			tmpFile, err := os.CreateTemp("", "test_motion_duplicate_*.csv")
+			require.NoError(t, err)
+			defer os.Remove(tmpFile.Name())
+
+			_, err = tmpFile.WriteString(tt.csvContent)
+			require.NoError(t, err)
+			tmpFile.Close()
+
+			// 測試解析
+			parser := parsers.NewMotionParser()
+			data, err := parser.ParseFile(tmpFile.Name())
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.NotNil(t, data)
+
+			if tt.expectedHeaders != nil {
+				assert.Equal(t, tt.expectedHeaders, data.Headers)
+			}
+
+			if tt.checkData != nil {
+				tt.checkData(t, data)
+			}
+		})
+	}
+}
+
 func TestMotionParser_Integration(t *testing.T) {
 	// 集成測試：創建完整的 Motion 文件並測試完整流程
 	t.Run("complete Motion file parsing and validation", func(t *testing.T) {

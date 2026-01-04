@@ -406,18 +406,25 @@ func TestFormatPhaseTime(t *testing.T) {
 func TestPhaseCalculator_GetPhaseTimeRange_EdgeCases(t *testing.T) {
 	pc := synchronizer.NewPhaseCalculator()
 
-	// Create test phase points with extreme values
+	// Create test phase points with realistic values that maintain proper time ordering
+	// Note: EMG time calculation depends on EMGMotionOffset
+	// For Force time: EMG_time = Force_time - (offset-1)/250
+	// For Motion index: EMG_time = (index - offset) / 250
+	// Values must maintain proper ordering after EMG time conversion
+	// Example with offset=1:
+	//   P0 (force 10.0): EMG_time = 10.0 - 0 = 10.0
+	//   D (motion 3000): EMG_time = (3000-1)/250 = 11.996
 	phasePoints := models.PhasePoints{
-		P0: 0.001,   // Very small force time
+		P0: 10.0,    // Force time
 		P1: 999.999, // Very large force time
-		P2: 3.0,
-		S:  4.0,
-		C:  5.0,
-		D:  1, // Minimum motion index
-		T0: 6.0,
-		T:  7.0,
+		P2: 12.0,
+		S:  13.0,
+		C:  14.0,
+		D:  3000, // Motion index (EMG_time = (3000-offset)/250, must be > P0's EMG_time)
+		T0: 16.0,
+		T:  17.0,
 		O:  9999, // Large motion index
-		L:  8.0,
+		L:  18.0,
 	}
 
 	tests := []struct {
@@ -428,7 +435,7 @@ func TestPhaseCalculator_GetPhaseTimeRange_EdgeCases(t *testing.T) {
 		expectErr       bool
 	}{
 		{
-			name:            "minimum motion index",
+			name:            "small EMG offset with valid range",
 			startPhase:      "P0",
 			endPhase:        "D",
 			emgMotionOffset: 1,

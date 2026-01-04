@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"count_mean/internal/models"
+
+	"github.com/xuri/excelize/v2"
 )
 
 // ANCParser ANC力板檔案解析器
@@ -37,11 +40,31 @@ type ANCHeader struct {
 	ChannelRanges []int
 }
 
-// ParseFile 解析 ANC 檔案
-func (p *ANCParser) ParseFile(filepath string) (*models.ForceData, error) {
-	file, err := os.Open(filepath)
+// ParseFile 解析 ANC 檔案（支援 .anc 文字格式和 .xlsx Excel 格式）
+func (p *ANCParser) ParseFile(filePath string) (*models.ForceData, error) {
+	// 根據副檔名選擇解析方式
+	ext := strings.ToLower(filepath.Ext(filePath))
+
+	switch ext {
+	case ".xlsx":
+		return p.parseXLSXFile(filePath)
+	case ".anc":
+		return p.parseANCTextFile(filePath)
+	default:
+		// 對於複合副檔名如 .anc.xlsx，檢查是否以 .xlsx 結尾
+		if strings.HasSuffix(strings.ToLower(filePath), ".xlsx") {
+			return p.parseXLSXFile(filePath)
+		}
+		// 默認使用文字解析（向後兼容）
+		return p.parseANCTextFile(filePath)
+	}
+}
+
+// parseANCTextFile 解析文字格式的 ANC 檔案
+func (p *ANCParser) parseANCTextFile(filePath string) (*models.ForceData, error) {
+	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("無法開啟 ANC 檔案 %s: %w", filepath, err)
+		return nil, fmt.Errorf("無法開啟 ANC 檔案 %s: %w", filePath, err)
 	}
 	defer file.Close()
 
@@ -109,6 +132,234 @@ func (p *ANCParser) ParseFile(filepath string) (*models.ForceData, error) {
 	}
 
 	// 驗證數據完整性
+	dataLen := len(forceData.Time)
+	for channelName, channelData := range forceData.Forces {
+		if len(channelData) != dataLen {
+			return nil, fmt.Errorf("通道 %s 的數據長度不一致", channelName)
+		}
+	}
+
+	return forceData, nil
+}
+
+// parseXLSXFile 解析 Excel xlsx 格式的 ANC 檔案
+// 支援兩種格式：
+// 1. 純數據表格式（第一行是標題，後續是數據）
+// 2. ANC 格式的 xlsx（有 11 行頭部資訊，第 9 行是通道名稱，第 12 行開始是數據）
+func (p *ANCParser) parseXLSXFile(filePath string) (*models.ForceData, error) {
+	// 開啟 Excel 檔案
+	f, err := excelize.OpenFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("無法開啟 Excel 檔案 %s: %w", filePath, err)
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			// 忽略關閉錯誤
+		}
+	}()
+
+	// 獲取第一個工作表名稱
+	sheetName := f.GetSheetName(0)
+	if sheetName == "" {
+		return nil, fmt.Errorf("Excel 檔案沒有工作表: %s", filePath)
+	}
+
+	// 讀取所有行
+	rows, err := f.GetRows(sheetName)
+	if err != nil {
+		return nil, fmt.Errorf("讀取 Excel 工作表失敗: %w", err)
+	}
+
+	if len(rows) < 2 {
+		return nil, fmt.Errorf("Excel 檔案數據不足（需要至少標題行和一行數據）: %s", filePath)
+	}
+
+	// 檢測檔案格式：ANC 格式的第一行通常以 "File_Type:" 開頭
+	isANCFormat := false
+	if len(rows) > 0 && len(rows[0]) > 0 {
+		firstCell := strings.TrimSpace(rows[0][0])
+		isANCFormat = strings.HasPrefix(firstCell, "File_Type:")
+	}
+
+	if isANCFormat {
+		return p.parseANCFormatXLSX(rows, filePath)
+	}
+	return p.parseSimpleXLSX(rows, filePath)
+}
+
+// parseANCFormatXLSX 解析 ANC 格式的 xlsx 檔案（有頭部資訊）
+func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*models.ForceData, error) {
+	// ANC 格式結構：
+	// Row 1-8: 頭部資訊
+	// Row 9: 通道名稱（Name, F1X, F1Y, ...）
+	// Row 10: 採樣率
+	// Row 11: 範圍
+	// Row 12+: 數據（時間, 數值...）
+
+	if len(rows) < 12 {
+		return nil, fmt.Errorf("ANC xlsx 檔案格式不完整（需要至少 12 行）: %s", filePath)
+	}
+
+	// 解析第 9 行的通道名稱（索引 8）
+	nameRow := rows[8]
+	if len(nameRow) < 2 {
+		return nil, fmt.Errorf("ANC xlsx 通道名稱行格式錯誤: %s", filePath)
+	}
+
+	// 第一欄應該是 "Name"，後續是通道名稱
+	channelNames := make([]string, 0, len(nameRow)-1)
+	for i := 1; i < len(nameRow); i++ {
+		name := strings.TrimSpace(nameRow[i])
+		if name != "" {
+			channelNames = append(channelNames, name)
+		}
+	}
+
+	if len(channelNames) == 0 {
+		return nil, fmt.Errorf("ANC xlsx 檔案沒有找到有效的通道名稱: %s", filePath)
+	}
+
+	// 初始化數據結構
+	forceData := &models.ForceData{
+		Time:    make([]float64, 0, len(rows)-11),
+		Forces:  make(map[string][]float64),
+		Headers: channelNames,
+	}
+
+	// 為每個通道初始化切片
+	for _, channelName := range channelNames {
+		forceData.Forces[channelName] = make([]float64, 0, len(rows)-11)
+	}
+
+	// 從第 12 行開始解析數據（索引 11）
+	for rowIdx := 11; rowIdx < len(rows); rowIdx++ {
+		row := rows[rowIdx]
+
+		// 跳過空行
+		if len(row) == 0 {
+			continue
+		}
+
+		// 解析時間（第一欄）
+		timeStr := strings.TrimSpace(row[0])
+		if timeStr == "" {
+			continue
+		}
+
+		timeValue, err := strconv.ParseFloat(timeStr, 64)
+		if err != nil {
+			continue // 跳過無效的時間值
+		}
+		forceData.Time = append(forceData.Time, timeValue)
+
+		// 解析各通道數據
+		for i, channelName := range channelNames {
+			colIdx := i + 1
+			var value float64 = 0
+			if colIdx < len(row) {
+				valueStr := strings.TrimSpace(row[colIdx])
+				if valueStr != "" {
+					parsedValue, err := strconv.ParseFloat(valueStr, 64)
+					if err == nil {
+						value = parsedValue
+					}
+				}
+			}
+			forceData.Forces[channelName] = append(forceData.Forces[channelName], value)
+		}
+	}
+
+	// 驗證數據完整性
+	if len(forceData.Time) == 0 {
+		return nil, fmt.Errorf("ANC xlsx 檔案沒有有效的數據行: %s", filePath)
+	}
+
+	dataLen := len(forceData.Time)
+	for channelName, channelData := range forceData.Forces {
+		if len(channelData) != dataLen {
+			return nil, fmt.Errorf("通道 %s 的數據長度不一致", channelName)
+		}
+	}
+
+	return forceData, nil
+}
+
+// parseSimpleXLSX 解析純數據表格式的 xlsx 檔案
+func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.ForceData, error) {
+	// 解析標題行（第一行應該包含 Time 和各通道名稱）
+	headerRow := rows[0]
+	if len(headerRow) < 2 {
+		return nil, fmt.Errorf("Excel 標題行欄位不足: %s", filePath)
+	}
+
+	// 第一欄應該是 Time，後續欄位是通道名稱
+	channelNames := make([]string, 0, len(headerRow)-1)
+	for i := 1; i < len(headerRow); i++ {
+		name := strings.TrimSpace(headerRow[i])
+		if name != "" {
+			channelNames = append(channelNames, name)
+		}
+	}
+
+	if len(channelNames) == 0 {
+		return nil, fmt.Errorf("Excel 檔案沒有找到有效的通道名稱: %s", filePath)
+	}
+
+	// 初始化數據結構
+	forceData := &models.ForceData{
+		Time:    make([]float64, 0, len(rows)-1),
+		Forces:  make(map[string][]float64),
+		Headers: channelNames,
+	}
+
+	// 為每個通道初始化切片
+	for _, channelName := range channelNames {
+		forceData.Forces[channelName] = make([]float64, 0, len(rows)-1)
+	}
+
+	// 解析數據行（從第二行開始）
+	for rowIdx := 1; rowIdx < len(rows); rowIdx++ {
+		row := rows[rowIdx]
+
+		// 跳過空行
+		if len(row) == 0 {
+			continue
+		}
+
+		// 解析時間（第一欄）
+		timeStr := strings.TrimSpace(row[0])
+		if timeStr == "" {
+			continue
+		}
+
+		timeValue, err := strconv.ParseFloat(timeStr, 64)
+		if err != nil {
+			continue // 跳過無效的時間值
+		}
+		forceData.Time = append(forceData.Time, timeValue)
+
+		// 解析各通道數據
+		for i, channelName := range channelNames {
+			colIdx := i + 1
+			var value float64 = 0
+			if colIdx < len(row) {
+				valueStr := strings.TrimSpace(row[colIdx])
+				if valueStr != "" {
+					parsedValue, err := strconv.ParseFloat(valueStr, 64)
+					if err == nil {
+						value = parsedValue
+					}
+				}
+			}
+			forceData.Forces[channelName] = append(forceData.Forces[channelName], value)
+		}
+	}
+
+	// 驗證數據完整性
+	if len(forceData.Time) == 0 {
+		return nil, fmt.Errorf("Excel 檔案沒有有效的數據行: %s", filePath)
+	}
+
 	dataLen := len(forceData.Time)
 	for channelName, channelData := range forceData.Forces {
 		if len(channelData) != dataLen {
