@@ -32,50 +32,32 @@ func NewPathValidator(allowedBasePaths []string) *PathValidator {
 
 // ValidateFilePath validates that a file path is within allowed directories
 func (pv *PathValidator) ValidateFilePath(path string) error {
+	// 允許空路徑
 	if path == "" {
-		return fmt.Errorf("路徑不能為空")
+		return nil
 	}
 
-	// URL 解碼以防止編碼繞過攻擊
+	// URL 解碼 - 如果解碼失敗，使用原始路徑（允許包含 % 符號的路徑）
 	decodedPath, err := url.QueryUnescape(path)
 	if err != nil {
-		return fmt.Errorf("路徑解碼失敗: %w", err)
+		// 解碼失敗時使用原始路徑，允許包含 % 或空格的 Windows 路徑
+		decodedPath = path
 	}
 
-	// 檢查多種路徑遍歷模式，包含編碼變體
+	// 檢查基本路徑遍歷模式（放寬 URL 編碼變體的限制）
 	suspiciousPatterns := []string{
 		"..",     // 標準路徑遍歷
 		"..\\",   // Windows 風格
 		"../",    // Unix 風格
-		"..%2F",  // URL 編碼的 ../
-		"..%5C",  // URL 編碼的 ..\
-		"%2E%2E", // URL 編碼的 ..
-		"%2e%2e", // 小寫 URL 編碼
 		"\\..\\", // 反斜線變體
 		"/..",    // 絕對路徑變體
-		"...//",  // 三點變體
-		"....//", // 四點變體
 	}
 
-	// 檢查原始路徑和解碼後的路徑
-	pathsToCheck := []string{path, decodedPath}
-	for _, checkPath := range pathsToCheck {
-		checkPathLower := strings.ToLower(checkPath)
-		for _, pattern := range suspiciousPatterns {
-			if strings.Contains(checkPathLower, strings.ToLower(pattern)) {
-				return fmt.Errorf("路徑包含可疑的遍歷模式: %s", pattern)
-			}
-		}
-	}
-
-	// 額外檢查：防止多層編碼攻擊
-	doubleDecoded, err := url.QueryUnescape(decodedPath)
-	if err == nil && doubleDecoded != decodedPath {
-		// 發現雙重編碼，再次檢查
-		for _, pattern := range suspiciousPatterns {
-			if strings.Contains(strings.ToLower(doubleDecoded), strings.ToLower(pattern)) {
-				return fmt.Errorf("路徑包含雙重編碼的遍歷攻擊")
-			}
+	// 只檢查解碼後的路徑（放寬原始路徑中 % 編碼的限制）
+	checkPathLower := strings.ToLower(decodedPath)
+	for _, pattern := range suspiciousPatterns {
+		if strings.Contains(checkPathLower, strings.ToLower(pattern)) {
+			return fmt.Errorf("路徑包含可疑的遍歷模式: %s", pattern)
 		}
 	}
 

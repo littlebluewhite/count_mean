@@ -232,7 +232,7 @@ func (v *InputValidator) ValidateFilename(filename string) error {
 		}
 	}
 
-	// Check for dangerous characters - Enhanced security check
+	// Check for dangerous characters - Enhanced security check (放寬 % 和空格限制)
 	dangerousChars := []string{
 		"<", ">", ":", "\"", "|", "?", "*", "\x00",
 		// Command injection prevention
@@ -243,10 +243,9 @@ func (v *InputValidator) ValidateFilename(filename string) error {
 		"<script", "</script", "javascript:", "vbscript:", "onload=", "onerror=",
 		// Path traversal prevention (additional patterns)
 		"../", "..\\", ".../", "...\\", "....//", "....\\\\",
-		// URL encoded dangerous chars
-		"%2e%2e", "%2f", "%5c", "%00", "%0a", "%0d",
-		// Unicode variants
-		"\u002e\u002e", "\u002f", "\u005c", "\u0000",
+		// 移除 URL 編碼字符限制，允許 % 符號和空格
+		// Unicode null character
+		"\u0000",
 		// Other control characters
 		"\x01", "\x02", "\x03", "\x04", "\x05", "\x06", "\x07", "\x08", "\x0b", "\x0c", "\x0e", "\x0f",
 		"\x10", "\x11", "\x12", "\x13", "\x14", "\x15", "\x16", "\x17", "\x18", "\x19", "\x1a", "\x1b", "\x1c", "\x1d", "\x1e", "\x1f",

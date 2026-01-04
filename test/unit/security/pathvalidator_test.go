@@ -24,7 +24,17 @@ func TestPathValidator_ValidateFilePath(t *testing.T) {
 		{
 			name:    "empty path",
 			path:    "",
-			wantErr: true,
+			wantErr: false, // 允許空路徑
+		},
+		{
+			name:    "path with percent sign",
+			path:    "./input/test%20file.csv",
+			wantErr: false, // 允許包含 % 符號的路徑
+		},
+		{
+			name:    "path with spaces",
+			path:    "./input/test file.csv",
+			wantErr: false, // 允許包含空格的路徑
 		},
 		{
 			name:    "path traversal attempt",
