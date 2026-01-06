@@ -209,7 +209,7 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 	}
 
 	// 9. 提取指定時間範圍的 EMG 數據
-	rangeEMGData, err := analyzer.emgParser.GetDataInTimeRange(
+	rangeResult, err := analyzer.emgParser.GetDataInTimeRange(
 		emgData,
 		phaseTimeRange.StartTime,
 		phaseTimeRange.EndTime,
@@ -218,13 +218,13 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 		return nil, fmt.Errorf("提取 EMG 時間範圍數據失敗: %w", err)
 	}
 
-	// 10. 計算統計信息
+	// 10. 計算統計信息（使用實際選取的時間範圍，確保輸出與計算一致）
 	stats, err := analyzer.statsCalculator.CalculateStatistics(
-		rangeEMGData,
+		rangeResult.Data,
 		params.StartPhase,
-		phaseTimeRange.StartTime,
+		rangeResult.ActualStartTime,
 		params.EndPhase,
-		phaseTimeRange.EndTime,
+		rangeResult.ActualEndTime,
 		manifest.Subject,
 	)
 	if err != nil {
