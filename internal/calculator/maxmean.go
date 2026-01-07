@@ -518,6 +518,11 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 	scaledStartRange := startRange * math.Pow10(c.scalingFactor)
 	scaledEndRange := endRange * math.Pow10(c.scalingFactor)
 
+	// 將時間轉換為整數微秒進行比較，避免浮點數精度問題
+	// 使用微秒是因為縮放後的時間可能有更高精度
+	startRangeUs := int64(math.Round(scaledStartRange * 1000000))
+	endRangeUs := int64(math.Round(scaledEndRange * 1000000))
+
 	// 找到時間範圍內的數據索引
 	startIdx := -1
 	endIdx := -1
@@ -526,17 +531,19 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 	if endRange == 0 {
 		endIdx = len(dataset.Data) - 1
 		for i, data := range dataset.Data {
-			if startIdx == -1 && data.Time >= scaledStartRange {
+			dataTimeUs := int64(math.Round(data.Time * 1000000))
+			if startIdx == -1 && dataTimeUs >= startRangeUs {
 				startIdx = i
 				break
 			}
 		}
 	} else {
 		for i, data := range dataset.Data {
-			if startIdx == -1 && data.Time >= scaledStartRange {
+			dataTimeUs := int64(math.Round(data.Time * 1000000))
+			if startIdx == -1 && dataTimeUs >= startRangeUs {
 				startIdx = i
 			}
-			if data.Time <= scaledEndRange {
+			if dataTimeUs <= endRangeUs {
 				endIdx = i
 			}
 		}

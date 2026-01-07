@@ -2,6 +2,7 @@ package parsers
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -107,21 +108,35 @@ func (p *EMGParser) parseHeaders(headerRow []string) []string {
 	return headers
 }
 
+// EMGTimeRangeResult 時間範圍提取結果，包含實際選取的時間範圍
+type EMGTimeRangeResult struct {
+	Data            *models.PhaseSyncEMGData
+	ActualStartTime float64 // 實際選取的第一個數據點時間
+	ActualEndTime   float64 // 實際選取的最後一個數據點時間
+}
+
 // GetDataInTimeRange 獲取指定時間範圍內的數據
-func (p *EMGParser) GetDataInTimeRange(data *models.PhaseSyncEMGData, startTime, endTime float64) (*models.PhaseSyncEMGData, error) {
+// 返回實際選取的數據和實際的時間範圍，確保輸出時間與計算數據一致
+// 使用整數毫秒進行比較，避免浮點數精度問題
+func (p *EMGParser) GetDataInTimeRange(data *models.PhaseSyncEMGData, startTime, endTime float64) (*EMGTimeRangeResult, error) {
 	if startTime > endTime {
 		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", startTime, endTime)
 	}
+
+	// 將時間轉換為整數毫秒進行比較，避免浮點數精度問題
+	startTimeMs := int64(math.Round(startTime * 1000))
+	endTimeMs := int64(math.Round(endTime * 1000))
 
 	// 找到時間範圍的索引
 	startIdx := -1
 	endIdx := -1
 
 	for i, t := range data.Time {
-		if startIdx == -1 && t >= startTime {
+		tMs := int64(math.Round(t * 1000))
+		if startIdx == -1 && tMs >= startTimeMs {
 			startIdx = i
 		}
-		if t <= endTime {
+		if tMs <= endTimeMs {
 			endIdx = i
 		} else if endIdx != -1 {
 			break
@@ -144,10 +159,15 @@ func (p *EMGParser) GetDataInTimeRange(data *models.PhaseSyncEMGData, startTime,
 		rangeData.Channels[channelName] = channelData[startIdx : endIdx+1]
 	}
 
-	return rangeData, nil
+	// 返回實際選取的時間範圍
+	return &EMGTimeRangeResult{
+		Data:            rangeData,
+		ActualStartTime: data.Time[startIdx],
+		ActualEndTime:   data.Time[endIdx],
+	}, nil
 }
 
-// CalculateStatistics 計算統計數據
+// CalculateEMGStatistics 計算統計數據
 func CalculateEMGStatistics(data *models.PhaseSyncEMGData) (means map[string]float64, maxes map[string]float64) {
 	means = make(map[string]float64)
 	maxes = make(map[string]float64)
@@ -161,17 +181,17 @@ func CalculateEMGStatistics(data *models.PhaseSyncEMGData) (means map[string]flo
 
 		// 計算平均值
 		sum := 0.0
-		max := channelData[0]
+		_max := channelData[0]
 
 		for _, value := range channelData {
 			sum += value
-			if value > max {
-				max = value
+			if value > _max {
+				_max = value
 			}
 		}
 
 		means[channelName] = sum / float64(len(channelData))
-		maxes[channelName] = max
+		maxes[channelName] = _max
 	}
 
 	return means, maxes

@@ -220,7 +220,7 @@ func TestEMGParser_GetDataInTimeRange(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rangeData, err := parser.GetDataInTimeRange(testData, tt.startTime, tt.endTime)
+			result, err := parser.GetDataInTimeRange(testData, tt.startTime, tt.endTime)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -228,20 +228,23 @@ func TestEMGParser_GetDataInTimeRange(t *testing.T) {
 			}
 
 			assert.NoError(t, err)
-			assert.NotNil(t, rangeData)
-			assert.Len(t, rangeData.Time, tt.checkLen)
-			assert.Len(t, rangeData.Channels["Ch1"], tt.checkLen)
-			assert.Len(t, rangeData.Channels["Ch2"], tt.checkLen)
+			assert.NotNil(t, result)
+			assert.NotNil(t, result.Data)
+			assert.Len(t, result.Data.Time, tt.checkLen)
+			assert.Len(t, result.Data.Channels["Ch1"], tt.checkLen)
+			assert.Len(t, result.Data.Channels["Ch2"], tt.checkLen)
 
-			// 檢查時間範圍
+			// 檢查實際時間範圍與數據一致
 			if tt.checkLen > 0 {
-				assert.GreaterOrEqual(t, rangeData.Time[0], tt.startTime)
-				assert.LessOrEqual(t, rangeData.Time[len(rangeData.Time)-1], tt.endTime)
+				assert.Equal(t, result.Data.Time[0], result.ActualStartTime)
+				assert.Equal(t, result.Data.Time[len(result.Data.Time)-1], result.ActualEndTime)
+				assert.GreaterOrEqual(t, result.ActualStartTime, tt.startTime)
+				assert.LessOrEqual(t, result.ActualEndTime, tt.endTime)
 			}
 
 			// 檢查數據完整性
-			for channelName := range rangeData.Channels {
-				assert.Len(t, rangeData.Channels[channelName], len(rangeData.Time))
+			for channelName := range result.Data.Channels {
+				assert.Len(t, result.Data.Channels[channelName], len(result.Data.Time))
 			}
 		})
 	}
@@ -531,12 +534,16 @@ func TestEMGParser_Integration(t *testing.T) {
 		assert.Len(t, data.Channels, 4)
 
 		// 測試時間範圍查詢
-		rangeData, err := parser.GetDataInTimeRange(data, 0.001, 0.003)
+		rangeResult, err := parser.GetDataInTimeRange(data, 0.001, 0.003)
 		require.NoError(t, err)
-		assert.Len(t, rangeData.Time, 3)
+		assert.Len(t, rangeResult.Data.Time, 3)
+
+		// 驗證實際時間範圍與數據一致
+		assert.Equal(t, rangeResult.Data.Time[0], rangeResult.ActualStartTime)
+		assert.Equal(t, rangeResult.Data.Time[len(rangeResult.Data.Time)-1], rangeResult.ActualEndTime)
 
 		// 驗證範圍數據
-		err = parsers.ValidateEMGData(rangeData)
+		err = parsers.ValidateEMGData(rangeResult.Data)
 		assert.NoError(t, err)
 
 		// 測試統計計算

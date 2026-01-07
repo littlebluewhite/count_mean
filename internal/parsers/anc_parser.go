@@ -3,6 +3,7 @@ package parsers
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -494,20 +495,26 @@ func (p *ANCParser) extractValue(content, label string) string {
 }
 
 // GetDataInTimeRange 獲取指定時間範圍內的數據
+// 使用整數毫秒進行比較，避免浮點數精度問題
 func (p *ANCParser) GetDataInTimeRange(data *models.ForceData, startTime, endTime float64) (*models.ForceData, error) {
 	if startTime > endTime {
 		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", startTime, endTime)
 	}
+
+	// 將時間轉換為整數毫秒進行比較，避免浮點數精度問題
+	startTimeMs := int64(math.Round(startTime * 1000))
+	endTimeMs := int64(math.Round(endTime * 1000))
 
 	// 找到時間範圍的索引
 	startIdx := -1
 	endIdx := -1
 
 	for i, t := range data.Time {
-		if startIdx == -1 && t >= startTime {
+		tMs := int64(math.Round(t * 1000))
+		if startIdx == -1 && tMs >= startTimeMs {
 			startIdx = i
 		}
-		if t <= endTime {
+		if tMs <= endTimeMs {
 			endIdx = i
 		} else if endIdx != -1 {
 			break
