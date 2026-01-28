@@ -14,7 +14,9 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -86,25 +88,38 @@ type StreamingResult struct {
 }
 
 // GetFileInfo 獲取文件基本信息
+// 執行基本安全檢查（路徑遍歷攻擊防護），支援任意路徑的檔案
 func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 	h.logger.Debug("開始獲取文件信息", map[string]interface{}{
 		"filename": filename,
 	})
 
-	// 驗證路徑
+	// 清理路徑
 	sanitizedPath := h.pathValidator.SanitizePath(filename)
-	if err := h.pathValidator.ValidateFilePath(sanitizedPath); err != nil {
-		return nil, errors.WrapError(err, errors.ErrCodePathValidation, "路徑驗證失敗")
+
+	// 檢查路徑遍歷攻擊
+	if strings.Contains(sanitizedPath, "..") {
+		return nil, errors.NewAppErrorWithDetails(
+			errors.ErrCodePathValidation,
+			"路徑包含遍歷字符",
+			fmt.Sprintf("路徑 '%s' 包含不安全的遍歷模式", filename),
+		)
+	}
+
+	// 獲取絕對路徑
+	absPath, err := filepath.Abs(sanitizedPath)
+	if err != nil {
+		return nil, errors.WrapError(err, errors.ErrCodePathValidation, "無法解析路徑")
 	}
 
 	// 獲取文件統計信息
-	fileInfo, err := os.Stat(sanitizedPath)
+	fileInfo, err := os.Stat(absPath)
 	if err != nil {
 		return nil, errors.WrapError(err, errors.ErrCodeFileNotFound, "無法獲取文件信息")
 	}
 
 	info := &FileInfo{
-		Path:    sanitizedPath,
+		Path:    absPath,
 		Size:    fileInfo.Size(),
 		IsLarge: fileInfo.Size() > h.maxFileSize/10, // 超過200MB視為大文件
 	}
@@ -119,7 +134,7 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 	}
 
 	// 快速掃描獲取行數和列數
-	lineCount, columnCount, err := h.scanFileStructure(sanitizedPath)
+	lineCount, columnCount, err := h.scanFileStructure(absPath)
 	if err != nil {
 		return nil, err
 	}

@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+// TestBenchmarkPlaceholder is a placeholder test to satisfy go test
+func TestBenchmarkPlaceholder(t *testing.T) {
+	// This package contains only benchmarks.
+	// Run benchmarks with: go test -bench=. ./test/benchmark
+}
+
 // BenchmarkMathCalculation 數學計算基準測試
 func BenchmarkMathCalculation(b *testing.B) {
 	for i := 0; i < b.N; i++ {

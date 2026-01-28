@@ -187,14 +187,14 @@ func TestLoadConfig(t *testing.T) {
 		configFile := filepath.Join(tempDir, "test_config.json")
 
 		validJSON := `{
-			"scaling_factor": 20,
-			"phase_labels": ["自定義階段1", "自定義階段2"],
+			"scalingFactor": 20,
+			"phaseLabels": ["自定義階段1", "自定義階段2"],
 			"precision": 8,
-			"output_format": "json",
-			"bom_enabled": false,
-			"input_dir": "./input",
-			"output_dir": "./output",
-			"operate_dir": "./value_operate"
+			"outputFormat": "json",
+			"bomEnabled": false,
+			"inputDir": "./input",
+			"outputDir": "./output",
+			"operateDir": "./value_operate"
 		}`
 
 		err := os.WriteFile(configFile, []byte(validJSON), 0644)

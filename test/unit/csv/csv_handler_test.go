@@ -31,7 +31,7 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 	t.Run("FileNotExists", func(t *testing.T) {
 		records, err := handler.ReadCSV("nonexistent.csv")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "路徑驗證失敗")
+		require.Contains(t, err.Error(), "無法獲取文件信息")
 		require.Nil(t, records)
 	})
 
@@ -275,10 +275,10 @@ func TestCSVHandler_ConvertMaxMeanResultsToCSV(t *testing.T) {
 		}
 
 		data := handler.ConvertMaxMeanResultsToCSV(headers, results, 0.5, 4.0)
-		require.Equal(t, "0.50", data[1][1])   // 開始範圍
-		require.Equal(t, "4.00", data[2][1])   // 結束範圍
-		require.Equal(t, "0.00", data[3][1])   // 開始計算時間: 1.123456/10^6 = 0.000001123456 with "%.2f" becomes "0.00"
-		require.Equal(t, "0.00", data[4][1])   // 結束計算時間: 2.987654/10^6 = 0.000002987654 with "%.2f" becomes "0.00"
+		require.Equal(t, "0.5000", data[1][1]) // 開始範圍 (precision 4)
+		require.Equal(t, "4.0000", data[2][1]) // 結束範圍 (precision 4)
+		require.Equal(t, "0.0000", data[3][1]) // 開始計算時間: 1.123456/10^6 = 0.000001123456 with precision 4 becomes "0.0000"
+		require.Equal(t, "0.0000", data[4][1]) // 結束計算時間: 2.987654/10^6 = 0.000002987654 with precision 4 becomes "0.0000"
 		require.Equal(t, "0.1235", data[5][1]) // 最大平均值: 123456.0/10^6 = 0.123456 with precision 4 becomes "0.1235"
 	})
 }
@@ -291,7 +291,8 @@ func TestCSVHandler_ConvertNormalizedDataToCSV(t *testing.T) {
 
 	t.Run("ValidConversion", func(t *testing.T) {
 		dataset := &models.EMGDataset{
-			Headers: []string{"Time", "Ch1", "Ch2"},
+			Headers:               []string{"Time", "Ch1", "Ch2"},
+			OriginalTimePrecision: 2, // 設置時間精度為2位小數
 			Data: []models.EMGData{
 				{Time: 1.0, Channels: []float64{2.5, 3.75}},
 				{Time: 2.0, Channels: []float64{1.25, 5.0}},

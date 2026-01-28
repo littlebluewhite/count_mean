@@ -285,15 +285,16 @@ func (h *CSVHandler) ReadCSV(filename string) ([][]string, error) {
 		"filename": filename,
 	})
 
-	// 檢查文件大小並決定處理方式
+	// 檢查文件大小並決定處理方式（同時進行基本安全檢查）
 	fileInfo, err := h.largeFileHandler.GetFileInfo(filename)
 	if err != nil {
-		// 如果無法獲取文件信息，使用傳統方式
-		h.logger.Warn("無法獲取文件信息，使用傳統讀取方式", map[string]interface{}{
+		h.logger.Error("獲取文件信息失敗", err, map[string]interface{}{
 			"filename": filename,
-			"error":    err.Error(),
 		})
-	} else if fileInfo.IsLarge {
+		return nil, err
+	}
+
+	if fileInfo.IsLarge {
 		h.logger.Info("檢測到大文件，使用流式讀取", map[string]interface{}{
 			"filename":   filename,
 			"file_size":  fileInfo.Size,
@@ -307,15 +308,8 @@ func (h *CSVHandler) ReadCSV(filename string) ([][]string, error) {
 		)
 	}
 
-	// Validate and sanitize the file path
-	sanitizedPath := h.pathValidator.SanitizePath(filename)
-	if err := h.pathValidator.ValidateFilePath(sanitizedPath); err != nil {
-		h.logger.Error("路徑驗證失敗", err, map[string]interface{}{
-			"original_path":  filename,
-			"sanitized_path": sanitizedPath,
-		})
-		return nil, errors.WrapError(err, errors.ErrCodePathValidation, "路徑驗證失敗")
-	}
+	// 使用已驗證的安全路徑
+	sanitizedPath := fileInfo.Path
 
 	// Check if it's a CSV file
 	if !h.pathValidator.IsCSVFile(sanitizedPath) {

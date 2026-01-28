@@ -281,7 +281,7 @@ func TestFullWorkflow_ErrorHandling(t *testing.T) {
 		// 測試讀取不存在的文件
 		_, err := csvHandler.ReadCSV("nonexistent.csv")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "路徑驗證失敗")
+		require.Contains(t, err.Error(), "無法獲取文件信息")
 	})
 
 	t.Run("InvalidInputData", func(t *testing.T) {

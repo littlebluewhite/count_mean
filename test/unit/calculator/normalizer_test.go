@@ -227,7 +227,7 @@ func TestNormalizer_NormalizeFromRawData(t *testing.T) {
 		}
 		reference := [][]string{
 			{"Time", "Ch1"},
-			{"invalid", "100"},
+			{"Label", "invalid_value"}, // Invalid channel value (not a number)
 		}
 		result, err := normalizer.NormalizeFromRawData(records, reference)
 		require.Error(t, err)
