@@ -1,11 +1,14 @@
 package calculator
 
 import (
-	"count_mean/internal/logging"
-	"count_mean/internal/models"
-	"count_mean/util"
 	"fmt"
 	"time"
+
+	calcerrors "count_mean/internal/errors"
+	"count_mean/internal/logging"
+	"count_mean/internal/models"
+	"count_mean/internal/parser"
+	"count_mean/util"
 )
 
 // PhaseAnalyzer 處理階段分析
@@ -13,14 +16,17 @@ type PhaseAnalyzer struct {
 	scalingFactor int
 	phaseLabels   []string
 	logger        *logging.Logger
+	dataParser    *parser.DataParser
 }
 
 // NewPhaseAnalyzer 創建新的階段分析器
 func NewPhaseAnalyzer(scalingFactor int, phaseLabels []string) *PhaseAnalyzer {
+	logger := logging.GetLogger("phase_analyzer")
 	return &PhaseAnalyzer{
 		scalingFactor: scalingFactor,
 		phaseLabels:   phaseLabels,
-		logger:        logging.GetLogger("phase_analyzer"),
+		logger:        logger,
+		dataParser:    parser.NewDataParserWithLogger(scalingFactor, logger),
 	}
 }
 
@@ -32,30 +38,38 @@ type AnalyzeResult struct {
 
 // Analyze 分析不同階段的數據
 func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.TimeRange) (*AnalyzeResult, error) {
+	if p == nil {
+		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "階段分析器為空")
+	}
+
 	startTime := time.Now()
 
-	if dataset == nil || len(dataset.Data) == 0 {
-		err := fmt.Errorf("數據集為空")
-		dataLength := 0
-		if dataset != nil {
-			dataLength = len(dataset.Data)
-		}
+	// 使用 IsEmpty() 統一檢查 nil 和空數據
+	if dataset.IsEmpty() {
+		err := calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "數據集為空")
+		// 安全記錄：dataset 可能為 nil，避免存取其方法
 		p.logger.Error("階段分析輸入驗證失敗", err, map[string]interface{}{
-			"dataset_nil": dataset == nil,
-			"data_length": dataLength,
+			"dataset_empty": true,
 		})
 		return nil, err
 	}
 
 	p.logger.Info("開始階段分析", map[string]interface{}{
 		"phase_count":    len(phases),
-		"data_points":    len(dataset.Data),
-		"channel_count":  len(dataset.Data[0].Channels),
+		"data_points":    dataset.DataPointCount(),
+		"channel_count":  dataset.ChannelCount(),
 		"scaling_factor": p.scalingFactor,
 	})
 
 	if len(phases) != len(p.phaseLabels) {
-		err := fmt.Errorf("階段數量與標籤數量不匹配")
+		err := calcerrors.NewCalculatorErrorWithContext(
+			calcerrors.ErrPhaseMismatch,
+			"階段數量與標籤數量不匹配",
+			map[string]interface{}{
+				"phase_count": len(phases),
+				"label_count": len(p.phaseLabels),
+			},
+		)
 		p.logger.Error("階段配置不匹配", err, map[string]interface{}{
 			"phase_count": len(phases),
 			"label_count": len(p.phaseLabels),
@@ -63,7 +77,7 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 		return nil, err
 	}
 
-	channelCount := len(dataset.Data[0].Channels)
+	channelCount := dataset.ChannelCount()
 
 	// 初始化階段數據收集器
 	phaseData := make([]map[int][]float64, len(phases))
@@ -72,7 +86,7 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 	}
 
 	allData := make(map[int][]float64) // 用於找到全局最大值的時間
-	timeData := make([]float64, 0, len(dataset.Data))
+	timeData := make([]float64, 0, dataset.DataPointCount())
 
 	// 收集數據
 	for _, data := range dataset.Data {
@@ -144,12 +158,16 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 
 // AnalyzeFromRawData 從原始字符串數據進行階段分析
 func (p *PhaseAnalyzer) AnalyzeFromRawData(records [][]string, phaseStrings []string) (*AnalyzeResult, error) {
+	if p == nil {
+		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "階段分析器為空")
+	}
+
 	p.logger.Info("開始從原始數據進行階段分析", map[string]interface{}{
 		"record_count":  len(records),
 		"phase_strings": phaseStrings,
 	})
 
-	dataset, err := p.parseRawData(records)
+	dataset, err := p.dataParser.ParseRawData(records)
 	if err != nil {
 		p.logger.Error("階段分析數據解析失敗", err)
 		return nil, fmt.Errorf("解析數據失敗: %w", err)
@@ -164,70 +182,17 @@ func (p *PhaseAnalyzer) AnalyzeFromRawData(records [][]string, phaseStrings []st
 	return p.Analyze(dataset, phases)
 }
 
-// parseRawData 解析原始字符串數據
-func (p *PhaseAnalyzer) parseRawData(records [][]string) (*models.EMGDataset, error) {
-	if len(records) < 2 {
-		return nil, fmt.Errorf("數據至少需要包含標題行和一行數據")
-	}
-
-	dataset := &models.EMGDataset{
-		Headers: make([]string, len(records[0])),
-		Data:    make([]models.EMGData, 0, len(records)-1),
-	}
-
-	// 複製標題
-	copy(dataset.Headers, records[0])
-
-	// 解析數據
-	for i := 1; i < len(records); i++ {
-		row := records[i]
-		if len(row) < 2 {
-			continue
-		}
-
-		// 解析時間
-		if row[0] == "" {
-			p.logger.Debug("跳過空白時間行", map[string]interface{}{
-				"row_number": i + 1,
-			})
-			continue // 跳過空白時間值的行
-		}
-
-		timeVal, err := util.Str2Number[float64, int](row[0], p.scalingFactor)
-		if err != nil {
-			p.logger.Warn("時間值解析失敗，跳過此行", map[string]interface{}{
-				"row_number": i + 1,
-				"time_value": row[0],
-				"error":      err.Error(),
-			})
-			continue // 跳過無法解析的行
-		}
-
-		// 解析通道數據
-		channels := make([]float64, 0, len(row)-1)
-		for j := 1; j < len(row); j++ {
-			val, err := util.Str2Number[float64, int](row[j], p.scalingFactor)
-			if err != nil {
-				return nil, fmt.Errorf("解析數據失敗在第 %d 行第 %d 列: %w", i+1, j+1, err)
-			}
-			channels = append(channels, val)
-		}
-
-		data := models.EMGData{
-			Time:     timeVal,
-			Channels: channels,
-		}
-
-		dataset.Data = append(dataset.Data, data)
-	}
-
-	return dataset, nil
-}
-
 // parsePhases 解析階段字符串為時間範圍
 func (p *PhaseAnalyzer) parsePhases(phaseStrings []string) ([]models.TimeRange, error) {
 	if len(phaseStrings) < 5 {
-		return nil, fmt.Errorf("需要至少 5 個時間點來定義 4 個階段")
+		return nil, calcerrors.NewCalculatorErrorWithContext(
+			calcerrors.ErrInsufficientData,
+			"需要至少 5 個時間點來定義 4 個階段",
+			map[string]interface{}{
+				"provided_points": len(phaseStrings),
+				"required_points": 5,
+			},
+		)
 	}
 
 	// 解析時間點
@@ -240,9 +205,23 @@ func (p *PhaseAnalyzer) parsePhases(phaseStrings []string) ([]models.TimeRange, 
 		timePoints[i] = val
 	}
 
+	// 驗證時間點數量是否足夠定義所有階段
+	requiredTimePoints := len(p.phaseLabels) + 1
+	if len(timePoints) < requiredTimePoints {
+		return nil, calcerrors.NewCalculatorErrorWithContext(
+			calcerrors.ErrInsufficientData,
+			fmt.Sprintf("需要至少 %d 個時間點來定義 %d 個階段", requiredTimePoints, len(p.phaseLabels)),
+			map[string]interface{}{
+				"provided_points": len(timePoints),
+				"required_points": requiredTimePoints,
+				"phase_count":     len(p.phaseLabels),
+			},
+		)
+	}
+
 	// 創建時間範圍
 	phases := make([]models.TimeRange, len(p.phaseLabels))
-	for i := 0; i < len(p.phaseLabels) && i+1 < len(timePoints); i++ {
+	for i := 0; i < len(p.phaseLabels); i++ {
 		phases[i] = models.TimeRange{
 			Start: timePoints[i],
 			End:   timePoints[i+1],

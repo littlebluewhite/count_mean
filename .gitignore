@@ -12,3 +12,5 @@
 /coverage/
 /.serena/
 /prompt.txt
+/.gocache/
+/CLAUDE.md

@@ -1,14 +1,16 @@
 package calculator
 
 import (
-	"count_mean/internal/logging"
-	"count_mean/internal/models"
-	"count_mean/util"
 	"fmt"
 	"math"
 	"runtime"
 	"sync"
 	"time"
+
+	calcerrors "count_mean/internal/errors"
+	"count_mean/internal/logging"
+	"count_mean/internal/models"
+	"count_mean/internal/parser"
 )
 
 // MaxMeanCalculator 處理最大平均值計算
@@ -17,15 +19,18 @@ type MaxMeanCalculator struct {
 	logger                 *logging.Logger
 	workerCount            int
 	progressCallback       models.ProgressCallback
-	startTime              time.Time
 	backpressureController *models.BackpressureController
+	dataParser             *parser.DataParser
 }
 
-// channelJob 表示一個通道計算任務
-type channelJob struct {
+// calculationJob 表示一個通道計算任務（統一的任務結構）
+type calculationJob struct {
 	channelIdx int
 	dataset    *models.EMGDataset
 	windowSize int
+	startIdx   int  // 0 表示從頭開始（非範圍計算）
+	endIdx     int  // 0 表示到結尾（非範圍計算）
+	isRanged   bool // 是否為範圍計算
 }
 
 // channelResult 表示通道計算結果
@@ -33,6 +38,57 @@ type channelResult struct {
 	channelIdx int
 	result     models.MaxMeanResult
 	err        error
+}
+
+// processJob 處理單個計算任務的通用邏輯（包含背壓控制和日誌記錄）
+func (c *MaxMeanCalculator) processJob(job calculationJob) channelResult {
+	// 背壓控制：等待足夠的容量
+	if c.backpressureController != nil {
+		c.backpressureController.WaitForCapacity()
+		c.backpressureController.RecordJobStart()
+	}
+
+	// 構建日誌上下文
+	logContext := map[string]interface{}{
+		"channel_index": job.channelIdx + 1,
+		"memory_usage":  c.getMemoryUsageInfo(),
+	}
+	if job.isRanged {
+		logContext["start_idx"] = job.startIdx
+		logContext["end_idx"] = job.endIdx
+		c.logger.Debug("工作協程開始處理通道範圍計算", logContext)
+	} else {
+		c.logger.Debug("工作協程開始處理通道", logContext)
+	}
+
+	// 執行計算
+	var result models.MaxMeanResult
+	var err error
+	if job.isRanged {
+		result, err = c.calculateChannelMaxMeanWithRange(job.dataset, job.channelIdx, job.windowSize, job.startIdx, job.endIdx)
+	} else {
+		result, err = c.calculateChannelMaxMean(job.dataset, job.channelIdx, job.windowSize)
+	}
+
+	// 記錄任務完成
+	if c.backpressureController != nil {
+		c.backpressureController.RecordJobComplete()
+	}
+
+	return channelResult{
+		channelIdx: job.channelIdx,
+		result:     result,
+		err:        err,
+	}
+}
+
+// worker 處理通道計算任務的工作協程（統一的工作協程）
+func (c *MaxMeanCalculator) worker(jobs <-chan calculationJob, results chan<- channelResult, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for job := range jobs {
+		results <- c.processJob(job)
+	}
 }
 
 // NewMaxMeanCalculator 創建新的最大平均值計算器
@@ -47,16 +103,22 @@ func NewMaxMeanCalculator(scalingFactor int) *MaxMeanCalculator {
 	backpressureConfig := models.DefaultBackpressureConfig()
 	backpressureConfig.MaxWorkers = workerCount
 
+	logger := logging.GetLogger("max_mean_calculator")
+
 	return &MaxMeanCalculator{
 		scalingFactor:          scalingFactor,
-		logger:                 logging.GetLogger("max_mean_calculator"),
+		logger:                 logger,
 		workerCount:            workerCount,
 		backpressureController: models.NewBackpressureController(backpressureConfig),
+		dataParser:             parser.NewDataParserWithLogger(scalingFactor, logger),
 	}
 }
 
 // SetProgressCallback 設置進度回調函數
 func (c *MaxMeanCalculator) SetProgressCallback(callback models.ProgressCallback) {
+	if c == nil {
+		return
+	}
 	c.progressCallback = callback
 }
 
@@ -96,8 +158,12 @@ func (c *MaxMeanCalculator) getMemoryUsageInfo() map[string]interface{} {
 }
 
 // reportProgress 報告進度
-func (c *MaxMeanCalculator) reportProgress(currentStep, totalSteps int, status string, channelIndex int, channelName string) {
+func (c *MaxMeanCalculator) reportProgress(currentStep, totalSteps int, status string, channelIndex int, channelName string, startTime time.Time) {
 	if c.progressCallback == nil {
+		return
+	}
+
+	if totalSteps == 0 {
 		return
 	}
 
@@ -106,7 +172,7 @@ func (c *MaxMeanCalculator) reportProgress(currentStep, totalSteps int, status s
 		percentage = 100
 	}
 
-	elapsed := time.Since(c.startTime)
+	elapsed := time.Since(startTime)
 	var estimated string
 	if currentStep > 0 && currentStep < totalSteps {
 		avgTimePerStep := elapsed / time.Duration(currentStep)
@@ -227,85 +293,12 @@ func (c *MaxMeanCalculator) calculateChannelMaxMeanWithRange(dataset *models.EMG
 	return result, nil
 }
 
-// channelRangeJob 表示一個通道範圍計算任務
-type channelRangeJob struct {
-	channelIdx int
-	dataset    *models.EMGDataset
-	windowSize int
-	startIdx   int
-	endIdx     int
-}
-
-// workerWithRange 處理通道範圍計算任務的工作協程
-func (c *MaxMeanCalculator) workerWithRange(jobs <-chan channelRangeJob, results chan<- channelResult, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	for job := range jobs {
-		// 背壓控制：等待足夠的容量
-		if c.backpressureController != nil {
-			c.backpressureController.WaitForCapacity()
-			c.backpressureController.RecordJobStart()
-		}
-
-		c.logger.Debug("工作協程開始處理通道範圍計算", map[string]interface{}{
-			"channel_index": job.channelIdx + 1,
-			"start_idx":     job.startIdx,
-			"end_idx":       job.endIdx,
-			"memory_usage":  c.getMemoryUsageInfo(),
-		})
-
-		result, err := c.calculateChannelMaxMeanWithRange(job.dataset, job.channelIdx, job.windowSize, job.startIdx, job.endIdx)
-
-		results <- channelResult{
-			channelIdx: job.channelIdx,
-			result:     result,
-			err:        err,
-		}
-
-		// 記錄任務完成
-		if c.backpressureController != nil {
-			c.backpressureController.RecordJobComplete()
-		}
-	}
-}
-
-// worker 處理通道計算任務的工作協程
-func (c *MaxMeanCalculator) worker(jobs <-chan channelJob, results chan<- channelResult, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	for job := range jobs {
-		// 背壓控制：等待足夠的容量
-		if c.backpressureController != nil {
-			c.backpressureController.WaitForCapacity()
-			c.backpressureController.RecordJobStart()
-		}
-
-		c.logger.Debug("工作協程開始處理通道", map[string]interface{}{
-			"channel_index": job.channelIdx + 1,
-			"memory_usage":  c.getMemoryUsageInfo(),
-		})
-
-		result, err := c.calculateChannelMaxMean(job.dataset, job.channelIdx, job.windowSize)
-
-		results <- channelResult{
-			channelIdx: job.channelIdx,
-			result:     result,
-			err:        err,
-		}
-
-		// 記錄任務完成
-		if c.backpressureController != nil {
-			c.backpressureController.RecordJobComplete()
-		}
-	}
-}
-
 // Calculate 計算指定窗口大小的最大平均值
 func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int) ([]models.MaxMeanResult, error) {
-	c.startTime = time.Now()
+	startTime := time.Now()
 
 	if dataset == nil || len(dataset.Data) == 0 {
-		err := fmt.Errorf("數據集為空")
+		err := calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "數據集為空")
 		dataLength := 0
 		if dataset != nil {
 			dataLength = len(dataset.Data)
@@ -323,18 +316,18 @@ func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int
 		"channel_count": len(dataset.Data[0].Channels),
 	})
 
-	if len(dataset.Data) < windowSize {
-		err := fmt.Errorf("數據集無效或窗口大小過大")
+	if windowSize < 1 {
+		err := calcerrors.NewCalculatorError(calcerrors.ErrInvalidWindowSize, "窗口大小必須大於 0")
 		c.logger.Error("窗口大小驗證失敗", err, map[string]interface{}{
-			"data_length": len(dataset.Data),
 			"window_size": windowSize,
 		})
 		return nil, err
 	}
 
-	if windowSize < 1 {
-		err := fmt.Errorf("窗口大小必須大於 0")
+	if len(dataset.Data) < windowSize {
+		err := calcerrors.NewCalculatorError(calcerrors.ErrWindowTooLarge, "數據集無效或窗口大小過大")
 		c.logger.Error("窗口大小驗證失敗", err, map[string]interface{}{
+			"data_length": len(dataset.Data),
 			"window_size": windowSize,
 		})
 		return nil, err
@@ -358,10 +351,10 @@ func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int
 	})
 
 	// 初始化進度報告
-	c.reportProgress(0, channelCount, "初始化並行計算", 0, "")
+	c.reportProgress(0, channelCount, "初始化並行計算", 0, "", startTime)
 
 	// 創建任務和結果通道
-	jobs := make(chan channelJob, channelCount)
+	jobs := make(chan calculationJob, channelCount)
 	resultsChan := make(chan channelResult, channelCount)
 
 	// 啟動工作協程池
@@ -375,10 +368,11 @@ func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int
 	go func() {
 		defer close(jobs)
 		for channelIdx := 0; channelIdx < channelCount; channelIdx++ {
-			jobs <- channelJob{
+			jobs <- calculationJob{
 				channelIdx: channelIdx,
 				dataset:    dataset,
 				windowSize: windowSize,
+				isRanged:   false,
 			}
 		}
 	}()
@@ -409,7 +403,7 @@ func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int
 		}
 
 		status := fmt.Sprintf("通道 %s 計算完成", channelName)
-		c.reportProgress(processedCount, channelCount, status, result.channelIdx+1, channelName)
+		c.reportProgress(processedCount, channelCount, status, result.channelIdx+1, channelName, startTime)
 
 		c.logger.Debug("通道計算完成", map[string]interface{}{
 			"channel_index": result.channelIdx + 1,
@@ -417,7 +411,7 @@ func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int
 		})
 	}
 
-	duration := time.Since(c.startTime)
+	duration := time.Since(startTime)
 	c.logger.Info("最大平均值計算完成", map[string]interface{}{
 		"duration_ms":   duration.Milliseconds(),
 		"channel_count": len(results),
@@ -425,7 +419,7 @@ func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int
 	})
 
 	// 報告完成狀態
-	c.reportProgress(channelCount, channelCount, "計算完成", 0, "")
+	c.reportProgress(channelCount, channelCount, "計算完成", 0, "", startTime)
 
 	// 記錄背壓控制統計
 	if c.backpressureController != nil {
@@ -453,7 +447,7 @@ func (c *MaxMeanCalculator) CalculateFromRawData(records [][]string, windowSize 
 		"window_size":  windowSize,
 	})
 
-	dataset, err := c.parseRawData(records)
+	dataset, err := c.dataParser.ParseRawData(records)
 	if err != nil {
 		c.logger.Error("原始數據解析失敗", err)
 		return nil, fmt.Errorf("解析數據失敗: %w", err)
@@ -471,7 +465,7 @@ func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(records [][]string, wi
 		"end_range":    endRange,
 	})
 
-	dataset, err := c.parseRawData(records)
+	dataset, err := c.dataParser.ParseRawData(records)
 	if err != nil {
 		c.logger.Error("原始數據解析失敗", err)
 		return nil, fmt.Errorf("解析數據失敗: %w", err)
@@ -482,10 +476,10 @@ func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(records [][]string, wi
 
 // CalculateWithRange 計算指定時間範圍內的最大平均值
 func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windowSize int, startRange, endRange float64) ([]models.MaxMeanResult, error) {
-	c.startTime = time.Now()
+	startTime := time.Now()
 
 	if dataset == nil || len(dataset.Data) < windowSize {
-		err := fmt.Errorf("數據集無效或窗口大小過大")
+		err := calcerrors.NewCalculatorError(calcerrors.ErrWindowTooLarge, "數據集無效或窗口大小過大")
 		dataLength := 0
 		if dataset != nil {
 			dataLength = len(dataset.Data)
@@ -507,7 +501,7 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 	})
 
 	if windowSize < 1 {
-		err := fmt.Errorf("窗口大小必須大於 0")
+		err := calcerrors.NewCalculatorError(calcerrors.ErrInvalidWindowSize, "窗口大小必須大於 0")
 		c.logger.Error("窗口大小驗證失敗", err, map[string]interface{}{
 			"window_size": windowSize,
 		})
@@ -550,7 +544,7 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 	}
 
 	if startIdx == -1 || endIdx == -1 || endIdx-startIdx+1 < windowSize {
-		err := fmt.Errorf("指定時間範圍內的數據不足以進行窗口分析")
+		err := calcerrors.NewCalculatorError(calcerrors.ErrInvalidTimeRange, "指定時間範圍內的數據不足以進行窗口分析")
 		c.logger.Error("時間範圍內數據不足", err, map[string]interface{}{
 			"start_idx":        startIdx,
 			"end_idx":          endIdx,
@@ -590,29 +584,30 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 	})
 
 	// 初始化進度報告
-	c.reportProgress(0, channelCount, "初始化範圍並行計算", 0, "")
+	c.reportProgress(0, channelCount, "初始化範圍並行計算", 0, "", startTime)
 
 	// 創建任務和結果通道
-	jobs := make(chan channelRangeJob, channelCount)
+	jobs := make(chan calculationJob, channelCount)
 	resultsChan := make(chan channelResult, channelCount)
 
 	// 啟動工作協程池
 	var wg sync.WaitGroup
 	for w := 0; w < actualWorkerCount; w++ {
 		wg.Add(1)
-		go c.workerWithRange(jobs, resultsChan, &wg)
+		go c.worker(jobs, resultsChan, &wg)
 	}
 
 	// 發送任務到工作協程
 	go func() {
 		defer close(jobs)
 		for channelIdx := 0; channelIdx < channelCount; channelIdx++ {
-			jobs <- channelRangeJob{
+			jobs <- calculationJob{
 				channelIdx: channelIdx,
 				dataset:    dataset,
 				windowSize: windowSize,
 				startIdx:   startIdx,
 				endIdx:     endIdx,
+				isRanged:   true,
 			}
 		}
 	}()
@@ -645,7 +640,7 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 		}
 
 		status := fmt.Sprintf("範圍計算: 通道 %s 完成", channelName)
-		c.reportProgress(processedCount, channelCount, status, result.channelIdx+1, channelName)
+		c.reportProgress(processedCount, channelCount, status, result.channelIdx+1, channelName, startTime)
 
 		c.logger.Debug("通道範圍計算完成", map[string]interface{}{
 			"channel_index": result.channelIdx + 1,
@@ -653,7 +648,7 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 		})
 	}
 
-	duration := time.Since(c.startTime)
+	duration := time.Since(startTime)
 	c.logger.Info("指定範圍內最大平均值計算完成", map[string]interface{}{
 		"duration_ms":      duration.Milliseconds(),
 		"channel_count":    len(results),
@@ -664,7 +659,7 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 	})
 
 	// 報告完成狀態
-	c.reportProgress(channelCount, channelCount, "範圍計算完成", 0, "")
+	c.reportProgress(channelCount, channelCount, "範圍計算完成", 0, "", startTime)
 
 	// 記錄背壓控制統計
 	if c.backpressureController != nil {
@@ -683,92 +678,4 @@ func (c *MaxMeanCalculator) CalculateWithRange(dataset *models.EMGDataset, windo
 	c.logger.Debug("範圍計算完成後觸發垃圾回收")
 
 	return results, nil
-}
-
-// parseRawData 解析原始字符串數據
-func (c *MaxMeanCalculator) parseRawData(records [][]string) (*models.EMGDataset, error) {
-	c.logger.Debug("開始解析原始數據", map[string]interface{}{
-		"record_count":   len(records),
-		"scaling_factor": c.scalingFactor,
-	})
-
-	if len(records) < 2 {
-		err := fmt.Errorf("數據至少需要包含標題行和一行數據")
-		c.logger.Error("原始數據結構驗證失敗", err, map[string]interface{}{
-			"record_count": len(records),
-		})
-		return nil, err
-	}
-
-	dataset := &models.EMGDataset{
-		Headers: make([]string, len(records[0])),
-		Data:    make([]models.EMGData, 0, len(records)-1),
-	}
-
-	// 複製標題
-	copy(dataset.Headers, records[0])
-
-	// 解析數據
-	for i := 1; i < len(records); i++ {
-		row := records[i]
-		if len(row) < 2 {
-			continue // 跳過無效行
-		}
-
-		// 解析時間
-		if row[0] == "" {
-			c.logger.Debug("跳過空白時間行", map[string]interface{}{
-				"row_number": i + 1,
-			})
-			continue // 跳過空白時間值的行
-		}
-
-		timeVal, err := util.Str2Number[float64, int](row[0], c.scalingFactor)
-		if err != nil {
-			c.logger.Warn("時間值解析失敗，跳過此行", map[string]interface{}{
-				"row_number": i + 1,
-				"time_value": row[0],
-				"error":      err.Error(),
-			})
-			continue // 跳過無法解析的行
-		}
-
-		// 解析通道數據
-		channels := make([]float64, 0, len(row)-1)
-		for j := 1; j < len(row); j++ {
-			val, err := util.Str2Number[float64, int](row[j], c.scalingFactor)
-			if err != nil {
-				c.logger.Error("通道數據解析失敗", err, map[string]interface{}{
-					"row_number":    i + 1,
-					"column_number": j + 1,
-					"value":         row[j],
-				})
-				return nil, fmt.Errorf("解析數據失敗在第 %d 行第 %d 列: %w", i+1, j+1, err)
-			}
-			channels = append(channels, val)
-		}
-
-		data := models.EMGData{
-			Time:     timeVal,
-			Channels: channels,
-		}
-
-		dataset.Data = append(dataset.Data, data)
-	}
-
-	if len(dataset.Data) == 0 {
-		err := fmt.Errorf("解析後數據集為空，所有行都被跳過")
-		c.logger.Error("原始數據解析失敗", err, map[string]interface{}{
-			"header_count": len(dataset.Headers),
-		})
-		return nil, err
-	}
-
-	c.logger.Info("原始數據解析完成", map[string]interface{}{
-		"parsed_records": len(dataset.Data),
-		"channel_count":  len(dataset.Data[0].Channels),
-		"header_count":   len(dataset.Headers),
-	})
-
-	return dataset, nil
 }

@@ -232,11 +232,11 @@ func (v *InputValidator) ValidateFilename(filename string) error {
 		}
 	}
 
-	// Check for dangerous characters - Enhanced security check (放寬 % 和空格限制)
+	// Check for dangerous characters - Enhanced security check (放寬 % 和空格限制，允許括號)
 	dangerousChars := []string{
 		"<", ">", ":", "\"", "|", "?", "*", "\x00",
-		// Command injection prevention
-		";", "&", "&&", "||", "`", "$", "(", ")", "[", "]", "{", "}",
+		// Command injection prevention (放寬括號限制，允許科學數據檔案命名)
+		";", "&", "&&", "||", "`", "$", "{", "}",
 		// SQL injection prevention
 		"'", "--", "/*", "*/", "@@", "xp_", "sp_",
 		// Script injection prevention
@@ -564,7 +564,8 @@ func (v *InputValidator) validateCSVCell(cell string, row, col int, filename str
 	}
 
 	// CSV Formula Injection Detection (Critical Security Issue)
-	formulaStarters := []string{"=", "+", "-", "@", "\t=", "\r=", "\n="}
+	// 注意：允許以 +/- 開頭的合法數值（包括科學記號如 -2.56E-06）
+	formulaStarters := []string{"=", "@", "\t=", "\r=", "\n="}
 	for _, starter := range formulaStarters {
 		if strings.HasPrefix(cell, starter) {
 			return errors.NewValidationError("csv_cell",
@@ -575,6 +576,24 @@ func (v *InputValidator) validateCSVCell(cell string, row, col int, filename str
 					"content":  cell,
 				},
 				fmt.Sprintf("第 %d 行第 %d 欄疑似包含 CSV 公式注入攻擊", row, col))
+		}
+	}
+
+	// 對於以 + 或 - 開頭的內容，檢查是否為合法數值
+	if strings.HasPrefix(cell, "+") || strings.HasPrefix(cell, "-") {
+		// 嘗試解析為浮點數，如果失敗則可能是公式注入
+		if _, err := strconv.ParseFloat(cell, 64); err != nil {
+			// 不是合法數值，檢查是否包含可疑模式
+			if strings.ContainsAny(cell, "=@|!") {
+				return errors.NewValidationError("csv_cell",
+					map[string]interface{}{
+						"row":      row,
+						"col":      col,
+						"filename": filename,
+						"content":  cell,
+					},
+					fmt.Sprintf("第 %d 行第 %d 欄疑似包含 CSV 公式注入攻擊", row, col))
+			}
 		}
 	}
 

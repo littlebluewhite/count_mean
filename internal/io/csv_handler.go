@@ -18,11 +18,12 @@ import (
 
 // CSVHandler 處理 CSV 檔案讀寫
 type CSVHandler struct {
-	config           *config.AppConfig
-	pathValidator    *security.PathValidator
-	validator        *validation.InputValidator
-	logger           *logging.Logger
-	largeFileHandler *LargeFileHandler
+	config            *config.AppConfig
+	scalingMultiplier float64 // = math.Pow10(config.ScalingFactor), calculated once in constructor
+	pathValidator     *security.PathValidator
+	validator         *validation.InputValidator
+	logger            *logging.Logger
+	largeFileHandler  *LargeFileHandler
 }
 
 // NewCSVHandler 創建新的 CSV 處理器
@@ -35,11 +36,12 @@ func NewCSVHandler(config *config.AppConfig) *CSVHandler {
 	}
 
 	return &CSVHandler{
-		config:           config,
-		pathValidator:    security.NewPathValidator(allowedPaths),
-		validator:        validation.NewInputValidator(),
-		logger:           logging.GetLogger("csv_handler"),
-		largeFileHandler: NewLargeFileHandler(config),
+		config:            config,
+		scalingMultiplier: math.Pow10(config.ScalingFactor),
+		pathValidator:     security.NewPathValidator(allowedPaths),
+		validator:         validation.NewInputValidator(),
+		logger:            logging.GetLogger("csv_handler"),
+		largeFileHandler:  NewLargeFileHandler(config),
 	}
 }
 
@@ -499,9 +501,9 @@ func (h *CSVHandler) ConvertMaxMeanResultsToCSV(headers []string, results []mode
 
 		startRangeTimes = append(startRangeTimes, fmt.Sprintf(precision, startRange))
 		endRangeTimes = append(endRangeTimes, fmt.Sprintf(precision, endRange))
-		startTimes = append(startTimes, fmt.Sprintf(precision, result.StartTime/math.Pow10(h.config.ScalingFactor)))
-		endTimes = append(endTimes, fmt.Sprintf(precision, result.EndTime/math.Pow10(h.config.ScalingFactor)))
-		maxMeans = append(maxMeans, fmt.Sprintf(precision, result.MaxMean/math.Pow10(h.config.ScalingFactor)))
+		startTimes = append(startTimes, fmt.Sprintf(precision, result.StartTime/h.scalingMultiplier))
+		endTimes = append(endTimes, fmt.Sprintf(precision, result.EndTime/h.scalingMultiplier))
+		maxMeans = append(maxMeans, fmt.Sprintf(precision, result.MaxMean/h.scalingMultiplier))
 	}
 
 	data = append(data, startRangeTimes)
@@ -528,7 +530,7 @@ func (h *CSVHandler) ConvertNormalizedDataToCSV(dataset *models.EMGDataset) [][]
 		row := make([]string, 0, len(dataset.Headers))
 
 		// 時間列 - 使用原始檔案的時間精度
-		row = append(row, fmt.Sprintf(timePrecision, emgData.Time/math.Pow10(h.config.ScalingFactor)))
+		row = append(row, fmt.Sprintf(timePrecision, emgData.Time/h.scalingMultiplier))
 
 		// 數據列 - 使用配置的精度
 		for _, val := range emgData.Channels {
@@ -549,7 +551,6 @@ func (h *CSVHandler) ConvertPhaseAnalysisToCSV(headers []string, result *models.
 	data = append(data, headers)
 
 	precision := fmt.Sprintf("%%.%df", h.config.Precision)
-	scalingFactor := float64(h.config.ScalingFactor)
 
 	// 最大值行
 	for i, phaseResult := range []models.PhaseAnalysisResult{*result} {
@@ -559,7 +560,7 @@ func (h *CSVHandler) ConvertPhaseAnalysisToCSV(headers []string, result *models.
 		for j := 1; j < len(headers); j++ {
 			channelIdx := j - 1
 			if maxVal, exists := phaseResult.MaxValues[channelIdx]; exists {
-				maxRow = append(maxRow, fmt.Sprintf(precision, maxVal/math.Pow10(int(scalingFactor))))
+				maxRow = append(maxRow, fmt.Sprintf(precision, maxVal/h.scalingMultiplier))
 			} else {
 				maxRow = append(maxRow, "N/A")
 			}
@@ -573,7 +574,7 @@ func (h *CSVHandler) ConvertPhaseAnalysisToCSV(headers []string, result *models.
 		for j := 1; j < len(headers); j++ {
 			channelIdx := j - 1
 			if meanVal, exists := phaseResult.MeanValues[channelIdx]; exists {
-				meanRow = append(meanRow, fmt.Sprintf(precision, meanVal/math.Pow10(int(scalingFactor))))
+				meanRow = append(meanRow, fmt.Sprintf(precision, meanVal/h.scalingMultiplier))
 			} else {
 				meanRow = append(meanRow, "N/A")
 			}
@@ -594,7 +595,7 @@ func (h *CSVHandler) ConvertPhaseAnalysisToCSV(headers []string, result *models.
 		for j := 1; j < len(headers); j++ {
 			channelIdx := j - 1
 			if timeVal, exists := maxTimeIndex[channelIdx]; exists {
-				timeRow = append(timeRow, fmt.Sprintf(fmt.Sprintf("%%.%df", h.config.Precision), timeVal/math.Pow10(h.config.ScalingFactor)))
+				timeRow = append(timeRow, fmt.Sprintf(fmt.Sprintf("%%.%df", h.config.Precision), timeVal/h.scalingMultiplier))
 			} else {
 				timeRow = append(timeRow, "N/A")
 			}
@@ -637,45 +638,4 @@ func (h *CSVHandler) WriteLargeCSVStreaming(filename string, data [][]string, ca
 	})
 
 	return h.largeFileHandler.WriteCSVStreaming(filename, data, callback)
-}
-
-// detectTimePrecision 檢測時間欄位的小數位數
-func (h *CSVHandler) detectTimePrecision(records [][]string) int {
-	if len(records) < 2 {
-		return 2 // 預設精度
-	}
-
-	maxPrecision := 0
-	// 檢查前幾行數據來確定時間精度
-	for i := 1; i < len(records) && i <= 10; i++ {
-		if len(records[i]) > 0 {
-			timeStr := records[i][0]
-			precision := h.getDecimalPrecision(timeStr)
-			if precision > maxPrecision {
-				maxPrecision = precision
-			}
-		}
-	}
-
-	// 如果檢測不到小數位數，預設為 2
-	if maxPrecision == 0 {
-		maxPrecision = 2
-	}
-
-	return maxPrecision
-}
-
-// getDecimalPrecision 獲取字串中小數點後的位數
-func (h *CSVHandler) getDecimalPrecision(numStr string) int {
-	// 移除空白字元
-	numStr = strings.TrimSpace(numStr)
-
-	// 找到小數點位置
-	dotIndex := strings.Index(numStr, ".")
-	if dotIndex == -1 {
-		return 0 // 沒有小數點
-	}
-
-	// 計算小數點後的位數
-	return len(numStr) - dotIndex - 1
 }

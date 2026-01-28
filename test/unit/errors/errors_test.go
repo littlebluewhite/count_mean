@@ -214,3 +214,161 @@ func TestValidationError_Error(t *testing.T) {
 		t.Errorf("ValidationError.Error() = %v, want %v", got, expectedPattern)
 	}
 }
+
+// Tests for calculator sentinel errors
+func TestCalculatorError_Is(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		target   error
+		expected bool
+	}{
+		{
+			name:     "empty dataset error matches sentinel",
+			err:      apperrors.NewCalculatorError(apperrors.ErrEmptyDataset, "數據集為空"),
+			target:   apperrors.ErrEmptyDataset,
+			expected: true,
+		},
+		{
+			name:     "window too large error matches sentinel",
+			err:      apperrors.NewCalculatorError(apperrors.ErrWindowTooLarge, "窗口過大"),
+			target:   apperrors.ErrWindowTooLarge,
+			expected: true,
+		},
+		{
+			name:     "invalid window size error matches sentinel",
+			err:      apperrors.NewCalculatorError(apperrors.ErrInvalidWindowSize, "窗口大小無效"),
+			target:   apperrors.ErrInvalidWindowSize,
+			expected: true,
+		},
+		{
+			name:     "channel mismatch error matches sentinel",
+			err:      apperrors.NewCalculatorError(apperrors.ErrChannelMismatch, "通道不匹配"),
+			target:   apperrors.ErrChannelMismatch,
+			expected: true,
+		},
+		{
+			name:     "zero reference error matches sentinel",
+			err:      apperrors.NewCalculatorError(apperrors.ErrZeroReference, "參考值為零"),
+			target:   apperrors.ErrZeroReference,
+			expected: true,
+		},
+		{
+			name:     "phase mismatch error matches sentinel",
+			err:      apperrors.NewCalculatorError(apperrors.ErrPhaseMismatch, "階段不匹配"),
+			target:   apperrors.ErrPhaseMismatch,
+			expected: true,
+		},
+		{
+			name:     "empty dataset error does not match window too large",
+			err:      apperrors.NewCalculatorError(apperrors.ErrEmptyDataset, "數據集為空"),
+			target:   apperrors.ErrWindowTooLarge,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := errors.Is(tt.err, tt.target); got != tt.expected {
+				t.Errorf("errors.Is() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCalculatorError_Message(t *testing.T) {
+	err := apperrors.NewCalculatorError(apperrors.ErrEmptyDataset, "數據集為空")
+
+	if err.Error() != "數據集為空" {
+		t.Errorf("Error() = %v, want 數據集為空", err.Error())
+	}
+}
+
+func TestCalculatorError_WithContext(t *testing.T) {
+	ctx := map[string]interface{}{
+		"data_length": 0,
+		"window_size": 100,
+	}
+	err := apperrors.NewCalculatorErrorWithContext(apperrors.ErrWindowTooLarge, "窗口過大", ctx)
+
+	if err.Context["data_length"] != 0 {
+		t.Errorf("Context[data_length] = %v, want 0", err.Context["data_length"])
+	}
+	if err.Context["window_size"] != 100 {
+		t.Errorf("Context[window_size] = %v, want 100", err.Context["window_size"])
+	}
+}
+
+func TestCalculatorError_HelperFunctions(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		checkFn  func(error) bool
+		expected bool
+	}{
+		{
+			name:     "IsEmptyDataset returns true for empty dataset error",
+			err:      apperrors.NewCalculatorError(apperrors.ErrEmptyDataset, "test"),
+			checkFn:  apperrors.IsEmptyDataset,
+			expected: true,
+		},
+		{
+			name:     "IsWindowTooLarge returns true for window too large error",
+			err:      apperrors.NewCalculatorError(apperrors.ErrWindowTooLarge, "test"),
+			checkFn:  apperrors.IsWindowTooLarge,
+			expected: true,
+		},
+		{
+			name:     "IsInvalidWindowSize returns true for invalid window size error",
+			err:      apperrors.NewCalculatorError(apperrors.ErrInvalidWindowSize, "test"),
+			checkFn:  apperrors.IsInvalidWindowSize,
+			expected: true,
+		},
+		{
+			name:     "IsChannelMismatch returns true for channel mismatch error",
+			err:      apperrors.NewCalculatorError(apperrors.ErrChannelMismatch, "test"),
+			checkFn:  apperrors.IsChannelMismatch,
+			expected: true,
+		},
+		{
+			name:     "IsZeroReference returns true for zero reference error",
+			err:      apperrors.NewCalculatorError(apperrors.ErrZeroReference, "test"),
+			checkFn:  apperrors.IsZeroReference,
+			expected: true,
+		},
+		{
+			name:     "IsPhaseMismatch returns true for phase mismatch error",
+			err:      apperrors.NewCalculatorError(apperrors.ErrPhaseMismatch, "test"),
+			checkFn:  apperrors.IsPhaseMismatch,
+			expected: true,
+		},
+		{
+			name:     "IsEmptyDataset returns false for different error",
+			err:      apperrors.NewCalculatorError(apperrors.ErrWindowTooLarge, "test"),
+			checkFn:  apperrors.IsEmptyDataset,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.checkFn(tt.err); got != tt.expected {
+				t.Errorf("%s() = %v, want %v", tt.name, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestWrapParseError(t *testing.T) {
+	originalErr := errors.New("parsing failed")
+	wrappedErr := apperrors.WrapParseError(10, 5, originalErr)
+
+	expectedMsg := "parsing error at row 10, col 5: parsing failed"
+	if wrappedErr.Error() != expectedMsg {
+		t.Errorf("WrapParseError() = %v, want %v", wrappedErr.Error(), expectedMsg)
+	}
+
+	if !errors.Is(wrappedErr, originalErr) {
+		t.Error("WrapParseError should wrap the original error")
+	}
+}
