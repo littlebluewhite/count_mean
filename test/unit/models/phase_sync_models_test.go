@@ -1,15 +1,16 @@
 package models_test
 
 import (
-	"count_mean/internal/models"
 	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"count_mean/internal/models"
 )
 
-// TestPhaseManifest 測試分期總檔案記錄結構
+// TestPhaseManifest 測試分期總檔案記錄結構.
 func TestPhaseManifest(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -132,6 +133,7 @@ func testPhaseManifestJSONDeserialization(t *testing.T) {
 	}`
 
 	var manifest models.PhaseManifest
+
 	err := json.Unmarshal([]byte(jsonString), &manifest)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -187,7 +189,7 @@ func testPhaseManifestValidation(t *testing.T) {
 	}
 }
 
-// TestPhasePoints 測試分期點結構
+// TestPhasePoints 測試分期點結構.
 func TestPhasePoints(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -275,6 +277,7 @@ func testPhasePointsJSONDeserialization(t *testing.T) {
 	}`
 
 	var points models.PhasePoints
+
 	err := json.Unmarshal([]byte(jsonString), &points)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -323,7 +326,7 @@ func testPhasePointsValidation(t *testing.T) {
 	}
 }
 
-// TestAnalysisParams 測試分析參數結構
+// TestAnalysisParams 測試分析參數結構.
 func TestAnalysisParams(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -404,6 +407,7 @@ func testAnalysisParamsJSONDeserialization(t *testing.T) {
 	}`
 
 	var params models.AnalysisParams
+
 	err := json.Unmarshal([]byte(jsonString), &params)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -441,7 +445,7 @@ func testAnalysisParamsValidation(t *testing.T) {
 	}
 }
 
-// TestEMGStatistics 測試 EMG 統計結果結構
+// TestEMGStatistics 測試 EMG 統計結果結構.
 func TestEMGStatistics(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -547,6 +551,7 @@ func testEMGStatisticsJSONDeserialization(t *testing.T) {
 	}`
 
 	var stats models.EMGStatistics
+
 	err := json.Unmarshal([]byte(jsonString), &stats)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -592,17 +597,18 @@ func testEMGStatisticsValidation(t *testing.T) {
 
 	// 檢查均值和最大值的關係
 	for channel, mean := range validStats.ChannelMeans {
-		max, exists := validStats.ChannelMaxes[channel]
+		maxVal, exists := validStats.ChannelMaxes[channel]
 		if !exists {
 			t.Errorf("Channel %s missing in maxes", channel)
 		}
-		if mean > max {
-			t.Errorf("Channel %s mean (%f) > max (%f)", channel, mean, max)
+
+		if mean > maxVal {
+			t.Errorf("Channel %s mean (%f) > max (%f)", channel, mean, maxVal)
 		}
 	}
 }
 
-// TestPhaseSyncEMGData 測試分期同步 EMG 數據結構
+// TestPhaseSyncEMGData 測試分期同步 EMG 數據結構.
 func TestPhaseSyncEMGData(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -687,6 +693,7 @@ func testPhaseSyncEMGDataJSONDeserialization(t *testing.T) {
 	}`
 
 	var data models.PhaseSyncEMGData
+
 	err := json.Unmarshal([]byte(jsonString), &data)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -732,7 +739,7 @@ func testPhaseSyncEMGDataValidation(t *testing.T) {
 	}
 }
 
-// TestMotionData 測試 Motion 數據結構
+// TestMotionData 測試 Motion 數據結構.
 func TestMotionData(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -817,6 +824,7 @@ func testMotionDataJSONDeserialization(t *testing.T) {
 	}`
 
 	var motionData models.MotionData
+
 	err := json.Unmarshal([]byte(jsonString), &motionData)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -862,7 +870,7 @@ func testMotionDataValidation(t *testing.T) {
 	}
 }
 
-// TestValidationError 測試驗證錯誤結構
+// TestValidationError 測試驗證錯誤結構.
 func TestValidationError(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -906,13 +914,14 @@ func testValidationErrorString(t *testing.T) {
 }
 
 func testValidationErrorInterface(t *testing.T) {
-	var err error = models.ValidationError{
+	validationErr := models.ValidationError{
 		Field:   "StartTime",
 		Message: "must be positive",
 	}
 
 	// 測試是否實現了 error 接口
-	if err == nil {
+	var err error = validationErr
+	if err.Error() == "" {
 		t.Error("ValidationError should implement error interface")
 	}
 
@@ -922,7 +931,7 @@ func testValidationErrorInterface(t *testing.T) {
 	}
 }
 
-// TestSyncTime 測試同步時間信息結構
+// TestSyncTime 測試同步時間信息結構.
 func TestSyncTime(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1005,6 +1014,7 @@ func testSyncTimeJSONDeserialization(t *testing.T) {
 	}`
 
 	var syncTime models.SyncTime
+
 	err := json.Unmarshal([]byte(jsonString), &syncTime)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -1049,7 +1059,7 @@ func testSyncTimeValidation(t *testing.T) {
 	}
 }
 
-// 基準測試
+// 基準測試.
 func BenchmarkPhaseManifestJSONSerialization(b *testing.B) {
 	manifest := models.PhaseManifest{
 		Subject:         "BenchmarkSubject",
@@ -1116,7 +1126,7 @@ func BenchmarkPhaseSyncEMGDataJSONSerialization(b *testing.B) {
 	}
 }
 
-// 測試完整的數據流程
+// 測試完整的數據流程.
 func TestCompleteDataFlow(t *testing.T) {
 	// 創建完整的分析流程數據
 	manifest := models.PhaseManifest{
@@ -1152,12 +1162,14 @@ func TestCompleteDataFlow(t *testing.T) {
 
 	// 反序列化
 	var deserializedManifest models.PhaseManifest
+
 	err = json.Unmarshal(manifestJSON, &deserializedManifest)
 	if err != nil {
 		t.Fatalf("Manifest deserialization failed: %v", err)
 	}
 
 	var deserializedParams models.AnalysisParams
+
 	err = json.Unmarshal(paramsJSON, &deserializedParams)
 	if err != nil {
 		t.Fatalf("Params deserialization failed: %v", err)

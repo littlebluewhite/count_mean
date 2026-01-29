@@ -1,15 +1,16 @@
 package integration
 
 import (
+	"os"
+	"testing"
+
 	"count_mean/internal/config"
 	"count_mean/internal/errors"
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
-	"os"
-	"testing"
 )
 
-// 國際化集成測試
+// TestI18nIntegration tests the internationalization integration functionality.
 func TestI18nIntegration(t *testing.T) {
 	// 初始化日誌
 	if err := logging.InitLogger(logging.LevelInfo, "./logs", false); err != nil {
@@ -25,7 +26,7 @@ func TestI18nIntegration(t *testing.T) {
 	cfg.TranslationsDir = "./test_translations"
 
 	// 確保測試目錄存在
-	if err := os.MkdirAll(cfg.TranslationsDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.TranslationsDir, 0o755); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
 	defer os.RemoveAll(cfg.TranslationsDir)
@@ -42,6 +43,7 @@ func TestI18nIntegration(t *testing.T) {
 	t.Run("BasicTranslation", func(t *testing.T) {
 		msg := i18n.T("app.title")
 		expected := "EMG Data Analysis Tool"
+
 		if msg != expected {
 			t.Errorf("基本翻譯失敗，期望 '%s'，實際 '%s'", expected, msg)
 		}
@@ -51,6 +53,7 @@ func TestI18nIntegration(t *testing.T) {
 	t.Run("ErrorTranslation", func(t *testing.T) {
 		err := errors.GetI18nFileNotFoundError()
 		expected := "File not found"
+
 		if err.Message != expected {
 			t.Errorf("錯誤翻譯失敗，期望 '%s'，實際 '%s'", expected, err.Message)
 		}
@@ -62,6 +65,7 @@ func TestI18nIntegration(t *testing.T) {
 		i18n.SetLocale(i18n.LocaleZhTW)
 		msg := i18n.T("app.title")
 		expected := "EMG 數據分析工具"
+
 		if msg != expected {
 			t.Errorf("語言切換失敗，期望 '%s'，實際 '%s'", expected, msg)
 		}
@@ -70,6 +74,7 @@ func TestI18nIntegration(t *testing.T) {
 		i18n.SetLocale(i18n.LocaleZhCN)
 		msg = i18n.T("app.title")
 		expected = "EMG 数据分析工具"
+
 		if msg != expected {
 			t.Errorf("語言切換失敗，期望 '%s'，實際 '%s'", expected, msg)
 		}
@@ -80,6 +85,7 @@ func TestI18nIntegration(t *testing.T) {
 		i18n.SetLocale(i18n.LocaleEnUS)
 		msg := i18n.T("status.large_file_processing", 42.5)
 		expected := "Processing large file... 42.5%"
+
 		if msg != expected {
 			t.Errorf("參數化翻譯失敗，期望 '%s'，實際 '%s'", expected, msg)
 		}
@@ -89,6 +95,7 @@ func TestI18nIntegration(t *testing.T) {
 	t.Run("AllSupportedLanguages", func(t *testing.T) {
 		locales := i18n.GetSupportedLocales()
 		expectedCount := 4
+
 		if len(locales) != expectedCount {
 			t.Errorf("支持語言數量錯誤，期望 %d，實際 %d", expectedCount, len(locales))
 		}
@@ -96,6 +103,7 @@ func TestI18nIntegration(t *testing.T) {
 		// 測試每種語言的基本翻譯
 		for _, locale := range locales {
 			i18n.SetLocale(locale)
+
 			msg := i18n.T("app.title")
 			if msg == "app.title" {
 				t.Errorf("語言 %s 的翻譯失敗，返回了鍵值", locale)
@@ -108,6 +116,7 @@ func TestI18nIntegration(t *testing.T) {
 		i18n.SetLocale(i18n.LocaleZhTW)
 		msg := i18n.T("nonexistent.key")
 		expected := "nonexistent.key"
+
 		if msg != expected {
 			t.Errorf("Fallback 機制失敗，期望 '%s'，實際 '%s'", expected, msg)
 		}

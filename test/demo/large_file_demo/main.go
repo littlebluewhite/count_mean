@@ -3,13 +3,14 @@
 package main
 
 import (
-	"count_mean/internal/config"
-	"count_mean/internal/io"
-	"count_mean/internal/logging"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"count_mean/internal/config"
+	"count_mean/internal/io"
+	"count_mean/internal/logging"
 )
 
 // 示範大文件處理功能
@@ -35,7 +36,7 @@ func main() {
 
 	// 創建大型測試數據文件
 	testFile := filepath.Join(cfg.InputDir, "large_test_data.csv")
-	if err := os.MkdirAll(cfg.InputDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.InputDir, 0o755); err != nil {
 		logger.Fatal("無法創建輸入目錄", err)
 	}
 
@@ -121,7 +122,7 @@ func main() {
 	outputData := csvHandler.ConvertMaxMeanResultsToCSV(calcResult.Headers, calcResult.Results, 0.0, 100.0)
 	outputFile := filepath.Join(cfg.OutputDir, "large_file_results.csv")
 
-	if err := os.MkdirAll(cfg.OutputDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		logger.Fatal("無法創建輸出目錄", err)
 	}
 

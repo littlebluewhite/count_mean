@@ -36,6 +36,7 @@ func TestMemoryPool_Float64Slice(t *testing.T) {
 	if stats.Float64Gets < 2 {
 		t.Errorf("Expected at least 2 gets, got %d", stats.Float64Gets)
 	}
+
 	if stats.Float64Puts < 2 {
 		t.Errorf("Expected at least 2 puts, got %d", stats.Float64Puts)
 	}
@@ -59,6 +60,7 @@ func TestMemoryPool_IntSlice(t *testing.T) {
 	if stats.IntGets < 1 {
 		t.Error("Expected at least 1 int get")
 	}
+
 	if stats.IntPuts < 1 {
 		t.Error("Expected at least 1 int put")
 	}
@@ -105,6 +107,7 @@ func TestMemoryPool_ByteSlice(t *testing.T) {
 	if stats.ByteSliceGets < 1 {
 		t.Error("Expected at least 1 byte slice get")
 	}
+
 	if stats.ByteSlicePuts < 1 {
 		t.Error("Expected at least 1 byte slice put")
 	}
@@ -133,6 +136,7 @@ func TestPooledArray_Float64(t *testing.T) {
 
 	// 測試添加元素
 	arr.AppendFloat64(1.0, 2.0, 3.0)
+
 	if arr.Len() != 3 {
 		t.Errorf("Expected length 3, got %d", arr.Len())
 	}
@@ -150,6 +154,7 @@ func TestPooledArray_Float64(t *testing.T) {
 
 	// 測試重置
 	arr.Reset()
+
 	if arr.Len() != 0 {
 		t.Errorf("Expected length 0 after reset, got %d", arr.Len())
 	}
@@ -160,6 +165,7 @@ func TestPooledArray_Int(t *testing.T) {
 	defer arr.Close()
 
 	arr.AppendInt(10, 20, 30)
+
 	if arr.Len() != 3 {
 		t.Errorf("Expected length 3, got %d", arr.Len())
 	}
@@ -175,6 +181,7 @@ func TestPooledArray_String(t *testing.T) {
 	defer arr.Close()
 
 	arr.AppendString("hello", "world")
+
 	if arr.Len() != 2 {
 		t.Errorf("Expected length 2, got %d", arr.Len())
 	}
@@ -201,12 +208,13 @@ func TestPooledCalculator_CalculateArrayMax(t *testing.T) {
 	calc := NewPooledCalculator()
 
 	data := []float64{1, 5, 3, 2, 4}
-	max, maxIndex := calc.CalculateArrayMax(data)
+	maxVal, maxIndex := calc.CalculateArrayMax(data)
 
 	expectedMax := 5.0
 	expectedIndex := 1
-	if max != expectedMax || maxIndex != expectedIndex {
-		t.Errorf("Expected max (%f, %d), got (%f, %d)", expectedMax, expectedIndex, max, maxIndex)
+
+	if maxVal != expectedMax || maxIndex != expectedIndex {
+		t.Errorf("Expected max (%f, %d), got (%f, %d)", expectedMax, expectedIndex, maxVal, maxIndex)
 	}
 }
 
@@ -277,19 +285,19 @@ func TestGCOptimizer(t *testing.T) {
 
 	// 測試禁用/啟用
 	optimizer.DisableAutoGC()
+
 	triggered = optimizer.CheckAndTriggerGC()
 	if triggered {
 		t.Error("GC should not be triggered when disabled")
 	}
 
 	optimizer.EnableAutoGC()
-	// 啟用後應該可以觸發
 }
 
-// 基準測試：比較使用記憶體池和不使用記憶體池的性能
-
+// 基準測試：比較使用記憶體池和不使用記憶體池的性能.
 func BenchmarkMemoryPool_Float64Slice(b *testing.B) {
 	pool := NewMemoryPool()
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -297,6 +305,7 @@ func BenchmarkMemoryPool_Float64Slice(b *testing.B) {
 		for j := 0; j < 500; j++ {
 			slice = append(slice, float64(j))
 		}
+
 		pool.PutFloat64Slice(slice)
 	}
 }
@@ -309,16 +318,19 @@ func BenchmarkDirect_Float64Slice(b *testing.B) {
 		for j := 0; j < 500; j++ {
 			slice = append(slice, float64(j))
 		}
-		// 沒有池化，直接丟棄
+
+		_ = slice // 沒有池化，直接丟棄
 	}
 }
 
 func BenchmarkPooledCalculator_Mean(b *testing.B) {
 	calc := NewPooledCalculator()
+
 	data := make([]float64, 10000)
 	for i := range data {
 		data[i] = float64(i)
 	}
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -331,6 +343,7 @@ func BenchmarkDirect_Mean(b *testing.B) {
 	for i := range data {
 		data[i] = float64(i)
 	}
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -340,31 +353,36 @@ func BenchmarkDirect_Mean(b *testing.B) {
 
 func BenchmarkPooledCalculator_SlidingWindow(b *testing.B) {
 	calc := NewPooledCalculator()
+
 	data := make([]float64, 10000)
 	for i := range data {
 		data[i] = float64(i)
 	}
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		calc.CalculateSlidingWindowMean(data, 100)
+		_, _ = calc.CalculateSlidingWindowMean(data, 100)
 	}
 }
 
-// 記憶體使用測試
+// 記憶體使用測試.
 func TestMemoryUsage(t *testing.T) {
 	var m1, m2 runtime.MemStats
+
 	runtime.ReadMemStats(&m1)
 
 	// 使用記憶體池
 	pool := NewMemoryPool()
-	var slices [][]float64
+
+	slices := make([][]float64, 0, 1000)
 
 	for i := 0; i < 1000; i++ {
 		slice := pool.GetFloat64Slice(1000)
 		for j := 0; j < 500; j++ {
 			slice = append(slice, float64(j))
 		}
+
 		slices = append(slices, slice)
 	}
 
@@ -384,18 +402,19 @@ func TestMemoryUsage(t *testing.T) {
 		stats.Float64Gets, stats.Float64Puts, stats.Float64Misses, pool.GetHitRate()*100)
 }
 
-// 並發安全測試
+// 並發安全測試.
 func TestMemoryPool_Concurrent(t *testing.T) {
 	pool := NewMemoryPool()
 
 	// 啟動多個goroutine並發使用記憶體池
 	const numGoroutines = 10
+
 	const numOperations = 100
 
 	done := make(chan bool, numGoroutines)
 
 	for i := 0; i < numGoroutines; i++ {
-		go func(id int) {
+		go func() {
 			defer func() { done <- true }()
 
 			for j := 0; j < numOperations; j++ {
@@ -404,6 +423,7 @@ func TestMemoryPool_Concurrent(t *testing.T) {
 				for k := 0; k < 50; k++ {
 					slice = append(slice, float64(k))
 				}
+
 				pool.PutFloat64Slice(slice)
 
 				// 獲取和釋放int切片
@@ -411,9 +431,10 @@ func TestMemoryPool_Concurrent(t *testing.T) {
 				for k := 0; k < 50; k++ {
 					intSlice = append(intSlice, k)
 				}
+
 				pool.PutIntSlice(intSlice)
 			}
-		}(i)
+		}()
 	}
 
 	// 等待所有goroutine完成
@@ -431,7 +452,7 @@ func TestMemoryPool_Concurrent(t *testing.T) {
 	}
 }
 
-// 壓力測試：測試記憶體池在高負載下的表現
+// 壓力測試：測試記憶體池在高負載下的表現.
 func TestMemoryPool_StressTest(t *testing.T) {
 	pool := NewMemoryPool()
 
@@ -444,6 +465,7 @@ func TestMemoryPool_StressTest(t *testing.T) {
 		for j := 0; j < 5; j++ {
 			smallSlice = append(smallSlice, float64(j))
 		}
+
 		pool.PutFloat64Slice(smallSlice)
 
 		// 大切片
@@ -452,6 +474,7 @@ func TestMemoryPool_StressTest(t *testing.T) {
 			for j := 0; j < 5000; j++ {
 				largeSlice = append(largeSlice, float64(j))
 			}
+
 			pool.PutFloat64Slice(largeSlice)
 		}
 	}

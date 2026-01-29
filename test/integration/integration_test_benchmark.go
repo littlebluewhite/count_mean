@@ -1,17 +1,22 @@
 package integration
 
 import (
-	"count_mean/internal/benchmark"
-	"count_mean/internal/config"
-	"count_mean/internal/logging"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"count_mean/internal/benchmark"
+	"count_mean/internal/config"
+	"count_mean/internal/logging"
 )
 
-// 性能基準測試整合測試
+// errSimulated is a static error for test simulation.
+var errSimulated = errors.New("模擬錯誤")
+
+// TestBenchmarkIntegration performs integration tests for benchmark functionality.
 func TestBenchmarkIntegration(t *testing.T) {
 	// 初始化日誌
 	if err := logging.InitLogger(logging.LevelInfo, "./benchmark_test_logs", false); err != nil {
@@ -26,9 +31,10 @@ func TestBenchmarkIntegration(t *testing.T) {
 
 	// 確保測試目錄存在
 	testDir := "./benchmark_test_reports"
-	if err := os.MkdirAll(testDir, 0755); err != nil {
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
+
 	defer os.RemoveAll(testDir)
 	defer os.RemoveAll("./benchmark_test_logs")
 
@@ -41,6 +47,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 			for i := 0; i < 10000; i++ {
 				sum += i
 			}
+
 			return nil
 		})
 
@@ -74,6 +81,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 			for _, b := range data {
 				sum += int(b)
 			}
+
 			return nil
 		})
 
@@ -99,6 +107,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 			for i := 0; i < operationCount; i++ {
 				sum += i * i
 			}
+
 			return nil
 		})
 
@@ -130,7 +139,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 		})
 
 		benchmarker.Benchmark("失敗測試", func() error {
-			return fmt.Errorf("模擬錯誤")
+			return errSimulated
 		})
 
 		// 生成報告
@@ -150,6 +159,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 
 		// 保存報告
 		reportFile := filepath.Join(testDir, "integration_test_report.json")
+
 		err := benchmarker.SaveReportToFile(report, reportFile)
 		if err != nil {
 			t.Errorf("保存報告失敗: %v", err)
@@ -174,20 +184,24 @@ func TestBenchmarkIntegration(t *testing.T) {
 		defer csvBench.Cleanup()
 
 		// 測試模擬文件生成
-		tempFile := filepath.Join(os.TempDir(), "integration_test.csv")
+		tempFile := filepath.Join(t.TempDir(), "integration_test.csv")
+
 		file, err := os.Create(tempFile)
 		if err != nil {
 			t.Errorf("創建測試文件失敗: %v", err)
 			return
 		}
+
 		defer os.Remove(tempFile)
 
 		// 寫入測試數據
 		file.WriteString("time,ch1,ch2\n")
+
 		for i := 0; i < 100; i++ {
-			file.WriteString(fmt.Sprintf("%.2f,%.2f,%.2f\n",
-				float64(i)*0.01, float64(i)*1.1, float64(i)*1.2))
+			fmt.Fprintf(file, "%.2f,%.2f,%.2f\n",
+				float64(i)*0.01, float64(i)*1.1, float64(i)*1.2)
 		}
+
 		file.Close()
 
 		info, err := os.Stat(tempFile)

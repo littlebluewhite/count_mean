@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"count_mean/internal/models"
-	"count_mean/internal/parsers"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xuri/excelize/v2"
+
+	"count_mean/internal/models"
+	"count_mean/internal/parsers"
 )
 
 func TestNewANCParser(t *testing.T) {
@@ -133,9 +133,8 @@ invalid_time	0.1	0.2
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// 創建臨時測試文件
-			tmpFile, err := os.CreateTemp("", "test_anc_*.anc")
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_anc_*.anc")
 			require.NoError(t, err)
-			defer os.Remove(tmpFile.Name())
 
 			_, err = tmpFile.WriteString(tt.fileContent)
 			require.NoError(t, err)
@@ -323,6 +322,7 @@ func TestValidateForceData(t *testing.T) {
 
 			if tt.wantErr {
 				assert.Error(t, err)
+
 				if tt.errMsg != "" {
 					assert.Contains(t, err.Error(), tt.errMsg)
 				}
@@ -378,9 +378,8 @@ func TestANCParser_extractValue(t *testing.T) {
 	}
 }
 
-// 輔助函數來測試私有方法 extractValue
-// 這裡創建一個精確模擬 ANC 解析器 extractValue 方法的版本
-func extractValueTestHelper(parser *parsers.ANCParser, content, label string) string {
+// 這裡創建一個精確模擬 ANC 解析器 extractValue 方法的版本.
+func extractValueTestHelper(_ *parsers.ANCParser, content, label string) string {
 	parts := strings.Split(content, "\t")
 	for _, part := range parts {
 		if strings.Contains(part, label) {
@@ -390,6 +389,7 @@ func extractValueTestHelper(parser *parsers.ANCParser, content, label string) st
 			}
 		}
 	}
+
 	return ""
 }
 
@@ -414,9 +414,8 @@ func TestANCParser_Integration(t *testing.T) {
 0.003000	-0.5	1.2	-985.0	2.1	-1.8	0.3`
 
 		// 創建臨時文件
-		tmpFile, err := os.CreateTemp("", "integration_test_*.anc")
+		tmpFile, err := os.CreateTemp(t.TempDir(), "integration_test_*.anc")
 		require.NoError(t, err)
-		defer os.Remove(tmpFile.Name())
 
 		_, err = tmpFile.WriteString(ancContent)
 		require.NoError(t, err)
@@ -449,7 +448,7 @@ func TestANCParser_Integration(t *testing.T) {
 
 // ==================== XLSX 格式測試 ====================
 
-// createTestXLSXFile 創建測試用的 xlsx 檔案
+// createTestXLSXFile 創建測試用的 xlsx 檔案.
 func createTestXLSXFile(t *testing.T, headers []string, data [][]string) string {
 	t.Helper()
 
@@ -475,9 +474,11 @@ func createTestXLSXFile(t *testing.T, headers []string, data [][]string) string 
 	}
 
 	// 保存到臨時文件
-	tmpFile, err := os.CreateTemp("", "test_anc_*.xlsx")
+	tmpFile, err := os.CreateTemp(t.TempDir(), "test_anc_*.xlsx")
 	require.NoError(t, err)
-	tmpFile.Close()
+
+	err = tmpFile.Close()
+	require.NoError(t, err)
 
 	err = f.SaveAs(tmpFile.Name())
 	require.NoError(t, err)
@@ -520,6 +521,7 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 
 	t.Run("xlsx file with many data points", func(t *testing.T) {
 		headers := []string{"Time", "Fx", "Fy", "Fz", "Mx", "My", "Mz"}
+
 		var data [][]string
 
 		// 創建 1000 個數據點（模擬 1 秒的 1000Hz 數據）
@@ -558,10 +560,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		// 創建臨時 xlsx 文件
 		f := excelize.NewFile()
 		sheetName := f.GetSheetName(0)
+
 		for colIdx, header := range headers {
 			cell, _ := excelize.CoordinatesToCellName(colIdx+1, 1)
 			f.SetCellValue(sheetName, cell, header)
 		}
+
 		for rowIdx, row := range data {
 			for colIdx, value := range row {
 				cell, _ := excelize.CoordinatesToCellName(colIdx+1, rowIdx+2)
@@ -570,14 +574,16 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		}
 
 		// 使用 .anc.xlsx 副檔名
-		tmpFile, err := os.CreateTemp("", "test_*.anc.xlsx")
+		tmpFile, err := os.CreateTemp(t.TempDir(), "test_*.anc.xlsx")
 		require.NoError(t, err)
-		tmpFile.Close()
-		defer os.Remove(tmpFile.Name())
+
+		err = tmpFile.Close()
+		require.NoError(t, err)
 
 		err = f.SaveAs(tmpFile.Name())
 		require.NoError(t, err)
-		f.Close()
+		err = f.Close()
+		require.NoError(t, err)
 
 		parser := parsers.NewANCParser()
 		forceData, err := parser.ParseFile(tmpFile.Name())
@@ -705,7 +711,7 @@ func TestANCParser_ParseXLSXFile_Validation(t *testing.T) {
 	})
 }
 
-// formatFloat 將浮點數格式化為字符串
+// formatFloat 將浮點數格式化為字符串.
 func formatFloat(f float64) string {
 	return strings.TrimRight(strings.TrimRight(
 		fmt.Sprintf("%.6f", f), "0"), ".")

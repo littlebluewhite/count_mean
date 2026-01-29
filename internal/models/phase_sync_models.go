@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// PhaseManifest 分期總檔案記錄
+// PhaseManifest 分期總檔案記錄.
 type PhaseManifest struct {
 	Subject         string      // 主題名稱
 	MotionFile      string      // Motion檔案名
@@ -12,7 +12,7 @@ type PhaseManifest struct {
 	PhasePoints     PhasePoints // 分期點數據
 }
 
-// PhasePoints 分期點定義
+// PhasePoints 分期點定義.
 type PhasePoints struct {
 	P0 float64 // 力板時間
 	P1 float64 // 力板時間
@@ -26,7 +26,7 @@ type PhasePoints struct {
 	L  float64 // 著地瞬間-力板時間
 }
 
-// AnalysisParams 分析參數
+// AnalysisParams 分析參數.
 type AnalysisParams struct {
 	ManifestFile string // 分期總檔案路徑
 	DataFolder   string // 數據資料夾路徑
@@ -35,7 +35,7 @@ type AnalysisParams struct {
 	SubjectIndex int    // 選擇的主題索引（從0開始）
 }
 
-// EMGStatistics EMG 統計結果
+// EMGStatistics EMG 統計結果.
 type EMGStatistics struct {
 	Subject      string             // 主題名稱
 	StartPhase   string             // 開始分期點
@@ -47,28 +47,28 @@ type EMGStatistics struct {
 	ChannelMaxes map[string]float64 // 各通道最大值
 }
 
-// PhaseSyncEMGData EMG數據結構（用於分期同步分析）
+// PhaseSyncEMGData EMG數據結構（用於分期同步分析）.
 type PhaseSyncEMGData struct {
 	Time     []float64            // 時間序列
 	Channels map[string][]float64 // 通道名稱 -> 數據序列
 	Headers  []string             // 通道順序
 }
 
-// MotionData Motion數據結構
+// MotionData Motion數據結構.
 type MotionData struct {
 	Indices []int                // Index序列
 	Data    map[string][]float64 // 數據列
 	Headers []string             // 標題
 }
 
-// ForceData 力板數據結構
+// ForceData 力板數據結構.
 type ForceData struct {
 	Time    []float64            // 時間序列
 	Forces  map[string][]float64 // 力值數據
 	Headers []string             // 標題
 }
 
-// PhaseTimeRange 分期時間範圍
+// PhaseTimeRange 分期時間範圍.
 type PhaseTimeRange struct {
 	StartTime float64
 	EndTime   float64
@@ -76,7 +76,7 @@ type PhaseTimeRange struct {
 	EndType   string // "force" or "motion"
 }
 
-// ValidationError 驗證錯誤
+// ValidationError 驗證錯誤.
 type ValidationError struct {
 	Field   string
 	Message string
@@ -86,7 +86,7 @@ func (e ValidationError) Error() string {
 	return e.Field + ": " + e.Message
 }
 
-// SyncTime 同步時間信息
+// SyncTime 同步時間信息.
 type SyncTime struct {
 	EMGTime   float64
 	ForceTime float64

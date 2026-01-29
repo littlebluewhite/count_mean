@@ -5,11 +5,11 @@ import (
 	"os"
 	"testing"
 
-	"count_mean/internal/models"
-	"count_mean/internal/parsers"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/models"
+	"count_mean/internal/parsers"
 )
 
 func TestNewMotionParser(t *testing.T) {
@@ -168,9 +168,8 @@ text,text,text`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// 創建臨時測試文件
-			tmpFile, err := os.CreateTemp("", "test_motion_*.csv")
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_motion_*.csv")
 			require.NoError(t, err)
-			defer os.Remove(tmpFile.Name())
 
 			_, err = tmpFile.WriteString(tt.csvContent)
 			require.NoError(t, err)
@@ -507,6 +506,7 @@ func TestValidateMotionData(t *testing.T) {
 
 			if tt.wantErr {
 				assert.Error(t, err)
+
 				if tt.errMsg != "" {
 					assert.Contains(t, err.Error(), tt.errMsg)
 				}
@@ -537,7 +537,7 @@ func TestMotionParser_DuplicateSeriesHeaders(t *testing.T) {
 			name: "duplicate Series with category row",
 			csvContent: `[Data],,,
 ,Trunk Angle,Hip Angle,Knee Angle
-,Trunk Flexion / Extension Joint Angle (deg),Hip Flexion / Extension Joint Angle (deg),Knee Flexion / Extension Joint Angle (deg)
+,Trunk Flex (deg),Hip Flex (deg),Knee Flex (deg)
 Index,Series,Series,Series
 1,-10.040299,-4.25116,3.056281
 2,-10.036259,-4.27678,3.095674
@@ -633,9 +633,8 @@ Index,Series,Series,Series
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// 創建臨時測試文件
-			tmpFile, err := os.CreateTemp("", "test_motion_duplicate_*.csv")
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_motion_duplicate_*.csv")
 			require.NoError(t, err)
-			defer os.Remove(tmpFile.Name())
 
 			_, err = tmpFile.WriteString(tt.csvContent)
 			require.NoError(t, err)
@@ -678,9 +677,8 @@ Index,X,Y,Z,RX,RY,RZ
 7,12.9,23.0,45.6,1.3,2.2,3.6`
 
 		// 創建臨時文件
-		tmpFile, err := os.CreateTemp("", "integration_test_*.csv")
+		tmpFile, err := os.CreateTemp(t.TempDir(), "integration_test_*.csv")
 		require.NoError(t, err)
-		defer os.Remove(tmpFile.Name())
 
 		_, err = tmpFile.WriteString(motionContent)
 		require.NoError(t, err)

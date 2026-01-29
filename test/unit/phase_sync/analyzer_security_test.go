@@ -1,4 +1,4 @@
-package phase_sync
+package phase_sync //nolint:revive // underscore in package name matches directory structure
 
 import (
 	"fmt"
@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"count_mean/internal/models"
-	"count_mean/internal/phase_sync"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/models"
+	"count_mean/internal/phase_sync"
 )
 
-// TestPhaseSyncAnalyzer_PathTraversalAttack tests that path traversal attacks are prevented
+// TestPhaseSyncAnalyzer_PathTraversalAttack tests that path traversal attacks are prevented.
 func TestPhaseSyncAnalyzer_PathTraversalAttack(t *testing.T) {
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
 
@@ -23,7 +23,7 @@ func TestPhaseSyncAnalyzer_PathTraversalAttack(t *testing.T) {
 	// Create a folder outside the data folder to simulate an attack target
 	targetFolder := t.TempDir()
 	targetFile := filepath.Join(targetFolder, "secret.csv")
-	err := os.WriteFile(targetFile, []byte("sensitive data"), 0644)
+	err := os.WriteFile(targetFile, []byte("sensitive data"), 0o644)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -82,7 +82,7 @@ func TestPhaseSyncAnalyzer_PathTraversalAttack(t *testing.T) {
 			manifestContent := fmt.Sprintf(`Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, tt.emgPath)
 
-			manifestFile := createTempFile(t, manifestContent, ".csv")
+			manifestFile := createTempFile(t, manifestContent)
 
 			params := &models.AnalysisParams{
 				ManifestFile: manifestFile,
@@ -108,7 +108,7 @@ TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 	}
 }
 
-// TestPhaseSyncAnalyzer_ValidPathsAllowed tests that legitimate paths are allowed
+// TestPhaseSyncAnalyzer_ValidPathsAllowed tests that legitimate paths are allowed.
 func TestPhaseSyncAnalyzer_ValidPathsAllowed(t *testing.T) {
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
 
@@ -117,7 +117,7 @@ func TestPhaseSyncAnalyzer_ValidPathsAllowed(t *testing.T) {
 
 	// Create a subdirectory within data folder
 	subDir := filepath.Join(dataFolder, "subdir")
-	err := os.MkdirAll(subDir, 0755)
+	err := os.MkdirAll(subDir, 0o755)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -151,9 +151,10 @@ func TestPhaseSyncAnalyzer_ValidPathsAllowed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create the EMG file in the expected location
 			emgFilePath := filepath.Join(dataFolder, tt.emgPath)
+
 			emgDir := filepath.Dir(emgFilePath)
 			if emgDir != dataFolder {
-				err := os.MkdirAll(emgDir, 0755)
+				err := os.MkdirAll(emgDir, 0o755)
 				require.NoError(t, err)
 			}
 
@@ -165,14 +166,14 @@ func TestPhaseSyncAnalyzer_ValidPathsAllowed(t *testing.T) {
 0.003,13,23,33,43,53,63
 0.004,14,24,34,44,54,64
 `
-			err := os.WriteFile(emgFilePath, []byte(emgContent), 0644)
+			err := os.WriteFile(emgFilePath, []byte(emgContent), 0o644)
 			require.NoError(t, err)
 
 			// Create manifest with valid EMG path
 			manifestContent := fmt.Sprintf(`Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.csv,%s,0,0.0,0.001,0.002,0.0015,0.0018,2,0.0025,0.003,3,0.004`, tt.emgPath)
 
-			manifestFile := createTempFile(t, manifestContent, ".csv")
+			manifestFile := createTempFile(t, manifestContent)
 
 			params := &models.AnalysisParams{
 				ManifestFile: manifestFile,
@@ -198,7 +199,7 @@ TestSubject,motion.csv,force.csv,%s,0,0.0,0.001,0.002,0.0015,0.0018,2,0.0025,0.0
 	}
 }
 
-// TestPhaseSyncAnalyzer_AbsolutePathMustBeInDataFolder tests that absolute paths must be within data folder
+// TestPhaseSyncAnalyzer_AbsolutePathMustBeInDataFolder tests that absolute paths must be within data folder.
 func TestPhaseSyncAnalyzer_AbsolutePathMustBeInDataFolder(t *testing.T) {
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
 
@@ -211,7 +212,7 @@ func TestPhaseSyncAnalyzer_AbsolutePathMustBeInDataFolder(t *testing.T) {
 0.0,10,20,30,40,50,60
 0.001,11,21,31,41,51,61
 `
-	err := os.WriteFile(emgFile, []byte(emgContent), 0644)
+	err := os.WriteFile(emgFile, []byte(emgContent), 0o644)
 	require.NoError(t, err)
 
 	t.Run("absolute path inside data folder - should be allowed", func(t *testing.T) {
@@ -219,7 +220,7 @@ func TestPhaseSyncAnalyzer_AbsolutePathMustBeInDataFolder(t *testing.T) {
 		manifestContent := fmt.Sprintf(`Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.csv,%s,0,0.0,0.001,0.002,0.0015,0.0018,2,0.0025,0.003,3,0.004`, emgFile)
 
-		manifestFile := createTempFile(t, manifestContent, ".csv")
+		manifestFile := createTempFile(t, manifestContent)
 
 		params := &models.AnalysisParams{
 			ManifestFile: manifestFile,
@@ -230,12 +231,12 @@ TestSubject,motion.csv,force.csv,%s,0,0.0,0.001,0.002,0.0015,0.0018,2,0.0025,0.0
 		}
 
 		_, err := analyzer.AnalyzePhaseSync(params)
-
 		// Path validation should succeed (analysis may fail for other reasons)
 		if err != nil {
 			assert.NotContains(t, err.Error(), "EMG 檔案路徑驗證失敗",
 				"Absolute path inside data folder should be allowed")
 		}
+
 		t.Log("✓ Absolute path inside data folder was allowed")
 	})
 
@@ -243,14 +244,14 @@ TestSubject,motion.csv,force.csv,%s,0,0.0,0.001,0.002,0.0015,0.0018,2,0.0025,0.0
 		// Create a file outside the data folder
 		outsideFolder := t.TempDir()
 		outsideFile := filepath.Join(outsideFolder, "external.csv")
-		err := os.WriteFile(outsideFile, []byte("external data"), 0644)
+		err := os.WriteFile(outsideFile, []byte("external data"), 0o644)
 		require.NoError(t, err)
 
 		// Create manifest with absolute path that is OUTSIDE data folder
 		manifestContent := fmt.Sprintf(`Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, outsideFile)
 
-		manifestFile := createTempFile(t, manifestContent, ".csv")
+		manifestFile := createTempFile(t, manifestContent)
 
 		params := &models.AnalysisParams{
 			ManifestFile: manifestFile,
@@ -269,7 +270,7 @@ TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 	})
 }
 
-// TestPhaseSyncAnalyzer_SymbolicLinkAttack tests protection against symlink attacks
+// TestPhaseSyncAnalyzer_SymbolicLinkAttack tests protection against symlink attacks.
 func TestPhaseSyncAnalyzer_SymbolicLinkAttack(t *testing.T) {
 	// Skip this test on Windows where symlinks require admin privileges
 	if os.Getenv("GOOS") == "windows" {
@@ -284,11 +285,12 @@ func TestPhaseSyncAnalyzer_SymbolicLinkAttack(t *testing.T) {
 	// Create a target folder outside the data folder
 	targetFolder := t.TempDir()
 	targetFile := filepath.Join(targetFolder, "sensitive.csv")
-	err := os.WriteFile(targetFile, []byte("sensitive data"), 0644)
+	err := os.WriteFile(targetFile, []byte("sensitive data"), 0o644)
 	require.NoError(t, err)
 
 	// Create a symlink inside the data folder pointing to the target file
 	symlinkPath := filepath.Join(dataFolder, "symlink.csv")
+
 	err = os.Symlink(targetFile, symlinkPath)
 	if err != nil {
 		t.Skipf("Cannot create symlink: %v", err)
@@ -298,7 +300,7 @@ func TestPhaseSyncAnalyzer_SymbolicLinkAttack(t *testing.T) {
 	manifestContent := `Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.csv,symlink.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 
-	manifestFile := createTempFile(t, manifestContent, ".csv")
+	manifestFile := createTempFile(t, manifestContent)
 
 	params := &models.AnalysisParams{
 		ManifestFile: manifestFile,

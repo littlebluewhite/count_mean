@@ -21,12 +21,13 @@ func TestPhaseSyncAnalysis_NSF2(t *testing.T) {
 	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
 		t.Skipf("Skipping test: test data file not found: %s", manifestPath)
 	}
+
 	if _, err := os.Stat(dataFolder); os.IsNotExist(err) {
 		t.Skipf("Skipping test: test data folder not found: %s", dataFolder)
 	}
 
 	// 確保輸出目錄存在
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		t.Fatalf("無法創建輸出目錄: %v", err)
 	}
 
@@ -84,6 +85,7 @@ func TestPhaseSyncAnalysis_NSF2(t *testing.T) {
 	if diff := stats.StartTime - expectedStartTime; diff > tolerance || diff < -tolerance {
 		t.Errorf("開始時間計算錯誤: 期望 %.6f, 實際 %.6f", expectedStartTime, stats.StartTime)
 	}
+
 	if diff := stats.EndTime - expectedEndTime; diff > tolerance || diff < -tolerance {
 		t.Errorf("結束時間計算錯誤: 期望 %.6f, 實際 %.6f", expectedEndTime, stats.EndTime)
 	}
@@ -113,7 +115,6 @@ func TestPhaseSyncAnalysis_NSF2(t *testing.T) {
 func TestTimeSynchronization_Verification(t *testing.T) {
 	// 測試時間同步計算的正確性
 	// 使用 NSF2 的數據進行驗證
-
 	emgMotionOffset := 600
 	motionFreq := 250.0
 
@@ -144,9 +145,8 @@ func TestTimeSynchronization_Verification(t *testing.T) {
 	t.Logf("時間差 (O - T): %.6f 秒", expectedEMGTimeFromMotion-expectedEMGTime)
 }
 
-func TestAllPhases_P0_to_L(t *testing.T) {
+func TestAllPhases_P0_to_L(_ *testing.T) {
 	// 測試所有分期點的時間計算
-
 	emgMotionOffset := 600
 	motionFreq := 250.0
 
@@ -166,13 +166,15 @@ func TestAllPhases_P0_to_L(t *testing.T) {
 		"O":  {3363, true},
 	}
 
-	fmt.Println("=== 各分期點的 EMG 時間 ===")
-	fmt.Printf("%-5s %-15s %-15s %-15s\n", "分期", "原始值", "類型", "EMG時間")
-	fmt.Println("----------------------------------------")
+	_, _ = fmt.Println("=== 各分期點的 EMG 時間 ===")
+	_, _ = fmt.Printf("%-5s %-15s %-15s %-15s\n", "分期", "原始值", "類型", "EMG時間")
+	_, _ = fmt.Println("----------------------------------------")
 
 	for _, phaseName := range []string{"P0", "P1", "P2", "S", "C", "D", "T0", "T", "O"} {
 		phase := phases[phaseName]
+
 		var emgTime float64
+
 		var typeStr string
 
 		if phase.isMotionIndex {
@@ -183,6 +185,6 @@ func TestAllPhases_P0_to_L(t *testing.T) {
 			typeStr = "Force Time"
 		}
 
-		fmt.Printf("%-5s %-15.3f %-15s %-15.6f\n", phaseName, phase.value, typeStr, emgTime)
+		_, _ = fmt.Printf("%-5s %-15.3f %-15s %-15.6f\n", phaseName, phase.value, typeStr, emgTime)
 	}
 }

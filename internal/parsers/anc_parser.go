@@ -9,24 +9,24 @@ import (
 	"strconv"
 	"strings"
 
-	"count_mean/internal/models"
-
 	"github.com/xuri/excelize/v2"
+
+	"count_mean/internal/models"
 )
 
-// ANCParser ANC力板檔案解析器
+// ANCParser ANC力板檔案解析器.
 type ANCParser struct {
 	frequency float64 // 採樣頻率 Hz
 }
 
-// NewANCParser 創建新的 ANC 解析器
+// NewANCParser 創建新的 ANC 解析器.
 func NewANCParser() *ANCParser {
 	return &ANCParser{
-		frequency: 1000.0, // 1000Hz
+		frequency: FrequencyANC,
 	}
 }
 
-// ANCHeader ANC檔案頭信息
+// ANCHeader ANC檔案頭信息.
 type ANCHeader struct {
 	FileType      string
 	BoardType     string
@@ -41,7 +41,7 @@ type ANCHeader struct {
 	ChannelRanges []int
 }
 
-// ParseFile 解析 ANC 檔案（支援 .anc 文字格式和 .xlsx Excel 格式）
+// ParseFile 解析 ANC 檔案（支援 .anc 文字格式和 .xlsx Excel 格式）.
 func (p *ANCParser) ParseFile(filePath string) (*models.ForceData, error) {
 	// 根據副檔名選擇解析方式
 	ext := strings.ToLower(filepath.Ext(filePath))
@@ -61,112 +61,134 @@ func (p *ANCParser) ParseFile(filePath string) (*models.ForceData, error) {
 	}
 }
 
-// parseANCTextFile 解析文字格式的 ANC 檔案
+// initForceDataFromHeader initializes ForceData structure from ANC header.
+func initForceDataFromHeader(header *ANCHeader) *models.ForceData {
+	capacity := int(header.Duration * header.PreciseRate)
+	forceData := &models.ForceData{
+		Time:    make([]float64, 0, capacity),
+		Forces:  make(map[string][]float64),
+		Headers: header.ChannelNames,
+	}
+
+	for _, channelName := range header.ChannelNames {
+		forceData.Forces[channelName] = make([]float64, 0, capacity)
+	}
+
+	return forceData
+}
+
+// parseANCDataLine parses a single data line and appends to forceData.
+func parseANCDataLine(fields, channelNames []string, forceData *models.ForceData) bool {
+	timeValue, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return false
+	}
+
+	forceData.Time = append(forceData.Time, timeValue)
+
+	for i, channelName := range channelNames {
+		value := 0.0
+
+		if i+1 < len(fields) {
+			if parsed, parseErr := strconv.ParseFloat(fields[i+1], 64); parseErr == nil {
+				value = parsed
+			}
+		}
+
+		forceData.Forces[channelName] = append(forceData.Forces[channelName], value)
+	}
+
+	return true
+}
+
+// validateForceDataIntegrity validates that all channels have consistent data length.
+//
+//nolint:err113 // dynamic errors with Chinese messages for user-facing output
+func validateForceDataIntegrity(forceData *models.ForceData) error {
+	dataLen := len(forceData.Time)
+	for channelName, channelData := range forceData.Forces {
+		if len(channelData) != dataLen {
+			return fmt.Errorf("通道 %s 的數據長度不一致", channelName)
+		}
+	}
+
+	return nil
+}
+
+// parseANCTextFile 解析文字格式的 ANC 檔案.
 func (p *ANCParser) parseANCTextFile(filePath string) (*models.ForceData, error) {
-	file, err := os.Open(filePath)
+	file, err := os.Open(filePath) //nolint:gosec // filePath is validated by caller
 	if err != nil {
 		return nil, fmt.Errorf("無法開啟 ANC 檔案 %s: %w", filePath, err)
 	}
-	defer file.Close()
+
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			// Log error but don't override original error
+			_ = closeErr
+		}
+	}()
 
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 增加緩衝區大小處理長行
+	scanner.Buffer(make([]byte, 0, BufferInitKB*KilobyteMultiplier), BufferMaxBytes)
 
-	// 解析頭部信息
 	header, err := p.parseHeader(scanner)
 	if err != nil {
 		return nil, fmt.Errorf("解析 ANC 頭部失敗: %w", err)
 	}
 
-	// 初始化數據結構
-	forceData := &models.ForceData{
-		Time:    make([]float64, 0, int(header.Duration*header.PreciseRate)),
-		Forces:  make(map[string][]float64),
-		Headers: header.ChannelNames,
-	}
+	forceData := initForceDataFromHeader(header)
+	minFieldCount := len(header.ChannelNames) + 1
 
-	// 為每個通道初始化切片
-	for _, channelName := range header.ChannelNames {
-		forceData.Forces[channelName] = make([]float64, 0, int(header.Duration*header.PreciseRate))
-	}
-
-	// 解析數據行
-	lineNum := 0
 	for scanner.Scan() {
 		line := scanner.Text()
-		lineNum++
-
-		// 跳過空行
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 
-		// 解析數據行
 		fields := strings.Fields(line)
-		if len(fields) < len(header.ChannelNames)+1 { // +1 for time column
+		if len(fields) < minFieldCount {
 			continue
 		}
 
-		// 解析時間
-		timeValue, err := strconv.ParseFloat(fields[0], 64)
-		if err != nil {
-			continue
-		}
-		forceData.Time = append(forceData.Time, timeValue)
-
-		// 解析各通道數據
-		for i, channelName := range header.ChannelNames {
-			if i+1 < len(fields) {
-				value, err := strconv.ParseFloat(fields[i+1], 64)
-				if err != nil {
-					value = 0
-				}
-				forceData.Forces[channelName] = append(forceData.Forces[channelName], value)
-			} else {
-				forceData.Forces[channelName] = append(forceData.Forces[channelName], 0)
-			}
-		}
+		parseANCDataLine(fields, header.ChannelNames, forceData)
 	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("讀取 ANC 檔案時發生錯誤: %w", err)
 	}
 
-	// 驗證數據完整性
-	dataLen := len(forceData.Time)
-	for channelName, channelData := range forceData.Forces {
-		if len(channelData) != dataLen {
-			return nil, fmt.Errorf("通道 %s 的數據長度不一致", channelName)
-		}
+	if err := validateForceDataIntegrity(forceData); err != nil {
+		return nil, err
 	}
 
 	return forceData, nil
 }
 
-// parseXLSXFile 解析 Excel xlsx 格式的 ANC 檔案
-// 支援兩種格式：
-// 1. 純數據表格式（第一行是標題，後續是數據）
-// 2. ANC 格式的 xlsx（有 11 行頭部資訊，第 9 行是通道名稱，第 12 行開始是數據）
+// 2. ANC 格式的 xlsx（有 11 行頭部資訊，第 9 行是通道名稱，第 12 行開始是數據）.
+//
+//nolint:err113,stylecheck // dynamic errors with Chinese messages; Excel is proper noun
 func (p *ANCParser) parseXLSXFile(filePath string) (*models.ForceData, error) {
 	// 開啟 Excel 檔案
-	f, err := excelize.OpenFile(filePath)
+	excelFile, err := excelize.OpenFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("無法開啟 Excel 檔案 %s: %w", filePath, err)
 	}
+
 	defer func() {
-		if err := f.Close(); err != nil {
-			// 忽略關閉錯誤
+		if closeErr := excelFile.Close(); closeErr != nil {
+			_ = closeErr // Ignore close error
 		}
 	}()
 
 	// 獲取第一個工作表名稱
-	sheetName := f.GetSheetName(0)
+	sheetName := excelFile.GetSheetName(0)
 	if sheetName == "" {
 		return nil, fmt.Errorf("Excel 檔案沒有工作表: %s", filePath)
 	}
 
 	// 讀取所有行
-	rows, err := f.GetRows(sheetName)
+	rows, err := excelFile.GetRows(sheetName)
 	if err != nil {
 		return nil, fmt.Errorf("讀取 Excel 工作表失敗: %w", err)
 	}
@@ -177,6 +199,7 @@ func (p *ANCParser) parseXLSXFile(filePath string) (*models.ForceData, error) {
 
 	// 檢測檔案格式：ANC 格式的第一行通常以 "File_Type:" 開頭
 	isANCFormat := false
+
 	if len(rows) > 0 && len(rows[0]) > 0 {
 		firstCell := strings.TrimSpace(rows[0][0])
 		isANCFormat = strings.HasPrefix(firstCell, "File_Type:")
@@ -185,10 +208,13 @@ func (p *ANCParser) parseXLSXFile(filePath string) (*models.ForceData, error) {
 	if isANCFormat {
 		return p.parseANCFormatXLSX(rows, filePath)
 	}
+
 	return p.parseSimpleXLSX(rows, filePath)
 }
 
-// parseANCFormatXLSX 解析 ANC 格式的 xlsx 檔案（有頭部資訊）
+// parseANCFormatXLSX 解析 ANC 格式的 xlsx 檔案（有頭部資訊）.
+//
+//nolint:revive,err113 // unused-receiver: keep consistent API; dynamic errors with Chinese messages
 func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*models.ForceData, error) {
 	// ANC 格式結構：
 	// Row 1-8: 頭部資訊
@@ -196,8 +222,7 @@ func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*model
 	// Row 10: 採樣率
 	// Row 11: 範圍
 	// Row 12+: 數據（時間, 數值...）
-
-	if len(rows) < 12 {
+	if len(rows) < ANCDataStartLine {
 		return nil, fmt.Errorf("ANC xlsx 檔案格式不完整（需要至少 12 行）: %s", filePath)
 	}
 
@@ -209,6 +234,7 @@ func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*model
 
 	// 第一欄應該是 "Name"，後續是通道名稱
 	channelNames := make([]string, 0, len(nameRow)-1)
+
 	for i := 1; i < len(nameRow); i++ {
 		name := strings.TrimSpace(nameRow[i])
 		if name != "" {
@@ -222,53 +248,18 @@ func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*model
 
 	// 初始化數據結構
 	forceData := &models.ForceData{
-		Time:    make([]float64, 0, len(rows)-11),
+		Time:    make([]float64, 0, len(rows)-ANCHeaderRows),
 		Forces:  make(map[string][]float64),
 		Headers: channelNames,
 	}
 
 	// 為每個通道初始化切片
 	for _, channelName := range channelNames {
-		forceData.Forces[channelName] = make([]float64, 0, len(rows)-11)
+		forceData.Forces[channelName] = make([]float64, 0, len(rows)-ANCHeaderRows)
 	}
 
 	// 從第 12 行開始解析數據（索引 11）
-	for rowIdx := 11; rowIdx < len(rows); rowIdx++ {
-		row := rows[rowIdx]
-
-		// 跳過空行
-		if len(row) == 0 {
-			continue
-		}
-
-		// 解析時間（第一欄）
-		timeStr := strings.TrimSpace(row[0])
-		if timeStr == "" {
-			continue
-		}
-
-		timeValue, err := strconv.ParseFloat(timeStr, 64)
-		if err != nil {
-			continue // 跳過無效的時間值
-		}
-		forceData.Time = append(forceData.Time, timeValue)
-
-		// 解析各通道數據
-		for i, channelName := range channelNames {
-			colIdx := i + 1
-			var value float64 = 0
-			if colIdx < len(row) {
-				valueStr := strings.TrimSpace(row[colIdx])
-				if valueStr != "" {
-					parsedValue, err := strconv.ParseFloat(valueStr, 64)
-					if err == nil {
-						value = parsedValue
-					}
-				}
-			}
-			forceData.Forces[channelName] = append(forceData.Forces[channelName], value)
-		}
-	}
+	parseDataRows(rows, ANCHeaderRows, channelNames, forceData)
 
 	// 驗證數據完整性
 	if len(forceData.Time) == 0 {
@@ -285,7 +276,9 @@ func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*model
 	return forceData, nil
 }
 
-// parseSimpleXLSX 解析純數據表格式的 xlsx 檔案
+// parseSimpleXLSX 解析純數據表格式的 xlsx 檔案.
+//
+//nolint:revive,err113,stylecheck // unused-receiver; dynamic errors with Chinese messages; Excel is proper noun
 func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.ForceData, error) {
 	// 解析標題行（第一行應該包含 Time 和各通道名稱）
 	headerRow := rows[0]
@@ -295,6 +288,7 @@ func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.F
 
 	// 第一欄應該是 Time，後續欄位是通道名稱
 	channelNames := make([]string, 0, len(headerRow)-1)
+
 	for i := 1; i < len(headerRow); i++ {
 		name := strings.TrimSpace(headerRow[i])
 		if name != "" {
@@ -319,42 +313,7 @@ func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.F
 	}
 
 	// 解析數據行（從第二行開始）
-	for rowIdx := 1; rowIdx < len(rows); rowIdx++ {
-		row := rows[rowIdx]
-
-		// 跳過空行
-		if len(row) == 0 {
-			continue
-		}
-
-		// 解析時間（第一欄）
-		timeStr := strings.TrimSpace(row[0])
-		if timeStr == "" {
-			continue
-		}
-
-		timeValue, err := strconv.ParseFloat(timeStr, 64)
-		if err != nil {
-			continue // 跳過無效的時間值
-		}
-		forceData.Time = append(forceData.Time, timeValue)
-
-		// 解析各通道數據
-		for i, channelName := range channelNames {
-			colIdx := i + 1
-			var value float64 = 0
-			if colIdx < len(row) {
-				valueStr := strings.TrimSpace(row[colIdx])
-				if valueStr != "" {
-					parsedValue, err := strconv.ParseFloat(valueStr, 64)
-					if err == nil {
-						value = parsedValue
-					}
-				}
-			}
-			forceData.Forces[channelName] = append(forceData.Forces[channelName], value)
-		}
-	}
+	parseDataRows(rows, 1, channelNames, forceData)
 
 	// 驗證數據完整性
 	if len(forceData.Time) == 0 {
@@ -371,12 +330,190 @@ func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.F
 	return forceData, nil
 }
 
-// parseHeader 解析 ANC 檔案頭部
+// parseChannelValue parses a single channel value from a row.
+func parseChannelValue(row []string, colIdx int) float64 {
+	if colIdx >= len(row) {
+		return 0
+	}
+
+	valueStr := strings.TrimSpace(row[colIdx])
+	if valueStr == "" {
+		return 0
+	}
+
+	value, err := strconv.ParseFloat(valueStr, 64)
+	if err != nil {
+		return 0
+	}
+
+	return value
+}
+
+// parseDataRow parses a single data row and appends values to forceData.
+// Returns false if the row should be skipped.
+func parseDataRow(row, channelNames []string, forceData *models.ForceData) bool {
+	if len(row) == 0 {
+		return false
+	}
+
+	timeStr := strings.TrimSpace(row[0])
+	if timeStr == "" {
+		return false
+	}
+
+	timeValue, err := strconv.ParseFloat(timeStr, 64)
+	if err != nil {
+		return false
+	}
+
+	forceData.Time = append(forceData.Time, timeValue)
+
+	for i, channelName := range channelNames {
+		value := parseChannelValue(row, i+1)
+		forceData.Forces[channelName] = append(forceData.Forces[channelName], value)
+	}
+
+	return true
+}
+
+// parseDataRows 解析數據行，從指定的起始行索引開始.
+// 這是一個共用的輔助函數，用於解析時間序列和通道數據.
+func parseDataRows(rows [][]string, startRowIdx int, channelNames []string, forceData *models.ForceData) {
+	for rowIdx := startRowIdx; rowIdx < len(rows); rowIdx++ {
+		parseDataRow(rows[rowIdx], channelNames, forceData)
+	}
+}
+
+// lineHandler 定義行處理函數類型.
+type lineHandler func(p *ANCParser, header *ANCHeader, content string)
+
+// lineHandlers 行處理器映射表.
+//
+//nolint:gochecknoglobals // immutable configuration mapping
+var lineHandlers = map[int]lineHandler{
+	1:  handleFileTypeLine,
+	2:  handleBoardTypeLine,
+	3:  handleTrialInfoLine,
+	4:  handleBitDepthLine,
+	9:  handleChannelNamesLine,
+	10: handleChannelRatesLine,
+	11: handleChannelRangesLine,
+}
+
+// handleFileTypeLine 處理 File_Type 行.
+func handleFileTypeLine(_ *ANCParser, header *ANCHeader, content string) {
+	if !strings.Contains(content, "File_Type:") {
+		return
+	}
+
+	fileParts := strings.Split(content, "\t")
+	for _, part := range fileParts {
+		if strings.Contains(part, "File_Type:") {
+			header.FileType = strings.TrimSpace(strings.Split(part, ":")[1])
+
+			return
+		}
+	}
+}
+
+// handleBoardTypeLine 處理 Board_Type 行.
+func handleBoardTypeLine(p *ANCParser, header *ANCHeader, content string) {
+	if strings.Contains(content, "Board_Type:") {
+		header.BoardType = p.extractValue(content, "Board_Type:")
+	}
+}
+
+// handleTrialInfoLine 處理 Trial 信息行.
+func handleTrialInfoLine(p *ANCParser, header *ANCHeader, content string) {
+	if !strings.Contains(content, "Trial_Name:") {
+		return
+	}
+
+	header.TrialName = p.extractValue(content, "Trial_Name:")
+
+	if val := p.extractValue(content, "Trial#:"); val != "" {
+		header.TrialNumber, _ = strconv.Atoi(val) //nolint:errcheck // optional header field
+	}
+
+	if val := p.extractValue(content, "Duration(Sec.):"); val != "" {
+		header.Duration, _ = strconv.ParseFloat(val, 64) //nolint:errcheck // optional header field
+	}
+
+	if val := p.extractValue(content, "#Channels:"); val != "" {
+		header.NumChannels, _ = strconv.Atoi(strings.TrimSpace(val)) //nolint:errcheck // optional header field
+	}
+}
+
+// handleBitDepthLine 處理 BitDepth 和 PreciseRate 行.
+func handleBitDepthLine(p *ANCParser, header *ANCHeader, content string) {
+	if !strings.Contains(content, "BitDepth:") {
+		return
+	}
+
+	if val := p.extractValue(content, "BitDepth:"); val != "" {
+		header.BitDepth, _ = strconv.Atoi(val) //nolint:errcheck // optional header field
+	}
+
+	if val := p.extractValue(content, "PreciseRate:"); val != "" {
+		header.PreciseRate, _ = strconv.ParseFloat(val, 64) //nolint:errcheck // optional header field
+		p.frequency = header.PreciseRate
+	}
+}
+
+// handleChannelNamesLine 處理通道名稱行.
+func handleChannelNamesLine(_ *ANCParser, header *ANCHeader, content string) {
+	if !strings.Contains(content, "Name") {
+		return
+	}
+
+	fields := strings.Fields(content)
+	if len(fields) > 1 {
+		header.ChannelNames = fields[1:] // 跳過 "Name"
+	}
+}
+
+// handleChannelRatesLine 處理採樣率行.
+func handleChannelRatesLine(_ *ANCParser, header *ANCHeader, content string) {
+	if !strings.Contains(content, "Rate") {
+		return
+	}
+
+	fields := strings.Fields(content)
+	if len(fields) > 1 {
+		header.ChannelRates = make([]int, 0, len(fields)-1)
+
+		for _, f := range fields[1:] {
+			rate, _ := strconv.Atoi(f) //nolint:errcheck // optional header field
+			header.ChannelRates = append(header.ChannelRates, rate)
+		}
+	}
+}
+
+// handleChannelRangesLine 處理範圍行.
+func handleChannelRangesLine(_ *ANCParser, header *ANCHeader, content string) {
+	if !strings.Contains(content, "Range") {
+		return
+	}
+
+	fields := strings.Fields(content)
+	if len(fields) > 1 {
+		header.ChannelRanges = make([]int, 0, len(fields)-1)
+
+		for _, f := range fields[1:] {
+			rang, _ := strconv.Atoi(f) //nolint:errcheck // optional header field
+			header.ChannelRanges = append(header.ChannelRanges, rang)
+		}
+	}
+}
+
+// parseHeader 解析 ANC 檔案頭部.
+//
+//nolint:unparam // error return kept for future extensibility and API consistency
 func (p *ANCParser) parseHeader(scanner *bufio.Scanner) (*ANCHeader, error) {
 	header := &ANCHeader{}
 	lineNum := 0
 
-	for scanner.Scan() && lineNum < 12 { // 通常頭部在前12行內
+	for scanner.Scan() && lineNum < ANCDataStartLine { // 通常頭部在前12行內
 		line := scanner.Text()
 		lineNum++
 
@@ -389,98 +526,23 @@ func (p *ANCParser) parseHeader(scanner *bufio.Scanner) (*ANCHeader, error) {
 		// 獲取實際內容（跳過行號）
 		content := strings.Join(parts[1:], "\t")
 
-		switch lineNum {
-		case 1: // File_Type 行
-			if strings.Contains(content, "File_Type:") {
-				fileParts := strings.Split(content, "\t")
-				for i, part := range fileParts {
-					if strings.Contains(part, "File_Type:") {
-						header.FileType = strings.TrimSpace(strings.Split(part, ":")[1])
-					} else if strings.Contains(part, "Generation#:") && i > 0 {
-						// Generation number 通常在 File_Type 之後
-					}
-				}
-			}
-
-		case 2: // Board_Type 行
-			if strings.Contains(content, "Board_Type:") {
-				header.BoardType = p.extractValue(content, "Board_Type:")
-			}
-
-		case 3: // Trial 信息行
-			if strings.Contains(content, "Trial_Name:") {
-				header.TrialName = p.extractValue(content, "Trial_Name:")
-
-				// 解析 Trial#
-				if val := p.extractValue(content, "Trial#:"); val != "" {
-					header.TrialNumber, _ = strconv.Atoi(val)
-				}
-
-				// 解析 Duration
-				if val := p.extractValue(content, "Duration(Sec.):"); val != "" {
-					header.Duration, _ = strconv.ParseFloat(val, 64)
-				}
-
-				// 解析 #Channels
-				if val := p.extractValue(content, "#Channels:"); val != "" {
-					header.NumChannels, _ = strconv.Atoi(strings.TrimSpace(val))
-				}
-			}
-
-		case 4: // BitDepth 和 PreciseRate 行
-			if strings.Contains(content, "BitDepth:") {
-				if val := p.extractValue(content, "BitDepth:"); val != "" {
-					header.BitDepth, _ = strconv.Atoi(val)
-				}
-
-				if val := p.extractValue(content, "PreciseRate:"); val != "" {
-					header.PreciseRate, _ = strconv.ParseFloat(val, 64)
-					p.frequency = header.PreciseRate
-				}
-			}
-
-		case 9: // 通道名稱行
-			if strings.Contains(content, "Name") {
-				fields := strings.Fields(content)
-				if len(fields) > 1 {
-					header.ChannelNames = fields[1:] // 跳過 "Name"
-				}
-			}
-
-		case 10: // 採樣率行
-			if strings.Contains(content, "Rate") {
-				fields := strings.Fields(content)
-				if len(fields) > 1 {
-					header.ChannelRates = make([]int, 0, len(fields)-1)
-					for _, f := range fields[1:] {
-						rate, _ := strconv.Atoi(f)
-						header.ChannelRates = append(header.ChannelRates, rate)
-					}
-				}
-			}
-
-		case 11: // 範圍行
-			if strings.Contains(content, "Range") {
-				fields := strings.Fields(content)
-				if len(fields) > 1 {
-					header.ChannelRanges = make([]int, 0, len(fields)-1)
-					for _, f := range fields[1:] {
-						rang, _ := strconv.Atoi(f)
-						header.ChannelRanges = append(header.ChannelRanges, rang)
-					}
-				}
-			}
-
-		case 12: // 數據開始
-			// 這是第一行數據，需要回退
+		// 第12行是數據開始
+		if lineNum == ANCDataStartLine {
 			return header, nil
+		}
+
+		// 使用處理器映射表處理對應行
+		if handler, exists := lineHandlers[lineNum]; exists {
+			handler(p, header, content)
 		}
 	}
 
 	return header, nil
 }
 
-// extractValue 從字符串中提取指定標籤的值
+// extractValue 從字符串中提取指定標籤的值.
+//
+//nolint:revive // unused-receiver: keep consistent API
 func (p *ANCParser) extractValue(content, label string) string {
 	parts := strings.Split(content, "\t")
 	for _, part := range parts {
@@ -491,11 +553,14 @@ func (p *ANCParser) extractValue(content, label string) string {
 			}
 		}
 	}
+
 	return ""
 }
 
-// GetDataInTimeRange 獲取指定時間範圍內的數據
-// 使用整數毫秒進行比較，避免浮點數精度問題
+// GetDataInTimeRange returns force data within the specified time range.
+// Uses integer milliseconds for comparison to avoid floating point precision issues.
+//
+//nolint:revive,err113 // unused-receiver: keep consistent API; dynamic errors with Chinese messages
 func (p *ANCParser) GetDataInTimeRange(data *models.ForceData, startTime, endTime float64) (*models.ForceData, error) {
 	if startTime > endTime {
 		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", startTime, endTime)
@@ -514,6 +579,7 @@ func (p *ANCParser) GetDataInTimeRange(data *models.ForceData, startTime, endTim
 		if startIdx == -1 && tMs >= startTimeMs {
 			startIdx = i
 		}
+
 		if tMs <= endTimeMs {
 			endIdx = i
 		} else if endIdx != -1 {
@@ -540,12 +606,14 @@ func (p *ANCParser) GetDataInTimeRange(data *models.ForceData, startTime, endTim
 	return rangeData, nil
 }
 
-// GetSampleInterval 獲取採樣間隔（秒）
+// GetSampleInterval 獲取採樣間隔（秒）.
 func (p *ANCParser) GetSampleInterval() float64 {
 	return 1.0 / p.frequency
 }
 
-// ValidateForceData 驗證力板數據
+// ValidateForceData 驗證力板數據.
+//
+//nolint:err113,dupl // dynamic errors with Chinese messages; similar validation pattern is intentional
 func ValidateForceData(data *models.ForceData) error {
 	if data == nil {
 		return fmt.Errorf("力板數據為空")

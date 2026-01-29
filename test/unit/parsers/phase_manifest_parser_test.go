@@ -1,14 +1,15 @@
 package parsers
 
 import (
+	"errors"
 	"os"
 	"testing"
 
-	"count_mean/internal/models"
-	"count_mean/internal/parsers"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/models"
+	"count_mean/internal/parsers"
 )
 
 func TestNewPhaseManifestParser(t *testing.T) {
@@ -75,8 +76,10 @@ Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,NA,x,4.000,-,150,N/A,7.000,X,
 		},
 		{
 			name: "file with spaces",
-			csvContent: `  Subject  ,  MotionFile  ,  ForceFile  ,  EMGFile  ,  EMGMotionOffset  ,  P0  ,  P1  ,  P2  ,  S  ,  C  ,  D  ,  T0  ,  T  ,  O  ,  L  
-  Subject1  ,  motion1.csv  ,  force1.anc  ,  emg1.csv  ,  100  ,  1.000  ,  2.000  ,  3.000  ,  4.000  ,  5.000  ,  150  ,  6.000  ,  7.000  ,  200  ,  8.000  `,
+			csvContent: "  Subject  ,  MotionFile  ,  ForceFile  ,  EMGFile  ,  " +
+				"EMGMotionOffset  ,  P0  ,  P1  ,  P2  ,  S  ,  C  ,  D  ,  T0  ,  T  ,  O  ,  L  \n" +
+				"  Subject1  ,  motion1.csv  ,  force1.anc  ,  emg1.csv  ,  100  ,  " +
+				"1.000  ,  2.000  ,  3.000  ,  4.000  ,  5.000  ,  150  ,  6.000  ,  7.000  ,  200  ,  8.000  ",
 			wantErr: false,
 			checkData: func(t *testing.T, manifests []models.PhaseManifest) {
 				assert.Len(t, manifests, 1)
@@ -127,9 +130,8 @@ Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,inval
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// 創建臨時測試文件
-			tmpFile, err := os.CreateTemp("", "test_manifest_*.csv")
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_manifest_*.csv")
 			require.NoError(t, err)
-			defer os.Remove(tmpFile.Name())
 
 			_, err = tmpFile.WriteString(tt.csvContent)
 			require.NoError(t, err)
@@ -195,7 +197,7 @@ func TestGetPhaseValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.phaseName, func(t *testing.T) {
-			value, isIdx, err := parsers.GetPhaseValue(phasePoints, tt.phaseName)
+			value, isIdx, err := parsers.GetPhaseValue(&phasePoints, tt.phaseName)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -355,11 +357,13 @@ func TestValidatePhaseManifest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := parsers.ValidatePhaseManifest(tt.manifest)
+			err := parsers.ValidatePhaseManifest(&tt.manifest)
 
 			if tt.wantErr {
 				assert.Error(t, err)
-				if validationErr, ok := err.(models.ValidationError); ok {
+
+				var validationErr models.ValidationError
+				if errors.As(err, &validationErr) {
 					assert.Equal(t, tt.errField, validationErr.Field)
 					assert.Contains(t, validationErr.Message, tt.errMsg)
 				} else {
@@ -400,9 +404,8 @@ func TestPhaseManifestParser_parseFloat(t *testing.T) {
 			csvContent := "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n"
 			csvContent += "Subject1,motion1.csv,force1.anc,emg1.csv,100," + tt.value + ",2,3,4,5,150,6,7,200,8"
 
-			tmpFile, err := os.CreateTemp("", "test_float_*.csv")
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_float_*.csv")
 			require.NoError(t, err)
-			defer os.Remove(tmpFile.Name())
 
 			_, err = tmpFile.WriteString(csvContent)
 			require.NoError(t, err)
@@ -451,9 +454,8 @@ func TestPhaseManifestParser_parseInt(t *testing.T) {
 			csvContent := "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n"
 			csvContent += "Subject1,motion1.csv,force1.anc,emg1.csv,100,1,2,3,4,5," + tt.value + ",6,7,200,8"
 
-			tmpFile, err := os.CreateTemp("", "test_int_*.csv")
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_int_*.csv")
 			require.NoError(t, err)
-			defer os.Remove(tmpFile.Name())
 
 			_, err = tmpFile.WriteString(csvContent)
 			require.NoError(t, err)
@@ -482,9 +484,8 @@ Subject002,motion002.csv,force002.anc,emg002.csv,110,0.480,1.150,2.050,2.800,3.1
 Subject003,motion003.csv,force003.anc,emg003.csv,130,NA,1.250,x,2.900,3.250,780,-,4.700,X,5.250`
 
 		// 創建臨時文件
-		tmpFile, err := os.CreateTemp("", "integration_test_*.csv")
+		tmpFile, err := os.CreateTemp(t.TempDir(), "integration_test_*.csv")
 		require.NoError(t, err)
-		defer os.Remove(tmpFile.Name())
 
 		_, err = tmpFile.WriteString(manifestContent)
 		require.NoError(t, err)
@@ -518,18 +519,18 @@ Subject003,motion003.csv,force003.anc,emg003.csv,130,NA,1.250,x,2.900,3.250,780,
 		assert.Equal(t, 2.900, m3.PhasePoints.S)  // 正常值
 
 		// 驗證所有記錄
-		for i, manifest := range manifests {
-			err := parsers.ValidatePhaseManifest(manifest)
+		for i := range manifests {
+			err := parsers.ValidatePhaseManifest(&manifests[i])
 			assert.NoError(t, err, "Validation failed for manifest %d", i+1)
 		}
 
 		// 測試分期點值獲取
-		value, isIndex, err := parsers.GetPhaseValue(m1.PhasePoints, "D")
+		value, isIndex, err := parsers.GetPhaseValue(&m1.PhasePoints, "D")
 		require.NoError(t, err)
 		assert.Equal(t, 780.0, value)
 		assert.True(t, isIndex)
 
-		value, isIndex, err = parsers.GetPhaseValue(m1.PhasePoints, "S")
+		value, isIndex, err = parsers.GetPhaseValue(&m1.PhasePoints, "S")
 		require.NoError(t, err)
 		assert.Equal(t, 2.850, value)
 		assert.False(t, isIndex)

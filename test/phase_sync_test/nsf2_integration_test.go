@@ -17,7 +17,7 @@ const (
 	outputDir   = "/Users/wilson08/IdeaProjects/count_mean/output"
 )
 
-// TestNSF2_T_to_O_Analysis tests the T to O phase analysis
+// TestNSF2_T_to_O_Analysis tests the T to O phase analysis.
 func TestNSF2_T_to_O_Analysis(t *testing.T) {
 	manifestPath := filepath.Join(projectRoot, "input", "test_manifest_nsf2.csv")
 
@@ -25,12 +25,13 @@ func TestNSF2_T_to_O_Analysis(t *testing.T) {
 	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
 		t.Skipf("Skipping test: test data file not found: %s", manifestPath)
 	}
+
 	if _, err := os.Stat(dataFolder); os.IsNotExist(err) {
 		t.Skipf("Skipping test: test data folder not found: %s", dataFolder)
 	}
 
 	// Ensure output directory exists
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		t.Fatalf("Failed to create output directory: %v", err)
 	}
 
@@ -90,6 +91,7 @@ func TestNSF2_T_to_O_Analysis(t *testing.T) {
 		t.Errorf("Start time calculation error: expected %.6f, got %.6f (diff: %.6f)",
 			expectedStartTime, stats.StartTime, diff)
 	}
+
 	if diff := math.Abs(stats.EndTime - expectedEndTime); diff > tolerance {
 		t.Errorf("End time calculation error: expected %.6f, got %.6f (diff: %.6f)",
 			expectedEndTime, stats.EndTime, diff)
@@ -131,7 +133,7 @@ func TestNSF2_T_to_O_Analysis(t *testing.T) {
 	verifyStatistics(t, stats)
 }
 
-// TestNSF2_P0_to_P1_Analysis tests the P0 to P1 phase analysis
+// TestNSF2_P0_to_P1_Analysis tests the P0 to P1 phase analysis.
 func TestNSF2_P0_to_P1_Analysis(t *testing.T) {
 	manifestPath := filepath.Join(projectRoot, "input", "test_manifest_nsf2.csv")
 
@@ -139,12 +141,13 @@ func TestNSF2_P0_to_P1_Analysis(t *testing.T) {
 	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
 		t.Skipf("Skipping test: test data file not found: %s", manifestPath)
 	}
+
 	if _, err := os.Stat(dataFolder); os.IsNotExist(err) {
 		t.Skipf("Skipping test: test data folder not found: %s", dataFolder)
 	}
 
 	// Ensure output directory exists
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		t.Fatalf("Failed to create output directory: %v", err)
 	}
 
@@ -203,6 +206,7 @@ func TestNSF2_P0_to_P1_Analysis(t *testing.T) {
 		t.Errorf("Start time calculation error: expected %.6f, got %.6f (diff: %.6f)",
 			expectedStartTime, stats.StartTime, diff)
 	}
+
 	if diff := math.Abs(stats.EndTime - expectedEndTime); diff > tolerance {
 		t.Errorf("End time calculation error: expected %.6f, got %.6f (diff: %.6f)",
 			expectedEndTime, stats.EndTime, diff)
@@ -244,8 +248,8 @@ func TestNSF2_P0_to_P1_Analysis(t *testing.T) {
 	verifyStatistics(t, stats)
 }
 
-// verifyCSVStructure checks the CSV output structure
-func verifyCSVStructure(t *testing.T, content string, startPhase, endPhase string, expectedStartTime, expectedEndTime float64) {
+// verifyCSVStructure checks the CSV output structure.
+func verifyCSVStructure(t *testing.T, content, startPhase, endPhase string, _, _ float64) {
 	t.Helper()
 
 	lines := strings.Split(content, "\n")
@@ -258,12 +262,14 @@ func verifyCSVStructure(t *testing.T, content string, startPhase, endPhase strin
 
 	for _, required := range requiredRows {
 		found := false
+
 		for _, line := range lines {
 			if strings.Contains(line, required) {
 				found = true
 				break
 			}
 		}
+
 		if !found {
 			t.Errorf("Missing required row: %s", required)
 		}
@@ -276,6 +282,7 @@ func verifyCSVStructure(t *testing.T, content string, startPhase, endPhase strin
 				t.Errorf("Start Phase row should contain '%s', got: %s", startPhase, line)
 			}
 		}
+
 		if strings.Contains(line, "結束分期點") {
 			if !strings.Contains(line, endPhase) {
 				t.Errorf("End Phase row should contain '%s', got: %s", endPhase, line)
@@ -284,7 +291,7 @@ func verifyCSVStructure(t *testing.T, content string, startPhase, endPhase strin
 	}
 }
 
-// verifyStatistics checks that statistics values are reasonable
+// verifyStatistics checks that statistics values are reasonable.
 func verifyStatistics(t *testing.T, stats *models.EMGStatistics) {
 	t.Helper()
 
@@ -302,6 +309,7 @@ func verifyStatistics(t *testing.T, stats *models.EMGStatistics) {
 		if math.IsNaN(mean) {
 			t.Errorf("Mean for channel %s is NaN", channelName)
 		}
+
 		if math.IsInf(mean, 0) {
 			t.Errorf("Mean for channel %s is Inf", channelName)
 		}
@@ -312,6 +320,7 @@ func verifyStatistics(t *testing.T, stats *models.EMGStatistics) {
 		if math.IsNaN(max) {
 			t.Errorf("Max for channel %s is NaN", channelName)
 		}
+
 		if math.IsInf(max, 0) {
 			t.Errorf("Max for channel %s is Inf", channelName)
 		}
@@ -319,16 +328,17 @@ func verifyStatistics(t *testing.T, stats *models.EMGStatistics) {
 
 	// Check that max >= mean for each channel (for positive values)
 	for channelName, mean := range stats.ChannelMeans {
-		if max, ok := stats.ChannelMaxes[channelName]; ok {
-			if mean > 0 && max < mean {
+		if maxVal, ok := stats.ChannelMaxes[channelName]; ok {
+			if mean > 0 && maxVal < mean {
 				t.Errorf("Channel %s: Max (%.6f) should be >= Mean (%.6f)",
-					channelName, max, mean)
+					channelName, maxVal, mean)
 			}
 		}
 	}
 
 	// Log some statistics for verification
 	t.Logf("Channel names: %v", stats.ChannelNames)
+
 	for _, channelName := range stats.ChannelNames {
 		if mean, ok := stats.ChannelMeans[channelName]; ok {
 			t.Logf("Channel %s - Mean: %.10f, Max: %.10f",
@@ -337,7 +347,7 @@ func verifyStatistics(t *testing.T, stats *models.EMGStatistics) {
 	}
 }
 
-// TestTimeCalculationVerification verifies the time synchronization formulas
+// TestTimeCalculationVerification verifies the time synchronization formulas.
 func TestTimeCalculationVerification(t *testing.T) {
 	emgMotionOffset := 600
 	motionFreq := 250.0
@@ -376,7 +386,7 @@ func TestTimeCalculationVerification(t *testing.T) {
 	}
 }
 
-// TestAllPhasesEMGTime prints EMG times for all phases
+// TestAllPhasesEMGTime prints EMG times for all phases.
 func TestAllPhasesEMGTime(t *testing.T) {
 	emgMotionOffset := 600
 	motionFreq := 250.0
@@ -403,6 +413,7 @@ func TestAllPhasesEMGTime(t *testing.T) {
 
 	for _, phase := range phases {
 		var emgTime float64
+
 		var typeStr string
 
 		if phase.isMotionIndex {
@@ -417,7 +428,7 @@ func TestAllPhasesEMGTime(t *testing.T) {
 	}
 }
 
-// TestOutputFileContent verifies the output file contains expected content
+// TestOutputFileContent verifies the output file contains expected content.
 func TestOutputFileContent(t *testing.T) {
 	// Skip if test data doesn't exist (this test depends on output from previous tests)
 	manifestPath := filepath.Join(projectRoot, "input", "test_manifest_nsf2.csv")
@@ -432,11 +443,13 @@ func TestOutputFileContent(t *testing.T) {
 	}
 
 	foundFiles := 0
+
 	for _, file := range files {
 		if _, err := os.Stat(file); os.IsNotExist(err) {
 			t.Logf("File not found (run phase analysis tests first): %s", file)
 			continue
 		}
+
 		foundFiles++
 
 		content, err := os.ReadFile(file)

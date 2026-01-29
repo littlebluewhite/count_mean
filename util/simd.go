@@ -5,7 +5,7 @@ import (
 	"unsafe"
 )
 
-// SIMDCapabilities 檢測系統SIMD支持能力
+// SIMDCapabilities 檢測系統SIMD支持能力.
 type SIMDCapabilities struct {
 	HasAVX2    bool
 	HasSSE4    bool
@@ -14,14 +14,17 @@ type SIMDCapabilities struct {
 	VectorSize int
 }
 
-// DetectSIMDCapabilities 檢測當前系統的SIMD支持
+// avx2VectorSize AVX2可以同時處理的float64數量.
+const avx2VectorSize = 8
+
+// DetectSIMDCapabilities 檢測當前系統的SIMD支持.
 func DetectSIMDCapabilities() *SIMDCapabilities {
 	caps := &SIMDCapabilities{
-		HasSSE2:    true, // 現代x86-64處理器都支持SSE2
-		HasSSE4:    true, // 大多數現代處理器支持SSE4
-		HasAVX:     true, // 現代處理器一般支持AVX
-		HasAVX2:    true, // 假設支持AVX2（可用runtime.GOARCH檢測）
-		VectorSize: 8,    // AVX2可以同時處理8個float64
+		HasSSE2:    true,           // 現代x86-64處理器都支持SSE2
+		HasSSE4:    true,           // 大多數現代處理器支持SSE4
+		HasAVX:     true,           // 現代處理器一般支持AVX
+		HasAVX2:    true,           // 假設支持AVX2（可用runtime.GOARCH檢測）
+		VectorSize: avx2VectorSize, // AVX2可以同時處理8個float64
 	}
 
 	// 根據架構調整
@@ -35,207 +38,211 @@ func DetectSIMDCapabilities() *SIMDCapabilities {
 	return caps
 }
 
-// ArrayMeanSIMD 使用SIMD指令優化的陣列平均值計算
-func ArrayMeanSIMD(a []float64) float64 {
-	if len(a) == 0 {
+// ArrayMeanSIMD 使用SIMD指令優化的陣列平均值計算.
+func ArrayMeanSIMD(data []float64) float64 {
+	if len(data) == 0 {
 		return 0
 	}
 
 	caps := DetectSIMDCapabilities()
 
 	// 如果支持AVX2且數據量足夠大，使用SIMD優化
-	if caps.HasAVX2 && len(a) >= caps.VectorSize {
-		return arrayMeanAVX2(a)
+	if caps.HasAVX2 && len(data) >= caps.VectorSize {
+		return arrayMeanAVX2(data)
 	}
 
 	// 回退到通用實現
-	return arrayMeanGeneric(a)
+	return arrayMeanGeneric(data)
 }
 
-// ArrayMaxSIMD 使用SIMD指令優化的陣列最大值計算
-func ArrayMaxSIMD(a []float64) (float64, int) {
-	if len(a) == 0 {
+// ArrayMaxSIMD 使用SIMD指令優化的陣列最大值計算.
+func ArrayMaxSIMD(data []float64) (float64, int) {
+	if len(data) == 0 {
 		return 0, -1
 	}
 
 	caps := DetectSIMDCapabilities()
 
 	// 如果支持AVX2且數據量足夠大，使用SIMD優化
-	if caps.HasAVX2 && len(a) >= caps.VectorSize {
-		return arrayMaxAVX2(a)
+	if caps.HasAVX2 && len(data) >= caps.VectorSize {
+		return arrayMaxAVX2(data)
 	}
 
 	// 回退到通用實現
-	return arrayMaxGeneric(a)
+	return arrayMaxGeneric(data)
 }
 
-// arrayMeanAVX2 使用AVX2指令集的向量化平均值計算
-func arrayMeanAVX2(a []float64) float64 {
-	length := len(a)
+// arrayMeanAVX2 使用AVX2指令集的向量化平均值計算.
+func arrayMeanAVX2(data []float64) float64 {
+	length := len(data)
 	vectorSize := 8 // AVX2可以同時處理8個float64
 
 	// 向量化部分的總和
 	var vectorSum float64
+
 	vectorCount := (length / vectorSize) * vectorSize
 
 	if vectorCount > 0 {
-		vectorSum = simdSum8Float64(a[:vectorCount])
+		vectorSum = simdSum8Float64(data[:vectorCount])
 	}
 
 	// 處理剩餘的元素
 	var remainderSum float64
 	for i := vectorCount; i < length; i++ {
-		remainderSum += a[i]
+		remainderSum += data[i]
 	}
 
 	return (vectorSum + remainderSum) / float64(length)
 }
 
-// arrayMaxAVX2 使用AVX2指令集的向量化最大值計算
-func arrayMaxAVX2(a []float64) (float64, int) {
-	length := len(a)
+// arrayMaxAVX2 使用AVX2指令集的向量化最大值計算.
+func arrayMaxAVX2(data []float64) (float64, int) {
+	length := len(data)
 	vectorSize := 8 // AVX2可以同時處理8個float64
 
-	max := a[0]
-	maxIndex := 0
+	maxVal := data[0]
+	maxIdx := 0
 
 	// 向量化部分
 	vectorCount := (length / vectorSize) * vectorSize
 	if vectorCount > 0 {
-		vectorMax, vectorIndex := simdMax8Float64(a[:vectorCount])
-		if vectorMax > max {
-			max = vectorMax
-			maxIndex = vectorIndex
+		vectorMax, vectorIndex := simdMax8Float64(data[:vectorCount])
+		if vectorMax > maxVal {
+			maxVal = vectorMax
+			maxIdx = vectorIndex
 		}
 	}
 
 	// 處理剩餘的元素
 	for i := vectorCount; i < length; i++ {
-		if a[i] > max {
-			max = a[i]
-			maxIndex = i
+		if data[i] > maxVal {
+			maxVal = data[i]
+			maxIdx = i
 		}
 	}
 
-	return max, maxIndex
+	return maxVal, maxIdx
 }
 
-// simdSum8Float64 使用向量化指令計算8個float64的總和
-// 這是一個模擬實現，實際應該使用內聯彙編或CGO調用
-func simdSum8Float64(a []float64) float64 {
-	if len(a) == 0 {
+// 這是一個模擬實現，實際應該使用內聯彙編或CGO調用.
+func simdSum8Float64(data []float64) float64 {
+	if len(data) == 0 {
 		return 0
 	}
 
 	var sum float64
+
 	vectorSize := 8
 
 	// 模擬向量化處理：一次處理8個元素
-	for i := 0; i < len(a); i += vectorSize {
+	for i := 0; i < len(data); i += vectorSize {
 		end := i + vectorSize
-		if end > len(a) {
-			end = len(a)
+		if end > len(data) {
+			end = len(data)
 		}
 
 		// 模擬SIMD向量加法：並行加法
 		var vectorSum float64
 		for j := i; j < end; j++ {
-			vectorSum += a[j]
+			vectorSum += data[j]
 		}
+
 		sum += vectorSum
 	}
 
 	return sum
 }
 
-// simdMax8Float64 使用向量化指令計算8個float64的最大值
-// 這是一個模擬實現，實際應該使用內聯彙編或CGO調用
-func simdMax8Float64(a []float64) (float64, int) {
-	if len(a) == 0 {
+// 這是一個模擬實現，實際應該使用內聯彙編或CGO調用.
+func simdMax8Float64(data []float64) (float64, int) {
+	if len(data) == 0 {
 		return 0, -1
 	}
 
-	max := a[0]
-	maxIndex := 0
+	maxVal := data[0]
+	maxIdx := 0
 	vectorSize := 8
 
 	// 模擬向量化處理：一次處理8個元素
-	for i := 0; i < len(a); i += vectorSize {
+	for i := 0; i < len(data); i += vectorSize {
 		end := i + vectorSize
-		if end > len(a) {
-			end = len(a)
+		if end > len(data) {
+			end = len(data)
 		}
 
 		// 模擬SIMD向量比較：並行比較
 		for j := i; j < end; j++ {
-			if a[j] > max {
-				max = a[j]
-				maxIndex = j
+			if data[j] > maxVal {
+				maxVal = data[j]
+				maxIdx = j
 			}
 		}
 	}
 
-	return max, maxIndex
+	return maxVal, maxIdx
 }
 
-// arrayMeanGeneric 通用的陣列平均值計算（回退實現）
-func arrayMeanGeneric(a []float64) float64 {
-	if len(a) == 0 {
+// arrayMeanGeneric 通用的陣列平均值計算（回退實現）.
+func arrayMeanGeneric(data []float64) float64 {
+	if len(data) == 0 {
 		return 0
 	}
 
 	var sum float64
-	for _, v := range a {
+	for _, v := range data {
 		sum += v
 	}
-	return sum / float64(len(a))
+
+	return sum / float64(len(data))
 }
 
-// arrayMaxGeneric 通用的陣列最大值計算（回退實現）
-func arrayMaxGeneric(a []float64) (float64, int) {
-	if len(a) == 0 {
+// arrayMaxGeneric 通用的陣列最大值計算（回退實現）.
+func arrayMaxGeneric(data []float64) (float64, int) {
+	if len(data) == 0 {
 		return 0, -1
 	}
 
-	max := a[0]
-	maxIndex := 0
+	maxVal := data[0]
+	maxIdx := 0
 
-	for i, v := range a {
-		if v > max {
-			max = v
-			maxIndex = i
+	for i, v := range data {
+		if v > maxVal {
+			maxVal = v
+			maxIdx = i
 		}
 	}
 
-	return max, maxIndex
+	return maxVal, maxIdx
 }
 
-// SIMDStatistics 使用SIMD優化的統計計算
+// SIMDStatistics 使用SIMD優化的統計計算.
 type SIMDStatistics struct {
 	caps *SIMDCapabilities
 }
 
-// NewSIMDStatistics 創建SIMD統計計算器
+// NewSIMDStatistics 創建SIMD統計計算器.
 func NewSIMDStatistics() *SIMDStatistics {
 	return &SIMDStatistics{
 		caps: DetectSIMDCapabilities(),
 	}
 }
 
-// CalculateChannelStatistics 計算通道統計數據（平均值、最大值）
-func (s *SIMDStatistics) CalculateChannelStatistics(data []float64) (mean, max float64, maxIndex int) {
+// CalculateChannelStatistics 計算通道統計數據（平均值、最大值）.
+//
+//nolint:nonamedreturns // Named returns improve readability for multiple return values
+func (*SIMDStatistics) CalculateChannelStatistics(data []float64) (mean, maxVal float64, maxIdx int) {
 	if len(data) == 0 {
 		return 0, 0, -1
 	}
 
 	// 使用SIMD優化的函數
 	mean = ArrayMeanSIMD(data)
-	max, maxIndex = ArrayMaxSIMD(data)
+	maxVal, maxIdx = ArrayMaxSIMD(data)
 
-	return mean, max, maxIndex
+	return mean, maxVal, maxIdx
 }
 
-// BatchCalculateStatistics 批量計算多個通道的統計數據
+// BatchCalculateStatistics 批量計算多個通道的統計數據.
 func (s *SIMDStatistics) BatchCalculateStatistics(channels map[string][]float64) map[string]struct {
 	Mean     float64
 	Max      float64
@@ -248,54 +255,60 @@ func (s *SIMDStatistics) BatchCalculateStatistics(channels map[string][]float64)
 	})
 
 	for channelName, data := range channels {
-		mean, max, maxIndex := s.CalculateChannelStatistics(data)
+		mean, maxVal, maxIdx := s.CalculateChannelStatistics(data)
 		results[channelName] = struct {
 			Mean     float64
 			Max      float64
 			MaxIndex int
 		}{
 			Mean:     mean,
-			Max:      max,
-			MaxIndex: maxIndex,
+			Max:      maxVal,
+			MaxIndex: maxIdx,
 		}
 	}
 
 	return results
 }
 
-// isAligned 檢查記憶體是否對齊（對SIMD性能很重要）
-func isAligned(ptr uintptr, alignment uintptr) bool {
+// isAligned 檢查記憶體是否對齊（對SIMD性能很重要）.
+func isAligned(ptr, alignment uintptr) bool {
 	return ptr&(alignment-1) == 0
 }
 
-// ensureAlignment 確保float64切片的記憶體對齊
-func ensureAlignment(a []float64) []float64 {
-	if len(a) == 0 {
-		return a
+// alignment32Bytes is the byte alignment required for AVX2.
+const alignment32Bytes = 32
+
+// ensureAlignment 確保float64切片的記憶體對齊.
+func ensureAlignment(data []float64) []float64 {
+	if len(data) == 0 {
+		return data
 	}
 
 	// 檢查是否已經對齊到32字節邊界（AVX2要求）
-	ptr := uintptr(unsafe.Pointer(&a[0]))
-	if isAligned(ptr, 32) {
-		return a
+	ptr := uintptr(unsafe.Pointer(&data[0])) //nolint:gosec // G103: Unsafe pointer for alignment check
+
+	if isAligned(ptr, alignment32Bytes) {
+		return data
 	}
 
 	// 如果沒有對齊，創建新的對齊切片
-	aligned := make([]float64, len(a))
-	copy(aligned, a)
+	aligned := make([]float64, len(data))
+	copy(aligned, data)
+
 	return aligned
 }
 
-// SIMDSlidingWindow SIMD優化的滑動窗口計算
+// SIMDSlidingWindow SIMD優化的滑動窗口計算.
 type SIMDSlidingWindow struct {
 	caps       *SIMDCapabilities
 	windowSize int
 	vectorSize int
 }
 
-// NewSIMDSlidingWindow 創建SIMD滑動窗口計算器
+// NewSIMDSlidingWindow 創建SIMD滑動窗口計算器.
 func NewSIMDSlidingWindow(windowSize int) *SIMDSlidingWindow {
 	caps := DetectSIMDCapabilities()
+
 	return &SIMDSlidingWindow{
 		caps:       caps,
 		windowSize: windowSize,
@@ -303,8 +316,8 @@ func NewSIMDSlidingWindow(windowSize int) *SIMDSlidingWindow {
 	}
 }
 
-// CalculateMaxMean 使用SIMD優化的滑動窗口最大平均值計算
-func (sw *SIMDSlidingWindow) CalculateMaxMean(data []float64) (maxMean float64, bestIndex int) {
+// CalculateMaxMean 使用SIMD優化的滑動窗口最大平均值計算.
+func (sw *SIMDSlidingWindow) CalculateMaxMean(data []float64) (float64, int) {
 	if len(data) < sw.windowSize {
 		return 0, -1
 	}
@@ -322,8 +335,8 @@ func (sw *SIMDSlidingWindow) CalculateMaxMean(data []float64) (maxMean float64, 
 		}
 	}
 
-	maxMean = windowSum / float64(sw.windowSize)
-	bestIndex = 0
+	maxMean := windowSum / float64(sw.windowSize)
+	bestIdx := 0
 
 	// 滑動窗口計算
 	for i := 1; i <= len(alignedData)-sw.windowSize; i++ {
@@ -333,14 +346,14 @@ func (sw *SIMDSlidingWindow) CalculateMaxMean(data []float64) (maxMean float64, 
 
 		if currentMean > maxMean {
 			maxMean = currentMean
-			bestIndex = i
+			bestIdx = i
 		}
 	}
 
-	return maxMean, bestIndex
+	return maxMean, bestIdx
 }
 
-// MultiChannelMaxMean 多通道並行SIMD滑動窗口計算
+// MultiChannelMaxMean 多通道並行SIMD滑動窗口計算.
 func (sw *SIMDSlidingWindow) MultiChannelMaxMean(channels [][]float64) []struct {
 	MaxMean   float64
 	BestIndex int

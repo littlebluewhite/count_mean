@@ -7,20 +7,17 @@ import (
 	"time"
 )
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
-
-// 生成測試數據
+// 生成測試數據.
 func generateTestData(size int) []float64 {
 	data := make([]float64, size)
 	for i := range data {
 		data[i] = rand.Float64() * 1000 // 0-1000之間的隨機數
 	}
+
 	return data
 }
 
-// 測試SIMD平均值計算的正確性
+// 測試SIMD平均值計算的正確性.
 func TestArrayMeanSIMD(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -59,7 +56,7 @@ func TestArrayMeanSIMD(t *testing.T) {
 	}
 }
 
-// 測試SIMD最大值計算的正確性
+// 測試SIMD最大值計算的正確性.
 func TestArrayMaxSIMD(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -104,7 +101,7 @@ func TestArrayMaxSIMD(t *testing.T) {
 	}
 }
 
-// 測試SIMD統計計算器
+// 測試SIMD統計計算器.
 func TestSIMDStatistics_CalculateChannelStatistics(t *testing.T) {
 	stats := NewSIMDStatistics()
 
@@ -113,20 +110,22 @@ func TestSIMDStatistics_CalculateChannelStatistics(t *testing.T) {
 	expectedMax := 10.0
 	expectedMaxIndex := 9
 
-	mean, max, maxIndex := stats.CalculateChannelStatistics(data)
+	mean, maxVal, maxIndex := stats.CalculateChannelStatistics(data)
 
 	if mean != expectedMean {
 		t.Errorf("Expected mean %v, got %v", expectedMean, mean)
 	}
-	if max != expectedMax {
-		t.Errorf("Expected max %v, got %v", expectedMax, max)
+
+	if maxVal != expectedMax {
+		t.Errorf("Expected max %v, got %v", expectedMax, maxVal)
 	}
+
 	if maxIndex != expectedMaxIndex {
 		t.Errorf("Expected maxIndex %v, got %v", expectedMaxIndex, maxIndex)
 	}
 }
 
-// 測試SIMD滑動窗口計算
+// 測試SIMD滑動窗口計算.
 func TestSIMDSlidingWindow_CalculateMaxMean(t *testing.T) {
 	sw := NewSIMDSlidingWindow(3)
 
@@ -141,6 +140,7 @@ func TestSIMDSlidingWindow_CalculateMaxMean(t *testing.T) {
 	if maxMean != expectedMaxMean {
 		t.Errorf("Expected maxMean %v, got %v", expectedMaxMean, maxMean)
 	}
+
 	if bestIndex != expectedBestIndex {
 		t.Errorf("Expected bestIndex %v, got %v", expectedBestIndex, bestIndex)
 	}
@@ -150,6 +150,7 @@ func TestSIMDSlidingWindow_CalculateMaxMean(t *testing.T) {
 
 func BenchmarkArrayMeanSIMD_Small(b *testing.B) {
 	data := generateTestData(100)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -159,6 +160,7 @@ func BenchmarkArrayMeanSIMD_Small(b *testing.B) {
 
 func BenchmarkArrayMeanGeneric_Small(b *testing.B) {
 	data := generateTestData(100)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -168,6 +170,7 @@ func BenchmarkArrayMeanGeneric_Small(b *testing.B) {
 
 func BenchmarkArrayMeanSIMD_Large(b *testing.B) {
 	data := generateTestData(10000)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -177,6 +180,7 @@ func BenchmarkArrayMeanSIMD_Large(b *testing.B) {
 
 func BenchmarkArrayMeanGeneric_Large(b *testing.B) {
 	data := generateTestData(10000)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -186,6 +190,7 @@ func BenchmarkArrayMeanGeneric_Large(b *testing.B) {
 
 func BenchmarkArrayMaxSIMD_Small(b *testing.B) {
 	data := generateTestData(100)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -195,6 +200,7 @@ func BenchmarkArrayMaxSIMD_Small(b *testing.B) {
 
 func BenchmarkArrayMaxGeneric_Small(b *testing.B) {
 	data := generateTestData(100)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -204,6 +210,7 @@ func BenchmarkArrayMaxGeneric_Small(b *testing.B) {
 
 func BenchmarkArrayMaxSIMD_Large(b *testing.B) {
 	data := generateTestData(10000)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -213,6 +220,7 @@ func BenchmarkArrayMaxSIMD_Large(b *testing.B) {
 
 func BenchmarkArrayMaxGeneric_Large(b *testing.B) {
 	data := generateTestData(10000)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -220,10 +228,11 @@ func BenchmarkArrayMaxGeneric_Large(b *testing.B) {
 	}
 }
 
-// 滑動窗口基準測試
+// 滑動窗口基準測試.
 func BenchmarkSIMDSlidingWindow_Small(b *testing.B) {
 	sw := NewSIMDSlidingWindow(10)
 	data := generateTestData(1000)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -234,6 +243,7 @@ func BenchmarkSIMDSlidingWindow_Small(b *testing.B) {
 func BenchmarkSIMDSlidingWindow_Large(b *testing.B) {
 	sw := NewSIMDSlidingWindow(100)
 	data := generateTestData(100000)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -241,7 +251,7 @@ func BenchmarkSIMDSlidingWindow_Large(b *testing.B) {
 	}
 }
 
-// 多通道統計計算基準測試
+// 多通道統計計算基準測試.
 func BenchmarkBatchCalculateStatistics_SIMD(b *testing.B) {
 	stats := NewSIMDStatistics()
 
@@ -257,7 +267,7 @@ func BenchmarkBatchCalculateStatistics_SIMD(b *testing.B) {
 	}
 }
 
-// 記憶體對齊測試
+// 記憶體對齊測試.
 func TestMemoryAlignment(t *testing.T) {
 	data := generateTestData(1000)
 	aligned := ensureAlignment(data)
@@ -270,7 +280,7 @@ func TestMemoryAlignment(t *testing.T) {
 	}
 }
 
-// 測試SIMD能力檢測
+// 測試SIMD能力檢測.
 func TestDetectSIMDCapabilities(t *testing.T) {
 	caps := DetectSIMDCapabilities()
 
@@ -280,7 +290,7 @@ func TestDetectSIMDCapabilities(t *testing.T) {
 	}
 
 	// 在x86-64架構上，應該至少支持SSE2
-	if caps.HasSSE2 == false {
+	if !caps.HasSSE2 {
 		t.Log("Warning: SSE2 support not detected")
 	}
 
@@ -288,7 +298,7 @@ func TestDetectSIMDCapabilities(t *testing.T) {
 		caps.HasAVX2, caps.HasAVX, caps.HasSSE4, caps.HasSSE2, caps.VectorSize)
 }
 
-// 壓力測試：確保SIMD實現在大數據集上的穩定性
+// 壓力測試：確保SIMD實現在大數據集上的穩定性.
 func TestSIMDStressTest(t *testing.T) {
 	// 測試各種大小的數據集
 	sizes := []int{1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 100, 1000, 10000}
@@ -315,15 +325,16 @@ func TestSIMDStressTest(t *testing.T) {
 	}
 }
 
-// 輔助函數：計算絕對值
+// 輔助函數：計算絕對值.
 func abs(x float64) float64 {
 	if x < 0 {
 		return -x
 	}
+
 	return x
 }
 
-// 性能比較測試
+// 性能比較測試.
 func TestPerformanceComparison(t *testing.T) {
 	sizes := []int{100, 1000, 10000, 100000}
 
@@ -333,16 +344,20 @@ func TestPerformanceComparison(t *testing.T) {
 		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
 			// 測試SIMD性能
 			start := time.Now()
+
 			for i := 0; i < 1000; i++ {
 				ArrayMeanSIMD(data)
 			}
+
 			simdTime := time.Since(start)
 
 			// 測試通用實現性能
 			start = time.Now()
+
 			for i := 0; i < 1000; i++ {
 				arrayMeanGeneric(data)
 			}
+
 			genericTime := time.Since(start)
 
 			speedup := float64(genericTime) / float64(simdTime)

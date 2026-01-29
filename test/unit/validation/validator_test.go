@@ -115,6 +115,7 @@ func TestInputValidator_ValidateWindowSize(t *testing.T) {
 				t.Errorf("ValidateWindowSize() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+
 			if got != tt.want {
 				t.Errorf("ValidateWindowSize() = %v, want %v", got, tt.want)
 			}
@@ -188,12 +189,15 @@ func TestInputValidator_ValidateTimeRange(t *testing.T) {
 				t.Errorf("ValidateTimeRange() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+
 			if gotStart != tt.wantStart {
 				t.Errorf("ValidateTimeRange() gotStart = %v, want %v", gotStart, tt.wantStart)
 			}
+
 			if gotEnd != tt.wantEnd {
 				t.Errorf("ValidateTimeRange() gotEnd = %v, want %v", gotEnd, tt.wantEnd)
 			}
+
 			if gotUseCustom != tt.wantUseCustom {
 				t.Errorf("ValidateTimeRange() gotUseCustom = %v, want %v", gotUseCustom, tt.wantUseCustom)
 			}
@@ -243,6 +247,7 @@ func TestInputValidator_ValidatePhaseLabels(t *testing.T) {
 				t.Errorf("ValidatePhaseLabels() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+
 			if len(got) != tt.wantLen {
 				t.Errorf("ValidatePhaseLabels() length = %v, want %v", len(got), tt.wantLen)
 			}

@@ -7,23 +7,32 @@ import (
 	"strings"
 )
 
-func Str2Number[T Number, U ~int](s string, move U) (T, error) {
-	a := strings.Split(s, "E")
+// Str2Number parses a scientific notation string and converts it to a numeric type.
+// The move parameter specifies an additional power of 10 to multiply by.
+//
+//nolint:ireturn // Generic function must return interface type T
+func Str2Number[T Number, U ~int](input string, move U) (T, error) {
+	parts := strings.Split(input, "E")
 	// 去除空白
-	b := strings.Replace(a[0], " ", "", -1)
-	f, err := strconv.ParseFloat(b, 64)
+	mantissaStr := strings.Replace(parts[0], " ", "", -1)
+
+	mantissa, err := strconv.ParseFloat(mantissaStr, 64)
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse float from '%s': %w", s, err)
+		return 0, fmt.Errorf("failed to parse float from '%s': %w", input, err)
 	}
-	if len(a) == 1 {
-		n2 := math.Pow10(int(move))
-		return T(f * n2), nil
+
+	if len(parts) == 1 {
+		multiplier := math.Pow10(int(move))
+		return T(mantissa * multiplier), nil
 	}
-	n, err := strconv.ParseInt(a[1], 10, 64)
+
+	exponent, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse exponent from '%s': %w", s, err)
+		return 0, fmt.Errorf("failed to parse exponent from '%s': %w", input, err)
 	}
-	n2 := math.Pow10(int(int64(move) + n))
-	r := f * n2
-	return T(r), nil
+
+	multiplier := math.Pow10(int(int64(move) + exponent))
+	result := mantissa * multiplier
+
+	return T(result), nil
 }

@@ -1,25 +1,26 @@
 package benchmark_test
 
 import (
-	"count_mean/internal/calculator"
-	"count_mean/internal/config"
-	"count_mean/internal/io"
-	"count_mean/internal/models"
-	"count_mean/internal/parsers"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"count_mean/internal/calculator"
+	"count_mean/internal/config"
+	"count_mean/internal/io"
+	"count_mean/internal/models"
+	"count_mean/internal/parsers"
 )
 
-// TestBenchmarkPlaceholder is a placeholder test to satisfy go test
-func TestBenchmarkPlaceholder(t *testing.T) {
+// TestBenchmarkPlaceholder is a placeholder test to satisfy go test.
+func TestBenchmarkPlaceholder(_ *testing.T) {
 	// This package contains only benchmarks.
 	// Run benchmarks with: go test -bench=. ./test/benchmark
 }
 
-// BenchmarkMathCalculation 數學計算基準測試
+// BenchmarkMathCalculation 數學計算基準測試.
 func BenchmarkMathCalculation(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		sum := 0.0
@@ -29,7 +30,7 @@ func BenchmarkMathCalculation(b *testing.B) {
 	}
 }
 
-// BenchmarkStringProcessing 字符串處理基準測試
+// BenchmarkStringProcessing 字符串處理基準測試.
 func BenchmarkStringProcessing(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		for j := 0; j < 10000; j++ {
@@ -39,7 +40,7 @@ func BenchmarkStringProcessing(b *testing.B) {
 	}
 }
 
-// BenchmarkArrayProcessing 陣列處理基準測試
+// BenchmarkArrayProcessing 陣列處理基準測試.
 func BenchmarkArrayProcessing(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		data := make([]int, 100000)
@@ -54,13 +55,13 @@ func BenchmarkArrayProcessing(b *testing.B) {
 	}
 }
 
-// BenchmarkCSVReading CSV讀取基準測試
+// BenchmarkCSVReading CSV讀取基準測試.
 func BenchmarkCSVReading(b *testing.B) {
 	// 設置測試數據
 	tempFile := createTestCSV(b)
-	defer os.Remove(tempFile)
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_, err := parsers.ReadCSVDirect(tempFile)
 		if err != nil {
@@ -69,13 +70,13 @@ func BenchmarkCSVReading(b *testing.B) {
 	}
 }
 
-// BenchmarkCSVParsing CSV解析基準測試
+// BenchmarkCSVParsing CSV解析基準測試.
 func BenchmarkCSVParsing(b *testing.B) {
 	// 設置測試數據
 	tempFile := createTestCSV(b)
-	defer os.Remove(tempFile)
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_, err := parsers.ReadCSVDirect(tempFile)
 		if err != nil {
@@ -84,7 +85,7 @@ func BenchmarkCSVParsing(b *testing.B) {
 	}
 }
 
-// BenchmarkMaxMeanCalculation 最大平均值計算基準測試
+// BenchmarkMaxMeanCalculation 最大平均值計算基準測試.
 func BenchmarkMaxMeanCalculation(b *testing.B) {
 	// 準備測試數據
 	dataset := &models.EMGDataset{
@@ -102,6 +103,7 @@ func BenchmarkMaxMeanCalculation(b *testing.B) {
 	calc := calculator.NewMaxMeanCalculator(100)
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_, err := calc.Calculate(dataset, 100)
 		if err != nil {
@@ -110,7 +112,7 @@ func BenchmarkMaxMeanCalculation(b *testing.B) {
 	}
 }
 
-// BenchmarkDataNormalization 數據標準化基準測試
+// BenchmarkDataNormalization 數據標準化基準測試.
 func BenchmarkDataNormalization(b *testing.B) {
 	// 準備測試數據
 	dataset := &models.EMGDataset{
@@ -141,6 +143,7 @@ func BenchmarkDataNormalization(b *testing.B) {
 	normalizer := calculator.NewNormalizer(100)
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_, err := normalizer.Normalize(dataset, reference)
 		if err != nil {
@@ -149,7 +152,7 @@ func BenchmarkDataNormalization(b *testing.B) {
 	}
 }
 
-// BenchmarkPhaseAnalysis 階段分析基準測試
+// BenchmarkPhaseAnalysis 階段分析基準測試.
 func BenchmarkPhaseAnalysis(b *testing.B) {
 	// 準備測試數據
 	dataset := &models.EMGDataset{
@@ -175,6 +178,7 @@ func BenchmarkPhaseAnalysis(b *testing.B) {
 	analyzer := calculator.NewPhaseAnalyzer(100, phaseLabels)
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_, err := analyzer.Analyze(dataset, phases)
 		if err != nil {
@@ -183,7 +187,7 @@ func BenchmarkPhaseAnalysis(b *testing.B) {
 	}
 }
 
-// BenchmarkConcurrentDataProcessing 並行數據處理基準測試
+// BenchmarkConcurrentDataProcessing 並行數據處理基準測試.
 func BenchmarkConcurrentDataProcessing(b *testing.B) {
 	// 準備測試數據
 	data := make([][]float64, 10)
@@ -195,9 +199,11 @@ func BenchmarkConcurrentDataProcessing(b *testing.B) {
 	}
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		// 模擬並行處理
 		done := make(chan bool)
+
 		for _, row := range data {
 			go func(r []float64) {
 				sum := 0.0
@@ -214,9 +220,10 @@ func BenchmarkConcurrentDataProcessing(b *testing.B) {
 	}
 }
 
-// BenchmarkMemoryIntensiveOperation 記憶體密集操作基準測試
+// BenchmarkMemoryIntensiveOperation 記憶體密集操作基準測試.
 func BenchmarkMemoryIntensiveOperation(b *testing.B) {
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		// 大量記憶體分配
 		data := make([][]float64, 1000)
@@ -229,6 +236,7 @@ func BenchmarkMemoryIntensiveOperation(b *testing.B) {
 
 		// 處理數據
 		sum := 0.0
+
 		for _, row := range data {
 			for _, v := range row {
 				sum += v
@@ -237,19 +245,22 @@ func BenchmarkMemoryIntensiveOperation(b *testing.B) {
 	}
 }
 
-// BenchmarkLargeFileProcessing 大檔案處理基準測試
+// BenchmarkLargeFileProcessing 大檔案處理基準測試.
 func BenchmarkLargeFileProcessing(b *testing.B) {
 	// 創建大檔案
 	tempFile := createLargeTestCSV(b)
-	defer os.Remove(tempFile)
 
 	cfg := config.DefaultConfig()
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		handler := io.NewLargeFileHandler(cfg)
-		_, err := handler.ProcessLargeFileInChunks(tempFile, 1000, func(processed int64, total int64, percentage float64) {
+
+		_, err := handler.ProcessLargeFileInChunks(tempFile, 1000, func(_, total int64, percentage float64) {
 			// 模擬進度回調
+			_ = total
+			_ = percentage
 		})
 		if err != nil {
 			b.Fatalf("處理大檔案失敗: %v", err)
@@ -257,9 +268,9 @@ func BenchmarkLargeFileProcessing(b *testing.B) {
 	}
 }
 
-// createTestCSV 創建測試CSV檔案
+// createTestCSV 創建測試CSV檔案.
 func createTestCSV(b *testing.B) string {
-	tempFile := filepath.Join(os.TempDir(), fmt.Sprintf("test_benchmark_%d.csv", time.Now().UnixNano()))
+	tempFile := filepath.Join(b.TempDir(), fmt.Sprintf("test_benchmark_%d.csv", time.Now().UnixNano()))
 
 	file, err := os.Create(tempFile)
 	if err != nil {
@@ -268,20 +279,24 @@ func createTestCSV(b *testing.B) string {
 	defer file.Close()
 
 	// 寫入標題
-	file.WriteString("time,channel1,channel2,channel3\n")
+	if _, err := file.WriteString("time,channel1,channel2,channel3\n"); err != nil {
+		b.Fatalf("寫入標題失敗: %v", err)
+	}
 
 	// 寫入測試數據
 	for i := 0; i < 1000; i++ {
-		file.WriteString(fmt.Sprintf("%.2f,%.2f,%.2f,%.2f\n",
-			float64(i)*0.01, float64(i)*1.1, float64(i)*1.2, float64(i)*1.3))
+		if _, err := fmt.Fprintf(file, "%.2f,%.2f,%.2f,%.2f\n",
+			float64(i)*0.01, float64(i)*1.1, float64(i)*1.2, float64(i)*1.3); err != nil {
+			b.Fatalf("寫入數據失敗: %v", err)
+		}
 	}
 
 	return tempFile
 }
 
-// createLargeTestCSV 創建大測試CSV檔案
+// createLargeTestCSV 創建大測試CSV檔案.
 func createLargeTestCSV(b *testing.B) string {
-	tempFile := filepath.Join(os.TempDir(), fmt.Sprintf("large_test_benchmark_%d.csv", time.Now().UnixNano()))
+	tempFile := filepath.Join(b.TempDir(), fmt.Sprintf("large_test_benchmark_%d.csv", time.Now().UnixNano()))
 
 	file, err := os.Create(tempFile)
 	if err != nil {
@@ -290,18 +305,22 @@ func createLargeTestCSV(b *testing.B) string {
 	defer file.Close()
 
 	// 寫入標題
-	file.WriteString("time,channel1,channel2,channel3\n")
+	if _, err := file.WriteString("time,channel1,channel2,channel3\n"); err != nil {
+		b.Fatalf("寫入標題失敗: %v", err)
+	}
 
 	// 寫入大量測試數據
 	for i := 0; i < 10000; i++ {
-		file.WriteString(fmt.Sprintf("%.2f,%.2f,%.2f,%.2f\n",
-			float64(i)*0.01, float64(i)*1.1, float64(i)*1.2, float64(i)*1.3))
+		if _, err := fmt.Fprintf(file, "%.2f,%.2f,%.2f,%.2f\n",
+			float64(i)*0.01, float64(i)*1.1, float64(i)*1.2, float64(i)*1.3); err != nil {
+			b.Fatalf("寫入數據失敗: %v", err)
+		}
 	}
 
 	return tempFile
 }
 
-// 子基準測試示例
+// 子基準測試示例.
 func BenchmarkCalculatorSuite(b *testing.B) {
 	b.Run("MaxMean", func(b *testing.B) {
 		dataset := &models.EMGDataset{
@@ -319,6 +338,7 @@ func BenchmarkCalculatorSuite(b *testing.B) {
 		calc := calculator.NewMaxMeanCalculator(100)
 
 		b.ResetTimer()
+
 		for i := 0; i < b.N; i++ {
 			_, err := calc.Calculate(dataset, 100)
 			if err != nil {
@@ -355,6 +375,7 @@ func BenchmarkCalculatorSuite(b *testing.B) {
 		normalizer := calculator.NewNormalizer(100)
 
 		b.ResetTimer()
+
 		for i := 0; i < b.N; i++ {
 			_, err := normalizer.Normalize(dataset, reference)
 			if err != nil {

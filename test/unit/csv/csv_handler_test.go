@@ -1,8 +1,6 @@
 package csv_test
 
 import (
-	"count_mean/internal/config"
-	"count_mean/internal/models"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +8,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"count_mean/internal/config"
 	"count_mean/internal/io"
+	"count_mean/internal/models"
 )
 
 func TestNewCSVHandler(t *testing.T) {
@@ -39,7 +39,7 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 		csvFile := filepath.Join(tempDir, "test.csv")
 
 		csvContent := "Time,Ch1,Ch2\n1.0,100,50\n2.0,200,100\n"
-		err := os.WriteFile(csvFile, []byte(csvContent), 0644)
+		err := os.WriteFile(csvFile, []byte(csvContent), 0o644)
 		require.NoError(t, err)
 
 		records, err := handler.ReadCSV(csvFile)
@@ -53,7 +53,7 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 	t.Run("EmptyFile", func(t *testing.T) {
 		csvFile := filepath.Join(tempDir, "empty.csv")
 
-		err := os.WriteFile(csvFile, []byte(""), 0644)
+		err := os.WriteFile(csvFile, []byte(""), 0o644)
 		require.NoError(t, err)
 
 		records, err := handler.ReadCSV(csvFile)
@@ -66,7 +66,7 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 		csvFile := filepath.Join(tempDir, "header_only.csv")
 
 		csvContent := "Time,Ch1,Ch2\n"
-		err := os.WriteFile(csvFile, []byte(csvContent), 0644)
+		err := os.WriteFile(csvFile, []byte(csvContent), 0o644)
 		require.NoError(t, err)
 
 		records, err := handler.ReadCSV(csvFile)
@@ -80,7 +80,7 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 
 		// 包含未封閉的引號
 		csvContent := "Time,Ch1\n1.0,\"unclosed quote\n2.0,100\n"
-		err := os.WriteFile(csvFile, []byte(csvContent), 0644)
+		err := os.WriteFile(csvFile, []byte(csvContent), 0o644)
 		require.NoError(t, err)
 
 		records, err := handler.ReadCSV(csvFile)
@@ -211,8 +211,10 @@ func TestCSVHandler_ConvertMaxMeanResultsToCSV(t *testing.T) {
 	t.Run("ValidConversion", func(t *testing.T) {
 		headers := []string{"Time", "Ch1", "Ch2"}
 		results := []models.MaxMeanResult{
-			{ColumnIndex: 1, StartTime: 1.0, EndTime: 2.0, MaxMean: 1500.0}, // 1500/10^10 = 0.15
-			{ColumnIndex: 2, StartTime: 1.5, EndTime: 2.5, MaxMean: 2000.0}, // 2000/10^10 = 0.20
+			// Scaled result: 1500 divided by 10 to the power of 10 equals 0.15
+			{ColumnIndex: 1, StartTime: 1.0, EndTime: 2.0, MaxMean: 1500.0},
+			// Scaled result: 2000 divided by 10 to the power of 10 equals 0.20
+			{ColumnIndex: 2, StartTime: 1.5, EndTime: 2.5, MaxMean: 2000.0},
 		}
 
 		data := handler.ConvertMaxMeanResultsToCSV(headers, results, 0.5, 3.0)

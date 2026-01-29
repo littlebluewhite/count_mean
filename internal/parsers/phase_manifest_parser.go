@@ -10,25 +10,32 @@ import (
 	"count_mean/internal/models"
 )
 
-// PhaseManifestParser 分期總檔案解析器
+// PhaseManifestParser 分期總檔案解析器.
 type PhaseManifestParser struct {
 	skipHeader bool
 }
 
-// NewPhaseManifestParser 創建新的解析器
+// NewPhaseManifestParser 創建新的解析器.
 func NewPhaseManifestParser() *PhaseManifestParser {
 	return &PhaseManifestParser{
 		skipHeader: true, // 第一行是標題
 	}
 }
 
-// ParseFile 解析分期總檔案
+// ParseFile 解析分期總檔案.
+//
+//nolint:err113 // dynamic errors with Chinese messages for user-facing output
 func (p *PhaseManifestParser) ParseFile(filepath string) ([]models.PhaseManifest, error) {
-	file, err := os.Open(filepath)
+	file, err := os.Open(filepath) //nolint:gosec // filepath is validated by caller
 	if err != nil {
 		return nil, fmt.Errorf("無法開啟檔案 %s: %w", filepath, err)
 	}
-	defer file.Close()
+
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
 
 	reader := csv.NewReader(file)
 	reader.TrimLeadingSpace = true
@@ -49,10 +56,11 @@ func (p *PhaseManifestParser) ParseFile(filepath string) ([]models.PhaseManifest
 		startRow = 1
 	}
 
-	var manifests []models.PhaseManifest
+	manifests := make([]models.PhaseManifest, 0, len(records)-startRow)
+
 	for i := startRow; i < len(records); i++ {
 		record := records[i]
-		if len(record) < 15 {
+		if len(record) < PhaseManifestMinFields {
 			return nil, fmt.Errorf("第 %d 行資料不完整，需要至少 15 個欄位", i+1)
 		}
 
@@ -67,9 +75,14 @@ func (p *PhaseManifestParser) ParseFile(filepath string) ([]models.PhaseManifest
 	return manifests, nil
 }
 
-// parseRecord 解析單行記錄
-func (p *PhaseManifestParser) parseRecord(record []string, lineNum int) (models.PhaseManifest, error) {
+// parseRecord 解析單行記錄.
+//
+//nolint:revive // unused-receiver: keep consistent API
+func (p *PhaseManifestParser) parseRecord(
+	record []string, _ int,
+) (models.PhaseManifest, error) {
 	var manifest models.PhaseManifest
+
 	var err error
 
 	// 基本欄位
@@ -152,7 +165,7 @@ func (p *PhaseManifestParser) parseRecord(record []string, lineNum int) (models.
 	return manifest, nil
 }
 
-// parseFloat 解析浮點數，處理空值
+// parseFloat 解析浮點數，處理空值.
 func parseFloat(value, fieldName string) (float64, error) {
 	trimmed := strings.TrimSpace(value)
 	// 處理各種空值表示
@@ -169,7 +182,7 @@ func parseFloat(value, fieldName string) (float64, error) {
 	return result, nil
 }
 
-// parseInt 解析整數，處理空值
+// parseInt 解析整數，處理空值.
 func parseInt(value, fieldName string) (int, error) {
 	trimmed := strings.TrimSpace(value)
 	// 處理各種空值表示
@@ -186,8 +199,10 @@ func parseInt(value, fieldName string) (int, error) {
 	return result, nil
 }
 
-// GetPhaseValue 根據分期點名稱獲取對應的值
-func GetPhaseValue(points models.PhasePoints, phaseName string) (float64, bool, error) {
+// GetPhaseValue 根據分期點名稱獲取對應的值.
+//
+//nolint:err113 // dynamic errors with Chinese messages for user-facing output
+func GetPhaseValue(points *models.PhasePoints, phaseName string) (float64, bool, error) {
 	switch phaseName {
 	case "P0":
 		return points.P0, false, nil // false 表示是力板時間
@@ -214,8 +229,8 @@ func GetPhaseValue(points models.PhasePoints, phaseName string) (float64, bool, 
 	}
 }
 
-// ValidatePhaseManifest 驗證分期總檔案數據
-func ValidatePhaseManifest(manifest models.PhaseManifest) error {
+// ValidatePhaseManifest 驗證分期總檔案數據.
+func ValidatePhaseManifest(manifest *models.PhaseManifest) error {
 	if manifest.Subject == "" {
 		return models.ValidationError{Field: "Subject", Message: "主題名稱不能為空"}
 	}

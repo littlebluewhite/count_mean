@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"count_mean/internal/parsers"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/parsers"
 )
 
 func TestReadCSVDirect(t *testing.T) {
@@ -33,8 +33,10 @@ func TestReadCSVDirect(t *testing.T) {
 			},
 		},
 		{
-			name:        "CSV with quotes",
-			csvContent:  "Name,Description,Value\n\"Test Name\",\"A test, with comma\",123\n\"Another Name\",\"Simple desc\",456",
+			name: "CSV with quotes",
+			csvContent: "Name,Description,Value\n" +
+				"\"Test Name\",\"A test, with comma\",123\n" +
+				"\"Another Name\",\"Simple desc\",456",
 			wantErr:     false,
 			expectedLen: 3,
 			checkData: func(t *testing.T, data [][]string) {
@@ -128,16 +130,14 @@ func TestReadCSVDirect(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// 創建臨時測試文件
-			tmpFile, err := os.CreateTemp("", "test_csv_*.csv")
-			require.NoError(t, err)
-			defer os.Remove(tmpFile.Name())
+			tmpDir := t.TempDir()
+			tmpFilePath := filepath.Join(tmpDir, "test_csv.csv")
 
-			_, err = tmpFile.WriteString(tt.csvContent)
+			err := os.WriteFile(tmpFilePath, []byte(tt.csvContent), 0o644)
 			require.NoError(t, err)
-			tmpFile.Close()
 
 			// 測試 ReadCSVDirect
-			data, err := parsers.ReadCSVDirect(tmpFile.Name())
+			data, err := parsers.ReadCSVDirect(tmpFilePath)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -166,21 +166,22 @@ func TestReadCSVDirect_FilePermissionDenied(t *testing.T) {
 	}
 
 	// 創建測試文件
-	tmpFile, err := os.CreateTemp("", "test_permission_*.csv")
-	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
+	tmpDir := t.TempDir()
+	tmpFilePath := filepath.Join(tmpDir, "test_permission.csv")
 
-	_, err = tmpFile.WriteString("test,data\n1,2")
+	err := os.WriteFile(tmpFilePath, []byte("test,data\n1,2"), 0o644)
 	require.NoError(t, err)
-	tmpFile.Close()
 
 	// 移除讀取權限
-	err = os.Chmod(tmpFile.Name(), 0000)
+	err = os.Chmod(tmpFilePath, 0o000)
 	require.NoError(t, err)
-	defer os.Chmod(tmpFile.Name(), 0644) // 恢復權限以便清理
+
+	defer func() {
+		_ = os.Chmod(tmpFilePath, 0o644) // 恢復權限以便清理
+	}()
 
 	// 測試權限被拒絕的情況
-	_, err = parsers.ReadCSVDirect(tmpFile.Name())
+	_, err = parsers.ReadCSVDirect(tmpFilePath)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "permission denied")
 }
@@ -194,17 +195,16 @@ func TestReadCSVDirect_InvalidDirectory(t *testing.T) {
 
 func TestReadCSVDirect_BinaryFile(t *testing.T) {
 	// 創建二進制文件
-	tmpFile, err := os.CreateTemp("", "test_binary_*.csv")
-	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
+	tmpDir := t.TempDir()
+	tmpFilePath := filepath.Join(tmpDir, "test_binary.csv")
 
 	// 寫入二進制數據
 	binaryData := []byte{0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xFD}
-	err = os.WriteFile(tmpFile.Name(), binaryData, 0644)
+	err := os.WriteFile(tmpFilePath, binaryData, 0o644)
 	require.NoError(t, err)
 
 	// 二進制文件應該仍能讀取，但可能產生意外結果
-	data, err := parsers.ReadCSVDirect(tmpFile.Name())
+	data, err := parsers.ReadCSVDirect(tmpFilePath)
 	// CSV 讀取器通常不會出錯，但數據可能不符合預期
 	assert.NoError(t, err)
 	assert.NotNil(t, data)
@@ -212,26 +212,30 @@ func TestReadCSVDirect_BinaryFile(t *testing.T) {
 
 func TestReadCSVDirect_LargeFile(t *testing.T) {
 	// 創建較大的 CSV 文件
-	tmpFile, err := os.CreateTemp("", "test_large_*.csv")
+	tmpDir := t.TempDir()
+	tmpFilePath := filepath.Join(tmpDir, "test_large.csv")
+
+	tmpFile, err := os.Create(tmpFilePath)
 	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
 
 	// 寫入標題
 	_, err = tmpFile.WriteString("Time,Channel1,Channel2,Channel3\n")
 	require.NoError(t, err)
 
 	// 寫入 1000 行數據
-	for i := 0; i < 1000; i++ {
+	const numRows = 1000
+	for i := 0; i < numRows; i++ {
 		line := fmt.Sprintf("%.3f,%d,%d,%d\n", float64(i)*0.001, i, i*2, i*3)
 		_, err = tmpFile.WriteString(line)
 		require.NoError(t, err)
 	}
-	tmpFile.Close()
+
+	require.NoError(t, tmpFile.Close())
 
 	// 測試讀取大文件
-	data, err := parsers.ReadCSVDirect(tmpFile.Name())
+	data, err := parsers.ReadCSVDirect(tmpFilePath)
 	assert.NoError(t, err)
-	assert.Len(t, data, 1001) // 標題 + 1000 行數據
+	assert.Len(t, data, numRows+1) // 標題 + 1000 行數據
 
 	// 檢查標題
 	assert.Equal(t, []string{"Time", "Channel1", "Channel2", "Channel3"}, data[0])
@@ -240,30 +244,29 @@ func TestReadCSVDirect_LargeFile(t *testing.T) {
 	assert.Equal(t, []string{"0.000", "0", "0", "0"}, data[1])
 
 	// 檢查最後一行數據
-	assert.Equal(t, []string{"0.999", "999", "1998", "2997"}, data[1000])
+	assert.Equal(t, []string{"0.999", "999", "1998", "2997"}, data[numRows])
 }
 
 func TestReadCSVDirect_UTF8WithBOM(t *testing.T) {
 	// 創建包含 UTF-8 BOM 的文件
-	tmpFile, err := os.CreateTemp("", "test_bom_*.csv")
-	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
+	tmpDir := t.TempDir()
+	tmpFilePath := filepath.Join(tmpDir, "test_bom.csv")
 
 	// UTF-8 BOM + CSV 內容
 	bomBytes := []byte{0xEF, 0xBB, 0xBF}
 	csvContent := "Name,Value\n測試,123\n"
 
-	file, err := os.OpenFile(tmpFile.Name(), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	file, err := os.OpenFile(tmpFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	require.NoError(t, err)
 
 	_, err = file.Write(bomBytes)
 	require.NoError(t, err)
 	_, err = file.WriteString(csvContent)
 	require.NoError(t, err)
-	file.Close()
+	require.NoError(t, file.Close())
 
 	// 測試讀取包含 BOM 的文件
-	data, err := parsers.ReadCSVDirect(tmpFile.Name())
+	data, err := parsers.ReadCSVDirect(tmpFilePath)
 	assert.NoError(t, err)
 	assert.Len(t, data, 2)
 
@@ -275,17 +278,16 @@ func TestReadCSVDirect_UTF8WithBOM(t *testing.T) {
 
 func TestReadCSVDirect_RelativeAndAbsolutePaths(t *testing.T) {
 	// 創建測試文件
-	tmpFile, err := os.CreateTemp("", "test_path_*.csv")
-	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
+	tmpDir := t.TempDir()
+	tmpFilePath := filepath.Join(tmpDir, "test_path.csv")
 
 	csvContent := "A,B\n1,2\n"
-	err = os.WriteFile(tmpFile.Name(), []byte(csvContent), 0644)
+	err := os.WriteFile(tmpFilePath, []byte(csvContent), 0o644)
 	require.NoError(t, err)
 
 	// 測試絕對路徑
 	t.Run("absolute path", func(t *testing.T) {
-		absolutePath, err := filepath.Abs(tmpFile.Name())
+		absolutePath, err := filepath.Abs(tmpFilePath)
 		require.NoError(t, err)
 
 		data, err := parsers.ReadCSVDirect(absolutePath)
@@ -297,15 +299,9 @@ func TestReadCSVDirect_RelativeAndAbsolutePaths(t *testing.T) {
 	// 測試相對路徑
 	t.Run("relative path", func(t *testing.T) {
 		// 改變工作目錄到臨時目錄
-		originalDir, err := os.Getwd()
-		require.NoError(t, err)
-		defer os.Chdir(originalDir)
+		t.Chdir(tmpDir)
 
-		tmpDir := filepath.Dir(tmpFile.Name())
-		err = os.Chdir(tmpDir)
-		require.NoError(t, err)
-
-		relativePath := filepath.Base(tmpFile.Name())
+		relativePath := filepath.Base(tmpFilePath)
 		data, err := parsers.ReadCSVDirect(relativePath)
 		assert.NoError(t, err)
 		assert.Len(t, data, 2)

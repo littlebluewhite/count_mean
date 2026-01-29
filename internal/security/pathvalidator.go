@@ -1,27 +1,52 @@
+// Package security provides secure path validation functionality
+// to prevent path traversal attacks and ensure file operations
+// are restricted to allowed directories.
 package security
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
 	"strings"
 )
 
-// PathValidator provides secure path validation functionality
+// Path validation error definitions.
+var (
+	ErrPathTraversal      = errors.New("路徑包含可疑的遍歷模式")
+	ErrPathTraversalAbs   = errors.New("絕對路徑仍包含遍歷字符")
+	ErrPathOutOfScope     = errors.New("路徑超出允許範圍")
+	ErrFilenameTraversal  = errors.New("文件名包含路徑遍歷字符")
+	ErrFilenameInvalid    = errors.New("文件名無效或被清理後為空")
+	ErrSensitiveDirectory = errors.New("路徑指向系統敏感目錄")
+	ErrPathTooLong        = errors.New("路徑長度超過限制")
+	ErrFilenameTooLong    = errors.New("文件名長度超過限制")
+)
+
+// Path length constants.
+const (
+	maxPathLength     = 4096
+	maxFilenameLength = 255
+	nonASCIIVisible   = 0x00A0 // Non-ASCII but visible characters start here
+)
+
+// PathValidator provides secure path validation functionality.
 type PathValidator struct {
 	allowedBasePaths []string
 }
 
-// NewPathValidator creates a new path validator with allowed base paths
+// NewPathValidator creates a new path validator with allowed base paths.
 func NewPathValidator(allowedBasePaths []string) *PathValidator {
 	// Convert all base paths to absolute paths
 	absPaths := make([]string, len(allowedBasePaths))
+
 	for i, path := range allowedBasePaths {
 		absPath, err := filepath.Abs(path)
 		if err != nil {
 			// If we can't get absolute path, use the original
 			absPath = path
 		}
+
 		absPaths[i] = filepath.Clean(absPath)
 	}
 
@@ -30,7 +55,7 @@ func NewPathValidator(allowedBasePaths []string) *PathValidator {
 	}
 }
 
-// ValidateFilePath validates that a file path is within allowed directories
+// ValidateFilePath validates that a file path is within allowed directories.
 func (pv *PathValidator) ValidateFilePath(path string) error {
 	// 允許空路徑
 	if path == "" {
@@ -57,7 +82,7 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 	checkPathLower := strings.ToLower(decodedPath)
 	for _, pattern := range suspiciousPatterns {
 		if strings.Contains(checkPathLower, strings.ToLower(pattern)) {
-			return fmt.Errorf("路徑包含可疑的遍歷模式: %s", pattern)
+			return fmt.Errorf("%w: %s", ErrPathTraversal, pattern)
 		}
 	}
 
@@ -72,37 +97,44 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 
 	// 最終檢查：確保絕對路徑不包含遍歷模式
 	if strings.Contains(absPath, "..") {
-		return fmt.Errorf("絕對路徑仍包含遍歷字符: %s", absPath)
+		return fmt.Errorf("%w: %s", ErrPathTraversalAbs, absPath)
 	}
 
 	// 靈活的白名單驗證機制 - 避免絕對路徑長度限制
 	if len(pv.allowedBasePaths) == 0 {
 		// 如果沒有設定允許路徑，只進行基本安全檢查
-		return pv.performBasicSecurityChecks(absPath)
+		return performBasicSecurityChecks(absPath)
 	}
 
 	// 檢查路徑是否在允許的基礎路徑內
 	for _, basePath := range pv.allowedBasePaths {
-		if pv.isPathWithinBase(absPath, basePath) {
+		if isPathWithinBase(absPath, basePath) {
 			return nil
 		}
 	}
 
-	return fmt.Errorf("路徑 '%s' 超出允許範圍", decodedPath)
+	return fmt.Errorf("%w: %s", ErrPathOutOfScope, decodedPath)
 }
 
-// ValidateDirectoryPath validates that a directory path is within allowed directories
+// ValidateDirectoryPath validates that a directory path is within allowed directories.
 func (pv *PathValidator) ValidateDirectoryPath(path string) error {
 	return pv.ValidateFilePath(path)
 }
 
-// IsCSVFile checks if the file has a .csv extension
-func (pv *PathValidator) IsCSVFile(path string) bool {
+// IsCSVFile checks if the file has a .csv extension.
+// This is a package-level function for use without a PathValidator instance.
+func IsCSVFile(path string) bool {
 	return strings.ToLower(filepath.Ext(path)) == ".csv"
 }
 
-// SanitizePath sanitizes a file path by removing dangerous characters
-func (pv *PathValidator) SanitizePath(path string) string {
+// IsCSVFile checks if the file has a .csv extension (method wrapper).
+func (*PathValidator) IsCSVFile(path string) bool {
+	return IsCSVFile(path)
+}
+
+// SanitizePath sanitizes a file path by removing dangerous characters.
+// This is a package-level function for use without a PathValidator instance.
+func SanitizePath(path string) string {
 	if path == "" {
 		return ""
 	}
@@ -142,15 +174,14 @@ func (pv *PathValidator) SanitizePath(path string) string {
 
 	// 移除 Unicode 控制字符 (U+0000 到 U+001F 和 U+007F 到 U+009F)
 	var result strings.Builder
+
 	for _, r := range sanitized {
 		if (r >= 0x0020 && r <= 0x007E) || // ASCII 可見字符
-			(r >= 0x00A0) || // 非 ASCII 但可見的字符
+			(r >= nonASCIIVisible) || // 非 ASCII 但可見的字符
 			r == '/' || r == '\\' || r == '.' || r == '-' || r == '_' { // 路徑相關的特殊字符
-			result.WriteRune(r)
+			_, _ = result.WriteRune(r) // WriteRune on strings.Builder never fails
 		}
-		// 忽略控制字符
 	}
-
 	// 最終清理路徑
 	finalPath := filepath.Clean(result.String())
 
@@ -160,7 +191,12 @@ func (pv *PathValidator) SanitizePath(path string) string {
 	return finalPath
 }
 
-// GetSafePath returns a safe path within the allowed directories
+// SanitizePath sanitizes a file path (method wrapper).
+func (*PathValidator) SanitizePath(path string) string {
+	return SanitizePath(path)
+}
+
+// GetSafePath returns a safe path within the allowed directories.
 func (pv *PathValidator) GetSafePath(basePath, filename string) (string, error) {
 	if err := pv.ValidateDirectoryPath(basePath); err != nil {
 		return "", fmt.Errorf("基礎路徑無效: %w", err)
@@ -168,15 +204,15 @@ func (pv *PathValidator) GetSafePath(basePath, filename string) (string, error) 
 
 	// 在清理之前檢查文件名是否包含路徑遍歷攻擊
 	if strings.Contains(filename, "..") {
-		return "", fmt.Errorf("文件名包含路徑遍歷字符: %s", filename)
+		return "", fmt.Errorf("%w: %s", ErrFilenameTraversal, filename)
 	}
 
 	// Sanitize filename
-	safeFilename := pv.SanitizePath(filename)
+	safeFilename := SanitizePath(filename)
 
 	// 檢查清理後的文件名是否為空或只包含無效字符
 	if safeFilename == "" || safeFilename == "." {
-		return "", fmt.Errorf("文件名無效或被清理後為空: %s", filename)
+		return "", fmt.Errorf("%w: %s", ErrFilenameInvalid, filename)
 	}
 
 	// Join paths safely
@@ -190,8 +226,8 @@ func (pv *PathValidator) GetSafePath(basePath, filename string) (string, error) 
 	return fullPath, nil
 }
 
-// isPathWithinBase 檢查目標路徑是否在基礎路徑內，支援長絕對路徑
-func (pv *PathValidator) isPathWithinBase(targetPath, basePath string) bool {
+// isPathWithinBase 檢查目標路徑是否在基礎路徑內，支援長絕對路徑.
+func isPathWithinBase(targetPath, basePath string) bool {
 	// 獲取基礎路徑的絕對路徑
 	absBasePath, err := filepath.Abs(basePath)
 	if err != nil {
@@ -212,8 +248,8 @@ func (pv *PathValidator) isPathWithinBase(targetPath, basePath string) bool {
 	return !strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, string(filepath.Separator))
 }
 
-// performBasicSecurityChecks 執行基本安全檢查，適用於無白名單限制的情況
-func (pv *PathValidator) performBasicSecurityChecks(absPath string) error {
+// performBasicSecurityChecks 執行基本安全檢查，適用於無白名單限制的情況.
+func performBasicSecurityChecks(absPath string) error {
 	// 檢查是否包含系統敏感路徑（跨平台）
 	sensitivePatterns := []string{
 		"/etc/",               // Unix 系統配置
@@ -232,29 +268,29 @@ func (pv *PathValidator) performBasicSecurityChecks(absPath string) error {
 	absPathLower := strings.ToLower(absPath)
 	for _, pattern := range sensitivePatterns {
 		if strings.Contains(absPathLower, strings.ToLower(pattern)) {
-			return fmt.Errorf("路徑指向系統敏感目錄: %s", pattern)
+			return fmt.Errorf("%w: %s", ErrSensitiveDirectory, pattern)
 		}
 	}
 
 	// 檢查路徑長度（防止過長路徑攻擊）
-	maxPathLength := 4096 // 合理的路徑長度限制
 	if len(absPath) > maxPathLength {
-		return fmt.Errorf("路徑長度超過限制 (%d 字符): %d", maxPathLength, len(absPath))
+		return fmt.Errorf("%w (%d 字符): %d", ErrPathTooLong, maxPathLength, len(absPath))
 	}
 
 	// 檢查文件名長度
 	filename := filepath.Base(absPath)
-	maxFilenameLength := 255 // 大多數文件系統的限制
+
 	if len(filename) > maxFilenameLength {
-		return fmt.Errorf("文件名長度超過限制 (%d 字符): %d", maxFilenameLength, len(filename))
+		return fmt.Errorf("%w (%d 字符): %d", ErrFilenameTooLong, maxFilenameLength, len(filename))
 	}
 
 	return nil
 }
 
-// SetAllowedBasePaths 動態設置允許的基礎路徑（支援長路徑）
+// SetAllowedBasePaths 動態設置允許的基礎路徑（支援長路徑）.
 func (pv *PathValidator) SetAllowedBasePaths(paths []string) {
 	absPaths := make([]string, 0, len(paths))
+
 	for _, path := range paths {
 		if path == "" {
 			continue
@@ -265,15 +301,18 @@ func (pv *PathValidator) SetAllowedBasePaths(paths []string) {
 			// 如果無法獲取絕對路徑，使用清理後的原始路徑
 			absPath = filepath.Clean(path)
 		}
+
 		absPaths = append(absPaths, absPath)
 	}
+
 	pv.allowedBasePaths = absPaths
 }
 
-// GetAllowedBasePaths 獲取當前允許的基礎路徑
+// GetAllowedBasePaths 獲取當前允許的基礎路徑.
 func (pv *PathValidator) GetAllowedBasePaths() []string {
 	// 返回副本以防止外部修改
 	result := make([]string, len(pv.allowedBasePaths))
 	copy(result, pv.allowedBasePaths)
+
 	return result
 }

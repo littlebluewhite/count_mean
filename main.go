@@ -1,16 +1,30 @@
+// Package main is the entry point for the EMG Data Analysis Tool application.
 package main
 
 import (
+	"embed"
+
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+
 	"count_mean/gui"
 	"count_mean/internal/config"
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
-	"embed"
+)
 
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+// Window dimensions for the application.
+const (
+	windowWidth  = 1024
+	windowHeight = 768
+)
 
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
+// Background color RGB values.
+const (
+	bgColorR = 27
+	bgColorG = 38
+	bgColorB = 54
 )
 
 //go:embed all:frontend/dist
@@ -21,11 +35,13 @@ func main() {
 	cfg, err := config.LoadConfig("./config.json")
 	if err != nil {
 		logging.Error("無法載入配置", err)
+
 		cfg = config.DefaultConfig()
 	}
 
 	// 解析日誌級別
 	var logLevel logging.LogLevel
+
 	switch cfg.LogLevel {
 	case "debug":
 		logLevel = logging.LevelDebug
@@ -58,9 +74,9 @@ func main() {
 	// 創建 Wails 應用
 	err = wails.Run(&options.App{
 		Title:            "EMG 資料分析工具",
-		Width:            1024,
-		Height:           768,
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		Width:            windowWidth,
+		Height:           windowHeight,
+		BackgroundColour: &options.RGBA{R: bgColorR, G: bgColorG, B: bgColorB, A: 1},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -75,7 +91,6 @@ func main() {
 			CSSDropValue:       "drop",
 		},
 	})
-
 	if err != nil {
 		println("Error:", err.Error())
 	}

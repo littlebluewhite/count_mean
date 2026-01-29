@@ -1,20 +1,21 @@
+// Package integration contains integration tests for the EMG data analysis tool.
 package integration
 
 import (
 	"os"
 	"testing"
 
-	"count_mean/internal/parsers"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/parsers"
 )
 
-// TestANCParser_RealXLSXFile 測試解析真實的 xlsx 格式 ANC 檔案
-// 此測試需要存在真實的測試檔案，如果檔案不存在會跳過
+// 此測試需要存在真實的測試檔案，如果檔案不存在會跳過.
 func TestANCParser_RealXLSXFile(t *testing.T) {
 	// 真實測試檔案路徑
-	testFilePath := "/Users/wilson08/pCloud Drive/LED/研究所/0論文/1論文實驗/1實驗資料處理/EMG&Motion&Force plate資料分析/SF2/SF2_BTS_4.anc.xlsx"
+	testFilePath := "/Users/wilson08/pCloud Drive/LED/研究所/0論文/1論文實驗/1實驗資料處理/" +
+		"EMG&Motion&Force plate資料分析/SF2/SF2_BTS_4.anc.xlsx"
 
 	// 檢查檔案是否存在
 	if _, err := os.Stat(testFilePath); os.IsNotExist(err) {
@@ -62,9 +63,10 @@ func TestANCParser_RealXLSXFile(t *testing.T) {
 	}
 }
 
-// TestANCParser_RealXLSXFile_TimeRange 測試真實 xlsx 檔案的時間範圍查詢
+// TestANCParser_RealXLSXFile_TimeRange 測試真實 xlsx 檔案的時間範圍查詢.
 func TestANCParser_RealXLSXFile_TimeRange(t *testing.T) {
-	testFilePath := "/Users/wilson08/pCloud Drive/LED/研究所/0論文/1論文實驗/1實驗資料處理/EMG&Motion&Force plate資料分析/SF2/SF2_BTS_4.anc.xlsx"
+	testFilePath := "/Users/wilson08/pCloud Drive/LED/研究所/0論文/1論文實驗/1實驗資料處理/" +
+		"EMG&Motion&Force plate資料分析/SF2/SF2_BTS_4.anc.xlsx"
 
 	if _, err := os.Stat(testFilePath); os.IsNotExist(err) {
 		t.Skipf("Test file not found: %s", testFilePath)

@@ -11,16 +11,17 @@ import (
 	"count_mean/util"
 )
 
-// Normalizer 處理數據標準化
+// Normalizer 處理數據標準化.
 type Normalizer struct {
 	scalingFactor int
 	logger        *logging.Logger
 	dataParser    *parser.DataParser
 }
 
-// NewNormalizer 創建新的標準化器
+// NewNormalizer 創建新的標準化器.
 func NewNormalizer(scalingFactor int) *Normalizer {
 	logger := logging.GetLogger("normalizer")
+
 	return &Normalizer{
 		scalingFactor: scalingFactor,
 		logger:        logger,
@@ -28,8 +29,8 @@ func NewNormalizer(scalingFactor int) *Normalizer {
 	}
 }
 
-// Normalize 標準化數據集（每個值除以參考值）
-func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMGDataset) (*models.EMGDataset, error) {
+// Normalize 標準化數據集（每個值除以參考值）.
+func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.EMGDataset, error) {
 	if n == nil {
 		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "標準化器為空")
 	}
@@ -43,6 +44,7 @@ func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMG
 			"dataset_empty":   dataset.IsEmpty(),
 			"reference_empty": reference.IsEmpty(),
 		})
+
 		return nil, err
 	}
 
@@ -66,6 +68,7 @@ func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMG
 			"dataset_channels":   dataset.ChannelCount(),
 			"reference_channels": reference.ChannelCount(),
 		})
+
 		return nil, err
 	}
 
@@ -99,6 +102,7 @@ func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMG
 				"channel_index":   i + 1,
 				"reference_value": refVal,
 			})
+
 			return nil, err
 		}
 	}
@@ -129,8 +133,8 @@ func (n *Normalizer) Normalize(dataset *models.EMGDataset, reference *models.EMG
 	return result, nil
 }
 
-// NormalizeFromRawData 從原始字符串數據進行標準化
-func (n *Normalizer) NormalizeFromRawData(records [][]string, reference [][]string) (*models.EMGDataset, error) {
+// NormalizeFromRawData 從原始字符串數據進行標準化.
+func (n *Normalizer) NormalizeFromRawData(records, reference [][]string) (*models.EMGDataset, error) {
 	if n == nil {
 		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "標準化器為空")
 	}
@@ -158,7 +162,7 @@ func (n *Normalizer) NormalizeFromRawData(records [][]string, reference [][]stri
 	return n.Normalize(dataset, refDataset)
 }
 
-// parseReferenceData 解析參考數據（特殊格式，第一列是標籤而非時間）
+// parseReferenceData 解析參考數據（特殊格式，第一列是標籤而非時間）.
 func (n *Normalizer) parseReferenceData(records [][]string) (*models.EMGDataset, error) {
 	n.logger.Debug("開始解析參考數據", map[string]interface{}{
 		"record_count": len(records),
@@ -175,6 +179,7 @@ func (n *Normalizer) parseReferenceData(records [][]string) (*models.EMGDataset,
 		n.logger.Error("參考數據結構驗證失敗", err, map[string]interface{}{
 			"record_count": len(records),
 		})
+
 		return nil, err
 	}
 
@@ -208,8 +213,10 @@ func (n *Normalizer) parseReferenceData(records [][]string) (*models.EMGDataset,
 					"column_number": j + 1,
 					"value":         row[j],
 				})
+
 				return nil, fmt.Errorf("解析參考數據失敗在行 %d 列 %d: %w", i+1, j+1, err)
 			}
+
 			data.Channels = append(data.Channels, val)
 		}
 

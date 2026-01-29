@@ -7,6 +7,15 @@ import (
 	apperrors "count_mean/internal/errors"
 )
 
+// Test sentinel errors for err113 compliance.
+var (
+	errSystem     = errors.New("system error")
+	errOther      = errors.New("other error")
+	errUnderlying = errors.New("underlying error")
+	errParse      = errors.New("parse error")
+	errParsing    = errors.New("parsing failed")
+)
+
 func TestAppError_Error(t *testing.T) {
 	tests := []struct {
 		name string
@@ -35,7 +44,7 @@ func TestAppError_Error(t *testing.T) {
 			err: &apperrors.AppError{
 				Code:    apperrors.ErrCodeFileNotFound,
 				Message: "檔案未找到",
-				Cause:   errors.New("system error"),
+				Cause:   errSystem,
 			},
 			want: "[FILE_NOT_FOUND] 檔案未找到 - 原因: system error",
 		},
@@ -45,7 +54,7 @@ func TestAppError_Error(t *testing.T) {
 				Code:    apperrors.ErrCodeFileNotFound,
 				Message: "檔案未找到",
 				Details: "檔案可能已被刪除",
-				Cause:   errors.New("system error"),
+				Cause:   errSystem,
 			},
 			want: "[FILE_NOT_FOUND] 檔案未找到 - 詳細: 檔案可能已被刪除 - 原因: system error",
 		},
@@ -64,7 +73,6 @@ func TestAppError_Is(t *testing.T) {
 	err1 := &apperrors.AppError{Code: apperrors.ErrCodeFileNotFound}
 	err2 := &apperrors.AppError{Code: apperrors.ErrCodeFileNotFound}
 	err3 := &apperrors.AppError{Code: apperrors.ErrCodeDataParsing}
-	otherErr := errors.New("other error")
 
 	tests := []struct {
 		name   string
@@ -87,7 +95,7 @@ func TestAppError_Is(t *testing.T) {
 		{
 			name:   "not AppError",
 			err:    err1,
-			target: otherErr,
+			target: errOther,
 			want:   false,
 		},
 	}
@@ -140,15 +148,14 @@ func TestNewAppError(t *testing.T) {
 }
 
 func TestNewAppErrorWithCause(t *testing.T) {
-	cause := errors.New("underlying error")
-	err := apperrors.NewAppErrorWithCause(apperrors.ErrCodeFileNotFound, "檔案未找到", cause)
+	err := apperrors.NewAppErrorWithCause(apperrors.ErrCodeFileNotFound, "檔案未找到", errUnderlying)
 
-	if err.Cause != cause {
-		t.Errorf("Cause = %v, want %v", err.Cause, cause)
+	if !errors.Is(err.Cause, errUnderlying) {
+		t.Errorf("Cause = %v, want %v", err.Cause, errUnderlying)
 	}
 
-	if err.Unwrap() != cause {
-		t.Errorf("Unwrap() = %v, want %v", err.Unwrap(), cause)
+	if !errors.Is(err.Unwrap(), errUnderlying) {
+		t.Errorf("Unwrap() = %v, want %v", err.Unwrap(), errUnderlying)
 	}
 }
 
@@ -190,14 +197,13 @@ func TestIsRecoverable(t *testing.T) {
 }
 
 func TestProcessingError_Error(t *testing.T) {
-	cause := errors.New("parse error")
 	err := apperrors.NewProcessingError(
 		apperrors.ErrCodeDataParsing,
 		"解析失敗",
 		"test.csv",
 		"read_csv",
 		"data_validation",
-		cause,
+		errParse,
 	)
 
 	expectedPattern := "[DATA_PARSING] - 檔案: test.csv - 操作: read_csv - 步驟: data_validation - 解析失敗 - 原因: parse error"
@@ -215,7 +221,7 @@ func TestValidationError_Error(t *testing.T) {
 	}
 }
 
-// Tests for calculator sentinel errors
+// Tests for calculator sentinel errors.
 func TestCalculatorError_Is(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -294,6 +300,7 @@ func TestCalculatorError_WithContext(t *testing.T) {
 	if err.Context["data_length"] != 0 {
 		t.Errorf("Context[data_length] = %v, want 0", err.Context["data_length"])
 	}
+
 	if err.Context["window_size"] != 100 {
 		t.Errorf("Context[window_size] = %v, want 100", err.Context["window_size"])
 	}
@@ -360,15 +367,14 @@ func TestCalculatorError_HelperFunctions(t *testing.T) {
 }
 
 func TestWrapParseError(t *testing.T) {
-	originalErr := errors.New("parsing failed")
-	wrappedErr := apperrors.WrapParseError(10, 5, originalErr)
+	wrappedErr := apperrors.WrapParseError(10, 5, errParsing)
 
 	expectedMsg := "parsing error at row 10, col 5: parsing failed"
 	if wrappedErr.Error() != expectedMsg {
 		t.Errorf("WrapParseError() = %v, want %v", wrappedErr.Error(), expectedMsg)
 	}
 
-	if !errors.Is(wrappedErr, originalErr) {
+	if !errors.Is(wrappedErr, errParsing) {
 		t.Error("WrapParseError should wrap the original error")
 	}
 }

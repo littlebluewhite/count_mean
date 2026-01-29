@@ -4,11 +4,11 @@ import (
 	"os"
 	"testing"
 
-	"count_mean/internal/models"
-	"count_mean/internal/parsers"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/models"
+	"count_mean/internal/parsers"
 )
 
 func TestNewEMGParser(t *testing.T) {
@@ -122,9 +122,8 @@ invalid_time_2,102.1,198.9`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// 創建臨時測試文件
-			tmpFile, err := os.CreateTemp("", "test_emg_*.csv")
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_emg_*.csv")
 			require.NoError(t, err)
-			defer os.Remove(tmpFile.Name())
 
 			_, err = tmpFile.WriteString(tt.csvContent)
 			require.NoError(t, err)
@@ -428,6 +427,7 @@ func TestValidateEMGData(t *testing.T) {
 
 			if tt.wantErr {
 				assert.Error(t, err)
+
 				if tt.errMsg != "" {
 					assert.Contains(t, err.Error(), tt.errMsg)
 				}
@@ -472,17 +472,19 @@ func TestEMGParser_parseHeaders(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// 由於 parseHeaders 是私有方法，我們通過創建一個簡單的 CSV 文件來間接測試
 			csvContent := ""
+
 			for i, header := range tt.input {
 				if i > 0 {
 					csvContent += ","
 				}
+
 				csvContent += header
 			}
+
 			csvContent += "\n0.000,1,2,3"
 
-			tmpFile, err := os.CreateTemp("", "test_headers_*.csv")
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_headers_*.csv")
 			require.NoError(t, err)
-			defer os.Remove(tmpFile.Name())
 
 			_, err = tmpFile.WriteString(csvContent)
 			require.NoError(t, err)
@@ -511,9 +513,8 @@ func TestEMGParser_Integration(t *testing.T) {
 0.004000,145.9,124.0,167.6,189.8`
 
 		// 創建臨時文件
-		tmpFile, err := os.CreateTemp("", "integration_test_*.csv")
+		tmpFile, err := os.CreateTemp(t.TempDir(), "integration_test_*.csv")
 		require.NoError(t, err)
-		defer os.Remove(tmpFile.Name())
 
 		_, err = tmpFile.WriteString(emgContent)
 		require.NoError(t, err)

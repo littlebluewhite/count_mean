@@ -1,7 +1,6 @@
 package csv_test
 
 import (
-	"count_mean/internal/config"
 	"math"
 	"os"
 	"path/filepath"
@@ -10,23 +9,23 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"count_mean/internal/config"
 	"count_mean/internal/io"
 )
 
 func TestLargeFileHandler_GetFileInfo(t *testing.T) {
 	// 創建測試配置
 	cfg := config.DefaultConfig()
-	handler := io.NewLargeFileHandler(cfg)
 
 	// 創建測試文件
 	testDir := "./test_temp"
-	if err := os.MkdirAll(testDir, 0755); err != nil {
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
 	defer os.RemoveAll(testDir)
 
 	cfg.InputDir = testDir
-	handler = io.NewLargeFileHandler(cfg)
+	handler := io.NewLargeFileHandler(cfg)
 
 	testFile := filepath.Join(testDir, "test.csv")
 	testData := []string{
@@ -37,7 +36,7 @@ func TestLargeFileHandler_GetFileInfo(t *testing.T) {
 	}
 
 	content := strings.Join(testData, "\n")
-	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("無法創建測試文件: %v", err)
 	}
 
@@ -64,10 +63,12 @@ func TestLargeFileHandler_GetFileInfo(t *testing.T) {
 func TestLargeFileHandler_ReadCSVStreaming(t *testing.T) {
 	// 創建測試配置
 	cfg := config.DefaultConfig()
+
 	testDir := "./test_temp"
-	if err := os.MkdirAll(testDir, 0755); err != nil {
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
+
 	defer os.RemoveAll(testDir)
 
 	cfg.InputDir = testDir
@@ -84,7 +85,7 @@ func TestLargeFileHandler_ReadCSVStreaming(t *testing.T) {
 	}
 
 	content := strings.Join(testData, "\n")
-	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("無法創建測試文件: %v", err)
 	}
 
@@ -92,6 +93,7 @@ func TestLargeFileHandler_ReadCSVStreaming(t *testing.T) {
 	progressCalled := false
 	callback := func(processed, total int64, percentage float64) {
 		progressCalled = true
+
 		if processed < 0 || total < 0 || percentage < 0 || percentage > 100 {
 			t.Errorf("進度回調參數無效: processed=%d, total=%d, percentage=%.2f",
 				processed, total, percentage)
@@ -121,10 +123,12 @@ func TestLargeFileHandler_ProcessLargeFileInChunks(t *testing.T) {
 	// 創建測試配置
 	cfg := config.DefaultConfig()
 	cfg.ScalingFactor = 1
+
 	testDir := "./test_temp"
-	if err := os.MkdirAll(testDir, 0755); err != nil {
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
+
 	defer os.RemoveAll(testDir)
 
 	cfg.InputDir = testDir
@@ -143,15 +147,17 @@ func TestLargeFileHandler_ProcessLargeFileInChunks(t *testing.T) {
 	}
 
 	content := strings.Join(testData, "\n")
-	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("無法創建測試文件: %v", err)
 	}
 
 	// 測試分塊處理
 	windowSize := 3
 	progressCalled := false
-	callback := func(processed, total int64, percentage float64) {
+	callback := func(_, total int64, percentage float64) {
 		progressCalled = true
+		_ = total
+		_ = percentage
 	}
 
 	result, err := handler.ProcessLargeFileInChunks(testFile, windowSize, callback)
@@ -177,9 +183,11 @@ func TestLargeFileHandler_ProcessLargeFileInChunks(t *testing.T) {
 		if result.MaxMean <= 0 {
 			t.Errorf("結果 %d 最大平均值應該大於 0，實際 %f", i, result.MaxMean)
 		}
+
 		if result.StartTime < 0 || result.EndTime < 0 {
 			t.Errorf("結果 %d 時間範圍無效: 開始=%f, 結束=%f", i, result.StartTime, result.EndTime)
 		}
+
 		if result.StartTime >= result.EndTime {
 			t.Errorf("結果 %d 開始時間應該小於結束時間", i)
 		}
@@ -202,7 +210,7 @@ func TestLargeFileHandler_ProcessLargeFileInChunks_NegativeValues(t *testing.T) 
 		"0.3,-9,-7",
 	}
 
-	if err := os.WriteFile(testFile, []byte(strings.Join(testData, "\n")), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte(strings.Join(testData, "\n")), 0o644); err != nil {
 		t.Fatalf("無法創建測試文件: %v", err)
 	}
 
@@ -230,10 +238,12 @@ func TestLargeFileHandler_ProcessLargeFileInChunks_NegativeValues(t *testing.T) 
 func TestLargeFileHandler_WriteCSVStreaming(t *testing.T) {
 	// 創建測試配置
 	cfg := config.DefaultConfig()
+
 	testDir := "./test_temp"
-	if err := os.MkdirAll(testDir, 0755); err != nil {
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
+
 	defer os.RemoveAll(testDir)
 
 	cfg.OutputDir = testDir
@@ -249,8 +259,10 @@ func TestLargeFileHandler_WriteCSVStreaming(t *testing.T) {
 
 	// 測試流式寫入
 	progressCalled := false
-	callback := func(processed, total int64, percentage float64) {
+	callback := func(_, total int64, percentage float64) {
 		progressCalled = true
+		_ = total
+		_ = percentage
 	}
 
 	err := handler.WriteCSVStreaming(testFile, testData, callback)
@@ -325,10 +337,12 @@ func TestLargeFileHandler_NegativeSignals(t *testing.T) {
 	// This verifies that channelMaxMeans is initialized correctly with negative infinity
 	cfg := config.DefaultConfig()
 	cfg.ScalingFactor = 1
+
 	testDir := "./test_temp"
-	if err := os.MkdirAll(testDir, 0755); err != nil {
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
+
 	defer os.RemoveAll(testDir)
 
 	cfg.InputDir = testDir
@@ -347,12 +361,13 @@ func TestLargeFileHandler_NegativeSignals(t *testing.T) {
 	}
 
 	content := strings.Join(testData, "\n")
-	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("無法創建測試文件: %v", err)
 	}
 
 	// Process with a window size of 3
 	windowSize := 3
+
 	result, err := handler.ProcessLargeFileInChunks(testFile, windowSize, nil)
 	if err != nil {
 		t.Fatalf("ProcessLargeFileInChunks 失敗: %v", err)
@@ -367,9 +382,11 @@ func TestLargeFileHandler_NegativeSignals(t *testing.T) {
 		if res.MaxMean >= 0 {
 			t.Errorf("通道 %d: 對於負信號，MaxMean 應該為負值，實際為 %f", i, res.MaxMean)
 		}
+
 		if res.StartTime <= 0 || res.EndTime <= 0 {
 			t.Errorf("通道 %d: 時間範圍無效: 開始=%f, 結束=%f", i, res.StartTime, res.EndTime)
 		}
+
 		if res.StartTime >= res.EndTime {
 			t.Errorf("通道 %d: 開始時間應該小於結束時間", i)
 		}

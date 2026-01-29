@@ -3,37 +3,49 @@ package parsers
 import (
 	"bytes"
 	"encoding/csv"
+	"fmt"
 	"io"
 	"os"
 )
 
-// BOMBytes UTF-8 BOM
+// BOMBytes UTF-8 BOM constant.
+//
+//nolint:gochecknoglobals // immutable byte constant
 var BOMBytes = []byte{0xEF, 0xBB, 0xBF}
 
-// ReadCSVDirect 直接讀取 CSV 檔案，不進行路徑驗證（用於分期同步分析）
+// ReadCSVDirect reads a CSV file directly without path validation.
+// Used for phase synchronization analysis.
 func ReadCSVDirect(filepath string) ([][]string, error) {
-	file, err := os.Open(filepath)
+	file, err := os.Open(filepath) //nolint:gosec // filepath is validated by caller
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open file: %w", err)
 	}
-	defer file.Close()
 
-	// 讀取檔案內容並檢查 BOM
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	// Read file content and check for BOM
 	content, err := io.ReadAll(file)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read file: %w", err)
 	}
 
-	// 移除 BOM 字符（如果存在）
-	if bytes.HasPrefix(content, BOMBytes) {
-		content = content[len(BOMBytes):]
-	}
+	// Remove BOM character if present
+	content = bytes.TrimPrefix(content, BOMBytes)
 
-	// 使用處理過的內容建立 CSV reader
+	// Create CSV reader with processed content
 	reader := csv.NewReader(bytes.NewReader(content))
 	reader.TrimLeadingSpace = true
 	reader.LazyQuotes = true
-	reader.FieldsPerRecord = -1 // 允許不同行有不同的欄位數
+	reader.FieldsPerRecord = -1 // Allow different number of fields per row
 
-	return reader.ReadAll()
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("parse CSV: %w", err)
+	}
+
+	return records, nil
 }

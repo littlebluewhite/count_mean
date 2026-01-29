@@ -3,10 +3,10 @@ package synchronizer
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"count_mean/internal/models"
 	"count_mean/internal/synchronizer"
-
-	"github.com/stretchr/testify/assert"
 )
 
 func TestNewPhaseCalculator(t *testing.T) {
@@ -59,35 +59,35 @@ func TestPhaseCalculator_ValidatePhaseOrder(t *testing.T) {
 			startPhase: "P1",
 			endPhase:   "P0",
 			expectErr:  true,
-			errorMsg:   "開始分期點 P1 必須在結束分期點 P0 之前",
+			errorMsg:   "start phase must be before end phase",
 		},
 		{
 			name:       "invalid order L to P0",
 			startPhase: "L",
 			endPhase:   "P0",
 			expectErr:  true,
-			errorMsg:   "開始分期點 L 必須在結束分期點 P0 之前",
+			errorMsg:   "start phase must be before end phase",
 		},
 		{
 			name:       "same phase",
 			startPhase: "P0",
 			endPhase:   "P0",
 			expectErr:  true,
-			errorMsg:   "開始分期點 P0 必須在結束分期點 P0 之前",
+			errorMsg:   "start phase must be before end phase",
 		},
 		{
 			name:       "unknown start phase",
 			startPhase: "Unknown",
 			endPhase:   "P1",
 			expectErr:  true,
-			errorMsg:   "未知的開始分期點: Unknown",
+			errorMsg:   "unknown phase point",
 		},
 		{
 			name:       "unknown end phase",
 			startPhase: "P0",
 			endPhase:   "Unknown",
 			expectErr:  true,
-			errorMsg:   "未知的結束分期點: Unknown",
+			errorMsg:   "unknown phase point",
 		},
 	}
 
@@ -202,7 +202,7 @@ func TestPhaseCalculator_GetPhaseTimeRange(t *testing.T) {
 			endPhase:        "P1",
 			emgMotionOffset: 100,
 			expectErr:       true,
-			errorMsg:        "開始分期點 P0 的值為 0 或未設置",
+			errorMsg:        "phase value is zero or not set",
 		},
 		{
 			name: "zero end value",
@@ -222,7 +222,7 @@ func TestPhaseCalculator_GetPhaseTimeRange(t *testing.T) {
 			endPhase:        "P1",
 			emgMotionOffset: 100,
 			expectErr:       true,
-			errorMsg:        "結束分期點 P1 的值為 0 或未設置",
+			errorMsg:        "phase value is zero or not set",
 		},
 		{
 			name: "zero motion index",
@@ -242,7 +242,7 @@ func TestPhaseCalculator_GetPhaseTimeRange(t *testing.T) {
 			endPhase:        "D",
 			emgMotionOffset: 100,
 			expectErr:       true,
-			errorMsg:        "結束分期點 D 的值為 0 或未設置",
+			errorMsg:        "phase value is zero or not set",
 		},
 		{
 			name:            "invalid phase order",
@@ -271,6 +271,7 @@ func TestPhaseCalculator_GetPhaseTimeRange(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, result)
+
 				if tt.checkResult != nil {
 					tt.checkResult(t, result)
 				}
@@ -360,44 +361,44 @@ func TestFormatPhaseTime(t *testing.T) {
 	tests := []struct {
 		name             string
 		value            float64
-		isMotionIndex    bool
+		phaseType        string
 		expectedContains string
 	}{
 		{
 			name:             "force time",
 			value:            1.234,
-			isMotionIndex:    false,
+			phaseType:        synchronizer.PhaseTypeForce,
 			expectedContains: "1.234 秒",
 		},
 		{
 			name:             "motion index",
 			value:            250.0,
-			isMotionIndex:    true,
+			phaseType:        synchronizer.PhaseTypeMotion,
 			expectedContains: "Index: 250",
 		},
 		{
 			name:             "decimal motion index",
 			value:            250.7,
-			isMotionIndex:    true,
+			phaseType:        synchronizer.PhaseTypeMotion,
 			expectedContains: "Index: 250", // Should be converted to int
 		},
 		{
 			name:             "zero force time",
 			value:            0.0,
-			isMotionIndex:    false,
+			phaseType:        synchronizer.PhaseTypeForce,
 			expectedContains: "0.000 秒",
 		},
 		{
 			name:             "zero motion index",
 			value:            0.0,
-			isMotionIndex:    true,
+			phaseType:        synchronizer.PhaseTypeMotion,
 			expectedContains: "Index: 0",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := synchronizer.FormatPhaseTime(tt.value, tt.isMotionIndex)
+			result := synchronizer.FormatPhaseTime(tt.value, tt.phaseType)
 			assert.Contains(t, result, tt.expectedContains)
 		})
 	}
@@ -491,11 +492,12 @@ func TestPhaseCalculator_GetPhaseTimeRange_EdgeCases(t *testing.T) {
 	}
 }
 
-// Benchmark tests
+// Benchmark tests.
 func BenchmarkPhaseCalculator_ValidatePhaseOrder(b *testing.B) {
 	pc := synchronizer.NewPhaseCalculator()
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_ = pc.ValidatePhaseOrder("P0", "L")
 	}
@@ -518,6 +520,7 @@ func BenchmarkPhaseCalculator_GetPhaseTimeRange(b *testing.B) {
 	}
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_, _ = pc.GetPhaseTimeRange(phasePoints, "P0", "L", 100)
 	}
@@ -525,6 +528,7 @@ func BenchmarkPhaseCalculator_GetPhaseTimeRange(b *testing.B) {
 
 func BenchmarkGetAvailableStartPhases(b *testing.B) {
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_ = synchronizer.GetAvailableStartPhases()
 	}
@@ -532,6 +536,7 @@ func BenchmarkGetAvailableStartPhases(b *testing.B) {
 
 func BenchmarkGetPhaseInfo(b *testing.B) {
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_ = synchronizer.GetPhaseInfo()
 	}
@@ -539,13 +544,14 @@ func BenchmarkGetPhaseInfo(b *testing.B) {
 
 func BenchmarkFormatPhaseTime(b *testing.B) {
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
-		_ = synchronizer.FormatPhaseTime(123.456, false)
-		_ = synchronizer.FormatPhaseTime(250.0, true)
+		_ = synchronizer.FormatPhaseTime(123.456, synchronizer.PhaseTypeForce)
+		_ = synchronizer.FormatPhaseTime(250.0, synchronizer.PhaseTypeMotion)
 	}
 }
 
-// Test concurrent access
+// Test concurrent access.
 func TestPhaseCalculator_ConcurrentAccess(t *testing.T) {
 	pc := synchronizer.NewPhaseCalculator()
 
@@ -564,6 +570,7 @@ func TestPhaseCalculator_ConcurrentAccess(t *testing.T) {
 
 	// Run multiple goroutines simultaneously
 	done := make(chan bool)
+
 	for i := 0; i < 10; i++ {
 		go func() {
 			for j := 0; j < 100; j++ {

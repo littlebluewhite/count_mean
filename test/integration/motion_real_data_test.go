@@ -4,10 +4,10 @@ import (
 	"os"
 	"testing"
 
-	"count_mean/internal/parsers"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/parsers"
 )
 
 func TestMotionParser_RealNSF2Data(t *testing.T) {

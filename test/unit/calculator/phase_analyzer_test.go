@@ -1,12 +1,12 @@
 package calculator_test
 
 import (
-	"count_mean/internal/models"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/models"
 )
 
 func TestPhaseAnalyzer_Analyze(t *testing.T) {

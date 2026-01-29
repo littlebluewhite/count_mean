@@ -1,17 +1,18 @@
 package chart_test
 
 import (
-	"count_mean/internal/chart"
-	"count_mean/internal/models"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"gonum.org/v1/plot/vg"
+
+	"count_mean/internal/chart"
+	"count_mean/internal/models"
 )
 
-// TestChartGenerator 測試圖表生成器
+// TestChartGenerator 測試圖表生成器.
 func TestChartGenerator(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -42,7 +43,7 @@ func testNewChartGenerator(t *testing.T) {
 
 	// 測試 logger 是否正確初始化
 	// 由於 logger 是私有字段，我們只能測試基本功能
-	testConfig := chart.ChartConfig{
+	testConfig := chart.Config{
 		Title:      "Test Chart",
 		XAxisLabel: "Time",
 		YAxisLabel: "Value",
@@ -61,7 +62,7 @@ func testNewChartGenerator(t *testing.T) {
 	}()
 
 	// 測試生成圖像功能
-	_, err := generator.GenerateLineChartImage(dataset, testConfig)
+	_, err := generator.GenerateLineChartImage(dataset, &testConfig)
 	if err != nil {
 		t.Errorf("GenerateLineChartImage() failed: %v", err)
 	}
@@ -75,7 +76,7 @@ func testGenerateLineChart(t *testing.T) {
 	tempDir := t.TempDir()
 	outputPath := filepath.Join(tempDir, "test_chart.png")
 
-	config := chart.ChartConfig{
+	config := chart.Config{
 		Title:      "Test Chart",
 		XAxisLabel: "Time (s)",
 		YAxisLabel: "EMG Value",
@@ -84,7 +85,7 @@ func testGenerateLineChart(t *testing.T) {
 		Columns:    []string{"Channel1"},
 	}
 
-	err := generator.GenerateLineChart(dataset, config, outputPath)
+	err := generator.GenerateLineChart(dataset, &config, outputPath)
 	if err != nil {
 		t.Errorf("GenerateLineChart() failed: %v", err)
 	}
@@ -109,7 +110,7 @@ func testGenerateLineChartImage(t *testing.T) {
 	generator := chart.NewChartGenerator()
 	dataset := createTestDataset()
 
-	config := chart.ChartConfig{
+	config := chart.Config{
 		Title:      "Test Chart Image",
 		XAxisLabel: "Time (s)",
 		YAxisLabel: "EMG Value",
@@ -118,7 +119,7 @@ func testGenerateLineChartImage(t *testing.T) {
 		Columns:    []string{"Channel1"},
 	}
 
-	img, err := generator.GenerateLineChartImage(dataset, config)
+	img, err := generator.GenerateLineChartImage(dataset, &config)
 	if err != nil {
 		t.Errorf("GenerateLineChartImage() failed: %v", err)
 	}
@@ -135,11 +136,11 @@ func testGenerateLineChartImage(t *testing.T) {
 }
 
 func testGetCSVColumns(t *testing.T) {
-	generator := chart.NewChartGenerator()
+	_ = chart.NewChartGenerator()
 
 	// 測試正常情況
 	dataset := createTestDataset()
-	columns := generator.GetCSVColumns(dataset)
+	columns := chart.GetCSVColumns(dataset)
 
 	expectedColumns := []string{"Channel1", "Channel2", "Channel3"}
 	if len(columns) != len(expectedColumns) {
@@ -155,13 +156,14 @@ func testGetCSVColumns(t *testing.T) {
 
 	// 測試空數據集
 	emptyDataset := &models.EMGDataset{}
-	columns = generator.GetCSVColumns(emptyDataset)
+
+	columns = chart.GetCSVColumns(emptyDataset)
 	if len(columns) != 0 {
 		t.Errorf("GetCSVColumns() with empty dataset returned %d columns, expected 0", len(columns))
 	}
 
 	// 測試 nil 數據集
-	columns = generator.GetCSVColumns(nil)
+	columns = chart.GetCSVColumns(nil)
 	if len(columns) != 0 {
 		t.Errorf("GetCSVColumns() with nil dataset returned %d columns, expected 0", len(columns))
 	}
@@ -170,7 +172,8 @@ func testGetCSVColumns(t *testing.T) {
 	timeOnlyDataset := &models.EMGDataset{
 		Headers: []string{"Time"},
 	}
-	columns = generator.GetCSVColumns(timeOnlyDataset)
+
+	columns = chart.GetCSVColumns(timeOnlyDataset)
 	if len(columns) != 0 {
 		t.Errorf("GetCSVColumns() with time-only dataset returned %d columns, expected 0", len(columns))
 	}
@@ -188,7 +191,7 @@ func testGenerateLineChartEmptyData(t *testing.T) {
 	tempDir := t.TempDir()
 	outputPath := filepath.Join(tempDir, "empty_chart.png")
 
-	config := chart.ChartConfig{
+	config := chart.Config{
 		Title:      "Empty Chart",
 		XAxisLabel: "Time (s)",
 		YAxisLabel: "EMG Value",
@@ -197,7 +200,7 @@ func testGenerateLineChartEmptyData(t *testing.T) {
 		Columns:    []string{"Channel1"},
 	}
 
-	err := generator.GenerateLineChart(emptyDataset, config, outputPath)
+	err := generator.GenerateLineChart(emptyDataset, &config, outputPath)
 	if err != nil {
 		t.Errorf("GenerateLineChart() with empty data failed: %v", err)
 	}
@@ -215,7 +218,7 @@ func testGenerateLineChartInvalidColumns(t *testing.T) {
 	tempDir := t.TempDir()
 	outputPath := filepath.Join(tempDir, "invalid_columns_chart.png")
 
-	config := chart.ChartConfig{
+	config := chart.Config{
 		Title:      "Invalid Columns Chart",
 		XAxisLabel: "Time (s)",
 		YAxisLabel: "EMG Value",
@@ -224,7 +227,7 @@ func testGenerateLineChartInvalidColumns(t *testing.T) {
 		Columns:    []string{"NonExistentColumn", "AnotherInvalidColumn"},
 	}
 
-	err := generator.GenerateLineChart(dataset, config, outputPath)
+	err := generator.GenerateLineChart(dataset, &config, outputPath)
 	if err != nil {
 		t.Errorf("GenerateLineChart() with invalid columns failed: %v", err)
 	}
@@ -242,7 +245,7 @@ func testGenerateLineChartMultipleColumns(t *testing.T) {
 	tempDir := t.TempDir()
 	outputPath := filepath.Join(tempDir, "multi_columns_chart.png")
 
-	config := chart.ChartConfig{
+	config := chart.Config{
 		Title:      "Multiple Columns Chart",
 		XAxisLabel: "Time (s)",
 		YAxisLabel: "EMG Value",
@@ -251,7 +254,7 @@ func testGenerateLineChartMultipleColumns(t *testing.T) {
 		Columns:    []string{"Channel1", "Channel2", "Channel3"},
 	}
 
-	err := generator.GenerateLineChart(dataset, config, outputPath)
+	err := generator.GenerateLineChart(dataset, &config, outputPath)
 	if err != nil {
 		t.Errorf("GenerateLineChart() with multiple columns failed: %v", err)
 	}
@@ -270,16 +273,19 @@ func testGenerateLineChartColorCycle(t *testing.T) {
 	outputPath := filepath.Join(tempDir, "color_cycle_chart.png")
 
 	// 測試超過8個顏色的情況（應該會循環使用顏色）
-	config := chart.ChartConfig{
+	config := chart.Config{
 		Title:      "Color Cycle Chart",
 		XAxisLabel: "Time (s)",
 		YAxisLabel: "EMG Value",
 		Width:      vg.Points(800),
 		Height:     vg.Points(600),
-		Columns:    []string{"Channel1", "Channel2", "Channel3", "Channel4", "Channel5", "Channel6", "Channel7", "Channel8", "Channel9", "Channel10"},
+		Columns: []string{
+			"Channel1", "Channel2", "Channel3", "Channel4", "Channel5",
+			"Channel6", "Channel7", "Channel8", "Channel9", "Channel10",
+		},
 	}
 
-	err := generator.GenerateLineChart(dataset, config, outputPath)
+	err := generator.GenerateLineChart(dataset, &config, outputPath)
 	if err != nil {
 		t.Errorf("GenerateLineChart() with color cycle failed: %v", err)
 	}
@@ -299,7 +305,7 @@ func testGenerateLineChartFileOperations(t *testing.T) {
 	// 測試深層目錄創建
 	deepPath := filepath.Join(tempDir, "deep", "nested", "directory", "chart.png")
 
-	config := chart.ChartConfig{
+	config := chart.Config{
 		Title:      "File Operations Chart",
 		XAxisLabel: "Time (s)",
 		YAxisLabel: "EMG Value",
@@ -308,7 +314,7 @@ func testGenerateLineChartFileOperations(t *testing.T) {
 		Columns:    []string{"Channel1"},
 	}
 
-	err := generator.GenerateLineChart(dataset, config, deepPath)
+	err := generator.GenerateLineChart(dataset, &config, deepPath)
 	if err != nil {
 		t.Errorf("GenerateLineChart() with deep directory failed: %v", err)
 	}
@@ -319,13 +325,13 @@ func testGenerateLineChartFileOperations(t *testing.T) {
 	}
 
 	// 測試文件覆蓋
-	err = generator.GenerateLineChart(dataset, config, deepPath)
+	err = generator.GenerateLineChart(dataset, &config, deepPath)
 	if err != nil {
 		t.Errorf("GenerateLineChart() file overwrite failed: %v", err)
 	}
 }
 
-// 輔助函數：創建測試數據集
+// 輔助函數：創建測試數據集.
 func createTestDataset() *models.EMGDataset {
 	return &models.EMGDataset{
 		Headers: []string{"Time", "Channel1", "Channel2", "Channel3"},
@@ -344,7 +350,7 @@ func createTestDataset() *models.EMGDataset {
 	}
 }
 
-// 輔助函數：創建大型測試數據集（用於測試顏色循環）
+// 輔助函數：創建大型測試數據集（用於測試顏色循環）.
 func createLargeTestDataset() *models.EMGDataset {
 	headers := []string{"Time"}
 	for i := 1; i <= 10; i++ {
@@ -352,11 +358,13 @@ func createLargeTestDataset() *models.EMGDataset {
 	}
 
 	data := make([]models.EMGData, 100)
+
 	for i := 0; i < 100; i++ {
 		channels := make([]float64, 10)
 		for j := 0; j < 10; j++ {
 			channels[j] = float64(i) * 0.01 * float64(j+1)
 		}
+
 		data[i] = models.EMGData{
 			Time:     float64(i) * 0.01,
 			Channels: channels,
@@ -369,14 +377,14 @@ func createLargeTestDataset() *models.EMGDataset {
 	}
 }
 
-// BenchmarkGenerateLineChart 基準測試
+// BenchmarkGenerateLineChart 基準測試.
 func BenchmarkGenerateLineChart(b *testing.B) {
 	generator := chart.NewChartGenerator()
 	dataset := createTestDataset()
 
 	tempDir := b.TempDir()
 
-	config := chart.ChartConfig{
+	config := chart.Config{
 		Title:      "Benchmark Chart",
 		XAxisLabel: "Time (s)",
 		YAxisLabel: "EMG Value",
@@ -389,19 +397,20 @@ func BenchmarkGenerateLineChart(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		outputPath := filepath.Join(tempDir, fmt.Sprintf("bench_chart_%d.png", i))
-		err := generator.GenerateLineChart(dataset, config, outputPath)
+
+		err := generator.GenerateLineChart(dataset, &config, outputPath)
 		if err != nil {
 			b.Errorf("GenerateLineChart() benchmark failed: %v", err)
 		}
 	}
 }
 
-// BenchmarkGenerateLineChartImage 基準測試
+// BenchmarkGenerateLineChartImage 基準測試.
 func BenchmarkGenerateLineChartImage(b *testing.B) {
 	generator := chart.NewChartGenerator()
 	dataset := createTestDataset()
 
-	config := chart.ChartConfig{
+	config := chart.Config{
 		Title:      "Benchmark Chart Image",
 		XAxisLabel: "Time (s)",
 		YAxisLabel: "EMG Value",
@@ -413,16 +422,16 @@ func BenchmarkGenerateLineChartImage(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err := generator.GenerateLineChartImage(dataset, config)
+		_, err := generator.GenerateLineChartImage(dataset, &config)
 		if err != nil {
 			b.Errorf("GenerateLineChartImage() benchmark failed: %v", err)
 		}
 	}
 }
 
-// TestChartConfig 測試圖表配置
+// TestChartConfig 測試圖表配置.
 func TestChartConfig(t *testing.T) {
-	config := chart.ChartConfig{
+	config := chart.Config{
 		Title:      "Test Config",
 		XAxisLabel: "X Axis",
 		YAxisLabel: "Y Axis",

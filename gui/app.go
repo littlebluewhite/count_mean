@@ -1,8 +1,17 @@
+// Package gui provides the graphical user interface for the EMG data analysis application.
+// It implements the Wails v2 desktop application with support for file operations,
+// data processing, and chart generation.
 package gui
 
 import (
-	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+
 	"count_mean/internal/calculator"
 	"count_mean/internal/chart"
 	"count_mean/internal/config"
@@ -12,21 +21,25 @@ import (
 	"count_mean/internal/phase_sync"
 	"count_mean/internal/synchronizer"
 	"count_mean/internal/validation"
-	"encoding/base64"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-
-	"gonum.org/v1/plot/vg"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// App struct
+// Sentinel errors for validation.
+var (
+	ErrNoMainFile         = errors.New("請選擇主要資料檔案")
+	ErrNoReferenceFile    = errors.New("請選擇參考資料檔案")
+	ErrNoInputFile        = errors.New("請選擇資料檔案")
+	ErrNoPhaseLabels      = errors.New("請輸入階段標籤")
+	ErrNoValidPhaseLabels = errors.New("請輸入有效的階段標籤")
+	ErrNoCSVHeaders       = errors.New("CSV 檔案沒有標題行")
+	ErrNoManifestFile     = errors.New("請選擇分期總檔案")
+	ErrNoDataFolder       = errors.New("請選擇數據資料夾")
+	ErrNoPhaseSelection   = errors.New("請選擇開始和結束分期點")
+	ErrNoCSVFilesInFolder = errors.New("資料夾中沒有找到CSV文件")
+)
+
+// App struct.
 type App struct {
-	ctx               context.Context
+	ctx               context.Context //nolint:containedctx // Required by Wails framework
 	config            *config.AppConfig
 	logger            *logging.Logger
 	csvHandler        *io.CSVHandler
@@ -39,7 +52,7 @@ type App struct {
 	progressManager   *ProgressManager
 }
 
-// NewApp creates a new App application struct
+// NewApp creates a new App application struct.
 func NewApp(cfg *config.AppConfig) *App {
 	// 創建模組實例
 	csvHandler := io.NewCSVHandler(cfg)
@@ -69,7 +82,7 @@ func NewApp(cfg *config.AppConfig) *App {
 	}
 }
 
-// startup is called when the app starts. The context is saved
+// Startup is called when the app starts. The context is saved.
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	a.logger.Info("Wails 應用程序啟動")
@@ -83,36 +96,44 @@ func (a *App) Startup(ctx context.Context) {
 	a.progressManager.Start()
 }
 
-// GetConfig returns the current configuration
+// GetConfig returns the current configuration.
 func (a *App) GetConfig() *config.AppConfig {
 	return a.config
 }
 
-// SaveConfig saves the configuration
+// SaveConfig saves the configuration.
 func (a *App) SaveConfig(cfg *config.AppConfig) error {
 	a.config = cfg
-	return cfg.SaveConfig("./config.json")
+
+	if err := cfg.SaveConfig("./config.json"); err != nil {
+		return fmt.Errorf("儲存設定檔失敗: %w", err)
+	}
+
+	return nil
 }
 
-// ResetConfig resets to default configuration
+// ResetConfig resets to default configuration.
 func (a *App) ResetConfig() *config.AppConfig {
 	a.config = config.DefaultConfig()
 	return a.config
 }
 
-// SelectFile opens a file dialog for file selection
+// SelectFile opens a file dialog for file selection.
 func (a *App) SelectFile(title string, filters []runtime.FileFilter, buttonType string) (string, error) {
 	var defaultDir string
-	print("buttonType:", buttonType)
+
+	a.logger.Debug("選擇文件對話框", map[string]interface{}{"buttonType": buttonType})
+
 	switch buttonType {
-	case "input":
+	case FileTypeInput:
 		defaultDir = a.config.InputDir
-	case "output":
+	case FileTypeOutput:
 		defaultDir = a.config.OutputDir
-	case "operate":
+	case FileTypeOperate:
 		defaultDir = a.config.OperateDir
 	}
-	print("defaultDir:", defaultDir)
+
+	a.logger.Debug("預設目錄", map[string]interface{}{"defaultDir": defaultDir})
 
 	options := runtime.OpenDialogOptions{
 		Title:            title,
@@ -122,13 +143,13 @@ func (a *App) SelectFile(title string, filters []runtime.FileFilter, buttonType 
 
 	file, err := runtime.OpenFileDialog(a.ctx, options)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("開啟檔案對話框失敗: %w", err)
 	}
 
 	return file, nil
 }
 
-// SelectDirectory opens a directory dialog
+// SelectDirectory opens a directory dialog.
 func (a *App) SelectDirectory(title string) (string, error) {
 	options := runtime.OpenDialogOptions{
 		Title:            title,
@@ -137,13 +158,13 @@ func (a *App) SelectDirectory(title string) (string, error) {
 
 	dir, err := runtime.OpenDirectoryDialog(a.ctx, options)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("開啟目錄對話框失敗: %w", err)
 	}
 
 	return dir, nil
 }
 
-// CalculateMaxMean calculates maximum mean values
+// CalculateMaxMean calculates maximum mean values.
 func (a *App) CalculateMaxMean(params MaxMeanParams) (*MaxMeanResult, error) {
 	a.logger.Info("開始最大平均值計算", map[string]interface{}{
 		"input_path":  params.InputPath,
@@ -151,7 +172,7 @@ func (a *App) CalculateMaxMean(params MaxMeanParams) (*MaxMeanResult, error) {
 		"is_batch":    params.IsBatch,
 	})
 
-	fmt.Printf("%+v\n", params)
+	a.logger.Debug("計算參數", map[string]interface{}{"params": params})
 
 	// 批次處理模式
 	if params.IsBatch {
@@ -162,299 +183,264 @@ func (a *App) CalculateMaxMean(params MaxMeanParams) (*MaxMeanResult, error) {
 	return a.calculateMaxMeanSingle(params)
 }
 
-// calculateMaxMeanSingle 處理單個檔案
+// calculateMaxMeanSingle 處理單個檔案.
 func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, error) {
-	// 驗證檔案名稱
-	filename := filepath.Base(params.InputPath)
-	if err := a.validator.ValidateFilename(filename); err != nil {
-		return nil, fmt.Errorf("檔案名稱驗證失敗: %w", err)
-	}
-
-	// 檢查檔案是否在允許的目錄範圍內，決定使用哪種讀取方法
-	var records [][]string
-	var err error
-
-	// 檢查檔案是否為絕對路徑且在輸入目錄外
-	if filepath.IsAbs(params.InputPath) {
-		fileDir := filepath.Dir(params.InputPath)
-		relPath, relErr := filepath.Rel(a.config.InputDir, fileDir)
-		if relErr != nil || strings.HasPrefix(relPath, "..") {
-			// 檔案在輸入目錄外，使用外部讀取方法（跳過路徑驗證）
-			records, err = a.csvHandler.ReadCSVExternal(params.InputPath)
-		} else {
-			// 檔案在輸入目錄內，使用正常讀取方法
-			records, err = a.csvHandler.ReadCSV(params.InputPath)
-		}
-	} else {
-		// 相對路徑，使用正常讀取方法
-		records, err = a.csvHandler.ReadCSV(params.InputPath)
-	}
-
+	// 使用統一的 CSV 讀取方法（包含路徑驗證）
+	records, err := a.ReadCSVWithPathValidation(params.InputPath, a.config.InputDir)
 	if err != nil {
 		return nil, fmt.Errorf("讀取檔案失敗: %w", err)
 	}
 
 	// 取得檔案名稱（不含路徑和副檔名）
-	fileName := filepath.Base(params.InputPath)
-	originalFileName := strings.TrimSuffix(fileName, ".csv")
+	originalFileName := TrimCSVExtension(filepath.Base(params.InputPath))
 
-	// 如果沒有指定時間範圍，使用數據中的預設範圍
-	startRange, endRange := params.StartTime, params.EndTime
-	useCustomRange := startRange != 0 || endRange != 0
+	// 解析時間範圍並計算
+	startRange, endRange := ResolveTimeRange(records, params.StartTime, params.EndTime)
 
-	if !useCustomRange {
-		if len(records) > 1 && len(records[1]) > 0 {
-			startRange, _ = strconv.ParseFloat(records[1][0], 64)
-		}
-		if len(records) > 1 && len(records[len(records)-1]) > 0 {
-			endRange, _ = strconv.ParseFloat(records[len(records)-1][0], 64)
-		}
-	}
-
-	// 計算最大平均值
-	var results []models.MaxMeanResult
-	if startRange == 0 && endRange == 0 {
-		results, err = a.maxMeanCalc.CalculateFromRawData(records, params.WindowSize)
-	} else {
-		results, err = a.maxMeanCalc.CalculateFromRawDataWithRange(records, params.WindowSize, startRange, endRange)
-	}
-
+	results, err := a.calculateWithTimeRange(records, params.WindowSize, startRange, endRange)
 	if err != nil {
 		return nil, fmt.Errorf("計算失敗: %w", err)
 	}
 
 	// 輸出結果
 	outputData := a.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, startRange, endRange)
-	outputFile := fmt.Sprintf("%s_最大平均值計算.csv", originalFileName)
+	outputFile := buildOutputFilename(originalFileName, SuffixMaxMean)
 
 	if err := a.csvHandler.WriteCSVToOutput(outputFile, outputData); err != nil {
 		return nil, fmt.Errorf("寫入輸出檔案失敗: %w", err)
 	}
 
 	// 準備回傳結果
-	outputPath := filepath.Join(a.config.OutputDir, outputFile)
-
-	// 將結果轉換為回傳格式
-	var resultData [][]float64
-	for _, result := range results {
-		row := []float64{result.MaxMean, result.StartTime, result.EndTime}
-		resultData = append(resultData, row)
-	}
-
 	return &MaxMeanResult{
-		OutputPath: outputPath,
+		OutputPath: filepath.Join(a.config.OutputDir, outputFile),
 		Headers:    records[0],
-		Results:    resultData,
+		Results:    convertMaxMeanResultsToArray(results),
 	}, nil
 }
 
-// calculateMaxMeanBatch 批次處理資料夾中的所有CSV檔案
+// batchFileDiscoveryResult 存放批次檔案搜尋結果.
+type batchFileDiscoveryResult struct {
+	dirName   string
+	isDirect  bool // true if processing external directory directly
+	fullPaths []string
+}
+
+// discoverBatchFiles 解析輸入路徑並找到所有CSV檔案.
+func (a *App) discoverBatchFiles(inputPath string) (*batchFileDiscoveryResult, error) {
+	if !filepath.IsAbs(inputPath) {
+		return &batchFileDiscoveryResult{dirName: inputPath}, nil
+	}
+
+	relPath, err := filepath.Rel(a.config.InputDir, inputPath)
+	if err != nil || strings.HasPrefix(relPath, "..") {
+		return discoverExternalBatchFiles(inputPath)
+	}
+
+	return &batchFileDiscoveryResult{dirName: relPath}, nil
+}
+
+// discoverExternalBatchFiles 搜尋外部目錄中的CSV檔案.
+func discoverExternalBatchFiles(inputPath string) (*batchFileDiscoveryResult, error) {
+	files, err := filepath.Glob(filepath.Join(inputPath, "*.csv"))
+	if err != nil {
+		return nil, fmt.Errorf("搜尋CSV文件失敗: %w", err)
+	}
+
+	if len(files) == 0 {
+		return nil, ErrNoCSVFilesInFolder
+	}
+
+	return &batchFileDiscoveryResult{
+		dirName:   filepath.Base(inputPath),
+		isDirect:  true,
+		fullPaths: files,
+	}, nil
+}
+
+// batchProcessContext 批次處理上下文.
+type batchProcessContext struct {
+	windowSize    int
+	startTime     float64
+	endTime       float64
+	outputDirName string
+}
+
+// batchProcessResult 批次處理單檔結果.
+type batchProcessResult struct {
+	headers []string
+	results [][]float64
+}
+
+// batchFileEntry represents a file to process in batch mode.
+type batchFileEntry struct {
+	displayName string
+	readFunc    func() ([][]string, error)
+}
+
+// executeBatchLoop processes batch file entries and accumulates results.
+func (a *App) executeBatchLoop(
+	entries []batchFileEntry,
+	ctx *batchProcessContext,
+	outputPath string,
+) (*MaxMeanResult, error) {
+	var allHeaders []string
+	// Pre-allocate with estimated capacity (assume ~10 results per file on average)
+	estimatedCapacity := 10
+	allResults := make([][]float64, 0, len(entries)*estimatedCapacity)
+	successCount := 0
+	failCount := 0
+
+	for _, entry := range entries {
+		records, err := entry.readFunc()
+		if err != nil {
+			failCount++
+
+			a.logger.Error("讀取檔案失敗", err, map[string]interface{}{"file": entry.displayName})
+
+			continue
+		}
+
+		result, err := a.processSingleBatchFile(records, entry.displayName, ctx)
+		if err != nil {
+			failCount++
+
+			a.logger.Error("處理檔案失敗", err, map[string]interface{}{"file": entry.displayName})
+
+			continue
+		}
+
+		if len(allHeaders) == 0 {
+			allHeaders = result.headers
+		}
+
+		allResults = append(allResults, result.results...)
+		successCount++
+
+		a.logger.Info("檔案處理成功", map[string]interface{}{
+			"file":          entry.displayName,
+			"results_count": len(result.results),
+		})
+	}
+
+	message := fmt.Sprintf("批次處理完成：成功 %d 個檔案，失敗 %d 個檔案", successCount, failCount)
+
+	return &MaxMeanResult{
+		OutputPath: outputPath,
+		Headers:    allHeaders,
+		Results:    allResults,
+		Success:    successCount > 0,
+		Message:    message,
+	}, nil
+}
+
+// processSingleBatchFile 處理批次中的單一檔案.
+func (a *App) processSingleBatchFile(
+	records [][]string,
+	fileBaseName string,
+	ctx *batchProcessContext,
+) (*batchProcessResult, error) {
+	startRange, endRange := ResolveTimeRange(records, ctx.startTime, ctx.endTime)
+
+	results, err := a.calculateWithTimeRange(records, ctx.windowSize, startRange, endRange)
+	if err != nil {
+		return nil, err
+	}
+
+	outputData := a.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, startRange, endRange)
+	outputFile := buildOutputFilename(fileBaseName, SuffixMaxMean)
+
+	if writeErr := a.csvHandler.WriteCSVToOutputDirectory(ctx.outputDirName, outputFile, outputData); writeErr != nil {
+		return nil, fmt.Errorf("寫入CSV輸出失敗: %w", writeErr)
+	}
+
+	return &batchProcessResult{
+		headers: records[0],
+		results: convertMaxMeanResultsToArray(results),
+	}, nil
+}
+
+// calculateMaxMeanBatch 批次處理資料夾中的所有CSV檔案.
 func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error) {
-	fmt.Println("1批次處理資料夾中的所有CSV檔案")
-	// 驗證目錄路徑
 	if err := a.validator.ValidateDirectoryPath(params.InputPath); err != nil {
 		return nil, fmt.Errorf("目錄路徑驗證失敗: %w", err)
 	}
 
-	// 取得資料夾名稱（相對於輸入目錄）
-	var dirName string
-	var csvFiles []string
-	var err error
-
-	fmt.Println("2批次處理資料夾中的所有CSV檔案")
-
-	// 檢查是否為輸入目錄的子目錄
-	if filepath.IsAbs(params.InputPath) {
-		// 如果是絕對路徑，檢查是否在輸入目錄下
-		relPath, err := filepath.Rel(a.config.InputDir, params.InputPath)
-		if err != nil || strings.HasPrefix(relPath, "..") {
-			// 不在輸入目錄下，直接使用目錄中的文件
-			files, err := filepath.Glob(filepath.Join(params.InputPath, "*.csv"))
-			if err != nil {
-				return nil, fmt.Errorf("搜尋CSV文件失敗: %w", err)
-			}
-			if len(files) == 0 {
-				return nil, fmt.Errorf("資料夾中沒有找到CSV文件")
-			}
-			// 對於外部目錄，直接處理文件
-			return a.executeBatchCalculationDirect(files, filepath.Base(params.InputPath), params.WindowSize, params.StartTime, params.EndTime)
-		}
-		dirName = relPath
-	} else {
-		dirName = params.InputPath
+	discovery, err := a.discoverBatchFiles(params.InputPath)
+	if err != nil {
+		return nil, err
 	}
 
-	// 使用CSV處理器的目錄方法列出文件
-	csvFiles, err = a.csvHandler.ListCSVFilesInDirectory(dirName)
+	if discovery.isDirect {
+		return a.executeBatchCalculationDirect(
+			discovery.fullPaths,
+			discovery.dirName,
+			params.WindowSize,
+			params.StartTime,
+			params.EndTime,
+		)
+	}
+
+	csvFiles, err := a.csvHandler.ListCSVFilesInDirectory(discovery.dirName)
 	if err != nil {
 		return nil, fmt.Errorf("列出CSV文件失敗: %w", err)
 	}
 
 	if len(csvFiles) == 0 {
-		return nil, fmt.Errorf("資料夾中沒有找到CSV文件")
+		return nil, ErrNoCSVFilesInFolder
 	}
 
-	// 準備批次結果
-	var allHeaders []string
-	var allResults [][]float64
-	successCount := 0
-	failCount := 0
-
-	// 處理每個文件
-	for _, fileName := range csvFiles {
-		fileBaseName := strings.TrimSuffix(fileName, ".csv")
-
-		records, err := a.csvHandler.ReadCSVFromDirectory(dirName, fileName)
-		if err != nil {
-			failCount++
-			a.logger.Error("讀取檔案失敗", err, map[string]interface{}{
-				"file": fileName,
-			})
-			continue // 跳過有錯誤的文件
-		}
-
-		// 如果沒有使用自定義範圍，從數據中獲取預設範圍
-		actualStartRange, actualEndRange := params.StartTime, params.EndTime
-		useCustomRange := actualStartRange != 0 || actualEndRange != 0
-
-		if !useCustomRange {
-			if len(records) > 1 && len(records[1]) > 0 {
-				actualStartRange, _ = strconv.ParseFloat(records[1][0], 64)
-			}
-			if len(records) > 1 && len(records[len(records)-1]) > 0 {
-				actualEndRange, _ = strconv.ParseFloat(records[len(records)-1][0], 64)
-			}
-		}
-
-		// 計算最大平均值
-		var results []models.MaxMeanResult
-		if actualStartRange == 0 && actualEndRange == 0 {
-			results, err = a.maxMeanCalc.CalculateFromRawData(records, params.WindowSize)
-		} else {
-			results, err = a.maxMeanCalc.CalculateFromRawDataWithRange(records, params.WindowSize, actualStartRange, actualEndRange)
-		}
-
-		if err != nil {
-			failCount++
-			a.logger.Error("計算失敗", err, map[string]interface{}{
-				"file": fileName,
-			})
-			continue
-		}
-
-		// 第一個文件時設置標題
-		if len(allHeaders) == 0 && len(records) > 0 {
-			allHeaders = records[0]
-		}
-
-		// 將結果轉換為回傳格式
-		for _, result := range results {
-			row := []float64{result.MaxMean, result.StartTime, result.EndTime}
-			allResults = append(allResults, row)
-		}
-
-		// 輸出結果
-		outputData := a.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, actualStartRange, actualEndRange)
-		outputFile := fmt.Sprintf("%s_最大平均值計算.csv", fileBaseName)
-
-		err = a.csvHandler.WriteCSVToOutputDirectory(filepath.Base(dirName), outputFile, outputData)
-		if err != nil {
-			failCount++
-			a.logger.Error("寫入輸出檔案失敗", err, map[string]interface{}{
-				"file": outputFile,
-			})
-			continue
-		}
-
-		successCount++
-		a.logger.Info("檔案處理成功", map[string]interface{}{
-			"file":          fileName,
-			"results_count": len(results),
-		})
+	ctx := &batchProcessContext{
+		windowSize:    params.WindowSize,
+		startTime:     params.StartTime,
+		endTime:       params.EndTime,
+		outputDirName: filepath.Base(discovery.dirName),
 	}
 
-	// 準備回傳結果
-	message := fmt.Sprintf("批次處理完成：成功 %d 個檔案，失敗 %d 個檔案", successCount, failCount)
+	entries := make([]batchFileEntry, len(csvFiles))
 
-	return &MaxMeanResult{
-		OutputPath: filepath.Join(a.config.OutputDir, dirName),
-		Headers:    allHeaders,
-		Results:    allResults,
-		Success:    successCount > 0,
-		Message:    message,
-	}, nil
+	for i, fileName := range csvFiles {
+		fn := fileName
+		entries[i] = batchFileEntry{
+			displayName: TrimCSVExtension(fn),
+			readFunc: func() ([][]string, error) {
+				return a.csvHandler.ReadCSVFromDirectory(discovery.dirName, fn)
+			},
+		}
+	}
+
+	return a.executeBatchLoop(entries, ctx, filepath.Join(a.config.OutputDir, discovery.dirName))
 }
 
-// executeBatchCalculationDirect 直接處理外部目錄的批次計算
-func (a *App) executeBatchCalculationDirect(files []string, outputDirName string, windowSize int, startTime, endTime float64) (*MaxMeanResult, error) {
-	var allHeaders []string
-	var allResults [][]float64
-	successCount := 0
-	failCount := 0
-
-	for _, fullPath := range files {
-		fileName := filepath.Base(fullPath)
-		fileBaseName := strings.TrimSuffix(fileName, ".csv")
-		records, err := a.csvHandler.ReadCSVExternal(fullPath)
-		if err != nil {
-			failCount++
-			continue
-		}
-
-		// 如果沒有使用自定義範圍，從數據中獲取預設範圍
-		actualStartRange, actualEndRange := startTime, endTime
-		useCustomRange := actualStartRange != 0 || actualEndRange != 0
-
-		if !useCustomRange {
-			if len(records) > 1 && len(records[1]) > 0 {
-				actualStartRange, _ = strconv.ParseFloat(records[1][0], 64)
-			}
-			if len(records) > 1 && len(records[len(records)-1]) > 0 {
-				actualEndRange, _ = strconv.ParseFloat(records[len(records)-1][0], 64)
-			}
-		}
-
-		// 計算最大平均值
-		var results []models.MaxMeanResult
-		if actualStartRange == 0 && actualEndRange == 0 {
-			results, err = a.maxMeanCalc.CalculateFromRawData(records, windowSize)
-		} else {
-			results, err = a.maxMeanCalc.CalculateFromRawDataWithRange(records, windowSize, actualStartRange, actualEndRange)
-		}
-
-		if err != nil {
-			failCount++
-			continue
-		}
-
-		// 輸出結果
-		outputData := a.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, actualStartRange, actualEndRange)
-		outputFile := fmt.Sprintf("%s_最大平均值計算.csv", fileBaseName)
-
-		err = a.csvHandler.WriteCSVToOutputDirectory(outputDirName, outputFile, outputData)
-		if err != nil {
-			failCount++
-			continue
-		}
-		successCount++
-		a.logger.Info("檔案處理成功", map[string]interface{}{
-			"file":          fileName,
-			"results_count": len(results),
-		})
+// executeBatchCalculationDirect 直接處理外部目錄的批次計算.
+func (a *App) executeBatchCalculationDirect(
+	files []string,
+	outputDirName string,
+	windowSize int,
+	startTime, endTime float64,
+) (*MaxMeanResult, error) {
+	ctx := &batchProcessContext{
+		windowSize:    windowSize,
+		startTime:     startTime,
+		endTime:       endTime,
+		outputDirName: outputDirName,
 	}
 
-	message := fmt.Sprintf("批次處理完成：成功 %d 個檔案，失敗 %d 個檔案", successCount, failCount)
+	entries := make([]batchFileEntry, len(files))
 
-	return &MaxMeanResult{
-		OutputPath: outputDirName,
-		Headers:    allHeaders,
-		Results:    allResults,
-		Success:    successCount > 0,
-		Message:    message,
-	}, nil
+	for i, fullPath := range files {
+		fp := fullPath
+		entries[i] = batchFileEntry{
+			displayName: TrimCSVExtension(filepath.Base(fp)),
+			readFunc: func() ([][]string, error) {
+				return a.csvHandler.ReadCSVExternal(fp)
+			},
+		}
+	}
+
+	return a.executeBatchLoop(entries, ctx, outputDirName)
 }
 
-// NormalizeData performs data normalization
+// NormalizeData performs data normalization.
 func (a *App) NormalizeData(params NormalizeParams) (*NormalizeResult, error) {
 	a.logger.Info("開始資料標準化", map[string]interface{}{
 		"main_file":      params.MainFile,
@@ -464,62 +450,21 @@ func (a *App) NormalizeData(params NormalizeParams) (*NormalizeResult, error) {
 
 	// 驗證輸入
 	if params.MainFile == "" {
-		return nil, fmt.Errorf("請選擇主要資料檔案")
+		return nil, ErrNoMainFile
 	}
 
 	if params.ReferenceFile == "" {
-		return nil, fmt.Errorf("請選擇參考資料檔案")
+		return nil, ErrNoReferenceFile
 	}
 
-	// 驗證檔案名稱
-	mainFilename := filepath.Base(params.MainFile)
-	if err := a.validator.ValidateFilename(mainFilename); err != nil {
-		return nil, fmt.Errorf("主要檔案名稱驗證失敗: %w", err)
-	}
-
-	refFilename := filepath.Base(params.ReferenceFile)
-	if err := a.validator.ValidateFilename(refFilename); err != nil {
-		return nil, fmt.Errorf("參考檔案名稱驗證失敗: %w", err)
-	}
-
-	// 讀取主要資料檔案
-	var mainRecords [][]string
-	var err error
-
-	// 檢查主檔案是否在允許的目錄範圍內
-	if filepath.IsAbs(params.MainFile) {
-		fileDir := filepath.Dir(params.MainFile)
-		relPath, relErr := filepath.Rel(a.config.InputDir, fileDir)
-		if relErr != nil || strings.HasPrefix(relPath, "..") {
-			mainRecords, err = a.csvHandler.ReadCSVExternal(params.MainFile)
-		} else {
-			mainRecords, err = a.csvHandler.ReadCSV(params.MainFile)
-		}
-	} else {
-		mainRecords, err = a.csvHandler.ReadCSV(params.MainFile)
-	}
-
+	// 讀取主要資料檔案（包含路徑驗證）
+	mainRecords, err := a.ReadCSVWithPathValidation(params.MainFile, a.config.InputDir)
 	if err != nil {
 		return nil, fmt.Errorf("讀取主要資料檔案失敗: %w", err)
 	}
 
-	// 讀取參考資料檔案
-	var refRecords [][]string
-
-	// 檢查參考檔案是否在允許的目錄範圍內
-	if filepath.IsAbs(params.ReferenceFile) {
-		fileDir := filepath.Dir(params.ReferenceFile)
-		relPath, relErr := filepath.Rel(a.config.OperateDir, fileDir)
-		if relErr != nil || strings.HasPrefix(relPath, "..") {
-			refRecords, err = a.csvHandler.ReadCSVExternal(params.ReferenceFile)
-		} else {
-			// 對於 operate 目錄中的檔案，直接讀取
-			refRecords, err = a.csvHandler.ReadCSV(params.ReferenceFile)
-		}
-	} else {
-		refRecords, err = a.csvHandler.ReadCSV(params.ReferenceFile)
-	}
-
+	// 讀取參考資料檔案（包含路徑驗證）
+	refRecords, err := a.ReadCSVWithPathValidation(params.ReferenceFile, a.config.OperateDir)
 	if err != nil {
 		return nil, fmt.Errorf("讀取參考資料檔案失敗: %w", err)
 	}
@@ -530,36 +475,18 @@ func (a *App) NormalizeData(params NormalizeParams) (*NormalizeResult, error) {
 		return nil, fmt.Errorf("標準化計算失敗: %w", err)
 	}
 
-	// 生成輸出檔名
-	outputName := params.OutputPath
-	if outputName == "" {
-		mainFileName := filepath.Base(params.MainFile)
-		mainBaseName := strings.TrimSuffix(mainFileName, ".csv")
-		outputName = fmt.Sprintf("%s_標準化.csv", mainBaseName)
-	} else if !strings.HasSuffix(outputName, ".csv") {
-		outputName += ".csv"
-	}
-
-	// 轉換為CSV格式
+	// 生成輸出檔名並保存結果
+	mainBaseName := TrimCSVExtension(filepath.Base(params.MainFile))
+	outputName := resolveOutputName(params.OutputPath, mainBaseName, SuffixNormalized)
 	outputData := a.csvHandler.ConvertNormalizedDataToCSV(normalizedData)
 
-	// 保存結果
-	err = a.csvHandler.WriteCSVToOutput(outputName, outputData)
-	if err != nil {
+	if err = a.csvHandler.WriteCSVToOutput(outputName, outputData); err != nil {
 		return nil, fmt.Errorf("保存結果失敗: %w", err)
 	}
 
 	// 準備回傳結果
 	outputPath := filepath.Join(a.config.OutputDir, outputName)
-
-	// 將標準化數據轉換為二維浮點數陣列
-	var data [][]float64
-	for _, row := range normalizedData.Data {
-		var floatRow []float64
-		floatRow = append(floatRow, row.Time)
-		floatRow = append(floatRow, row.Channels...)
-		data = append(data, floatRow)
-	}
+	data := convertNormalizedDataToArray(normalizedData)
 
 	a.logger.Info("資料標準化完成", map[string]interface{}{
 		"output_file":   outputPath,
@@ -576,203 +503,67 @@ func (a *App) NormalizeData(params NormalizeParams) (*NormalizeResult, error) {
 	}, nil
 }
 
-// GenerateInteractiveChart returns HTML content of an interactive chart.
-func (a *App) GenerateInteractiveChart(params InteractiveChartParams) (string, error) {
-	// 讀取 CSV 檔案
-	records, err := a.csvHandler.ReadCSV(params.FilePath)
-	if err != nil {
-		return "", fmt.Errorf("讀取 CSV 檔案失敗: %w", err)
+// validatePhaseParams validates phase analysis parameters and returns cleaned labels.
+func validatePhaseParams(params PhaseParams) ([]string, error) {
+	if params.InputFile == "" {
+		return nil, ErrNoInputFile
 	}
-	if len(records) < 2 {
-		return "", fmt.Errorf("CSV 檔案格式無效：需要至少包含標題和一行數據")
+
+	if len(params.PhaseLabels) == 0 {
+		return nil, ErrNoPhaseLabels
 	}
-	// 構建資料集
-	dataset := &models.EMGDataset{
-		Headers: make([]string, len(records[0])),
-		Data:    make([]models.EMGData, 0, len(records)-1),
-	}
-	copy(dataset.Headers, records[0])
-	for i := 1; i < len(records); i++ {
-		row := records[i]
-		timeVal, err := strconv.ParseFloat(row[0], 64)
-		if err != nil {
-			continue
+
+	// 清理階段標籤（移除空白）
+	cleanLabels := make([]string, 0, len(params.PhaseLabels))
+
+	for _, label := range params.PhaseLabels {
+		if trimmed := strings.TrimSpace(label); trimmed != "" {
+			cleanLabels = append(cleanLabels, trimmed)
 		}
-		channels := make([]float64, len(row)-1)
-		for j := 1; j < len(row); j++ {
-			val, _ := strconv.ParseFloat(row[j], 64)
-			channels[j-1] = val
-		}
-		dataset.Data = append(dataset.Data, models.EMGData{Time: timeVal, Channels: channels})
 	}
 
-	// 準備互動式圖表配置
-	chartConfig := chart.InteractiveChartConfig{
-		Title:           params.Title,
-		XAxisLabel:      "Time (s)",
-		YAxisLabel:      "Value",
-		SelectedColumns: params.Columns,
-		ColumnNames:     nil,
-		ShowAllColumns:  false,
-		Width:           params.Width,
-		Height:          params.Height,
+	if len(cleanLabels) == 0 {
+		return nil, ErrNoValidPhaseLabels
 	}
 
-	// 生成互動式圖表 HTML
-	var buf bytes.Buffer
-	err = a.chartGen.RenderChartToWriter(dataset, chartConfig, &buf)
-	if err != nil {
-		return "", fmt.Errorf("生成互動式圖表失敗: %w", err)
-	}
-
-	return buf.String(), nil
+	return cleanLabels, nil
 }
 
-// savePNGFromBase64 從 base64 數據保存 PNG 檔案
-func (a *App) savePNGFromBase64(params ChartParams) (*ChartResult, error) {
-	// 解析 base64 數據
-	dataURL := params.ImageData
-	if !strings.HasPrefix(dataURL, "data:image/png;base64,") {
-		return nil, fmt.Errorf("無效的圖片數據格式")
-	}
-
-	base64Data := strings.TrimPrefix(dataURL, "data:image/png;base64,")
-	pngData, err := base64.StdEncoding.DecodeString(base64Data)
-	if err != nil {
-		return nil, fmt.Errorf("解碼圖片數據失敗: %w", err)
-	}
-
-	// 生成輸出檔名
-	fileName := filepath.Base(params.FilePath)
-	baseName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-	outputPath := filepath.Join(a.config.OutputDir, fmt.Sprintf("%s_%s.png", baseName, params.Title))
-
-	// 保存 PNG 檔案
-	if err := os.WriteFile(outputPath, pngData, 0644); err != nil {
-		return nil, fmt.Errorf("保存圖片失敗: %w", err)
-	}
-
-	a.logger.Info("圖表下載完成", map[string]interface{}{
-		"output_file": outputPath,
-		"file_size":   len(pngData),
-	})
-
-	return &ChartResult{
-		OutputPath: outputPath,
-		Success:    true,
-		Message:    fmt.Sprintf("圖表已成功下載至: %s", outputPath),
-	}, nil
+// generatePhaseOutputName generates the output filename for phase analysis.
+func generatePhaseOutputName(inputFile, outputPath string) string {
+	baseName := TrimCSVExtension(filepath.Base(inputFile))
+	return resolveOutputName(outputPath, baseName, SuffixPhaseAnalysis)
 }
 
-// GenerateChart 依照目前預覽設定輸出 PNG 到 output_dir
-func (a *App) GenerateChart(params ChartParams) (*ChartResult, error) {
-	// 如果有 ImageData，直接保存 PNG
-	if params.ImageData != "" {
-		return a.savePNGFromBase64(params)
-	}
+// convertPhaseResultToAnalysis converts a PhaseAnalysisResult to PhaseAnalysis.
+func convertPhaseResultToAnalysis(phaseResult *models.PhaseAnalysisResult, channelCount int) PhaseAnalysis {
+	maxValues := make([]float64, channelCount)
+	meanValues := make([]float64, channelCount)
 
-	a.logger.Info("開始生成圖表", map[string]interface{}{
-		"file_path": params.FilePath,
-		"columns":   params.Columns,
-		"title":     params.Title,
-	})
-
-	// 驗證輸入
-	if params.FilePath == "" {
-		return nil, fmt.Errorf("請選擇資料檔案")
-	}
-
-	if len(params.Columns) == 0 {
-		return nil, fmt.Errorf("請選擇至少一個欄位")
-	}
-
-	// 驗證檔案名稱
-	filename := filepath.Base(params.FilePath)
-	if err := a.validator.ValidateFilename(filename); err != nil {
-		return nil, fmt.Errorf("檔案名稱驗證失敗: %w", err)
-	}
-
-	// 讀取 CSV 檔案
-	var records [][]string
-	var err error
-
-	// 檢查檔案是否在允許的目錄範圍內
-	if filepath.IsAbs(params.FilePath) {
-		fileDir := filepath.Dir(params.FilePath)
-		relPath, relErr := filepath.Rel(a.config.InputDir, fileDir)
-		if relErr != nil || strings.HasPrefix(relPath, "..") {
-			records, err = a.csvHandler.ReadCSVExternal(params.FilePath)
-		} else {
-			records, err = a.csvHandler.ReadCSV(params.FilePath)
-		}
-	} else {
-		records, err = a.csvHandler.ReadCSV(params.FilePath)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("讀取 CSV 檔案失敗: %w", err)
-	}
-
-	if len(records) < 2 {
-		return nil, fmt.Errorf("CSV 檔案格式無效：需要至少包含標題和一行數據")
-	}
-
-	// 構建資料集
-	dataset := &models.EMGDataset{
-		Headers: make([]string, len(records[0])),
-		Data:    make([]models.EMGData, 0, len(records)-1),
-	}
-	copy(dataset.Headers, records[0])
-
-	for i := 1; i < len(records); i++ {
-		row := records[i]
-		timeVal, err := strconv.ParseFloat(row[0], 64)
-		if err != nil {
-			continue
-		}
-		channels := make([]float64, len(row)-1)
-		for j := 1; j < len(row); j++ {
-			val, _ := strconv.ParseFloat(row[j], 64)
-			channels[j-1] = val
-		}
-		dataset.Data = append(dataset.Data, models.EMGData{Time: timeVal, Channels: channels})
-	}
-
-	// 準備圖表配置
-	chartConfig := chart.ChartConfig{
-		Title:      params.Title,
-		XAxisLabel: "Time (s)",
-		YAxisLabel: "Value",
-		Width:      vg.Length(800),
-		Height:     vg.Length(600),
-		Columns:    make([]string, len(params.Columns)),
-	}
-
-	// 將選中的列索引轉換為列名
-	for i, colIndex := range params.Columns {
-		if colIndex < len(dataset.Headers) {
-			chartConfig.Columns[i] = dataset.Headers[colIndex]
+	for colIdx, val := range phaseResult.MaxValues {
+		if colIdx-1 >= 0 && colIdx-1 < len(maxValues) {
+			maxValues[colIdx-1] = val
 		}
 	}
 
-	// 生成輸出路徑
-	outputPath := filepath.Join(a.config.OutputDir, fmt.Sprintf("%s_chart.png",
-		strings.TrimSuffix(filepath.Base(params.FilePath), filepath.Ext(params.FilePath))))
+	for colIdx, val := range phaseResult.MeanValues {
+		if colIdx-1 >= 0 && colIdx-1 < len(meanValues) {
+			meanValues[colIdx-1] = val
+		}
+	}
 
-	a.logger.Info("圖表生成完成", map[string]interface{}{
-		"output_file":  outputPath,
-		"column_count": len(params.Columns),
-		"data_points":  len(dataset.Data),
-	})
-
-	return &ChartResult{
-		OutputPath: outputPath,
-		Success:    true,
-		Message:    fmt.Sprintf("圖表已成功生成並保存到: %s", outputPath),
-	}, nil
+	return PhaseAnalysis{
+		PhaseLabel: phaseResult.PhaseName,
+		StartTime:  0,
+		EndTime:    0,
+		Duration:   0,
+		Average:    meanValues,
+		MaxValues:  maxValues,
+		MinValues:  []float64{},
+	}
 }
 
-// AnalyzePhases performs phase analysis
+// AnalyzePhases performs phase analysis.
 func (a *App) AnalyzePhases(params PhaseParams) (*PhaseResult, error) {
 	a.logger.Info("開始階段分析", map[string]interface{}{
 		"input_file":   params.InputFile,
@@ -781,49 +572,13 @@ func (a *App) AnalyzePhases(params PhaseParams) (*PhaseResult, error) {
 	})
 
 	// 驗證輸入
-	if params.InputFile == "" {
-		return nil, fmt.Errorf("請選擇資料檔案")
+	cleanLabels, err := validatePhaseParams(params)
+	if err != nil {
+		return nil, err
 	}
 
-	if len(params.PhaseLabels) == 0 {
-		return nil, fmt.Errorf("請輸入階段標籤")
-	}
-
-	// 清理階段標籤（移除空白）
-	var cleanLabels []string
-	for _, label := range params.PhaseLabels {
-		if trimmed := strings.TrimSpace(label); trimmed != "" {
-			cleanLabels = append(cleanLabels, trimmed)
-		}
-	}
-
-	if len(cleanLabels) == 0 {
-		return nil, fmt.Errorf("請輸入有效的階段標籤")
-	}
-
-	// 驗證檔案名稱
-	filename := filepath.Base(params.InputFile)
-	if err := a.validator.ValidateFilename(filename); err != nil {
-		return nil, fmt.Errorf("檔案名稱驗證失敗: %w", err)
-	}
-
-	// 讀取資料檔案
-	var records [][]string
-	var err error
-
-	// 檢查檔案是否在允許的目錄範圍內
-	if filepath.IsAbs(params.InputFile) {
-		fileDir := filepath.Dir(params.InputFile)
-		relPath, relErr := filepath.Rel(a.config.InputDir, fileDir)
-		if relErr != nil || strings.HasPrefix(relPath, "..") {
-			records, err = a.csvHandler.ReadCSVExternal(params.InputFile)
-		} else {
-			records, err = a.csvHandler.ReadCSV(params.InputFile)
-		}
-	} else {
-		records, err = a.csvHandler.ReadCSV(params.InputFile)
-	}
-
+	// 讀取資料檔案（包含路徑驗證）
+	records, err := a.ReadCSVWithPathValidation(params.InputFile, a.config.InputDir)
 	if err != nil {
 		return nil, fmt.Errorf("讀取資料檔案失敗: %w", err)
 	}
@@ -834,69 +589,33 @@ func (a *App) AnalyzePhases(params PhaseParams) (*PhaseResult, error) {
 		return nil, fmt.Errorf("階段分析失敗: %w", err)
 	}
 
-	// 生成輸出檔名
-	outputName := params.OutputPath
-	if outputName == "" {
-		dataFileName := filepath.Base(params.InputFile)
-		dataBaseName := strings.TrimSuffix(dataFileName, ".csv")
-		outputName = fmt.Sprintf("%s_階段分析.csv", dataBaseName)
-	} else if !strings.HasSuffix(outputName, ".csv") {
-		outputName += ".csv"
-	}
+	// 生成輸出檔名並保存結果
+	outputName := generatePhaseOutputName(params.InputFile, params.OutputPath)
+	outputData := a.csvHandler.ConvertPhaseAnalysisToCSV(
+		records[0], &analysisResult.PhaseResults[0], analysisResult.MaxTimeIndex,
+	)
 
-	// 轉換為CSV格式
-	outputData := a.csvHandler.ConvertPhaseAnalysisToCSV(records[0], &analysisResult.PhaseResults[0], analysisResult.MaxTimeIndex)
-
-	// 保存結果
-	err = a.csvHandler.WriteCSVToOutput(outputName, outputData)
-	if err != nil {
+	if err = a.csvHandler.WriteCSVToOutput(outputName, outputData); err != nil {
 		return nil, fmt.Errorf("保存結果失敗: %w", err)
 	}
 
-	// 準備回傳結果
-	outputPath := filepath.Join(a.config.OutputDir, outputName)
-
 	// 轉換分析結果
-	var results []PhaseAnalysis
+	outputPath := filepath.Join(a.config.OutputDir, outputName)
+	channelCount := len(records[0]) - 1
+	results := make([]PhaseAnalysis, 0, len(analysisResult.PhaseResults))
+
 	for i, phaseResult := range analysisResult.PhaseResults {
 		if i >= len(cleanLabels) {
 			break
 		}
 
-		// 將 map 轉換為 slice
-		// 獲取通道數量（從 records 標題數量推算）
-		channelCount := len(records[0]) - 1
-		maxValues := make([]float64, channelCount)
-		meanValues := make([]float64, channelCount)
-
-		for colIdx, val := range phaseResult.MaxValues {
-			if colIdx-1 < len(maxValues) {
-				maxValues[colIdx-1] = val
-			}
-		}
-
-		for colIdx, val := range phaseResult.MeanValues {
-			if colIdx-1 < len(meanValues) {
-				meanValues[colIdx-1] = val
-			}
-		}
-
-		phaseAnalysis := PhaseAnalysis{
-			PhaseLabel: phaseResult.PhaseName,
-			StartTime:  0, // 這些資訊需要從其他地方獲取
-			EndTime:    0,
-			Duration:   0,
-			Average:    meanValues,
-			MaxValues:  maxValues,
-			MinValues:  []float64{}, // PhaseAnalysisResult 不包含最小值
-		}
-		results = append(results, phaseAnalysis)
+		results = append(results, convertPhaseResultToAnalysis(&phaseResult, channelCount))
 	}
 
 	a.logger.Info("階段分析完成", map[string]interface{}{
 		"output_file":   outputPath,
 		"phase_count":   len(results),
-		"channel_count": len(records[0]) - 1,
+		"channel_count": channelCount,
 	})
 
 	return &PhaseResult{
@@ -908,8 +627,9 @@ func (a *App) AnalyzePhases(params PhaseParams) (*PhaseResult, error) {
 	}, nil
 }
 
-// ShowMessage displays an informational dialog
-func (a *App) ShowMessage(title string, message string) {
+// ShowMessage displays an informational dialog.
+func (a *App) ShowMessage(title, message string) {
+	//nolint:errcheck,gosec // Return value intentionally ignored for fire-and-forget UI dialog
 	runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
 		Type:    runtime.InfoDialog,
 		Title:   title,
@@ -917,8 +637,9 @@ func (a *App) ShowMessage(title string, message string) {
 	})
 }
 
-// ShowError displays an error dialog
-func (a *App) ShowError(title string, message string) {
+// ShowError displays an error dialog.
+func (a *App) ShowError(title, message string) {
+	//nolint:errcheck,gosec // Return value intentionally ignored for fire-and-forget UI dialog
 	runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
 		Type:    runtime.ErrorDialog,
 		Title:   title,
@@ -940,8 +661,9 @@ func (a *App) GetCSVHeaders(params CSVHeadersParams) ([]string, error) {
 	}
 	// 確保有標題行
 	if len(records) == 0 {
-		return nil, fmt.Errorf("CSV 檔案沒有標題行")
+		return nil, ErrNoCSVHeaders
 	}
+
 	return records[0], nil
 }
 
@@ -956,6 +678,7 @@ type InteractiveChartParams struct {
 
 // Parameter structures
 
+// MaxMeanParams holds parameters for maximum mean calculation.
 type MaxMeanParams struct {
 	InputPath  string  `json:"inputPath"`
 	WindowSize int     `json:"windowSize"`
@@ -964,6 +687,7 @@ type MaxMeanParams struct {
 	IsBatch    bool    `json:"isBatch"`
 }
 
+// MaxMeanResult holds the result of maximum mean calculation.
 type MaxMeanResult struct {
 	OutputPath string      `json:"outputPath"`
 	Headers    []string    `json:"headers"`
@@ -972,12 +696,14 @@ type MaxMeanResult struct {
 	Message    string      `json:"message"`
 }
 
+// NormalizeParams holds parameters for data normalization.
 type NormalizeParams struct {
 	MainFile      string `json:"mainFile"`
 	ReferenceFile string `json:"referenceFile"`
 	OutputPath    string `json:"outputPath"`
 }
 
+// NormalizeResult holds the result of data normalization.
 type NormalizeResult struct {
 	OutputPath string      `json:"outputPath"`
 	Headers    []string    `json:"headers"`
@@ -986,6 +712,7 @@ type NormalizeResult struct {
 	Message    string      `json:"message"`
 }
 
+// ChartParams holds parameters for chart generation.
 type ChartParams struct {
 	FilePath  string `json:"filePath"`
 	Columns   []int  `json:"columns"`
@@ -993,6 +720,7 @@ type ChartParams struct {
 	ImageData string `json:"imageData"` // base64 PNG 數據
 }
 
+// ChartResult holds the result of chart generation.
 type ChartResult struct {
 	OutputPath  string `json:"outputPath"`
 	HTMLContent string `json:"htmlContent"`
@@ -1000,12 +728,14 @@ type ChartResult struct {
 	Message     string `json:"message"`
 }
 
+// PhaseParams holds parameters for phase analysis.
 type PhaseParams struct {
 	InputFile   string   `json:"inputFile"`
 	PhaseLabels []string `json:"phaseLabels"`
 	OutputPath  string   `json:"outputPath"`
 }
 
+// PhaseResult holds the result of phase analysis.
 type PhaseResult struct {
 	OutputPath string          `json:"outputPath"`
 	Headers    []string        `json:"headers"`
@@ -1014,6 +744,7 @@ type PhaseResult struct {
 	Message    string          `json:"message"`
 }
 
+// PhaseAnalysis holds individual phase analysis data.
 type PhaseAnalysis struct {
 	PhaseLabel string    `json:"phaseLabel"`
 	StartTime  float64   `json:"startTime"`
@@ -1024,7 +755,7 @@ type PhaseAnalysis struct {
 	MinValues  []float64 `json:"minValues"`
 }
 
-// PhaseSyncParams 分期同步分析參數
+// PhaseSyncParams 分期同步分析參數.
 type PhaseSyncParams struct {
 	ManifestFile string `json:"manifestFile"`
 	DataFolder   string `json:"dataFolder"`
@@ -1033,7 +764,7 @@ type PhaseSyncParams struct {
 	SubjectIndex int    `json:"subjectIndex"`
 }
 
-// PhaseSyncResult 分期同步分析結果
+// PhaseSyncResult 分期同步分析結果.
 type PhaseSyncResult struct {
 	OutputPath   string             `json:"outputPath"`
 	Subject      string             `json:"subject"`
@@ -1049,41 +780,44 @@ type PhaseSyncResult struct {
 	Message      string             `json:"message"`
 }
 
-// LoadPhaseManifest 載入分期總檔案的主題列表
+// LoadPhaseManifest 載入分期總檔案的主題列表.
 func (a *App) LoadPhaseManifest(manifestPath string) ([]string, error) {
 	a.logger.Info("載入分期總檔案", map[string]interface{}{"path": manifestPath})
 
 	subjects, err := a.phaseSyncAnalyzer.LoadManifestSubjects(manifestPath)
 	if err != nil {
 		a.logger.Error("載入分期總檔案失敗", err, map[string]interface{}{})
-		return nil, err
+		return nil, fmt.Errorf("載入分期總檔案失敗: %w", err)
 	}
 
 	a.logger.Info("成功載入分期總檔案", map[string]interface{}{"subjects": len(subjects)})
+
 	return subjects, nil
 }
 
-// GetAvailablePhases 獲取可用的分期點列表
-func (a *App) GetAvailablePhases() map[string][]string {
+// GetAvailablePhases 獲取可用的分期點列表.
+func (*App) GetAvailablePhases() map[string][]string {
 	return map[string][]string{
 		"start": synchronizer.GetAvailableStartPhases(),
 		"end":   synchronizer.GetAvailableEndPhases(),
 	}
 }
 
-// AnalyzePhaseSync 執行分期同步分析
+// AnalyzePhaseSync 執行分期同步分析.
 func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (*PhaseSyncResult, error) {
 	a.logger.Info("開始分期同步分析", map[string]interface{}{"params": params})
 
 	// 參數驗證
 	if params.ManifestFile == "" {
-		return nil, fmt.Errorf("請選擇分期總檔案")
+		return nil, ErrNoManifestFile
 	}
+
 	if params.DataFolder == "" {
-		return nil, fmt.Errorf("請選擇數據資料夾")
+		return nil, ErrNoDataFolder
 	}
+
 	if params.StartPhase == "" || params.EndPhase == "" {
-		return nil, fmt.Errorf("請選擇開始和結束分期點")
+		return nil, ErrNoPhaseSelection
 	}
 
 	// 創建分析參數
@@ -1099,6 +833,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (*PhaseSyncResult, error)
 	stats, err := a.phaseSyncAnalyzer.AnalyzePhaseSync(analysisParams)
 	if err != nil {
 		a.logger.Error("分期同步分析失敗", err, map[string]interface{}{})
+
 		return &PhaseSyncResult{
 			Success: false,
 			Message: fmt.Sprintf("分析失敗: %v", err),
@@ -1109,6 +844,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (*PhaseSyncResult, error)
 	outputPath, err := a.phaseSyncAnalyzer.ExportResults(stats, a.config.OutputDir)
 	if err != nil {
 		a.logger.Error("導出結果失敗", err, map[string]interface{}{})
+
 		return &PhaseSyncResult{
 			Success: false,
 			Message: fmt.Sprintf("導出失敗: %v", err),
@@ -1135,30 +871,31 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (*PhaseSyncResult, error)
 	}
 
 	a.logger.Info("分期同步分析完成", map[string]interface{}{"outputPath": outputPath})
+
 	return result, nil
 }
 
-// GetCurrentProgress 獲取當前進度信息
+// GetCurrentProgress 獲取當前進度信息.
 func (a *App) GetCurrentProgress() *models.ProgressInfo {
 	return a.progressManager.GetCurrentProgress()
 }
 
-// SubscribeToProgress 訂閱進度更新
+// SubscribeToProgress 訂閱進度更新.
 func (a *App) SubscribeToProgress() <-chan models.ProgressInfo {
 	return a.progressManager.Subscribe()
 }
 
-// UnsubscribeFromProgress 取消訂閱進度更新
+// UnsubscribeFromProgress 取消訂閱進度更新.
 func (a *App) UnsubscribeFromProgress(ch <-chan models.ProgressInfo) {
 	a.progressManager.Unsubscribe(ch)
 }
 
-// IsProgressActive 檢查進度管理器是否活躍
+// IsProgressActive 檢查進度管理器是否活躍.
 func (a *App) IsProgressActive() bool {
 	return a.progressManager.IsActive()
 }
 
-// GetBackpressureStats 獲取背壓控制統計信息
+// GetBackpressureStats 獲取背壓控制統計信息.
 func (a *App) GetBackpressureStats() models.BackpressureStats {
 	return a.maxMeanCalc.GetBackpressureStats()
 }

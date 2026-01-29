@@ -1,15 +1,16 @@
 package models_test
 
 import (
-	"count_mean/internal/models"
 	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"count_mean/internal/models"
 )
 
-// TestEMGData 測試 EMG 數據結構
+// TestEMGData 測試 EMG 數據結構.
 func TestEMGData(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -73,6 +74,7 @@ func testEMGDataJSONDeserialization(t *testing.T) {
 	jsonString := `{"time": 3.789, "channels": [0.8, 0.9, 1.0]}`
 
 	var emgData models.EMGData
+
 	err := json.Unmarshal([]byte(jsonString), &emgData)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -110,7 +112,7 @@ func testEMGDataValidation(t *testing.T) {
 	}
 }
 
-// TestEMGDataset 測試 EMG 數據集結構
+// TestEMGDataset 測試 EMG 數據集結構.
 func TestEMGDataset(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -194,6 +196,7 @@ func testEMGDatasetJSONDeserialization(t *testing.T) {
 	}`
 
 	var dataset models.EMGDataset
+
 	err := json.Unmarshal([]byte(jsonString), &dataset)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -243,7 +246,7 @@ func testEMGDatasetValidation(t *testing.T) {
 	}
 }
 
-// TestMaxMeanResult 測試最大平均值結果結構
+// TestMaxMeanResult 測試最大平均值結果結構.
 func TestMaxMeanResult(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -324,6 +327,7 @@ func testMaxMeanResultJSONDeserialization(t *testing.T) {
 	}`
 
 	var result models.MaxMeanResult
+
 	err := json.Unmarshal([]byte(jsonString), &result)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -346,7 +350,7 @@ func testMaxMeanResultJSONDeserialization(t *testing.T) {
 	}
 }
 
-// TestPhaseAnalysisResult 測試階段分析結果結構
+// TestPhaseAnalysisResult 測試階段分析結果結構.
 func TestPhaseAnalysisResult(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -419,6 +423,7 @@ func testPhaseAnalysisResultJSONDeserialization(t *testing.T) {
 	}`
 
 	var result models.PhaseAnalysisResult
+
 	err := json.Unmarshal([]byte(jsonString), &result)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -437,7 +442,7 @@ func testPhaseAnalysisResultJSONDeserialization(t *testing.T) {
 	}
 }
 
-// TestAnalysisConfig 測試分析配置結構
+// TestAnalysisConfig 測試分析配置結構.
 func TestAnalysisConfig(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -541,6 +546,7 @@ func testAnalysisConfigJSONDeserialization(t *testing.T) {
 	}`
 
 	var config models.AnalysisConfig
+
 	err := json.Unmarshal([]byte(jsonString), &config)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -588,7 +594,7 @@ func testAnalysisConfigValidation(t *testing.T) {
 	}
 }
 
-// TestTimeRange 測試時間範圍結構
+// TestTimeRange 測試時間範圍結構.
 func TestTimeRange(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -645,6 +651,7 @@ func testTimeRangeJSONDeserialization(t *testing.T) {
 	jsonString := `{"start": 2.0, "end": 3.0}`
 
 	var timeRange models.TimeRange
+
 	err := json.Unmarshal([]byte(jsonString), &timeRange)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -681,7 +688,7 @@ func testTimeRangeValidation(t *testing.T) {
 	}
 }
 
-// TestProcessingOptions 測試處理選項結構
+// TestProcessingOptions 測試處理選項結構.
 func TestProcessingOptions(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -752,6 +759,7 @@ func testProcessingOptionsJSONDeserialization(t *testing.T) {
 	}`
 
 	var options models.ProcessingOptions
+
 	err := json.Unmarshal([]byte(jsonString), &options)
 	if err != nil {
 		t.Errorf("JSON deserialization failed: %v", err)
@@ -787,12 +795,12 @@ func testProcessingOptionsDefaults(t *testing.T) {
 	}
 }
 
-// 輔助函數：檢查 JSON 字符串是否包含字段
+// 輔助函數：檢查 JSON 字符串是否包含字段.
 func containsField(jsonString, fieldName string) bool {
 	return strings.Contains(jsonString, `"`+fieldName+`"`)
 }
 
-// 基準測試
+// 基準測試.
 func BenchmarkEMGDataJSONSerialization(b *testing.B) {
 	emgData := models.EMGData{
 		Time:     1.234,
@@ -838,6 +846,7 @@ func BenchmarkEMGDataJSONDeserialization(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		var emgData models.EMGData
+
 		err := json.Unmarshal(jsonData, &emgData)
 		if err != nil {
 			b.Errorf("JSON deserialization failed: %v", err)
@@ -845,7 +854,7 @@ func BenchmarkEMGDataJSONDeserialization(b *testing.B) {
 	}
 }
 
-// 測試完整的數據流
+// 測試完整的數據流.
 func TestDataFlow(t *testing.T) {
 	// 創建原始數據
 	originalData := []models.EMGData{
@@ -869,6 +878,7 @@ func TestDataFlow(t *testing.T) {
 
 	// 反序列化
 	var deserializedDataset models.EMGDataset
+
 	err = json.Unmarshal(jsonData, &deserializedDataset)
 	if err != nil {
 		t.Fatalf("Deserialization failed: %v", err)
@@ -880,7 +890,7 @@ func TestDataFlow(t *testing.T) {
 	}
 }
 
-// 測試邊界情況
+// 測試邊界情況.
 func TestEdgeCases(t *testing.T) {
 	// 測試極小值
 	smallData := models.EMGData{
@@ -894,6 +904,7 @@ func TestEdgeCases(t *testing.T) {
 	}
 
 	var deserializedSmall models.EMGData
+
 	err = json.Unmarshal(jsonData, &deserializedSmall)
 	if err != nil {
 		t.Errorf("Small values deserialization failed: %v", err)
@@ -911,6 +922,7 @@ func TestEdgeCases(t *testing.T) {
 	}
 
 	var deserializedLarge models.EMGData
+
 	err = json.Unmarshal(jsonData, &deserializedLarge)
 	if err != nil {
 		t.Errorf("Large values deserialization failed: %v", err)

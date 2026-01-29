@@ -1,14 +1,35 @@
+// Package config provides configuration management for the EMG data analysis
+// application, including loading, saving, and validating application settings.
 package config
 
 import (
-	"count_mean/internal/models"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"time"
+
+	"count_mean/internal/models"
 )
 
-// AppConfig 應用程式配置
+// File permission constants.
+const (
+	dirPermission  = 0o750 // Directory permission mode.
+	filePermission = 0o600 // File permission mode.
+)
+
+// Configuration validation errors.
+var (
+	errScalingFactorInvalid = stderrors.New("縮放因子必須大於 0")
+	errPhaseLabelsEmpty     = stderrors.New("階段標籤不能為空")
+	errPrecisionOutOfRange  = stderrors.New("精度必須在 0-15 之間")
+	errUnsupportedFormat    = stderrors.New("不支援的輸出格式")
+	errInputDirEmpty        = stderrors.New("輸入目錄路徑不能為空")
+	errOutputDirEmpty       = stderrors.New("輸出目錄路徑不能為空")
+	errOperateDirEmpty      = stderrors.New("操作目錄路徑不能為空")
+)
+
+// AppConfig 應用程式配置.
 type AppConfig struct {
 	ScalingFactor int      `json:"scalingFactor"`
 	PhaseLabels   []string `json:"phaseLabels"`
@@ -29,7 +50,7 @@ type AppConfig struct {
 	TranslationsDir string `json:"translationsDir"` // 翻譯文件目錄
 }
 
-// DefaultConfig 返回默認配置
+// DefaultConfig 返回默認配置.
 func DefaultConfig() *AppConfig {
 	return &AppConfig{
 		ScalingFactor: 10,
@@ -57,19 +78,26 @@ func DefaultConfig() *AppConfig {
 	}
 }
 
-// LoadConfig 從檔案載入配置
+// LoadConfig 從檔案載入配置.
 func LoadConfig(filename string) (*AppConfig, error) {
-	file, err := os.Open(filename)
+	file, err := os.Open(filename) //nolint:gosec // filename is provided by caller, validated at application level
 	if err != nil {
 		if os.IsNotExist(err) {
 			// 如果檔案不存在，返回默認配置
 			return DefaultConfig(), nil
 		}
+
 		return nil, fmt.Errorf("無法開啟配置檔案: %w", err)
 	}
-	defer file.Close()
+
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
 
 	var config AppConfig
+
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&config); err != nil {
 		return nil, fmt.Errorf("解析配置檔案失敗: %w", err)
@@ -83,16 +111,23 @@ func LoadConfig(filename string) (*AppConfig, error) {
 	return &config, nil
 }
 
-// SaveConfig 保存配置到檔案
+// SaveConfig 保存配置到檔案.
 func (c *AppConfig) SaveConfig(filename string) error {
-	file, err := os.Create(filename)
+	//nolint:gosec // filename provided by caller
+	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, filePermission)
 	if err != nil {
 		return fmt.Errorf("無法創建配置檔案: %w", err)
 	}
-	defer file.Close()
+
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
+
 	if err := encoder.Encode(c); err != nil {
 		return fmt.Errorf("保存配置檔案失敗: %w", err)
 	}
@@ -100,18 +135,19 @@ func (c *AppConfig) SaveConfig(filename string) error {
 	return nil
 }
 
-// Validate 驗證配置
+// Validate 驗證配置.
 func (c *AppConfig) Validate() error {
 	if c.ScalingFactor <= 0 {
-		return fmt.Errorf("縮放因子必須大於 0")
+		return errScalingFactorInvalid
 	}
 
 	if len(c.PhaseLabels) == 0 {
-		return fmt.Errorf("階段標籤不能為空")
+		return errPhaseLabelsEmpty
 	}
 
-	if c.Precision < 0 || c.Precision > 15 {
-		return fmt.Errorf("精度必須在 0-15 之間")
+	const maxPrecision = 15
+	if c.Precision < 0 || c.Precision > maxPrecision {
+		return errPrecisionOutOfRange
 	}
 
 	validFormats := map[string]bool{
@@ -121,31 +157,31 @@ func (c *AppConfig) Validate() error {
 	}
 
 	if !validFormats[c.OutputFormat] {
-		return fmt.Errorf("不支援的輸出格式: %s", c.OutputFormat)
+		return fmt.Errorf("%w: %s", errUnsupportedFormat, c.OutputFormat)
 	}
 
 	// 驗證目錄路徑
 	if c.InputDir == "" {
-		return fmt.Errorf("輸入目錄路徑不能為空")
+		return errInputDirEmpty
 	}
 
 	if c.OutputDir == "" {
-		return fmt.Errorf("輸出目錄路徑不能為空")
+		return errOutputDirEmpty
 	}
 
 	if c.OperateDir == "" {
-		return fmt.Errorf("操作目錄路徑不能為空")
+		return errOperateDirEmpty
 	}
 
 	return nil
 }
 
-// EnsureDirectories 確保配置中的目錄存在
+// EnsureDirectories 確保配置中的目錄存在.
 func (c *AppConfig) EnsureDirectories() error {
 	dirs := []string{c.InputDir, c.OutputDir, c.OperateDir, c.LogDirectory, c.TranslationsDir}
 
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, dirPermission); err != nil {
 			return fmt.Errorf("無法創建目錄 %s: %w", dir, err)
 		}
 	}
@@ -153,7 +189,7 @@ func (c *AppConfig) EnsureDirectories() error {
 	return nil
 }
 
-// ToAnalysisConfig 轉換為分析配置
+// ToAnalysisConfig 轉換為分析配置.
 func (c *AppConfig) ToAnalysisConfig() *models.AnalysisConfig {
 	return &models.AnalysisConfig{
 		ScalingFactor: c.ScalingFactor,
@@ -162,7 +198,7 @@ func (c *AppConfig) ToAnalysisConfig() *models.AnalysisConfig {
 	}
 }
 
-// ProcessingOptions 獲取處理選項
+// ProcessingOptions 獲取處理選項.
 func (c *AppConfig) ProcessingOptions() *models.ProcessingOptions {
 	return &models.ProcessingOptions{
 		ValidateInput: true,

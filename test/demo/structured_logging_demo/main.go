@@ -3,13 +3,14 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+
 	"count_mean/internal/calculator"
 	"count_mean/internal/config"
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
-	"fmt"
-	"os"
-	"path/filepath"
 )
 
 // 示範結構化日誌使用
@@ -54,7 +55,7 @@ func main() {
 
 	// 寫入測試文件
 	testFile := filepath.Join(cfg.InputDir, "demo_test.csv")
-	if err := os.MkdirAll(cfg.InputDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.InputDir, 0o755); err != nil {
 		logger.Fatal("無法創建輸入目錄", err)
 	}
 
@@ -78,7 +79,7 @@ func main() {
 	// 寫入結果
 	outputData := csvHandler.ConvertMaxMeanResultsToCSV(testData[0], results, 0.1, 0.5)
 	outputFile := filepath.Join(cfg.OutputDir, "demo_results.csv")
-	if err := os.MkdirAll(cfg.OutputDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		logger.Fatal("無法創建輸出目錄", err)
 	}
 

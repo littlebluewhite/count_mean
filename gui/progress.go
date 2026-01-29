@@ -2,26 +2,34 @@ package gui
 
 import (
 	"context"
-	"count_mean/internal/logging"
-	"count_mean/internal/models"
 	"sync"
 	"time"
+
+	"count_mean/internal/logging"
+	"count_mean/internal/models"
 )
 
-// ProgressManager 管理進度報告
+// Progress manager constants.
+const (
+	progressBufferSize        = 10                     // 訂閱者通道緩衝大小
+	defaultUpdateInterval     = 100 * time.Millisecond // 默認更新間隔
+	progressCompletionPercent = 100                    // 完成百分比
+)
+
+// ProgressManager 管理進度報告.
 type ProgressManager struct {
 	logger       *logging.Logger
 	mutex        sync.RWMutex
 	currentInfo  *models.ProgressInfo
 	subscribers  []chan models.ProgressInfo
 	isActive     bool
-	ctx          context.Context
+	ctx          context.Context //nolint:containedctx // Context needed for cancellation
 	cancelFunc   context.CancelFunc
 	lastUpdateAt time.Time
 	updateBuffer time.Duration
 }
 
-// NewProgressManager 創建新的進度管理器
+// NewProgressManager 創建新的進度管理器.
 func NewProgressManager() *ProgressManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -30,32 +38,31 @@ func NewProgressManager() *ProgressManager {
 		subscribers:  make([]chan models.ProgressInfo, 0),
 		ctx:          ctx,
 		cancelFunc:   cancel,
-		updateBuffer: 100 * time.Millisecond, // 默認100ms更新間隔
+		updateBuffer: defaultUpdateInterval,
 	}
 }
 
-// SetUpdateBuffer 設置更新間隔緩衝
+// SetUpdateBuffer 設置更新間隔緩衝.
 func (pm *ProgressManager) SetUpdateBuffer(duration time.Duration) {
 	pm.mutex.Lock()
 	defer pm.mutex.Unlock()
 	pm.updateBuffer = duration
 }
 
-// Subscribe 訂閱進度更新
+// Subscribe 訂閱進度更新.
 func (pm *ProgressManager) Subscribe() <-chan models.ProgressInfo {
 	pm.mutex.Lock()
 	defer pm.mutex.Unlock()
 
 	// 創建帶緩衝的通道，避免阻塞
-	ch := make(chan models.ProgressInfo, 10)
+	ch := make(chan models.ProgressInfo, progressBufferSize)
 	pm.subscribers = append(pm.subscribers, ch)
 
 	// 如果有當前進度信息，立即發送
 	if pm.currentInfo != nil {
 		select {
 		case ch <- *pm.currentInfo:
-		default:
-			// 通道滿了，跳過這次更新
+		default: // 通道滿了，跳過這次更新
 		}
 	}
 
@@ -66,7 +73,7 @@ func (pm *ProgressManager) Subscribe() <-chan models.ProgressInfo {
 	return ch
 }
 
-// Unsubscribe 取消訂閱進度更新
+// Unsubscribe 取消訂閱進度更新.
 func (pm *ProgressManager) Unsubscribe(ch <-chan models.ProgressInfo) {
 	pm.mutex.Lock()
 	defer pm.mutex.Unlock()
@@ -79,6 +86,7 @@ func (pm *ProgressManager) Unsubscribe(ch <-chan models.ProgressInfo) {
 
 			// 從切片中移除
 			pm.subscribers = append(pm.subscribers[:i], pm.subscribers[i+1:]...)
+
 			break
 		}
 	}
@@ -88,14 +96,16 @@ func (pm *ProgressManager) Unsubscribe(ch <-chan models.ProgressInfo) {
 	})
 }
 
-// UpdateProgress 更新進度（實現 ProgressCallback 接口）
+// UpdateProgress 更新進度（實現 ProgressCallback 接口）.
+//
+//nolint:gocritic // hugeParam: Interface requirement
 func (pm *ProgressManager) UpdateProgress(info models.ProgressInfo) {
 	pm.mutex.Lock()
 	defer pm.mutex.Unlock()
 
 	// 檢查是否需要更新（基於時間間隔）
 	now := time.Now()
-	if pm.lastUpdateAt.Add(pm.updateBuffer).After(now) && info.Percentage < 100 {
+	if pm.lastUpdateAt.Add(pm.updateBuffer).After(now) && info.Percentage < progressCompletionPercent {
 		return
 	}
 
@@ -111,6 +121,7 @@ func (pm *ProgressManager) UpdateProgress(info models.ProgressInfo) {
 		default:
 			// 通道滿了或已關閉，移除此訂閱者
 			close(subscriber)
+
 			pm.subscribers = append(pm.subscribers[:i], pm.subscribers[i+1:]...)
 			pm.logger.Warn("移除無響應的進度訂閱者", map[string]interface{}{
 				"remaining_subscribers": len(pm.subscribers),
@@ -126,7 +137,7 @@ func (pm *ProgressManager) UpdateProgress(info models.ProgressInfo) {
 	})
 }
 
-// GetCurrentProgress 獲取當前進度
+// GetCurrentProgress 獲取當前進度.
 func (pm *ProgressManager) GetCurrentProgress() *models.ProgressInfo {
 	pm.mutex.RLock()
 	defer pm.mutex.RUnlock()
@@ -140,7 +151,7 @@ func (pm *ProgressManager) GetCurrentProgress() *models.ProgressInfo {
 	return nil
 }
 
-// Start 開始進度追蹤
+// Start 開始進度追蹤.
 func (pm *ProgressManager) Start() {
 	pm.mutex.Lock()
 	defer pm.mutex.Unlock()
@@ -149,7 +160,7 @@ func (pm *ProgressManager) Start() {
 	pm.logger.Info("進度管理器已啟動")
 }
 
-// Stop 停止進度追蹤
+// Stop 停止進度追蹤.
 func (pm *ProgressManager) Stop() {
 	pm.mutex.Lock()
 	defer pm.mutex.Unlock()
@@ -160,6 +171,7 @@ func (pm *ProgressManager) Stop() {
 	for _, subscriber := range pm.subscribers {
 		close(subscriber)
 	}
+
 	pm.subscribers = nil
 
 	// 取消上下文
@@ -168,31 +180,33 @@ func (pm *ProgressManager) Stop() {
 	pm.logger.Info("進度管理器已停止")
 }
 
-// IsActive 檢查進度管理器是否活躍
+// IsActive 檢查進度管理器是否活躍.
 func (pm *ProgressManager) IsActive() bool {
 	pm.mutex.RLock()
 	defer pm.mutex.RUnlock()
+
 	return pm.isActive
 }
 
-// GetSubscriberCount 獲取訂閱者數量
+// GetSubscriberCount 獲取訂閱者數量.
 func (pm *ProgressManager) GetSubscriberCount() int {
 	pm.mutex.RLock()
 	defer pm.mutex.RUnlock()
+
 	return len(pm.subscribers)
 }
 
-// CreateProgressCallback 創建進度回調函數
+// CreateProgressCallback 創建進度回調函數.
 func (pm *ProgressManager) CreateProgressCallback() models.ProgressCallback {
 	return pm.UpdateProgress
 }
 
-// SendCompletionNotification 發送完成通知
+// SendCompletionNotification 發送完成通知.
 func (pm *ProgressManager) SendCompletionNotification(status string, totalTime time.Duration) {
 	info := models.ProgressInfo{
-		CurrentStep:   100,
-		TotalSteps:    100,
-		Percentage:    100,
+		CurrentStep:   progressCompletionPercent,
+		TotalSteps:    progressCompletionPercent,
+		Percentage:    progressCompletionPercent,
 		Status:        status,
 		ChannelIndex:  0,
 		ChannelName:   "",
@@ -203,7 +217,7 @@ func (pm *ProgressManager) SendCompletionNotification(status string, totalTime t
 	pm.UpdateProgress(info)
 }
 
-// SendErrorNotification 發送錯誤通知
+// SendErrorNotification 發送錯誤通知.
 func (pm *ProgressManager) SendErrorNotification(errorMsg string) {
 	pm.mutex.RLock()
 	currentInfo := pm.currentInfo

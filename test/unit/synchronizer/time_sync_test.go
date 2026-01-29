@@ -3,9 +3,9 @@ package synchronizer
 import (
 	"testing"
 
-	"count_mean/internal/synchronizer"
-
 	"github.com/stretchr/testify/assert"
+
+	"count_mean/internal/synchronizer"
 )
 
 func TestNewTimeSynchronizer(t *testing.T) {
@@ -24,22 +24,22 @@ func TestTimeSynchronizer_MotionIndexToTime(t *testing.T) {
 		{
 			name:     "index 1 (first index)",
 			index:    1,
-			expected: 0.0, // (1-1)/250 = 0
+			expected: 0.0,
 		},
 		{
 			name:     "index 2",
 			index:    2,
-			expected: 0.004, // (2-1)/250 = 0.004
+			expected: 0.004, // index minus 1 divided by 250
 		},
 		{
 			name:     "index 250",
 			index:    250,
-			expected: 0.996, // (250-1)/250 = 0.996
+			expected: 0.996, // index minus 1 divided by 250
 		},
 		{
 			name:     "index 251",
 			index:    251,
-			expected: 1.0, // (251-1)/250 = 1.0
+			expected: 1.0, // index minus 1 divided by 250
 		},
 		{
 			name:     "index 0 (invalid)",
@@ -72,32 +72,32 @@ func TestTimeSynchronizer_TimeToMotionIndex(t *testing.T) {
 		{
 			name:     "time 0.0",
 			time:     0.0,
-			expected: 1, // 0*250 + 1 = 1
+			expected: 1, // time times 250 plus 1 equals 1
 		},
 		{
 			name:     "time 0.004",
 			time:     0.004,
-			expected: 2, // round(0.004*250) + 1 = 2
+			expected: 2, // rounded time times 250 plus 1
 		},
 		{
 			name:     "time 0.996",
 			time:     0.996,
-			expected: 250, // round(0.996*250) + 1 = 250
+			expected: 250, // rounded time times 250 plus 1
 		},
 		{
 			name:     "time 1.0",
 			time:     1.0,
-			expected: 251, // round(1.0*250) + 1 = 251
+			expected: 251, // rounded time times 250 plus 1
 		},
 		{
 			name:     "time 0.002 (rounding test)",
 			time:     0.002,
-			expected: 2, // round(0.002*250) + 1 = round(0.5) + 1 = 2
+			expected: 2, // rounds 0.5 up to 1, plus 1 equals 2
 		},
 		{
 			name:     "time 0.006 (rounding test)",
 			time:     0.006,
-			expected: 3, // round(0.006*250) + 1 = round(1.5) + 1 = 3
+			expected: 3, // rounds 1.5 up to 2, plus 1 equals 3
 		},
 		{
 			name:     "negative time",
@@ -127,31 +127,31 @@ func TestTimeSynchronizer_MotionIndexToEMGTime(t *testing.T) {
 			name:            "motion index 100, offset 100",
 			motionIndex:     100,
 			emgMotionOffset: 100,
-			expected:        0.0, // (100-100)/250 = 0
+			expected:        0.0, // index minus offset divided by 250
 		},
 		{
 			name:            "motion index 150, offset 100",
 			motionIndex:     150,
 			emgMotionOffset: 100,
-			expected:        0.2, // (150-100)/250 = 0.2
+			expected:        0.2, // index minus offset divided by 250
 		},
 		{
 			name:            "motion index 350, offset 100",
 			motionIndex:     350,
 			emgMotionOffset: 100,
-			expected:        1.0, // (350-100)/250 = 1.0
+			expected:        1.0, // index minus offset divided by 250
 		},
 		{
 			name:            "motion index 50, offset 100",
 			motionIndex:     50,
 			emgMotionOffset: 100,
-			expected:        -0.2, // (50-100)/250 = -0.2
+			expected:        -0.2, // index minus offset divided by 250
 		},
 		{
 			name:            "motion index 250, offset 0",
 			motionIndex:     250,
 			emgMotionOffset: 0,
-			expected:        1.0, // (250-0)/250 = 1.0
+			expected:        1.0, // index minus offset divided by 250
 		},
 	}
 
@@ -176,37 +176,37 @@ func TestTimeSynchronizer_EMGTimeToMotionIndex(t *testing.T) {
 			name:            "EMG time 0.0, offset 100",
 			emgTime:         0.0,
 			emgMotionOffset: 100,
-			expected:        100, // round(0.0*250) + 100 = 100
+			expected:        100, // rounded time times 250 plus offset
 		},
 		{
 			name:            "EMG time 0.2, offset 100",
 			emgTime:         0.2,
 			emgMotionOffset: 100,
-			expected:        150, // round(0.2*250) + 100 = 150
+			expected:        150, // rounded time times 250 plus offset
 		},
 		{
 			name:            "EMG time 1.0, offset 100",
 			emgTime:         1.0,
 			emgMotionOffset: 100,
-			expected:        350, // round(1.0*250) + 100 = 350
+			expected:        350, // rounded time times 250 plus offset
 		},
 		{
 			name:            "EMG time -0.2, offset 100",
 			emgTime:         -0.2,
 			emgMotionOffset: 100,
-			expected:        50, // round(-0.2*250) + 100 = 50
+			expected:        50, // rounded time times 250 plus offset
 		},
 		{
 			name:            "EMG time 1.0, offset 0",
 			emgTime:         1.0,
 			emgMotionOffset: 0,
-			expected:        250, // round(1.0*250) + 0 = 250
+			expected:        250, // rounded time times 250 plus offset
 		},
 		{
 			name:            "result less than 1",
 			emgTime:         -1.0,
 			emgMotionOffset: 100,
-			expected:        1, // Should return 1 for results < 1
+			expected:        1, // Should return 1 for results less than 1
 		},
 	}
 
@@ -307,19 +307,19 @@ func TestTimeSynchronizer_ForceTimeToEMGTime(t *testing.T) {
 			name:            "force time 0.0, offset 100",
 			forceTime:       0.0,
 			emgMotionOffset: 100,
-			expected:        -0.396, // ((0*250+1)-100)/250 = -0.396
+			expected:        -0.396, // converted via motion index minus offset
 		},
 		{
 			name:            "force time 0.4, offset 100",
 			forceTime:       0.4,
 			emgMotionOffset: 100,
-			expected:        0.004, // ((0.4*250+1)-100)/250 = 0.004
+			expected:        0.004, // converted via motion index minus offset
 		},
 		{
 			name:            "force time 1.0, offset 100",
 			forceTime:       1.0,
 			emgMotionOffset: 100,
-			expected:        0.604, // ((1.0*250+1)-100)/250 = 0.604
+			expected:        0.604, // converted via motion index minus offset
 		},
 	}
 
@@ -344,19 +344,19 @@ func TestTimeSynchronizer_EMGTimeToForceTime(t *testing.T) {
 			name:            "EMG time 0.0, offset 100",
 			emgTime:         0.0,
 			emgMotionOffset: 100,
-			expected:        0.396, // (100-1)/250 = 0.396
+			expected:        0.396, // motion index minus 1 divided by 250
 		},
 		{
 			name:            "EMG time 0.2, offset 100",
 			emgTime:         0.2,
 			emgMotionOffset: 100,
-			expected:        0.596, // (150-1)/250 = 0.596
+			expected:        0.596, // motion index minus 1 divided by 250
 		},
 		{
 			name:            "EMG time 1.0, offset 100",
 			emgTime:         1.0,
 			emgMotionOffset: 100,
-			expected:        1.396, // (350-1)/250 = 1.396
+			expected:        1.396, // motion index minus 1 divided by 250
 		},
 	}
 
@@ -489,6 +489,7 @@ func TestTimeSynchronizer_GetSyncedTimeRange(t *testing.T) {
 			if tt.expectErr {
 				assert.Error(t, err)
 				assert.Nil(t, result)
+
 				if tt.errorMsg != "" {
 					assert.Contains(t, err.Error(), tt.errorMsg)
 				}
@@ -654,6 +655,7 @@ func TestValidateTimeSync(t *testing.T) {
 
 			if tt.expectErr {
 				assert.Error(t, err)
+
 				if tt.errorMsg != "" {
 					assert.Contains(t, err.Error(), tt.errorMsg)
 				}
@@ -664,7 +666,7 @@ func TestValidateTimeSync(t *testing.T) {
 	}
 }
 
-// Test round-trip conversions
+// Test round-trip conversions.
 func TestTimeSynchronizer_RoundTripConversions(t *testing.T) {
 	ts := synchronizer.NewTimeSynchronizer()
 
@@ -705,11 +707,12 @@ func TestTimeSynchronizer_RoundTripConversions(t *testing.T) {
 	}
 }
 
-// Benchmark tests
+// Benchmark tests.
 func BenchmarkTimeSynchronizer_MotionIndexToTime(b *testing.B) {
 	ts := synchronizer.NewTimeSynchronizer()
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_ = ts.MotionIndexToTime(250)
 	}
@@ -719,6 +722,7 @@ func BenchmarkTimeSynchronizer_TimeToMotionIndex(b *testing.B) {
 	ts := synchronizer.NewTimeSynchronizer()
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_ = ts.TimeToMotionIndex(1.0)
 	}
@@ -728,6 +732,7 @@ func BenchmarkTimeSynchronizer_GetSyncedTimeRange(b *testing.B) {
 	ts := synchronizer.NewTimeSynchronizer()
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_, _ = ts.GetSyncedTimeRange(1.0, false, 2.0, false, 100)
 	}
@@ -740,12 +745,13 @@ func BenchmarkFindNearestTimeIndex(b *testing.B) {
 	}
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_ = synchronizer.FindNearestTimeIndex(times, 5.0)
 	}
 }
 
-// Test precision and edge cases
+// Test precision and edge cases.
 func TestTimeSynchronizer_PrecisionAndEdgeCases(t *testing.T) {
 	ts := synchronizer.NewTimeSynchronizer()
 
@@ -775,12 +781,13 @@ func TestTimeSynchronizer_PrecisionAndEdgeCases(t *testing.T) {
 	})
 }
 
-// Test concurrent access
-func TestTimeSynchronizer_ConcurrentAccess(t *testing.T) {
+// Test concurrent access.
+func TestTimeSynchronizer_ConcurrentAccess(_ *testing.T) {
 	ts := synchronizer.NewTimeSynchronizer()
 
 	// Run multiple goroutines simultaneously
 	done := make(chan bool)
+
 	for i := 0; i < 10; i++ {
 		go func() {
 			for j := 0; j < 100; j++ {
@@ -801,7 +808,7 @@ func TestTimeSynchronizer_ConcurrentAccess(t *testing.T) {
 	}
 }
 
-// Test with extreme values
+// Test with extreme values.
 func TestTimeSynchronizer_ExtremeValues(t *testing.T) {
 	ts := synchronizer.NewTimeSynchronizer()
 
@@ -821,7 +828,7 @@ func TestTimeSynchronizer_ExtremeValues(t *testing.T) {
 	assert.InDelta(t, 0.4, emgTime, 0.01)
 }
 
-// Test mathematical relationships
+// Test mathematical relationships.
 func TestTimeSynchronizer_MathematicalRelationships(t *testing.T) {
 	ts := synchronizer.NewTimeSynchronizer()
 

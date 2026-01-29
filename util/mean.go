@@ -1,10 +1,15 @@
 package util
 
-func ArrayMean[T Number](a []T) T {
+// ArrayMean calculates the arithmetic mean of a slice of numeric values.
+//
+//nolint:ireturn // Generic function must return interface type T
+func ArrayMean[T Number](data []T) T {
 	var sum T
-	l := len(a)
-	for i := 0; i < l; i++ {
-		sum += a[i]
+
+	length := len(data)
+	for i := 0; i < length; i++ {
+		sum += data[i]
 	}
-	return sum / T(l)
+
+	return sum / T(length)
 }

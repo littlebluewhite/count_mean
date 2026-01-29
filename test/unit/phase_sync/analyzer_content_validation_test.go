@@ -1,4 +1,4 @@
-package phase_sync
+package phase_sync //nolint:revive // underscore in package name matches directory structure
 
 import (
 	"fmt"
@@ -6,15 +6,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"count_mean/internal/models"
-	"count_mean/internal/phase_sync"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/models"
+	"count_mean/internal/phase_sync"
 )
 
-// createTestMotionFileN creates a test motion file with specified number of rows
-func createTestMotionFileN(t *testing.T, dir string, numRows int) string {
+// createTestMotionFileN creates a test motion file with specified number of rows.
+func createTestMotionFileN(t *testing.T, dir string, numRows int) {
 	content := `Line 1: Metadata
 Line 2: More metadata
 Line 3: Additional info
@@ -25,13 +25,12 @@ Index,X,Y,Z
 	}
 
 	filePath := filepath.Join(dir, "motion.csv")
-	err := os.WriteFile(filePath, []byte(content), 0644)
+	err := os.WriteFile(filePath, []byte(content), 0o644)
 	require.NoError(t, err)
-	return filePath
 }
 
-// createTestForceFileN creates a test force plate .anc file with specified duration
-func createTestForceFileN(t *testing.T, dir string, durationSec float64) string {
+// createTestForceFileN creates a test force plate .anc file with specified duration.
+func createTestForceFileN(t *testing.T, dir string, durationSec float64) {
 	numRows := int(durationSec * 1000) // 1000Hz sampling rate
 	content := fmt.Sprintf(`File_Type:	Analog R/C ASCII	Generation#:	2
 Board_Type:	USB-6225	Polarity:	Bipolar
@@ -45,20 +44,21 @@ Name	F1X	F1Y
 Rate	1000	1000
 Range	10000	10000
 `, durationSec)
+
 	for i := 0; i < numRows; i++ {
 		time := float64(i) / 1000.0
 		content += fmt.Sprintf("%.6f\t100\t200\n", time)
 	}
 
 	filePath := filepath.Join(dir, "force.anc")
-	err := os.WriteFile(filePath, []byte(content), 0644)
+	err := os.WriteFile(filePath, []byte(content), 0o644)
 	require.NoError(t, err)
-	return filePath
 }
 
-// createTestEMGFileN creates a test EMG file with specified time range
-func createTestEMGFileN(t *testing.T, dir string, startTime, endTime float64) string {
+// createTestEMGFileN creates a test EMG file with specified time range.
+func createTestEMGFileN(t *testing.T, dir string, startTime, endTime float64) {
 	content := "Time,Ch1,Ch2\n"
+
 	numRows := int((endTime - startTime) * 1000) // 1000Hz sampling
 	for i := 0; i <= numRows; i++ {
 		time := startTime + float64(i)/1000.0
@@ -66,12 +66,11 @@ func createTestEMGFileN(t *testing.T, dir string, startTime, endTime float64) st
 	}
 
 	filePath := filepath.Join(dir, "emg.csv")
-	err := os.WriteFile(filePath, []byte(content), 0644)
+	err := os.WriteFile(filePath, []byte(content), 0o644)
 	require.NoError(t, err)
-	return filePath
 }
 
-// TestMotionIndexValidation tests that D and O phase points are validated against motion data range
+// TestMotionIndexValidation tests that D and O phase points are validated against motion data range.
 func TestMotionIndexValidation_D_OutOfRange(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -88,7 +87,7 @@ func TestMotionIndexValidation_D_OutOfRange(t *testing.T) {
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,150,0.6,0.7,80,0.8`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
-	err := os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+	err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 	require.NoError(t, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
@@ -105,7 +104,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,150,0.6,0.7,80,0.
 	assert.Contains(t, analyzeErr.Error(), "D 分期點 index 150 超出 Motion 數據範圍")
 }
 
-// TestMotionIndexValidation_O_OutOfRange tests O phase point validation
+// TestMotionIndexValidation_O_OutOfRange tests O phase point validation.
 func TestMotionIndexValidation_O_OutOfRange(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -122,7 +121,7 @@ func TestMotionIndexValidation_O_OutOfRange(t *testing.T) {
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,200,0.8`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
-	err := os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+	err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 	require.NoError(t, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
@@ -139,7 +138,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,200,0.
 	assert.Contains(t, analyzeErr.Error(), "O 分期點 index 200 超出 Motion 數據範圍")
 }
 
-// TestEMGMotionOffsetValidation tests EMGMotionOffset validation
+// TestEMGMotionOffsetValidation tests EMGMotionOffset validation.
 func TestEMGMotionOffsetValidation_OutOfRange(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -156,7 +155,7 @@ func TestEMGMotionOffsetValidation_OutOfRange(t *testing.T) {
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.anc,emg.csv,500,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,0.8`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
-	err := os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+	err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 	require.NoError(t, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
@@ -173,7 +172,7 @@ TestSubject,motion.csv,force.anc,emg.csv,500,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,0
 	assert.Contains(t, analyzeErr.Error(), "EMGMotionOffset 500 超出 Motion 數據範圍")
 }
 
-// TestForceTimeValidation tests force plate time point validation
+// TestForceTimeValidation tests force plate time point validation.
 func TestForceTimeValidation_T_OutOfRange(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -190,7 +189,7 @@ func TestForceTimeValidation_T_OutOfRange(t *testing.T) {
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,2.0,80,0.8`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
-	err := os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+	err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 	require.NoError(t, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
@@ -207,7 +206,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,2.0,80,0.8
 	assert.Contains(t, analyzeErr.Error(), "T 分期點時間 2.000 超出 Force Plate 數據範圍")
 }
 
-// TestForceTimeValidation_L_OutOfRange tests L phase point validation
+// TestForceTimeValidation_L_OutOfRange tests L phase point validation.
 func TestForceTimeValidation_L_OutOfRange(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -224,7 +223,7 @@ func TestForceTimeValidation_L_OutOfRange(t *testing.T) {
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,5.0`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
-	err := os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+	err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 	require.NoError(t, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
@@ -241,7 +240,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,5.0
 	assert.Contains(t, analyzeErr.Error(), "L 分期點時間 5.000 超出 Force Plate 數據範圍")
 }
 
-// TestValidContentValidation tests that valid data passes all validations
+// TestValidContentValidation tests that valid data passes all validations.
 func TestValidContentValidation_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -263,7 +262,7 @@ func TestValidContentValidation_Success(t *testing.T) {
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,500,0.6,0.7,600,0.8`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
-	err := os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+	err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 	require.NoError(t, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
@@ -279,12 +278,13 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,500,0.6,0.7,600,0
 	stats, analyzeErr := analyzer.AnalyzePhaseSync(params)
 	assert.NoError(t, analyzeErr)
 	assert.NotNil(t, stats)
+
 	if stats != nil {
 		assert.Equal(t, "TestSubject", stats.Subject)
 	}
 }
 
-// TestEMGTimeRangeValidation_StartTimeTooSmall tests EMG time range validation
+// TestEMGTimeRangeValidation_StartTimeTooSmall tests EMG time range validation.
 func TestEMGTimeRangeValidation_StartTimeTooSmall(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -303,7 +303,7 @@ func TestEMGTimeRangeValidation_StartTimeTooSmall(t *testing.T) {
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,500,0.6,0.7,600,0.8`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
-	err := os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+	err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 	require.NoError(t, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
@@ -320,7 +320,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,500,0.6,0.7,600,0
 	assert.Contains(t, analyzeErr.Error(), "EMG 開始時間")
 }
 
-// TestEMGTimeRangeValidation_EndTimeTooLarge tests EMG time range validation when end time exceeds EMG data
+// TestEMGTimeRangeValidation_EndTimeTooLarge tests EMG time range validation when end time exceeds EMG data.
 func TestEMGTimeRangeValidation_EndTimeTooLarge(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -340,7 +340,7 @@ func TestEMGTimeRangeValidation_EndTimeTooLarge(t *testing.T) {
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,5000,0.6,0.7,6000,0.8`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
-	err := os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+	err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 	require.NoError(t, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
@@ -357,13 +357,13 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,5000,0.6,0.7,6000
 	assert.Contains(t, analyzeErr.Error(), "EMG 結束時間")
 }
 
-// TestMotionValidation_EmptyMotionFile tests validation when motion file is specified but empty/invalid
+// TestMotionValidation_EmptyMotionFile tests validation when motion file is specified but empty/invalid.
 func TestMotionValidation_EmptyMotionFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create empty motion file
 	motionPath := filepath.Join(tmpDir, "motion.csv")
-	err := os.WriteFile(motionPath, []byte(""), 0644)
+	err := os.WriteFile(motionPath, []byte(""), 0o644)
 	require.NoError(t, err)
 
 	// Create force file
@@ -375,7 +375,7 @@ func TestMotionValidation_EmptyMotionFile(t *testing.T) {
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,0.8`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
-	err = os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+	err = os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 	require.NoError(t, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
@@ -392,7 +392,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,0.8
 	assert.Contains(t, analyzeErr.Error(), "Motion")
 }
 
-// TestForceValidation_EmptyForceFile tests validation when force file is specified but empty/invalid
+// TestForceValidation_EmptyForceFile tests validation when force file is specified but empty/invalid.
 func TestForceValidation_EmptyForceFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -401,7 +401,7 @@ func TestForceValidation_EmptyForceFile(t *testing.T) {
 
 	// Create empty force file
 	forcePath := filepath.Join(tmpDir, "force.anc")
-	err := os.WriteFile(forcePath, []byte(""), 0644)
+	err := os.WriteFile(forcePath, []byte(""), 0o644)
 	require.NoError(t, err)
 
 	// Create EMG file
@@ -410,7 +410,7 @@ func TestForceValidation_EmptyForceFile(t *testing.T) {
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,0.8`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
-	err = os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+	err = os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 	require.NoError(t, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()

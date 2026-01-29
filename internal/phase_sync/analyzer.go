@@ -1,6 +1,12 @@
+// Package phase_sync provides phase synchronization analysis for EMG, motion,
+// and force plate data. It coordinates data validation, time synchronization,
+// and statistical calculations across multiple data sources.
+//
+//nolint:revive // package name with underscore maintained for backward compatibility
 package phase_sync
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +18,22 @@ import (
 	"count_mean/internal/synchronizer"
 )
 
-// PhaseSyncAnalyzer 分期同步分析器
+// Default precision for EMG statistics.
+const defaultEMGStatsPrecision = 6
+
+// Validation errors.
+var (
+	// ErrInvalidSubjectIndex indicates an invalid subject index.
+	ErrInvalidSubjectIndex = errors.New("invalid subject index")
+	// ErrFileNotFound indicates a file was not found.
+	ErrFileNotFound = errors.New("file not found")
+	// ErrPhasePointOutOfRange indicates a phase point is out of data range.
+	ErrPhasePointOutOfRange = errors.New("phase point out of data range")
+	// ErrEMGTimeOutOfRange indicates EMG time is out of data range.
+	ErrEMGTimeOutOfRange = errors.New("EMG time out of data range")
+)
+
+// PhaseSyncAnalyzer 分期同步分析器.
 type PhaseSyncAnalyzer struct {
 	manifestParser  *parsers.PhaseManifestParser
 	emgParser       *parsers.EMGParser
@@ -23,7 +44,7 @@ type PhaseSyncAnalyzer struct {
 	pathValidator   *security.PathValidator
 }
 
-// NewPhaseSyncAnalyzer 創建新的分期同步分析器
+// NewPhaseSyncAnalyzer 創建新的分期同步分析器.
 func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 	return &PhaseSyncAnalyzer{
 		manifestParser:  parsers.NewPhaseManifestParser(),
@@ -31,184 +52,261 @@ func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 		motionParser:    parsers.NewMotionParser(),
 		ancParser:       parsers.NewANCParser(),
 		phaseCalculator: synchronizer.NewPhaseCalculator(),
-		statsCalculator: calculator.NewEMGStatisticsCalculator(6),
+		statsCalculator: calculator.NewEMGStatisticsCalculator(defaultEMGStatsPrecision),
 		pathValidator:   security.NewPathValidator([]string{}),
 	}
 }
 
-// AnalyzePhaseSync 執行分期同步分析
-func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParams) (*models.EMGStatistics, error) {
-	// 1. 設置允許的基礎路徑為數據資料夾
-	analyzer.pathValidator.SetAllowedBasePaths([]string{params.DataFolder})
+// validationContext 驗證上下文，用於在驗證步驟之間傳遞數據.
+type validationContext struct {
+	params      *models.AnalysisParams
+	manifests   []models.PhaseManifest
+	manifest    models.PhaseManifest
+	baseFolder  string
+	emgFilePath string
+}
 
-	// 2. 解析分期總檔案
-	manifests, err := analyzer.manifestParser.ParseFile(params.ManifestFile)
+// validationStep 定義驗證步驟函數類型.
+type validationStep func(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error
+
+// validateManifestFile 驗證分期總檔案.
+func validateManifestFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error {
+	manifests, err := analyzer.manifestParser.ParseFile(ctx.params.ManifestFile)
 	if err != nil {
-		return nil, fmt.Errorf("解析分期總檔案失敗: %w", err)
+		return fmt.Errorf("解析分期總檔案失敗: %w", err)
 	}
 
-	// 3. 驗證主題索引
-	if params.SubjectIndex < 0 || params.SubjectIndex >= len(manifests) {
-		return nil, fmt.Errorf("無效的主題索引: %d (共有 %d 個主題)",
-			params.SubjectIndex, len(manifests))
+	ctx.manifests = manifests
+
+	return nil
+}
+
+// validateSubjectIndex 驗證主題索引.
+func validateSubjectIndex(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
+	if ctx.params.SubjectIndex < 0 || ctx.params.SubjectIndex >= len(ctx.manifests) {
+		return fmt.Errorf("無效的主題索引: %d (共有 %d 個主題): %w",
+			ctx.params.SubjectIndex, len(ctx.manifests), ErrInvalidSubjectIndex)
 	}
 
-	manifest := manifests[params.SubjectIndex]
+	ctx.manifest = ctx.manifests[ctx.params.SubjectIndex]
 
-	// 4. 驗證分期總檔案數據
-	if err := parsers.ValidatePhaseManifest(manifest); err != nil {
-		return nil, fmt.Errorf("分期總檔案數據驗證失敗: %w", err)
+	return nil
+}
+
+// validateManifestData 驗證分期總檔案數據.
+func validateManifestData(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
+	if err := parsers.ValidatePhaseManifest(&ctx.manifest); err != nil {
+		return fmt.Errorf("分期總檔案數據驗證失敗: %w", err)
 	}
 
-	// 5. 驗證分期點順序
-	if err := analyzer.phaseCalculator.ValidatePhaseOrder(params.StartPhase, params.EndPhase); err != nil {
-		return nil, err
+	return nil
+}
+
+// validatePhaseOrder 驗證分期點順序.
+func validatePhaseOrder(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error {
+	if err := analyzer.phaseCalculator.ValidatePhaseOrder(ctx.params.StartPhase, ctx.params.EndPhase); err != nil {
+		return fmt.Errorf("分期點順序驗證失敗: %w", err)
 	}
 
-	// 6. 構建並驗證 EMG 檔案路徑（限制於資料夾範圍內）
-	baseFolder := params.DataFolder
+	return nil
+}
+
+// validateEMGFilePath 驗證 EMG 檔案路徑.
+func validateEMGFilePath(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error {
+	baseFolder := ctx.params.DataFolder
 	if resolvedBase, err := filepath.EvalSymlinks(baseFolder); err == nil {
 		baseFolder = resolvedBase
 	}
 
+	ctx.baseFolder = baseFolder
 	analyzer.pathValidator.SetAllowedBasePaths([]string{baseFolder})
 
-	emgFilePath, err := analyzer.pathValidator.GetSafePath(baseFolder, manifest.EMGFile)
+	emgFilePath, err := analyzer.pathValidator.GetSafePath(baseFolder, ctx.manifest.EMGFile)
 	if err != nil {
-		return nil, fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
+		return fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
 	}
 
-	// 解析符號連結並再次驗證，避免透過 symlink 繞過目錄限制
+	// 解析符號連結並再次驗證
 	if resolvedPath, err := filepath.EvalSymlinks(emgFilePath); err == nil {
 		if err := analyzer.pathValidator.ValidateFilePath(resolvedPath); err != nil {
-			return nil, fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
+			return fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
 		}
+
 		emgFilePath = resolvedPath
 	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("EMG 檔案路徑解析失敗: %w", err)
+		return fmt.Errorf("EMG 檔案路徑解析失敗: %w", err)
 	}
 
-	// 6.1 構建並驗證 Motion 檔案路徑及內容
-	if manifest.MotionFile != "" {
-		motionFilePath, err := analyzer.pathValidator.GetSafePath(baseFolder, manifest.MotionFile)
-		if err != nil {
-			return nil, fmt.Errorf("Motion 檔案路徑驗證失敗: %w", err)
-		}
-		if _, err := os.Stat(motionFilePath); os.IsNotExist(err) {
-			return nil, fmt.Errorf("Motion 檔案不存在: %s", motionFilePath)
-		}
+	ctx.emgFilePath = emgFilePath
 
-		// 解析 Motion 檔案內容進行驗證
-		motionData, err := analyzer.motionParser.ParseFile(motionFilePath)
-		if err != nil {
-			return nil, fmt.Errorf("解析 Motion 檔案失敗: %w", err)
-		}
+	return nil
+}
 
-		// 獲取最大 Motion index
-		maxMotionIndex := 0
-		if len(motionData.Indices) > 0 {
-			maxMotionIndex = motionData.Indices[len(motionData.Indices)-1]
-		}
+// validateMotionFile 驗證 Motion 檔案.
+//
+//nolint:dupl // Similar to validateForceFile but handles different data type
+func validateMotionFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error {
+	if ctx.manifest.MotionFile == "" {
+		return nil
+	}
 
-		// 驗證 D 分期點 (motion index 類型)
-		if manifest.PhasePoints.D > 0 && manifest.PhasePoints.D > maxMotionIndex {
-			return nil, fmt.Errorf("D 分期點 index %d 超出 Motion 數據範圍 (最大: %d)",
-				manifest.PhasePoints.D, maxMotionIndex)
-		}
+	motionFilePath, err := analyzer.pathValidator.GetSafePath(ctx.baseFolder, ctx.manifest.MotionFile)
+	if err != nil {
+		return fmt.Errorf("Motion 檔案路徑驗證失敗: %w", err) //nolint:stylecheck // Chinese error message
+	}
 
-		// 驗證 O 分期點 (motion index 類型)
-		if manifest.PhasePoints.O > 0 && manifest.PhasePoints.O > maxMotionIndex {
-			return nil, fmt.Errorf("O 分期點 index %d 超出 Motion 數據範圍 (最大: %d)",
-				manifest.PhasePoints.O, maxMotionIndex)
-		}
+	if _, err := os.Stat(motionFilePath); os.IsNotExist(err) {
+		//nolint:stylecheck // Chinese error message for user display
+		return fmt.Errorf("Motion 檔案不存在 (%s): %w", motionFilePath, ErrFileNotFound)
+	}
 
-		// 驗證 EMGMotionOffset 是否在 Motion 數據範圍內
-		if manifest.EMGMotionOffset > 0 && manifest.EMGMotionOffset > maxMotionIndex {
-			return nil, fmt.Errorf("EMGMotionOffset %d 超出 Motion 數據範圍 (最大: %d)",
-				manifest.EMGMotionOffset, maxMotionIndex)
+	motionData, err := analyzer.motionParser.ParseFile(motionFilePath)
+	if err != nil {
+		return fmt.Errorf("解析 Motion 檔案失敗: %w", err)
+	}
+
+	maxMotionIndex := 0
+	if len(motionData.Indices) > 0 {
+		maxMotionIndex = motionData.Indices[len(motionData.Indices)-1]
+	}
+
+	return validateMotionPhasePoints(&ctx.manifest, maxMotionIndex)
+}
+
+// validateMotionPhasePoints 驗證 Motion 相關分期點.
+func validateMotionPhasePoints(manifest *models.PhaseManifest, maxMotionIndex int) error {
+	if manifest.PhasePoints.D > 0 && manifest.PhasePoints.D > maxMotionIndex {
+		//nolint:stylecheck // Chinese error message for user display
+		return fmt.Errorf("D 分期點 index %d 超出 Motion 數據範圍 (最大: %d): %w",
+			manifest.PhasePoints.D, maxMotionIndex, ErrPhasePointOutOfRange)
+	}
+
+	if manifest.PhasePoints.O > 0 && manifest.PhasePoints.O > maxMotionIndex {
+		//nolint:stylecheck // Chinese error message for user display
+		return fmt.Errorf("O 分期點 index %d 超出 Motion 數據範圍 (最大: %d): %w",
+			manifest.PhasePoints.O, maxMotionIndex, ErrPhasePointOutOfRange)
+	}
+
+	if manifest.EMGMotionOffset > 0 && manifest.EMGMotionOffset > maxMotionIndex {
+		return fmt.Errorf("EMGMotionOffset %d 超出 Motion 數據範圍 (最大: %d): %w",
+			manifest.EMGMotionOffset, maxMotionIndex, ErrPhasePointOutOfRange)
+	}
+
+	return nil
+}
+
+// validateForceFile 驗證 Force Plate 檔案.
+//
+//nolint:dupl // Similar to validateMotionFile but handles different data type
+func validateForceFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error {
+	if ctx.manifest.ForceFile == "" {
+		return nil
+	}
+
+	forceFilePath, err := analyzer.pathValidator.GetSafePath(ctx.baseFolder, ctx.manifest.ForceFile)
+	if err != nil {
+		return fmt.Errorf("Force Plate 檔案路徑驗證失敗: %w", err) //nolint:stylecheck // Chinese error message
+	}
+
+	if _, err := os.Stat(forceFilePath); os.IsNotExist(err) {
+		//nolint:stylecheck // Chinese error message for user display
+		return fmt.Errorf("Force Plate 檔案不存在 (%s): %w", forceFilePath, ErrFileNotFound)
+	}
+
+	forceData, err := analyzer.ancParser.ParseFile(forceFilePath)
+	if err != nil {
+		return fmt.Errorf("解析 Force Plate 檔案失敗: %w", err)
+	}
+
+	maxForceTime := 0.0
+	if len(forceData.Time) > 0 {
+		maxForceTime = forceData.Time[len(forceData.Time)-1]
+	}
+
+	return validateForcePhasePoints(&ctx.manifest, maxForceTime)
+}
+
+// validateForcePhasePoints 驗證 Force Plate 相關分期點.
+func validateForcePhasePoints(manifest *models.PhaseManifest, maxForceTime float64) error {
+	forceTimePoints := []struct {
+		name  string
+		value float64
+	}{
+		{"P0", manifest.PhasePoints.P0},
+		{"P1", manifest.PhasePoints.P1},
+		{"P2", manifest.PhasePoints.P2},
+		{"S", manifest.PhasePoints.S},
+		{"C", manifest.PhasePoints.C},
+		{"T0", manifest.PhasePoints.T0},
+		{"T", manifest.PhasePoints.T},
+		{"L", manifest.PhasePoints.L},
+	}
+
+	for _, point := range forceTimePoints {
+		if point.value > 0 && point.value > maxForceTime {
+			return fmt.Errorf("%s 分期點時間 %.3f 超出 Force Plate 數據範圍 (最大: %.3f): %w",
+				point.name, point.value, maxForceTime, ErrPhasePointOutOfRange)
 		}
 	}
 
-	// 6.2 構建並驗證 Force Plate 檔案路徑及內容
-	if manifest.ForceFile != "" {
-		forceFilePath, err := analyzer.pathValidator.GetSafePath(baseFolder, manifest.ForceFile)
-		if err != nil {
-			return nil, fmt.Errorf("Force Plate 檔案路徑驗證失敗: %w", err)
-		}
-		if _, err := os.Stat(forceFilePath); os.IsNotExist(err) {
-			return nil, fmt.Errorf("Force Plate 檔案不存在: %s", forceFilePath)
-		}
+	return nil
+}
 
-		// 解析 Force Plate 檔案內容進行驗證
-		forceData, err := analyzer.ancParser.ParseFile(forceFilePath)
-		if err != nil {
-			return nil, fmt.Errorf("解析 Force Plate 檔案失敗: %w", err)
-		}
+// runValidationPipeline 執行驗證管線.
+func (analyzer *PhaseSyncAnalyzer) runValidationPipeline(ctx *validationContext) error {
+	steps := []validationStep{
+		validateManifestFile,
+		validateSubjectIndex,
+		validateManifestData,
+		validatePhaseOrder,
+		validateEMGFilePath,
+		validateMotionFile,
+		validateForceFile,
+	}
 
-		// 獲取最大時間
-		maxForceTime := 0.0
-		if len(forceData.Time) > 0 {
-			maxForceTime = forceData.Time[len(forceData.Time)-1]
-		}
-
-		// 驗證各個 Force Plate 時間點
-		forceTimePoints := []struct {
-			name  string
-			value float64
-		}{
-			{"P0", manifest.PhasePoints.P0},
-			{"P1", manifest.PhasePoints.P1},
-			{"P2", manifest.PhasePoints.P2},
-			{"S", manifest.PhasePoints.S},
-			{"C", manifest.PhasePoints.C},
-			{"T0", manifest.PhasePoints.T0},
-			{"T", manifest.PhasePoints.T},
-			{"L", manifest.PhasePoints.L},
-		}
-
-		for _, point := range forceTimePoints {
-			if point.value > 0 && point.value > maxForceTime {
-				return nil, fmt.Errorf("%s 分期點時間 %.3f 超出 Force Plate 數據範圍 (最大: %.3f)",
-					point.name, point.value, maxForceTime)
-			}
+	for _, step := range steps {
+		if err := step(analyzer, ctx); err != nil {
+			return err
 		}
 	}
 
-	// 7. 解析 EMG 檔案
-	emgData, err := analyzer.emgParser.ParseFile(emgFilePath)
+	return nil
+}
+
+// AnalyzePhaseSync 執行分期同步分析.
+func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParams) (*models.EMGStatistics, error) {
+	// 1. 設置允許的基礎路徑
+	analyzer.pathValidator.SetAllowedBasePaths([]string{params.DataFolder})
+
+	// 2. 執行驗證管線
+	ctx := &validationContext{params: params}
+	if err := analyzer.runValidationPipeline(ctx); err != nil {
+		return nil, err
+	}
+
+	// 3. 解析 EMG 檔案
+	emgData, err := analyzer.emgParser.ParseFile(ctx.emgFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
 	}
 
-	// 8. 計算分期時間範圍
+	// 4. 計算分期時間範圍
 	phaseTimeRange, err := analyzer.phaseCalculator.GetPhaseTimeRange(
-		manifest.PhasePoints,
+		ctx.manifest.PhasePoints,
 		params.StartPhase,
 		params.EndPhase,
-		manifest.EMGMotionOffset,
+		ctx.manifest.EMGMotionOffset,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("計算分期時間範圍失敗: %w", err)
 	}
 
-	// 8.1 驗證計算出的 EMG 時間範圍是否在 EMG 數據範圍內
-	emgMinTime := 0.0
-	emgMaxTime := 0.0
-	if len(emgData.Time) > 0 {
-		emgMinTime = emgData.Time[0]
-		emgMaxTime = emgData.Time[len(emgData.Time)-1]
+	// 5. 驗證 EMG 時間範圍
+	if err := validateEMGTimeRange(emgData, phaseTimeRange, ctx.manifest.EMGMotionOffset); err != nil {
+		return nil, err
 	}
 
-	if phaseTimeRange.StartTime < emgMinTime {
-		return nil, fmt.Errorf("計算出的 EMG 開始時間 %.3f 小於 EMG 數據最小時間 %.3f (EMGMotionOffset: %d)",
-			phaseTimeRange.StartTime, emgMinTime, manifest.EMGMotionOffset)
-	}
-	if phaseTimeRange.EndTime > emgMaxTime {
-		return nil, fmt.Errorf("計算出的 EMG 結束時間 %.3f 超出 EMG 數據範圍 (最大: %.3f, EMGMotionOffset: %d)",
-			phaseTimeRange.EndTime, emgMaxTime, manifest.EMGMotionOffset)
-	}
-
-	// 9. 提取指定時間範圍的 EMG 數據
+	// 6. 提取指定時間範圍的 EMG 數據
 	rangeResult, err := analyzer.emgParser.GetDataInTimeRange(
 		emgData,
 		phaseTimeRange.StartTime,
@@ -218,14 +316,14 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 		return nil, fmt.Errorf("提取 EMG 時間範圍數據失敗: %w", err)
 	}
 
-	// 10. 計算統計信息（使用實際選取的時間範圍，確保輸出與計算一致）
+	// 7. 計算統計信息
 	stats, err := analyzer.statsCalculator.CalculateStatistics(
 		rangeResult.Data,
 		params.StartPhase,
 		rangeResult.ActualStartTime,
 		params.EndPhase,
 		rangeResult.ActualEndTime,
-		manifest.Subject,
+		ctx.manifest.Subject,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("計算統計信息失敗: %w", err)
@@ -234,12 +332,40 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 	return stats, nil
 }
 
-// ExportResults 導出分析結果
+// validateEMGTimeRange 驗證 EMG 時間範圍.
+func validateEMGTimeRange(
+	emgData *models.PhaseSyncEMGData,
+	phaseTimeRange *models.PhaseTimeRange,
+	emgMotionOffset int,
+) error {
+	emgMinTime := 0.0
+	emgMaxTime := 0.0
+
+	if len(emgData.Time) > 0 {
+		emgMinTime = emgData.Time[0]
+		emgMaxTime = emgData.Time[len(emgData.Time)-1]
+	}
+
+	if phaseTimeRange.StartTime < emgMinTime {
+		return fmt.Errorf(
+			"計算出的 EMG 開始時間 %.3f 小於 EMG 數據最小時間 %.3f (offset: %d): %w",
+			phaseTimeRange.StartTime, emgMinTime, emgMotionOffset, ErrEMGTimeOutOfRange)
+	}
+
+	if phaseTimeRange.EndTime > emgMaxTime {
+		return fmt.Errorf(
+			"計算出的 EMG 結束時間 %.3f 超出 EMG 數據範圍 (最大: %.3f, offset: %d): %w",
+			phaseTimeRange.EndTime, emgMaxTime, emgMotionOffset, ErrEMGTimeOutOfRange)
+	}
+
+	return nil
+}
+
+// ExportResults 導出分析結果.
 func (analyzer *PhaseSyncAnalyzer) ExportResults(
 	stats *models.EMGStatistics,
 	outputDir string,
 ) (string, error) {
-
 	// 生成輸出檔案名
 	fileName := calculator.GenerateOutputFileName(
 		stats.Subject,
@@ -257,7 +383,7 @@ func (analyzer *PhaseSyncAnalyzer) ExportResults(
 	return outputPath, nil
 }
 
-// LoadManifestSubjects 載入分期總檔案中的所有主題
+// LoadManifestSubjects 載入分期總檔案中的所有主題.
 func (analyzer *PhaseSyncAnalyzer) LoadManifestSubjects(manifestPath string) ([]string, error) {
 	manifests, err := analyzer.manifestParser.ParseFile(manifestPath)
 	if err != nil {
@@ -265,14 +391,14 @@ func (analyzer *PhaseSyncAnalyzer) LoadManifestSubjects(manifestPath string) ([]
 	}
 
 	subjects := make([]string, len(manifests))
-	for i, manifest := range manifests {
-		subjects[i] = manifest.Subject
+	for i := range manifests {
+		subjects[i] = manifests[i].Subject
 	}
 
 	return subjects, nil
 }
 
-// FindDataFiles 在指定資料夾中查找數據檔案
+// FindDataFiles 在指定資料夾中查找數據檔案.
 func FindDataFiles(folder string, patterns []string) ([]string, error) {
 	var files []string
 
@@ -281,15 +407,19 @@ func FindDataFiles(folder string, patterns []string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("搜索檔案失敗 (pattern: %s): %w", pattern, err)
 		}
+
 		files = append(files, matches...)
 	}
 
 	// 移除重複項目
 	uniqueFiles := make(map[string]bool)
+
 	var result []string
+
 	for _, file := range files {
 		if !uniqueFiles[file] {
 			uniqueFiles[file] = true
+
 			result = append(result, file)
 		}
 	}
@@ -297,7 +427,7 @@ func FindDataFiles(folder string, patterns []string) ([]string, error) {
 	return result, nil
 }
 
-// AnalysisResult 分析結果
+// AnalysisResult 分析結果.
 type AnalysisResult struct {
 	Statistics  *models.EMGStatistics
 	OutputPath  string
@@ -305,35 +435,35 @@ type AnalysisResult struct {
 	ElapsedTime float64
 }
 
-// GenerateAnalysisReport 生成分析報告
+// GenerateAnalysisReport 生成分析報告.
 func GenerateAnalysisReport(stats *models.EMGStatistics) string {
 	return calculator.FormatStatisticsReport(stats)
 }
 
-// ValidateDataFiles 驗證數據檔案是否存在
-func ValidateDataFiles(dataFolder string, manifest models.PhaseManifest) error {
+// ValidateDataFiles 驗證數據檔案是否存在.
+func ValidateDataFiles(dataFolder string, manifest *models.PhaseManifest) error {
 	// 檢查 EMG 檔案
 	emgPath := filepath.Join(dataFolder, manifest.EMGFile)
 	if !fileExists(emgPath) {
-		return fmt.Errorf("找不到 EMG 檔案: %s", emgPath)
+		return fmt.Errorf("找不到 EMG 檔案 (%s): %w", emgPath, ErrFileNotFound)
 	}
 
 	// 檢查 Motion 檔案
 	motionPath := filepath.Join(dataFolder, manifest.MotionFile)
 	if !fileExists(motionPath) {
-		return fmt.Errorf("找不到 Motion 檔案: %s", motionPath)
+		return fmt.Errorf("找不到 Motion 檔案 (%s): %w", motionPath, ErrFileNotFound)
 	}
 
 	// 檢查力板檔案
 	forcePath := filepath.Join(dataFolder, manifest.ForceFile)
 	if !fileExists(forcePath) {
-		return fmt.Errorf("找不到力板檔案: %s", forcePath)
+		return fmt.Errorf("找不到力板檔案 (%s): %w", forcePath, ErrFileNotFound)
 	}
 
 	return nil
 }
 
-// fileExists 檢查檔案是否存在
+// fileExists 檢查檔案是否存在.
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

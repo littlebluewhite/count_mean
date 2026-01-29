@@ -1,4 +1,4 @@
-package phase_sync
+package phase_sync //nolint:revive // underscore in package name matches directory structure
 
 import (
 	"fmt"
@@ -6,19 +6,20 @@ import (
 	"path/filepath"
 	"testing"
 
-	"count_mean/internal/models"
-	"count_mean/internal/phase_sync"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/models"
+	"count_mean/internal/phase_sync"
 )
 
-// Helper function to create a temporary test file
-func createTempFile(t *testing.T, content string, suffix string) string {
+// Helper function to create a temporary test CSV file.
+func createTempFile(t *testing.T, content string) string {
 	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "test_file"+suffix)
-	err := os.WriteFile(tmpFile, []byte(content), 0644)
+	tmpFile := filepath.Join(tmpDir, "test_file.csv")
+	err := os.WriteFile(tmpFile, []byte(content), 0o644)
 	require.NoError(t, err)
+
 	return tmpFile
 }
 
@@ -60,7 +61,7 @@ SingleSubject,motion.csv,force.csv,emg.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,3
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create temporary manifest file
-			manifestFile := createTempFile(t, tt.manifestContent, ".csv")
+			manifestFile := createTempFile(t, tt.manifestContent)
 
 			analyzer := phase_sync.NewPhaseSyncAnalyzer()
 			subjects, err := analyzer.LoadManifestSubjects(manifestFile)
@@ -146,7 +147,9 @@ func TestPhaseSyncAnalyzer_AnalyzePhaseSync_InvalidParams(t *testing.T) {
 		{
 			name: "invalid subject index - negative",
 			params: func() *models.AnalysisParams {
-				manifestFile := createTempFile(t, "Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\nTest,m.csv,f.csv,e.csv,100,1,2,3,4,5,250,6,7,350,8", ".csv")
+				manifestContent := "Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset," +
+					"P0,P1,P2,S,C,D,T0,T,O,L\nTest,m.csv,f.csv,e.csv,100,1,2,3,4,5,250,6,7,350,8"
+				manifestFile := createTempFile(t, manifestContent)
 				return &models.AnalysisParams{
 					ManifestFile: manifestFile,
 					DataFolder:   "/tmp",
@@ -160,7 +163,9 @@ func TestPhaseSyncAnalyzer_AnalyzePhaseSync_InvalidParams(t *testing.T) {
 		{
 			name: "invalid subject index - too large",
 			params: func() *models.AnalysisParams {
-				manifestFile := createTempFile(t, "Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\nTest,m.csv,f.csv,e.csv,100,1,2,3,4,5,250,6,7,350,8", ".csv")
+				manifestContent := "Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset," +
+					"P0,P1,P2,S,C,D,T0,T,O,L\nTest,m.csv,f.csv,e.csv,100,1,2,3,4,5,250,6,7,350,8"
+				manifestFile := createTempFile(t, manifestContent)
 				return &models.AnalysisParams{
 					ManifestFile: manifestFile,
 					DataFolder:   "/tmp",
@@ -174,7 +179,9 @@ func TestPhaseSyncAnalyzer_AnalyzePhaseSync_InvalidParams(t *testing.T) {
 		{
 			name: "invalid phase order",
 			params: func() *models.AnalysisParams {
-				manifestFile := createTempFile(t, "Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\nTest,m.csv,f.csv,e.csv,100,1,2,3,4,5,250,6,7,350,8", ".csv")
+				manifestContent := "Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset," +
+					"P0,P1,P2,S,C,D,T0,T,O,L\nTest,m.csv,f.csv,e.csv,100,1,2,3,4,5,250,6,7,350,8"
+				manifestFile := createTempFile(t, manifestContent)
 				return &models.AnalysisParams{
 					ManifestFile: manifestFile,
 					DataFolder:   "/tmp",
@@ -183,7 +190,7 @@ func TestPhaseSyncAnalyzer_AnalyzePhaseSync_InvalidParams(t *testing.T) {
 					SubjectIndex: 0,
 				}
 			}(),
-			expectedError: "開始分期點 P2 必須在結束分期點 P0 之前",
+			expectedError: "start phase must be before end phase",
 		},
 	}
 
@@ -212,7 +219,7 @@ func TestFindDataFiles(t *testing.T) {
 
 	for _, filename := range testFiles {
 		filepath := filepath.Join(tmpDir, filename)
-		err := os.WriteFile(filepath, []byte("test content"), 0644)
+		err := os.WriteFile(filepath, []byte("test content"), 0o644)
 		require.NoError(t, err)
 	}
 
@@ -300,11 +307,11 @@ func TestValidateDataFiles(t *testing.T) {
 	motionFile := filepath.Join(tmpDir, "motion.csv")
 	forceFile := filepath.Join(tmpDir, "force.csv")
 
-	err := os.WriteFile(emgFile, []byte("test"), 0644)
+	err := os.WriteFile(emgFile, []byte("test"), 0o644)
 	require.NoError(t, err)
-	err = os.WriteFile(motionFile, []byte("test"), 0644)
+	err = os.WriteFile(motionFile, []byte("test"), 0o644)
 	require.NoError(t, err)
-	err = os.WriteFile(forceFile, []byte("test"), 0644)
+	err = os.WriteFile(forceFile, []byte("test"), 0o644)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -356,7 +363,7 @@ func TestValidateDataFiles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := phase_sync.ValidateDataFiles(tmpDir, tt.manifest)
+			err := phase_sync.ValidateDataFiles(tmpDir, &tt.manifest)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -371,14 +378,13 @@ func TestValidateDataFiles(t *testing.T) {
 func TestPhaseSyncAnalyzer_AnalyzePhaseSync_Integration(t *testing.T) {
 	// This test would require setting up complete test data files
 	// For now, we'll test the basic error handling paths
-
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
 
 	// Create a basic manifest
 	manifestContent := `Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,motion.csv,force.csv,emg.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 
-	manifestFile := createTempFile(t, manifestContent, ".csv")
+	manifestFile := createTempFile(t, manifestContent)
 
 	params := &models.AnalysisParams{
 		ManifestFile: manifestFile,
@@ -408,7 +414,7 @@ func TestPhaseSyncAnalyzer_AnalyzePhaseSync_AbsolutePath(t *testing.T) {
 	manifestContent := fmt.Sprintf(`Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 TestSubject,%s,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, motionFile, emgFile)
 
-	manifestFile := createTempFile(t, manifestContent, ".csv")
+	manifestFile := createTempFile(t, manifestContent)
 
 	params := &models.AnalysisParams{
 		ManifestFile: manifestFile,
@@ -426,23 +432,26 @@ TestSubject,%s,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, motion
 	assert.Contains(t, err.Error(), "Motion 檔案不存在")
 }
 
-// Benchmark test
+// Benchmark test.
 func BenchmarkPhaseSyncAnalyzer_LoadManifestSubjects(b *testing.B) {
 	// Create a large manifest file
 	content := `Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
 `
 	for i := 0; i < 1000; i++ {
-		content += fmt.Sprintf("Subject%d,motion%d.csv,force%d.csv,emg%d.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0\n", i, i, i, i)
+		content += fmt.Sprintf(
+			"Subject%d,motion%d.csv,force%d.csv,emg%d.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0\n",
+			i, i, i, i)
 	}
 
 	tmpDir := b.TempDir()
 	manifestFile := filepath.Join(tmpDir, "manifest.csv")
-	err := os.WriteFile(manifestFile, []byte(content), 0644)
+	err := os.WriteFile(manifestFile, []byte(content), 0o644)
 	require.NoError(b, err)
 
 	analyzer := phase_sync.NewPhaseSyncAnalyzer()
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_, err := analyzer.LoadManifestSubjects(manifestFile)
 		if err != nil {

@@ -2,16 +2,17 @@ package chart_test
 
 import (
 	"bytes"
-	"count_mean/internal/chart"
-	"count_mean/internal/models"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"count_mean/internal/chart"
+	"count_mean/internal/models"
 )
 
-// TestEChartsGenerator 測試 ECharts 圖表生成器
+// TestEChartsGenerator 測試 ECharts 圖表生成器.
 func TestEChartsGenerator(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -48,7 +49,8 @@ func testNewEChartsGenerator(t *testing.T) {
 
 	// 測試基本功能是否正常
 	dataset := createTestDataset()
-	err := generator.ValidateDataset(dataset)
+
+	err := chart.ValidateDataset(dataset)
 	if err != nil {
 		t.Errorf("ValidateDataset() failed: %v", err)
 	}
@@ -72,7 +74,7 @@ func testGenerateInteractiveChart(t *testing.T) {
 		Height:          "600px",
 	}
 
-	err := generator.GenerateInteractiveChart(dataset, config, outputPath)
+	err := generator.GenerateInteractiveChart(dataset, &config, outputPath)
 	if err != nil {
 		t.Errorf("GenerateInteractiveChart() failed: %v", err)
 	}
@@ -99,10 +101,10 @@ func testGenerateInteractiveChart(t *testing.T) {
 }
 
 func testGetAvailableColumns(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createTestDataset()
 
-	columns := generator.GetAvailableColumns(dataset)
+	columns := chart.GetAvailableColumns(dataset)
 
 	expectedCount := 3 // Channel1, Channel2, Channel3
 	if len(columns) != expectedCount {
@@ -149,6 +151,7 @@ func testRenderChartToWriter(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
+
 	err := generator.RenderChartToWriter(dataset, config, &buf)
 	if err != nil {
 		t.Errorf("RenderChartToWriter() failed: %v", err)
@@ -165,17 +168,18 @@ func testRenderChartToWriter(t *testing.T) {
 }
 
 func testValidateDataset(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 
 	// 測試正常數據集
 	dataset := createTestDataset()
-	err := generator.ValidateDataset(dataset)
+
+	err := chart.ValidateDataset(dataset)
 	if err != nil {
 		t.Errorf("ValidateDataset() failed for valid dataset: %v", err)
 	}
 
 	// 測試 nil 數據集
-	err = generator.ValidateDataset(nil)
+	err = chart.ValidateDataset(nil)
 	if err == nil {
 		t.Error("ValidateDataset() should fail for nil dataset")
 	}
@@ -185,7 +189,8 @@ func testValidateDataset(t *testing.T) {
 		Headers: []string{},
 		Data:    []models.EMGData{},
 	}
-	err = generator.ValidateDataset(emptyHeaders)
+
+	err = chart.ValidateDataset(emptyHeaders)
 	if err == nil {
 		t.Error("ValidateDataset() should fail for empty headers")
 	}
@@ -195,7 +200,8 @@ func testValidateDataset(t *testing.T) {
 		Headers: []string{"Time", "Channel1"},
 		Data:    []models.EMGData{},
 	}
-	err = generator.ValidateDataset(emptyData)
+
+	err = chart.ValidateDataset(emptyData)
 	if err == nil {
 		t.Error("ValidateDataset() should fail for empty data")
 	}
@@ -208,19 +214,21 @@ func testValidateDataset(t *testing.T) {
 			{Time: 0.1, Channels: []float64{0.2, 0.3}}, // 2 channels
 		},
 	}
-	err = generator.ValidateDataset(inconsistentData)
+
+	err = chart.ValidateDataset(inconsistentData)
 	if err == nil {
 		t.Error("ValidateDataset() should fail for inconsistent channel counts")
 	}
 }
 
 func testSampleData(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createLargeTestDataset()
 
 	// 測試正常採樣
-	sampledData := generator.SampleData(dataset, 2)
+	sampledData := chart.SampleData(dataset, 2)
 	expectedSize := len(dataset.Data)/2 + 1
+
 	if len(sampledData.Data) > expectedSize+1 { // +1 for potential last point
 		t.Errorf("SampleData() returned %d points, expected around %d", len(sampledData.Data), expectedSize)
 	}
@@ -238,35 +246,36 @@ func testSampleData(t *testing.T) {
 
 		lastSampled := sampledData.Data[len(sampledData.Data)-1]
 		lastOriginal := dataset.Data[len(dataset.Data)-1]
+
 		if lastSampled.Time != lastOriginal.Time {
 			t.Error("SampleData() did not preserve last data point")
 		}
 	}
 
 	// 測試採樣率 <= 1
-	notSampledData := generator.SampleData(dataset, 1)
+	notSampledData := chart.SampleData(dataset, 1)
 	if len(notSampledData.Data) != len(dataset.Data) {
 		t.Error("SampleData() with rate 1 should not change data size")
 	}
 }
 
 func testCalculateOptimalSampling(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 
 	// 測試正常情況
-	rate := generator.CalculateOptimalSampling(1000, 500)
+	rate := chart.CalculateOptimalSampling(1000, 500)
 	if rate != 2 {
 		t.Errorf("CalculateOptimalSampling(1000, 500) = %d, expected 2", rate)
 	}
 
 	// 測試數據點少於最大值
-	rate = generator.CalculateOptimalSampling(300, 500)
+	rate = chart.CalculateOptimalSampling(300, 500)
 	if rate != 1 {
 		t.Errorf("CalculateOptimalSampling(300, 500) = %d, expected 1", rate)
 	}
 
 	// 測試邊界情況
-	rate = generator.CalculateOptimalSampling(1500, 500)
+	rate = chart.CalculateOptimalSampling(1500, 500)
 	if rate != 3 {
 		t.Errorf("CalculateOptimalSampling(1500, 500) = %d, expected 3", rate)
 	}
@@ -299,7 +308,7 @@ func testGenerateComparisonChart(t *testing.T) {
 		Height:          "600px",
 	}
 
-	err := generator.GenerateComparisonChart(datasets, labels, config, outputPath)
+	err := generator.GenerateComparisonChart(datasets, labels, &config, outputPath)
 	if err != nil {
 		t.Errorf("GenerateComparisonChart() failed: %v", err)
 	}
@@ -356,11 +365,11 @@ func testBatchExportCharts(t *testing.T) {
 }
 
 func testConvertToJSON(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createTestDataset()
 
 	selectedColumns := []int{1, 2}
-	jsonData := generator.ConvertToJSON(dataset, selectedColumns)
+	jsonData := chart.ConvertToJSON(dataset, selectedColumns)
 
 	if len(jsonData) != len(dataset.Data) {
 		t.Errorf("ConvertToJSON() returned %d points, expected %d", len(jsonData), len(dataset.Data))
@@ -388,11 +397,11 @@ func testConvertToJSON(t *testing.T) {
 }
 
 func testGetChartStatistics(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createTestDataset()
 
 	selectedColumns := []int{1, 2}
-	stats := generator.GetChartStatistics(dataset, selectedColumns)
+	stats := chart.GetChartStatistics(dataset, selectedColumns)
 
 	// 檢查基本統計
 	if stats["total_points"] != len(dataset.Data) {
@@ -431,11 +440,11 @@ func testGetChartStatistics(t *testing.T) {
 }
 
 func testOptimizeForLargeDataset(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createLargeTestDataset()
 
 	maxPoints := 50
-	optimizedData := generator.OptimizeForLargeDataset(dataset, maxPoints)
+	optimizedData := chart.OptimizeForLargeDataset(dataset, maxPoints)
 
 	if len(optimizedData.Data) > maxPoints {
 		t.Errorf("OptimizeForLargeDataset() returned %d points, expected max %d", len(optimizedData.Data), maxPoints)
@@ -448,36 +457,37 @@ func testOptimizeForLargeDataset(t *testing.T) {
 
 	// 測試小數據集不變
 	smallDataset := createTestDataset()
-	optimizedSmall := generator.OptimizeForLargeDataset(smallDataset, maxPoints)
+	optimizedSmall := chart.OptimizeForLargeDataset(smallDataset, maxPoints)
+
 	if len(optimizedSmall.Data) != len(smallDataset.Data) {
 		t.Error("OptimizeForLargeDataset() changed small dataset")
 	}
 }
 
 func testFormatValue(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 
 	// 測試正常值
-	result := generator.FormatValue(123.456, 2)
+	result := chart.FormatValue(123.456, 2)
 	if result != "123.46" {
 		t.Errorf("FormatValue(123.456, 2) = %s, expected '123.46'", result)
 	}
 
 	// 測試小值（科學記數法）
-	result = generator.FormatValue(0.0001, 2)
+	result = chart.FormatValue(0.0001, 2)
 	if !strings.Contains(result, "e") {
 		t.Errorf("FormatValue(0.0001, 2) = %s, expected scientific notation", result)
 	}
 
 	// 測試大值（科學記數法）
-	result = generator.FormatValue(1e7, 2)
+	result = chart.FormatValue(1e7, 2)
 	if !strings.Contains(result, "e") {
 		t.Errorf("FormatValue(1e7, 2) = %s, expected scientific notation", result)
 	}
 }
 
 func testGenerateExportScript(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 
 	config := chart.ExportConfig{
 		Format:   "png",
@@ -487,7 +497,7 @@ func testGenerateExportScript(t *testing.T) {
 		FileName: "test_chart.png",
 	}
 
-	script := generator.GenerateExportScript(config)
+	script := chart.GenerateExportScript(config)
 
 	if !strings.Contains(script, "png") {
 		t.Error("GenerateExportScript() does not contain format")
@@ -503,9 +513,9 @@ func testGenerateExportScript(t *testing.T) {
 }
 
 func testGenerateCustomTheme(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 
-	theme := generator.GenerateCustomTheme()
+	theme := chart.GenerateCustomTheme()
 
 	if theme == "" {
 		t.Error("GenerateCustomTheme() returned empty string")
@@ -524,7 +534,7 @@ func testGenerateCustomTheme(t *testing.T) {
 	}
 }
 
-// 基準測試
+// 基準測試.
 func BenchmarkGenerateInteractiveChart(b *testing.B) {
 	generator := chart.NewEChartsGenerator()
 	dataset := createTestDataset()
@@ -544,7 +554,8 @@ func BenchmarkGenerateInteractiveChart(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		outputPath := filepath.Join(tempDir, fmt.Sprintf("bench_chart_%d.html", i))
-		err := generator.GenerateInteractiveChart(dataset, config, outputPath)
+
+		err := generator.GenerateInteractiveChart(dataset, &config, outputPath)
 		if err != nil {
 			b.Errorf("GenerateInteractiveChart() benchmark failed: %v", err)
 		}
@@ -552,28 +563,28 @@ func BenchmarkGenerateInteractiveChart(b *testing.B) {
 }
 
 func BenchmarkSampleData(b *testing.B) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createLargeTestDataset()
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = generator.SampleData(dataset, 5)
+		_ = chart.SampleData(dataset, 5)
 	}
 }
 
 func BenchmarkGetAvailableColumns(b *testing.B) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createLargeTestDataset()
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = generator.GetAvailableColumns(dataset)
+		_ = chart.GetAvailableColumns(dataset)
 	}
 }
 
-// TestInteractiveChartConfig 測試互動式圖表配置
+// TestInteractiveChartConfig 測試互動式圖表配置.
 func TestInteractiveChartConfig(t *testing.T) {
 	config := chart.InteractiveChartConfig{
 		Title:           "Test Config",
@@ -608,12 +619,12 @@ func TestInteractiveChartConfig(t *testing.T) {
 	}
 }
 
-// TestColumnInfo 測試欄位信息結構
+// TestColumnInfo 測試欄位信息結構.
 func TestColumnInfo(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
+	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createTestDataset()
 
-	columns := generator.GetAvailableColumns(dataset)
+	columns := chart.GetAvailableColumns(dataset)
 
 	if len(columns) == 0 {
 		t.Fatal("GetAvailableColumns() returned no columns")

@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// ProgressInfo 代表處理進度信息
+// ProgressInfo 代表處理進度信息.
 type ProgressInfo struct {
 	CurrentStep   int     `json:"current_step"`   // 當前步驟
 	TotalSteps    int     `json:"total_steps"`    // 總步驟數
@@ -16,10 +16,10 @@ type ProgressInfo struct {
 	EstimatedTime string  `json:"estimated_time"` // 預估剩餘時間
 }
 
-// ProgressCallback 代表進度回調函數類型
+// ProgressCallback 代表進度回調函數類型.
 type ProgressCallback func(progress ProgressInfo)
 
-// ProgressTracker 代表進度追蹤器
+// ProgressTracker 代表進度追蹤器.
 type ProgressTracker struct {
 	startTime    time.Time
 	callback     ProgressCallback
@@ -29,7 +29,7 @@ type ProgressTracker struct {
 	updateBuffer time.Duration // 更新間隔緩衝，避免過於頻繁的回調
 }
 
-// NewProgressTracker 創建新的進度追蹤器
+// NewProgressTracker 創建新的進度追蹤器.
 func NewProgressTracker(totalSteps int, callback ProgressCallback) *ProgressTracker {
 	return &ProgressTracker{
 		startTime:    time.Now(),
@@ -41,12 +41,50 @@ func NewProgressTracker(totalSteps int, callback ProgressCallback) *ProgressTrac
 	}
 }
 
-// SetUpdateBuffer 設置更新間隔緩衝
+// SetUpdateBuffer 設置更新間隔緩衝.
 func (pt *ProgressTracker) SetUpdateBuffer(duration time.Duration) {
 	pt.updateBuffer = duration
 }
 
-// UpdateProgress 更新進度
+// calculateEstimatedTime 計算預估剩餘時間.
+func (pt *ProgressTracker) calculateEstimatedTime(step int, elapsed time.Duration) string {
+	if step > 0 && step < pt.totalSteps {
+		avgTimePerStep := elapsed / time.Duration(step)
+		remainingSteps := pt.totalSteps - step
+		estimatedRemaining := avgTimePerStep * time.Duration(remainingSteps)
+
+		return estimatedRemaining.Round(time.Second).String()
+	}
+
+	if step >= pt.totalSteps {
+		return "完成"
+	}
+
+	return "計算中..."
+}
+
+// buildProgressInfo 構建進度信息.
+func (pt *ProgressTracker) buildProgressInfo(
+	step int, status string, channelIndex int, channelName string, elapsed time.Duration,
+) ProgressInfo {
+	percentage := float64(step) / float64(pt.totalSteps) * 100
+	if percentage > 100 {
+		percentage = 100
+	}
+
+	return ProgressInfo{
+		CurrentStep:   step,
+		TotalSteps:    pt.totalSteps,
+		Percentage:    percentage,
+		Status:        status,
+		ChannelIndex:  channelIndex,
+		ChannelName:   channelName,
+		ElapsedTime:   elapsed.Round(time.Second).String(),
+		EstimatedTime: pt.calculateEstimatedTime(step, elapsed),
+	}
+}
+
+// UpdateProgress 更新進度.
 func (pt *ProgressTracker) UpdateProgress(step int, status string, channelIndex int, channelName string) {
 	// 檢查是否需要更新（基於時間間隔）
 	now := time.Now()
@@ -57,64 +95,40 @@ func (pt *ProgressTracker) UpdateProgress(step int, status string, channelIndex 
 	pt.currentStep = step
 	pt.lastUpdateAt = now
 
-	if pt.callback != nil {
-		percentage := float64(step) / float64(pt.totalSteps) * 100
-		if percentage > 100 {
-			percentage = 100
-		}
-
-		elapsed := now.Sub(pt.startTime)
-		var estimated string
-		if step > 0 && step < pt.totalSteps {
-			avgTimePerStep := elapsed / time.Duration(step)
-			remainingSteps := pt.totalSteps - step
-			estimatedRemaining := avgTimePerStep * time.Duration(remainingSteps)
-			estimated = estimatedRemaining.Round(time.Second).String()
-		} else if step >= pt.totalSteps {
-			estimated = "完成"
-		} else {
-			estimated = "計算中..."
-		}
-
-		info := ProgressInfo{
-			CurrentStep:   step,
-			TotalSteps:    pt.totalSteps,
-			Percentage:    percentage,
-			Status:        status,
-			ChannelIndex:  channelIndex,
-			ChannelName:   channelName,
-			ElapsedTime:   elapsed.Round(time.Second).String(),
-			EstimatedTime: estimated,
-		}
-
-		pt.callback(info)
+	if pt.callback == nil {
+		return
 	}
+
+	elapsed := now.Sub(pt.startTime)
+	info := pt.buildProgressInfo(step, status, channelIndex, channelName, elapsed)
+	pt.callback(info)
 }
 
-// Start 開始追蹤
+// Start 開始追蹤.
 func (pt *ProgressTracker) Start(initialStatus string) {
 	pt.UpdateProgress(0, initialStatus, 0, "")
 }
 
-// Complete 完成追蹤
+// Complete 完成追蹤.
 func (pt *ProgressTracker) Complete(finalStatus string) {
 	pt.UpdateProgress(pt.totalSteps, finalStatus, 0, "")
 }
 
-// GetElapsedTime 獲取已用時間
+// GetElapsedTime 獲取已用時間.
 func (pt *ProgressTracker) GetElapsedTime() time.Duration {
 	return time.Since(pt.startTime)
 }
 
-// GetProgress 獲取當前進度百分比
+// GetProgress 獲取當前進度百分比.
 func (pt *ProgressTracker) GetProgress() float64 {
 	if pt.totalSteps == 0 {
 		return 0
 	}
+
 	return float64(pt.currentStep) / float64(pt.totalSteps) * 100
 }
 
-// IsCompleted 檢查是否已完成
+// IsCompleted 檢查是否已完成.
 func (pt *ProgressTracker) IsCompleted() bool {
 	return pt.currentStep >= pt.totalSteps
 }

@@ -1,8 +1,8 @@
+// Package chart provides chart generation functionality for EMG data visualization.
+// It supports both static chart generation using gonum/plot and interactive charts using go-echarts.
 package chart
 
 import (
-	"count_mean/internal/logging"
-	"count_mean/internal/models"
 	"fmt"
 	"image"
 	"image/color"
@@ -15,22 +15,42 @@ import (
 	"gonum.org/v1/plot/vg"
 	"gonum.org/v1/plot/vg/draw"
 	"gonum.org/v1/plot/vg/vgimg"
+
+	"count_mean/internal/logging"
+	"count_mean/internal/models"
 )
 
-// ChartGenerator 處理圖表生成
-type ChartGenerator struct {
+// Chart generation constants.
+const (
+	lineWidth           = 2     // 線條寬度
+	chartFilePermission = 0o600 // 文件權限
+	chartDirPermission  = 0o750 // 目錄權限
+)
+
+// Color constants for chart lines.
+const (
+	colorFull   = 255 // 完整色彩值
+	colorOrange = 165 // 橙色RGB值
+	colorPurple = 128 // 紫色RGB值
+	colorPink   = 192 // 粉色綠色分量
+	colorPinkB  = 203 // 粉色藍色分量
+	colorBrown  = 42  // 棕色RGB值
+)
+
+// Generator 處理圖表生成.
+type Generator struct {
 	logger *logging.Logger
 }
 
-// NewChartGenerator 創建新的圖表生成器
-func NewChartGenerator() *ChartGenerator {
-	return &ChartGenerator{
+// NewChartGenerator 創建新的圖表生成器.
+func NewChartGenerator() *Generator {
+	return &Generator{
 		logger: logging.GetLogger("chart_generator"),
 	}
 }
 
-// ChartConfig 圖表配置
-type ChartConfig struct {
+// Config 圖表配置.
+type Config struct {
 	Title      string
 	XAxisLabel string
 	YAxisLabel string
@@ -39,38 +59,28 @@ type ChartConfig struct {
 	Columns    []string // 要繪製的column名稱
 }
 
-// GenerateLineChart 生成折線圖
-func (c *ChartGenerator) GenerateLineChart(dataset *models.EMGDataset, config ChartConfig, outputPath string) error {
-	c.logger.Info("開始生成折線圖", map[string]interface{}{
-		"title":       config.Title,
-		"columns":     config.Columns,
-		"output_path": outputPath,
-		"data_points": len(dataset.Data),
-	})
-
-	// 創建新圖表
-	p := plot.New()
-	p.Title.Text = config.Title
-	p.X.Label.Text = config.XAxisLabel
-	p.Y.Label.Text = config.YAxisLabel
-
-	// 找到選中的column索引
-	columnIndices := make(map[string]int)
-	for i, header := range dataset.Headers {
-		columnIndices[header] = i
+// getDefaultColors 返回預設的圖表顏色.
+func getDefaultColors() []color.RGBA {
+	return []color.RGBA{
+		{R: colorFull, G: 0, B: 0, A: colorFull},                       // 紅色
+		{R: 0, G: colorFull, B: 0, A: colorFull},                       // 綠色
+		{R: 0, G: 0, B: colorFull, A: colorFull},                       // 藍色
+		{R: colorFull, G: colorOrange, B: 0, A: colorFull},             // 橙色
+		{R: colorPurple, G: 0, B: colorPurple, A: colorFull},           // 紫色
+		{R: colorFull, G: colorPink, B: colorPinkB, A: colorFull},      // 粉色
+		{R: colorOrange, G: colorBrown, B: colorBrown, A: colorFull},   // 棕色
+		{R: colorPurple, G: colorPurple, B: colorPurple, A: colorFull}, // 灰色
 	}
+}
 
-	// 為每個選中的column創建線條
-	colors := []color.RGBA{
-		{R: 255, G: 0, B: 0, A: 255},     // 紅色
-		{R: 0, G: 255, B: 0, A: 255},     // 綠色
-		{R: 0, G: 0, B: 255, A: 255},     // 藍色
-		{R: 255, G: 165, B: 0, A: 255},   // 橙色
-		{R: 128, G: 0, B: 128, A: 255},   // 紫色
-		{R: 255, G: 192, B: 203, A: 255}, // 粉色
-		{R: 165, G: 42, B: 42, A: 255},   // 棕色
-		{R: 128, G: 128, B: 128, A: 255}, // 灰色
-	}
+// addColumnLinesToPlot 為圖表添加欄位線條（共用邏輯）.
+func (c *Generator) addColumnLinesToPlot(
+	p *plot.Plot,
+	dataset *models.EMGDataset,
+	config *Config,
+	columnIndices map[string]int,
+) {
+	colors := getDefaultColors()
 
 	for i, columnName := range config.Columns {
 		columnIndex, exists := columnIndices[columnName]
@@ -78,6 +88,7 @@ func (c *ChartGenerator) GenerateLineChart(dataset *models.EMGDataset, config Ch
 			c.logger.Warn("找不到指定的column", map[string]interface{}{
 				"column_name": columnName,
 			})
+
 			continue
 		}
 
@@ -101,17 +112,50 @@ func (c *ChartGenerator) GenerateLineChart(dataset *models.EMGDataset, config Ch
 			c.logger.Error("創建線條失敗", err, map[string]interface{}{
 				"column_name": columnName,
 			})
+
 			continue
 		}
 
 		// 設置線條顏色和樣式
 		line.Color = colors[i%len(colors)]
-		line.Width = vg.Points(2)
+		line.Width = vg.Points(lineWidth)
 
 		// 添加到圖表
 		p.Add(line)
 		p.Legend.Add(columnName, line)
 	}
+}
+
+// buildColumnIndices 建立欄位名稱到索引的映射.
+func buildColumnIndices(dataset *models.EMGDataset) map[string]int {
+	columnIndices := make(map[string]int)
+	for i, header := range dataset.Headers {
+		columnIndices[header] = i
+	}
+
+	return columnIndices
+}
+
+// GenerateLineChart 生成折線圖.
+func (c *Generator) GenerateLineChart(dataset *models.EMGDataset, config *Config, outputPath string) error {
+	c.logger.Info("開始生成折線圖", map[string]interface{}{
+		"title":       config.Title,
+		"columns":     config.Columns,
+		"output_path": outputPath,
+		"data_points": len(dataset.Data),
+	})
+
+	// 創建新圖表
+	p := plot.New()
+	p.Title.Text = config.Title
+	p.X.Label.Text = config.XAxisLabel
+	p.Y.Label.Text = config.YAxisLabel
+
+	// 找到選中的column索引
+	columnIndices := buildColumnIndices(dataset)
+
+	// 為每個選中的column創建線條
+	c.addColumnLinesToPlot(p, dataset, config, columnIndices)
 
 	// 設置圖例位置
 	p.Legend.Top = true
@@ -124,17 +168,23 @@ func (c *ChartGenerator) GenerateLineChart(dataset *models.EMGDataset, config Ch
 
 	// 確保輸出目錄存在
 	outputDir := filepath.Dir(outputPath)
-	if err := c.ensureDir(outputDir); err != nil {
+	if err := ensureDir(outputDir); err != nil {
 		return fmt.Errorf("創建輸出目錄失敗: %w", err)
 	}
 
 	// 保存為PNG
-	pngFile, err := os.Create(outputPath)
+	// G304: outputPath comes from trusted application code
+	pngFile, err := os.OpenFile(filepath.Clean(outputPath), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, chartFilePermission)
 	if err != nil {
 		c.logger.Error("創建PNG文件失敗", err)
 		return fmt.Errorf("創建PNG文件失敗: %w", err)
 	}
-	defer pngFile.Close()
+
+	defer func() {
+		if closeErr := pngFile.Close(); closeErr != nil {
+			c.logger.Warn("關閉PNG文件時發生錯誤", map[string]interface{}{"error": closeErr.Error()})
+		}
+	}()
 
 	// 直接保存PNG
 	_, err = vgimg.PngCanvas{Canvas: img}.WriteTo(pngFile)
@@ -150,8 +200,8 @@ func (c *ChartGenerator) GenerateLineChart(dataset *models.EMGDataset, config Ch
 	return nil
 }
 
-// GenerateLineChartImage 生成折線圖並返回圖像
-func (c *ChartGenerator) GenerateLineChartImage(dataset *models.EMGDataset, config ChartConfig) (image.Image, error) {
+// GenerateLineChartImage 生成折線圖並返回圖像.
+func (c *Generator) GenerateLineChartImage(dataset *models.EMGDataset, config *Config) (image.Image, error) {
 	c.logger.Info("開始生成折線圖圖像", map[string]interface{}{
 		"title":       config.Title,
 		"columns":     config.Columns,
@@ -165,63 +215,10 @@ func (c *ChartGenerator) GenerateLineChartImage(dataset *models.EMGDataset, conf
 	p.Y.Label.Text = config.YAxisLabel
 
 	// 找到選中的column索引
-	columnIndices := make(map[string]int)
-	for i, header := range dataset.Headers {
-		columnIndices[header] = i
-	}
+	columnIndices := buildColumnIndices(dataset)
 
 	// 為每個選中的column創建線條
-	colors := []color.RGBA{
-		{R: 255, G: 0, B: 0, A: 255},     // 紅色
-		{R: 0, G: 255, B: 0, A: 255},     // 綠色
-		{R: 0, G: 0, B: 255, A: 255},     // 藍色
-		{R: 255, G: 165, B: 0, A: 255},   // 橙色
-		{R: 128, G: 0, B: 128, A: 255},   // 紫色
-		{R: 255, G: 192, B: 203, A: 255}, // 粉色
-		{R: 165, G: 42, B: 42, A: 255},   // 棕色
-		{R: 128, G: 128, B: 128, A: 255}, // 灰色
-	}
-
-	for i, columnName := range config.Columns {
-		columnIndex, exists := columnIndices[columnName]
-		if !exists {
-			c.logger.Warn("找不到指定的column", map[string]interface{}{
-				"column_name": columnName,
-			})
-			continue
-		}
-
-		// 跳過時間列（通常是第一列）
-		if columnIndex == 0 {
-			continue
-		}
-
-		// 準備數據點
-		pts := make(plotter.XYs, len(dataset.Data))
-		for j, data := range dataset.Data {
-			pts[j].X = data.Time
-			if columnIndex-1 < len(data.Channels) {
-				pts[j].Y = data.Channels[columnIndex-1]
-			}
-		}
-
-		// 創建線條
-		line, err := plotter.NewLine(pts)
-		if err != nil {
-			c.logger.Error("創建線條失敗", err, map[string]interface{}{
-				"column_name": columnName,
-			})
-			continue
-		}
-
-		// 設置線條顏色和樣式
-		line.Color = colors[i%len(colors)]
-		line.Width = vg.Points(2)
-
-		// 添加到圖表
-		p.Add(line)
-		p.Legend.Add(columnName, line)
-	}
+	c.addColumnLinesToPlot(p, dataset, config, columnIndices)
 
 	// 設置圖例位置
 	p.Legend.Top = true
@@ -236,8 +233,8 @@ func (c *ChartGenerator) GenerateLineChartImage(dataset *models.EMGDataset, conf
 	return img.Image(), nil
 }
 
-// GetCSVColumns 獲取CSV文件的所有column
-func (c *ChartGenerator) GetCSVColumns(dataset *models.EMGDataset) []string {
+// GetCSVColumns 獲取CSV文件的所有column.
+func GetCSVColumns(dataset *models.EMGDataset) []string {
 	if dataset == nil || len(dataset.Headers) == 0 {
 		return []string{}
 	}
@@ -249,13 +246,17 @@ func (c *ChartGenerator) GetCSVColumns(dataset *models.EMGDataset) []string {
 	}
 
 	sort.Strings(columns)
+
 	return columns
 }
 
-// ensureDir 確保目錄存在
-func (c *ChartGenerator) ensureDir(dir string) error {
+// ensureDir 確保目錄存在.
+func ensureDir(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, chartDirPermission); err != nil {
+			return fmt.Errorf("創建目錄失敗 %s: %w", dir, err)
+		}
 	}
+
 	return nil
 }

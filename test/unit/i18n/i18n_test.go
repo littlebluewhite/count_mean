@@ -18,24 +18,28 @@ func TestI18n_Basic(t *testing.T) {
 
 	// 測試繁體中文翻譯
 	i18nInstance.SetLocale(i18n.LocaleZhTW)
+
 	if msg := i18nInstance.T("app.title"); msg != "EMG 數據分析工具" {
 		t.Errorf("繁體中文翻譯錯誤，期望 'EMG 數據分析工具'，實際 '%s'", msg)
 	}
 
 	// 測試簡體中文翻譯
 	i18nInstance.SetLocale(i18n.LocaleZhCN)
+
 	if msg := i18nInstance.T("app.title"); msg != "EMG 数据分析工具" {
 		t.Errorf("簡體中文翻譯錯誤，期望 'EMG 数据分析工具'，實際 '%s'", msg)
 	}
 
 	// 測試英文翻譯
 	i18nInstance.SetLocale(i18n.LocaleEnUS)
+
 	if msg := i18nInstance.T("app.title"); msg != "EMG Data Analysis Tool" {
 		t.Errorf("英文翻譯錯誤，期望 'EMG Data Analysis Tool'，實際 '%s'", msg)
 	}
 
 	// 測試日文翻譯
 	i18nInstance.SetLocale(i18n.LocaleJaJP)
+
 	if msg := i18nInstance.T("app.title"); msg != "EMGデータ解析ツール" {
 		t.Errorf("日文翻譯錯誤，期望 'EMGデータ解析ツール'，實際 '%s'", msg)
 	}
@@ -51,6 +55,7 @@ func TestI18n_Fallback(t *testing.T) {
 
 	// 測試不存在的鍵值
 	i18nInstance.SetLocale(i18n.LocaleZhTW)
+
 	if msg := i18nInstance.T("nonexistent.key"); msg != "nonexistent.key" {
 		t.Errorf("fallback 翻譯錯誤，期望 'nonexistent.key'，實際 '%s'", msg)
 	}
@@ -69,6 +74,7 @@ func TestI18n_WithArgs(t *testing.T) {
 	// 測試帶參數的翻譯
 	msg := i18nInstance.T("status.large_file_processing", 75.5)
 	expected := "處理大文件中... 75.5%"
+
 	if msg != expected {
 		t.Errorf("帶參數翻譯錯誤，期望 '%s'，實際 '%s'", expected, msg)
 	}
@@ -77,7 +83,7 @@ func TestI18n_WithArgs(t *testing.T) {
 func TestI18n_FileOperations(t *testing.T) {
 	// 創建臨時目錄
 	tmpDir := "./test_translations"
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
@@ -111,6 +117,7 @@ func TestI18n_FileOperations(t *testing.T) {
 
 	// 驗證翻譯是否正確
 	newI18nInstance.SetLocale(i18n.LocaleZhTW)
+
 	if msg := newI18nInstance.T("app.title"); msg != "EMG 數據分析工具" {
 		t.Errorf("重新載入的翻譯錯誤，期望 'EMG 數據分析工具'，實際 '%s'", msg)
 	}
@@ -125,12 +132,14 @@ func TestLocaleDetection(t *testing.T) {
 	// 確保返回的是支持的語言
 	supportedLocales := i18nInstance.GetSupportedLocales()
 	found := false
+
 	for _, supported := range supportedLocales {
 		if locale == supported {
 			found = true
 			break
 		}
 	}
+
 	if !found {
 		t.Errorf("系統語言檢測返回了不支持的語言: '%s'", locale)
 	}
@@ -182,6 +191,7 @@ func TestGlobalI18n(t *testing.T) {
 
 	// 測試設置語言
 	i18n.SetLocale(i18n.LocaleEnUS)
+
 	if locale := i18n.GetLocale(); locale != i18n.LocaleEnUS {
 		t.Errorf("設置語言失敗，期望 '%s'，實際 '%s'", i18n.LocaleEnUS, locale)
 	}

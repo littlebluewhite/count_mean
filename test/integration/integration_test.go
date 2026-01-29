@@ -1,9 +1,6 @@
 package integration
 
 import (
-	"count_mean/internal/calculator"
-	"count_mean/internal/config"
-	"count_mean/internal/io"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,9 +8,13 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/calculator"
+	"count_mean/internal/config"
+	"count_mean/internal/io"
 )
 
-// TestFullWorkflow_MaxMeanCalculation 測試完整的最大平均值計算流程
+// TestFullWorkflow_MaxMeanCalculation 測試完整的最大平均值計算流程.
 func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 	// 準備測試數據
 	tempDir := t.TempDir()
@@ -38,7 +39,7 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 
 	// 寫入測試CSV文件
 	testData := "Time,Ch1,Ch2\n0.1,100,50\n0.2,200,100\n0.3,150,75\n0.4,300,150\n"
-	err := os.WriteFile(inputFile, []byte(testData), 0644)
+	err := os.WriteFile(inputFile, []byte(testData), 0o644)
 	require.NoError(t, err)
 
 	// 讀取CSV數據
@@ -74,7 +75,7 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 	require.Contains(t, lines[5], "最大平均值")
 }
 
-// TestFullWorkflow_DataNormalization 測試完整的數據標準化流程
+// TestFullWorkflow_DataNormalization 測試完整的數據標準化流程.
 func TestFullWorkflow_DataNormalization(t *testing.T) {
 	// 準備測試數據
 	tempDir := t.TempDir()
@@ -98,13 +99,13 @@ func TestFullWorkflow_DataNormalization(t *testing.T) {
 	// 主數據文件
 	mainFile := filepath.Join(tempDir, "main_data.csv")
 	mainData := "Time,Ch1,Ch2\n0.1,200,100\n0.2,400,200\n"
-	err := os.WriteFile(mainFile, []byte(mainData), 0644)
+	err := os.WriteFile(mainFile, []byte(mainData), 0o644)
 	require.NoError(t, err)
 
 	// 參考數據文件
 	refFile := filepath.Join(tempDir, "ref_data.csv")
 	refData := "Time,Ch1,Ch2\n0.1,100,50\n0.2,100,50\n"
-	err = os.WriteFile(refFile, []byte(refData), 0644)
+	err = os.WriteFile(refFile, []byte(refData), 0o644)
 	require.NoError(t, err)
 
 	// 讀取數據
@@ -139,7 +140,7 @@ func TestFullWorkflow_DataNormalization(t *testing.T) {
 	require.Contains(t, string(content), "4.000")
 }
 
-// TestFullWorkflow_PhaseAnalysis 測試完整的階段分析流程
+// TestFullWorkflow_PhaseAnalysis 測試完整的階段分析流程.
 func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 	// 準備測試數據
 	tempDir := t.TempDir()
@@ -164,7 +165,7 @@ func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 
 	// 數據跨越兩個階段（0.5秒在第一階段，1.5秒在第二階段，2.5秒在第三階段）
 	testData := "Time,Ch1,Ch2\n0.5,100,50\n1.5,200,100\n2.5,150,75\n"
-	err := os.WriteFile(dataFile, []byte(testData), 0644)
+	err := os.WriteFile(dataFile, []byte(testData), 0o644)
 	require.NoError(t, err)
 
 	// 讀取數據
@@ -182,22 +183,22 @@ func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 	// 驗證第一階段（0.0-1.0秒，包含0.5秒的數據）
 	phase1 := result.PhaseResults[0]
 	require.Equal(t, "Phase1", phase1.PhaseName)
-	require.Equal(t, 1e+12, phase1.MaxValues[0])  // Ch1最大值 (100 * 10^10)
-	require.Equal(t, 5e+11, phase1.MaxValues[1])  // Ch2最大值 (50 * 10^10)
-	require.Equal(t, 1e+12, phase1.MeanValues[0]) // Ch1平均值 (100 * 10^10)
-	require.Equal(t, 5e+11, phase1.MeanValues[1]) // Ch2平均值 (50 * 10^10)
+	require.Equal(t, 1e+12, phase1.MaxValues[0])  // Ch1最大值
+	require.Equal(t, 5e+11, phase1.MaxValues[1])  // Ch2最大值
+	require.Equal(t, 1e+12, phase1.MeanValues[0]) // Ch1平均值
+	require.Equal(t, 5e+11, phase1.MeanValues[1]) // Ch2平均值
 
 	// 驗證第二階段（1.0-2.0秒，包含1.5秒的數據）
 	phase2 := result.PhaseResults[1]
 	require.Equal(t, "Phase2", phase2.PhaseName)
-	require.Equal(t, 2e+12, phase2.MaxValues[0]) // Ch1最大值 (200 * 10^10)
-	require.Equal(t, 1e+12, phase2.MaxValues[1]) // Ch2最大值 (100 * 10^10)
+	require.Equal(t, 2e+12, phase2.MaxValues[0]) // Ch1最大值
+	require.Equal(t, 1e+12, phase2.MaxValues[1]) // Ch2最大值
 
 	// 驗證第三階段（2.0-3.0秒，包含2.5秒的數據）
 	phase3 := result.PhaseResults[2]
 	require.Equal(t, "Phase3", phase3.PhaseName)
-	require.Equal(t, 1.5e+12, phase3.MaxValues[0]) // Ch1最大值 (150 * 10^10)
-	require.Equal(t, 7.5e+11, phase3.MaxValues[1]) // Ch2最大值 (75 * 10^10)
+	require.Equal(t, 1.5e+12, phase3.MaxValues[0]) // Ch1最大值
+	require.Equal(t, 7.5e+11, phase3.MaxValues[1]) // Ch2最大值
 
 	// 第四階段應該沒有數據（在我們的測試數據範圍外）
 	phase4 := result.PhaseResults[3]
@@ -222,7 +223,7 @@ func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 	}
 }
 
-// TestFullWorkflow_ConfigurationManagement 測試完整的配置管理流程
+// TestFullWorkflow_ConfigurationManagement 測試完整的配置管理流程.
 func TestFullWorkflow_ConfigurationManagement(t *testing.T) {
 	tempDir := t.TempDir()
 	configFile := filepath.Join(tempDir, "test_config.json")
@@ -271,7 +272,7 @@ func TestFullWorkflow_ConfigurationManagement(t *testing.T) {
 	require.NotNil(t, analyzer)
 }
 
-// TestFullWorkflow_ErrorHandling 測試完整流程的錯誤處理
+// TestFullWorkflow_ErrorHandling 測試完整流程的錯誤處理.
 func TestFullWorkflow_ErrorHandling(t *testing.T) {
 	cfg := config.DefaultConfig()
 	csvHandler := io.NewCSVHandler(cfg)
@@ -307,7 +308,7 @@ func TestFullWorkflow_ErrorHandling(t *testing.T) {
 	})
 }
 
-// TestFullWorkflow_Performance 測試大數據集的性能
+// TestFullWorkflow_Performance 測試大數據集的性能.
 func TestFullWorkflow_Performance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("跳過性能測試")
@@ -327,12 +328,14 @@ func TestFullWorkflow_Performance(t *testing.T) {
 
 	// 創建包含1000行數據的文件
 	var builder strings.Builder
-	builder.WriteString("Time,Ch1,Ch2,Ch3\n")
+
+	_, _ = builder.WriteString("Time,Ch1,Ch2,Ch3\n")
+
 	for i := 0; i < 1000; i++ {
-		builder.WriteString(fmt.Sprintf("%d.0,%d,%d,%d\n", i, i*10, i*20, i*30))
+		_, _ = builder.WriteString(fmt.Sprintf("%d.0,%d,%d,%d\n", i, i*10, i*20, i*30))
 	}
 
-	err := os.WriteFile(largeFile, []byte(builder.String()), 0644)
+	err := os.WriteFile(largeFile, []byte(builder.String()), 0o644)
 	require.NoError(t, err)
 
 	// 測試讀取大文件

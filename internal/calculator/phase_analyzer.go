@@ -11,7 +11,10 @@ import (
 	"count_mean/util"
 )
 
-// PhaseAnalyzer 處理階段分析
+// MinTimePointsForPhases is the minimum number of time points needed to define 4 phases.
+const MinTimePointsForPhases = 5
+
+// PhaseAnalyzer 處理階段分析.
 type PhaseAnalyzer struct {
 	scalingFactor int
 	phaseLabels   []string
@@ -19,9 +22,10 @@ type PhaseAnalyzer struct {
 	dataParser    *parser.DataParser
 }
 
-// NewPhaseAnalyzer 創建新的階段分析器
+// NewPhaseAnalyzer 創建新的階段分析器.
 func NewPhaseAnalyzer(scalingFactor int, phaseLabels []string) *PhaseAnalyzer {
 	logger := logging.GetLogger("phase_analyzer")
+
 	return &PhaseAnalyzer{
 		scalingFactor: scalingFactor,
 		phaseLabels:   phaseLabels,
@@ -30,13 +34,130 @@ func NewPhaseAnalyzer(scalingFactor int, phaseLabels []string) *PhaseAnalyzer {
 	}
 }
 
-// AnalyzeResult 階段分析結果
+// AnalyzeResult 階段分析結果.
 type AnalyzeResult struct {
 	PhaseResults []models.PhaseAnalysisResult `json:"phase_results"`
 	MaxTimeIndex map[int]float64              `json:"max_time_index"` // 每個通道最大值出現的時間
 }
 
-// Analyze 分析不同階段的數據
+// phaseDataCollector 收集階段數據的結構.
+type phaseDataCollector struct {
+	phaseData []map[int][]float64
+	allData   map[int][]float64
+	timeData  []float64
+}
+
+// validateAnalyzeInput 驗證分析輸入.
+func (p *PhaseAnalyzer) validateAnalyzeInput(dataset *models.EMGDataset, phases []models.TimeRange) error {
+	if dataset.IsEmpty() {
+		err := calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "數據集為空")
+		p.logger.Error("階段分析輸入驗證失敗", err, map[string]interface{}{"dataset_empty": true})
+
+		return err
+	}
+
+	if len(phases) != len(p.phaseLabels) {
+		err := calcerrors.NewCalculatorErrorWithContext(
+			calcerrors.ErrPhaseMismatch,
+			"階段數量與標籤數量不匹配",
+			map[string]interface{}{"phase_count": len(phases), "label_count": len(p.phaseLabels)},
+		)
+		p.logger.Error("階段配置不匹配", err, map[string]interface{}{"phase_count": len(phases), "label_count": len(p.phaseLabels)})
+
+		return err
+	}
+
+	return nil
+}
+
+// collectPhaseData 收集各階段的數據.
+func (p *PhaseAnalyzer) collectPhaseData(dataset *models.EMGDataset, phases []models.TimeRange) *phaseDataCollector {
+	collector := &phaseDataCollector{
+		phaseData: make([]map[int][]float64, len(phases)),
+		allData:   make(map[int][]float64),
+		timeData:  make([]float64, 0, dataset.DataPointCount()),
+	}
+
+	for i := range collector.phaseData {
+		collector.phaseData[i] = make(map[int][]float64)
+	}
+
+	for _, data := range dataset.Data {
+		collector.timeData = append(collector.timeData, data.Time)
+		p.assignDataToPhases(data, phases, collector.phaseData)
+		p.collectGlobalData(data, collector.allData)
+	}
+
+	return collector
+}
+
+// assignDataToPhases 將數據點分配到對應的階段.
+func (*PhaseAnalyzer) assignDataToPhases(
+	data models.EMGData, phases []models.TimeRange, phaseData []map[int][]float64,
+) {
+	for phaseIdx, phase := range phases {
+		if data.Time > phase.Start && data.Time < phase.End {
+			for chIdx, val := range data.Channels {
+				phaseData[phaseIdx][chIdx] = append(phaseData[phaseIdx][chIdx], val)
+			}
+		}
+	}
+}
+
+// collectGlobalData 收集全局數據.
+func (*PhaseAnalyzer) collectGlobalData(data models.EMGData, allData map[int][]float64) {
+	for chIdx, val := range data.Channels {
+		allData[chIdx] = append(allData[chIdx], val)
+	}
+}
+
+// computePhaseStatistics 計算每個階段的統計值.
+func (p *PhaseAnalyzer) computePhaseStatistics(
+	phaseData []map[int][]float64, channelCount int,
+) []models.PhaseAnalysisResult {
+	results := make([]models.PhaseAnalysisResult, 0, len(p.phaseLabels))
+
+	for phaseIdx, phaseName := range p.phaseLabels {
+		maxValues := make(map[int]float64)
+		meanValues := make(map[int]float64)
+
+		for chIdx := 0; chIdx < channelCount; chIdx++ {
+			if data, exists := phaseData[phaseIdx][chIdx]; exists && len(data) > 0 {
+				maxVal, _ := util.ArrayMax(data)
+				maxValues[chIdx] = maxVal
+				meanValues[chIdx] = util.ArrayMean(data)
+			}
+		}
+
+		results = append(results, models.PhaseAnalysisResult{
+			PhaseName:  phaseName,
+			MaxValues:  maxValues,
+			MeanValues: meanValues,
+		})
+	}
+
+	return results
+}
+
+// computeMaxTimeIndex 計算每個通道全局最大值出現的時間.
+func (*PhaseAnalyzer) computeMaxTimeIndex(
+	allData map[int][]float64, timeData []float64, channelCount int,
+) map[int]float64 {
+	maxTimeIndex := make(map[int]float64)
+
+	for chIdx := 0; chIdx < channelCount; chIdx++ {
+		if data, exists := allData[chIdx]; exists && len(data) > 0 {
+			_, maxIdx := util.ArrayMax(data)
+			if maxIdx < len(timeData) {
+				maxTimeIndex[chIdx] = timeData[maxIdx]
+			}
+		}
+	}
+
+	return maxTimeIndex
+}
+
+// Analyze 分析不同階段的數據.
 func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.TimeRange) (*AnalyzeResult, error) {
 	if p == nil {
 		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "階段分析器為空")
@@ -44,13 +165,7 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 
 	startTime := time.Now()
 
-	// 使用 IsEmpty() 統一檢查 nil 和空數據
-	if dataset.IsEmpty() {
-		err := calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "數據集為空")
-		// 安全記錄：dataset 可能為 nil，避免存取其方法
-		p.logger.Error("階段分析輸入驗證失敗", err, map[string]interface{}{
-			"dataset_empty": true,
-		})
+	if err := p.validateAnalyzeInput(dataset, phases); err != nil {
 		return nil, err
 	}
 
@@ -61,87 +176,10 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 		"scaling_factor": p.scalingFactor,
 	})
 
-	if len(phases) != len(p.phaseLabels) {
-		err := calcerrors.NewCalculatorErrorWithContext(
-			calcerrors.ErrPhaseMismatch,
-			"階段數量與標籤數量不匹配",
-			map[string]interface{}{
-				"phase_count": len(phases),
-				"label_count": len(p.phaseLabels),
-			},
-		)
-		p.logger.Error("階段配置不匹配", err, map[string]interface{}{
-			"phase_count": len(phases),
-			"label_count": len(p.phaseLabels),
-		})
-		return nil, err
-	}
-
 	channelCount := dataset.ChannelCount()
-
-	// 初始化階段數據收集器
-	phaseData := make([]map[int][]float64, len(phases))
-	for i := range phaseData {
-		phaseData[i] = make(map[int][]float64)
-	}
-
-	allData := make(map[int][]float64) // 用於找到全局最大值的時間
-	timeData := make([]float64, 0, dataset.DataPointCount())
-
-	// 收集數據
-	for _, data := range dataset.Data {
-		timeData = append(timeData, data.Time)
-
-		// 分配到對應階段
-		for phaseIdx, phase := range phases {
-			if data.Time > phase.Start && data.Time < phase.End {
-				for chIdx, val := range data.Channels {
-					phaseData[phaseIdx][chIdx] = append(phaseData[phaseIdx][chIdx], val)
-				}
-			}
-		}
-
-		// 收集全局數據
-		for chIdx, val := range data.Channels {
-			allData[chIdx] = append(allData[chIdx], val)
-		}
-	}
-
-	// 分析每個階段
-	results := make([]models.PhaseAnalysisResult, 0, len(phases))
-	for phaseIdx, phaseName := range p.phaseLabels {
-		maxValues := make(map[int]float64)
-		meanValues := make(map[int]float64)
-
-		for chIdx := 0; chIdx < channelCount; chIdx++ {
-			if data, exists := phaseData[phaseIdx][chIdx]; exists && len(data) > 0 {
-				maxVal, _ := util.ArrayMax(data)
-				meanVal := util.ArrayMean(data)
-
-				maxValues[chIdx] = maxVal
-				meanValues[chIdx] = meanVal
-			}
-		}
-
-		result := models.PhaseAnalysisResult{
-			PhaseName:  phaseName,
-			MaxValues:  maxValues,
-			MeanValues: meanValues,
-		}
-
-		results = append(results, result)
-	}
-
-	// 計算全局最大值出現的時間
-	maxTimeIndex := make(map[int]float64)
-	for chIdx := 0; chIdx < channelCount; chIdx++ {
-		if data, exists := allData[chIdx]; exists && len(data) > 0 {
-			_, maxIdx := util.ArrayMax(data)
-			if maxIdx < len(timeData) {
-				maxTimeIndex[chIdx] = timeData[maxIdx]
-			}
-		}
-	}
+	collector := p.collectPhaseData(dataset, phases)
+	results := p.computePhaseStatistics(collector.phaseData, channelCount)
+	maxTimeIndex := p.computeMaxTimeIndex(collector.allData, collector.timeData, channelCount)
 
 	duration := time.Since(startTime)
 	p.logger.Info("階段分析完成", map[string]interface{}{
@@ -156,7 +194,7 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 	}, nil
 }
 
-// AnalyzeFromRawData 從原始字符串數據進行階段分析
+// AnalyzeFromRawData 從原始字符串數據進行階段分析.
 func (p *PhaseAnalyzer) AnalyzeFromRawData(records [][]string, phaseStrings []string) (*AnalyzeResult, error) {
 	if p == nil {
 		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "階段分析器為空")
@@ -182,26 +220,28 @@ func (p *PhaseAnalyzer) AnalyzeFromRawData(records [][]string, phaseStrings []st
 	return p.Analyze(dataset, phases)
 }
 
-// parsePhases 解析階段字符串為時間範圍
+// parsePhases 解析階段字符串為時間範圍.
 func (p *PhaseAnalyzer) parsePhases(phaseStrings []string) ([]models.TimeRange, error) {
-	if len(phaseStrings) < 5 {
+	if len(phaseStrings) < MinTimePointsForPhases {
 		return nil, calcerrors.NewCalculatorErrorWithContext(
 			calcerrors.ErrInsufficientData,
 			"需要至少 5 個時間點來定義 4 個階段",
 			map[string]interface{}{
 				"provided_points": len(phaseStrings),
-				"required_points": 5,
+				"required_points": MinTimePointsForPhases,
 			},
 		)
 	}
 
 	// 解析時間點
 	timePoints := make([]float64, len(phaseStrings))
+
 	for i, timeStr := range phaseStrings {
 		val, err := util.Str2Number[float64, int](timeStr, p.scalingFactor)
 		if err != nil {
 			return nil, fmt.Errorf("解析時間點 '%s' 失敗: %w", timeStr, err)
 		}
+
 		timePoints[i] = val
 	}
 

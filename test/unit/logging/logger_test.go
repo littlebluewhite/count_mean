@@ -2,12 +2,12 @@ package logging_test
 
 import (
 	"bytes"
-	"count_mean/internal/errors"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"count_mean/internal/errors"
 	"count_mean/internal/logging"
 )
 
@@ -22,6 +22,7 @@ func TestNewLogger(t *testing.T) {
 
 	// Test that it can write a log message
 	logger.Info("test message")
+
 	if buf.Len() == 0 {
 		t.Error("logger should have written to the buffer")
 	}
@@ -40,6 +41,7 @@ func TestLogger_WithModule(t *testing.T) {
 
 	// Test that module appears in output
 	moduleLogger.Info("test message")
+
 	output := buf.String()
 	if !strings.Contains(output, "[test_module]") {
 		t.Error("output should contain module name")
@@ -59,6 +61,7 @@ func TestLogger_WithContext(t *testing.T) {
 
 	// Test that context appears in JSON output
 	contextLogger.Info("test message")
+
 	output := buf.String()
 	if !strings.Contains(output, "\"key\":\"value\"") {
 		t.Error("output should contain context data")
@@ -79,6 +82,7 @@ func TestLogger_WithError(t *testing.T) {
 
 	// Test that error appears in JSON output
 	errorLogger.Info("test message")
+
 	output := buf.String()
 	if !strings.Contains(output, "test error") {
 		t.Error("output should contain error message")
@@ -155,6 +159,9 @@ func TestLogger_LogLevels(t *testing.T) {
 				logger.Warn("test message")
 			case logging.LevelError:
 				logger.Error("test message", nil)
+			case logging.LevelFatal:
+				// Skip Fatal level in tests as it would exit the program
+				_ = logger // no-op to satisfy linter
 			}
 
 			if tt.shouldLog {
@@ -361,10 +368,12 @@ func TestLogger_SensitiveDataFiltering(t *testing.T) {
 
 	// Test password filtering
 	logger.Info("User login with password=secret123")
+
 	output := buf.String()
 	if strings.Contains(output, "secret123") {
 		t.Error("output should not contain password")
 	}
+
 	if !strings.Contains(output, "****") {
 		t.Error("output should contain masked password")
 	}
@@ -374,10 +383,12 @@ func TestLogger_SensitiveDataFiltering(t *testing.T) {
 
 	// Test API key filtering
 	logger.Info("Using api_key=abcd1234efgh5678")
+
 	output = buf.String()
 	if strings.Contains(output, "abcd1234efgh5678") {
 		t.Error("output should not contain API key")
 	}
+
 	if !strings.Contains(output, "****") {
 		t.Error("output should contain masked API key")
 	}
@@ -388,10 +399,12 @@ func TestLogger_SensitiveDataFiltering(t *testing.T) {
 	// Test error message filtering
 	testErr := errors.NewAppError(errors.ErrCodeFileNotFound, "Authentication failed: password=mysecret")
 	logger.Error("Login failed", testErr)
+
 	output = buf.String()
 	if strings.Contains(output, "mysecret") {
 		t.Error("output should not contain password in error message")
 	}
+
 	if !strings.Contains(output, "****") {
 		t.Error("output should contain masked password in error message")
 	}
@@ -404,10 +417,12 @@ func TestLogger_SensitiveDataFiltering(t *testing.T) {
 		"user_id": "12345",
 		"token":   "bearer_token_abc123",
 	})
+
 	output = buf.String()
 	if strings.Contains(output, "bearer_token_abc123") {
 		t.Error("output should not contain token in context")
 	}
+
 	if !strings.Contains(output, "****") {
 		t.Error("output should contain masked token in context")
 	}
@@ -417,10 +432,12 @@ func TestLogger_SensitiveDataFiltering(t *testing.T) {
 
 	// Test credit card filtering
 	logger.Info("Processing payment for card 1234-5678-9012-3456")
+
 	output = buf.String()
 	if strings.Contains(output, "1234-5678-9012-3456") {
 		t.Error("output should not contain full credit card number")
 	}
+
 	if !strings.Contains(output, "****") {
 		t.Error("output should contain masked credit card number")
 	}
@@ -446,6 +463,7 @@ func TestLogger_SensitiveDataMasking(t *testing.T) {
 	for _, tc := range testCases {
 		buf.Reset()
 		logger.Info(tc.input)
+
 		output := buf.String()
 
 		if strings.Contains(output, tc.input) {

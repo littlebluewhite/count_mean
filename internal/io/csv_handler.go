@@ -1,406 +1,379 @@
+// Package io provides file input/output operations for the EMG data analysis
+// application, including CSV reading, writing, and streaming support for large files.
 package io
 
 import (
 	"bufio"
+	"encoding/csv"
+	stderrors "errors"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+
 	"count_mean/internal/config"
 	"count_mean/internal/errors"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
 	"count_mean/internal/security"
 	"count_mean/internal/validation"
-	"encoding/csv"
-	"fmt"
-	"math"
-	"os"
-	"path/filepath"
-	"strings"
 )
 
-// CSVHandler 處理 CSV 檔案讀寫
+// File permission constants.
+const (
+	dirPermission     = 0o750 // Directory permission mode.
+	csvFilePermission = 0o600 // File permission mode.
+)
+
+// Static errors for err113 compliance.
+var errInvalidCSVFile = stderrors.New("不是有效的 CSV 檔案")
+
+// CSVHandler 處理 CSV 檔案讀寫.
 type CSVHandler struct {
-	config            *config.AppConfig
-	scalingMultiplier float64 // = math.Pow10(config.ScalingFactor), calculated once in constructor
-	pathValidator     *security.PathValidator
-	validator         *validation.InputValidator
-	logger            *logging.Logger
-	largeFileHandler  *LargeFileHandler
+	config           *config.AppConfig
+	pathValidator    *security.PathValidator
+	validator        *validation.InputValidator
+	logger           *logging.Logger
+	largeFileHandler *LargeFileHandler
+	pathBuilder      *FilePathBuilder
+	converter        *CSVConverter
 }
 
-// NewCSVHandler 創建新的 CSV 處理器
-func NewCSVHandler(config *config.AppConfig) *CSVHandler {
+// NewCSVHandler 創建新的 CSV 處理器.
+func NewCSVHandler(cfg *config.AppConfig) *CSVHandler {
 	// Initialize path validator with allowed directories
 	allowedPaths := []string{
-		config.InputDir,
-		config.OutputDir,
-		config.OperateDir,
+		cfg.InputDir,
+		cfg.OutputDir,
+		cfg.OperateDir,
 	}
+
+	pathValidator := security.NewPathValidator(allowedPaths)
+	scalingMultiplier := math.Pow10(cfg.ScalingFactor)
 
 	return &CSVHandler{
-		config:            config,
-		scalingMultiplier: math.Pow10(config.ScalingFactor),
-		pathValidator:     security.NewPathValidator(allowedPaths),
-		validator:         validation.NewInputValidator(),
-		logger:            logging.GetLogger("csv_handler"),
-		largeFileHandler:  NewLargeFileHandler(config),
+		config:           cfg,
+		pathValidator:    pathValidator,
+		validator:        validation.NewInputValidator(),
+		logger:           logging.GetLogger("csv_handler"),
+		largeFileHandler: NewLargeFileHandler(cfg),
+		pathBuilder:      NewFilePathBuilder(cfg, pathValidator),
+		converter:        NewCSVConverter(scalingMultiplier, cfg.Precision),
 	}
 }
 
-// BOMBytes UTF-8 BOM
+// BOMBytes UTF-8 BOM.
+//
+//nolint:gochecknoglobals // BOMBytes is a constant-like byte slice for UTF-8 BOM
 var BOMBytes = []byte{0xEF, 0xBB, 0xBF}
 
-// ListInputFiles 列出輸入目錄中的CSV文件
+// listOptions specifies options for listing directory entries.
+type listOptions struct {
+	dirPath       string
+	filesOnly     bool
+	dirsOnly      bool
+	csvFilesOnly  bool
+	errorMsgParam string
+}
+
+// listEntries lists directory entries based on the given options.
+func (*CSVHandler) listEntries(opts listOptions) ([]string, error) {
+	files, err := os.ReadDir(opts.dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("無法讀取%s %s: %w", opts.errorMsgParam, opts.dirPath, err)
+	}
+
+	var result []string
+
+	for _, file := range files {
+		result = appendEntryIfMatches(result, file, opts)
+	}
+
+	return result, nil
+}
+
+// appendEntryIfMatches appends the file name to result if it matches the options.
+func appendEntryIfMatches(result []string, file os.DirEntry, opts listOptions) []string {
+	if opts.dirsOnly && file.IsDir() {
+		return append(result, file.Name())
+	}
+
+	if opts.filesOnly && !file.IsDir() {
+		return appendFileIfMatches(result, file, opts)
+	}
+
+	return result
+}
+
+// appendFileIfMatches appends the file name to result if it matches CSV filter options.
+func appendFileIfMatches(result []string, file os.DirEntry, opts listOptions) []string {
+	if !opts.csvFilesOnly {
+		return append(result, file.Name())
+	}
+
+	if strings.HasSuffix(strings.ToLower(file.Name()), ".csv") {
+		return append(result, file.Name())
+	}
+
+	return result
+}
+
+// ListInputFiles 列出輸入目錄中的CSV文件.
 func (h *CSVHandler) ListInputFiles() ([]string, error) {
-	files, err := os.ReadDir(h.config.InputDir)
-	if err != nil {
-		return nil, fmt.Errorf("無法讀取輸入目錄 %s: %w", h.config.InputDir, err)
-	}
-
-	var csvFiles []string
-	for _, file := range files {
-		if !file.IsDir() && strings.HasSuffix(file.Name(), ".csv") {
-			csvFiles = append(csvFiles, file.Name())
-		}
-	}
-
-	return csvFiles, nil
+	return h.listEntries(listOptions{
+		dirPath:       h.config.InputDir,
+		filesOnly:     true,
+		csvFilesOnly:  true,
+		errorMsgParam: "輸入目錄",
+	})
 }
 
-// ListInputDirectories 列出輸入目錄中的子目錄
+// ListInputDirectories 列出輸入目錄中的子目錄.
 func (h *CSVHandler) ListInputDirectories() ([]string, error) {
-	files, err := os.ReadDir(h.config.InputDir)
-	if err != nil {
-		return nil, fmt.Errorf("無法讀取輸入目錄 %s: %w", h.config.InputDir, err)
-	}
-
-	var directories []string
-	for _, file := range files {
-		if file.IsDir() {
-			directories = append(directories, file.Name())
-		}
-	}
-
-	return directories, nil
+	return h.listEntries(listOptions{
+		dirPath:       h.config.InputDir,
+		dirsOnly:      true,
+		errorMsgParam: "輸入目錄",
+	})
 }
 
-// ListCSVFilesInDirectory 列出指定目錄中的CSV文件
+// ListCSVFilesInDirectory 列出指定目錄中的CSV文件.
 func (h *CSVHandler) ListCSVFilesInDirectory(dirName string) ([]string, error) {
 	dirPath := filepath.Join(h.config.InputDir, dirName)
-	files, err := os.ReadDir(dirPath)
-	if err != nil {
-		return nil, fmt.Errorf("無法讀取目錄 %s: %w", dirPath, err)
-	}
 
-	var csvFiles []string
-	for _, file := range files {
-		if !file.IsDir() && strings.HasSuffix(file.Name(), ".csv") {
-			csvFiles = append(csvFiles, file.Name())
-		}
-	}
-
-	return csvFiles, nil
+	return h.listEntries(listOptions{
+		dirPath:       dirPath,
+		filesOnly:     true,
+		csvFilesOnly:  true,
+		errorMsgParam: "目錄",
+	})
 }
 
-// ReadCSVFromDirectory 從指定目錄讀取CSV檔案
+// ReadCSVFromDirectory 從指定目錄讀取CSV檔案.
 func (h *CSVHandler) ReadCSVFromDirectory(dirName, fileName string) ([][]string, error) {
-	// 如果沒有副檔名，添加.csv
-	if !strings.HasSuffix(fileName, ".csv") {
-		fileName += ".csv"
-	}
-
-	// 建構完整路徑
+	fileName = h.pathBuilder.EnsureCSVExtension(fileName)
 	fullPath := filepath.Join(h.config.InputDir, dirName, fileName)
 
 	return h.ReadCSV(fullPath)
 }
 
-// WriteCSVToOutputDirectory 寫入CSV文件到輸出目錄的子目錄
+// WriteCSVToOutputDirectory 寫入CSV文件到輸出目錄的子目錄.
 func (h *CSVHandler) WriteCSVToOutputDirectory(dirName, filename string, data [][]string) error {
-	// 確保輸出目錄存在
 	outputDir := filepath.Join(h.config.OutputDir, dirName)
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(outputDir, dirPermission); err != nil {
 		return fmt.Errorf("無法創建輸出目錄: %w", err)
 	}
 
-	// 建構完整輸出路徑
 	fullPath := filepath.Join(outputDir, filename)
+
 	return h.WriteCSV(fullPath, data)
 }
 
-// ReadCSVFromPrompt 從使用者輸入讀取 CSV 檔案
+// ReadCSVFromPrompt 從使用者輸入讀取 CSV 檔案.
 func (h *CSVHandler) ReadCSVFromPrompt(prompt string) ([][]string, error) {
-	fmt.Print(prompt)
-	reader := bufio.NewReader(os.Stdin)
-	fileName, _ := reader.ReadString('\n')
-	fileName = strings.TrimSpace(fileName)
-
-	// 如果沒有副檔名，添加.csv
-	if !strings.HasSuffix(fileName, ".csv") {
-		fileName += ".csv"
+	if _, err := fmt.Fprint(os.Stdout, prompt); err != nil {
+		return nil, fmt.Errorf("無法輸出提示: %w", err)
 	}
 
-	// 建構完整路徑
+	reader := bufio.NewReader(os.Stdin)
+
+	fileName, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("無法讀取使用者輸入: %w", err)
+	}
+
+	fileName = strings.TrimSpace(fileName)
+	fileName = h.pathBuilder.EnsureCSVExtension(fileName)
 	fullPath := filepath.Join(h.config.InputDir, fileName)
 
 	return h.ReadCSV(fullPath)
 }
 
-// ReadCSVFromPromptWithName 從使用者輸入讀取 CSV 檔案並返回檔名
+// ReadCSVFromPromptWithName 從使用者輸入讀取 CSV 檔案並返回檔名.
 func (h *CSVHandler) ReadCSVFromPromptWithName(prompt string) ([][]string, string, error) {
-	fmt.Print(prompt)
-	reader := bufio.NewReader(os.Stdin)
-	fileName, _ := reader.ReadString('\n')
-	fileName = strings.TrimSpace(fileName)
-
-	// 保存原始檔名（不含副檔名）
-	originalName := fileName
-
-	// 如果沒有副檔名，添加.csv
-	if !strings.HasSuffix(fileName, ".csv") {
-		fileName += ".csv"
-	} else {
-		// 如果已有.csv副檔名，移除它以獲得原始名稱
-		originalName = strings.TrimSuffix(fileName, ".csv")
+	if _, err := fmt.Fprint(os.Stdout, prompt); err != nil {
+		return nil, "", fmt.Errorf("無法輸出提示: %w", err)
 	}
 
-	// 建構完整路徑
+	reader := bufio.NewReader(os.Stdin)
+
+	fileName, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, "", fmt.Errorf("無法讀取使用者輸入: %w", err)
+	}
+
+	fileName = strings.TrimSpace(fileName)
+
+	originalName := h.pathBuilder.StripCSVExtension(fileName)
+	fileName = h.pathBuilder.EnsureCSVExtension(fileName)
 	fullPath := filepath.Join(h.config.InputDir, fileName)
 
 	records, err := h.ReadCSV(fullPath)
+
 	return records, originalName, err
 }
 
-// ReadCSVFromInput 從輸入目錄讀取CSV檔案
+// ReadCSVFromInput 從輸入目錄讀取CSV檔案.
 func (h *CSVHandler) ReadCSVFromInput(filename string) ([][]string, error) {
-	// 使用安全路徑構建
 	fullPath, err := h.pathValidator.GetSafePath(h.config.InputDir, filename)
 	if err != nil {
 		return nil, fmt.Errorf("無法構建安全路徑: %w", err)
 	}
+
 	return h.ReadCSV(fullPath)
 }
 
-// ReadCSVExternal 讀取外部 CSV 檔案（添加基本路徑驗證以提升安全性）
-func (h *CSVHandler) ReadCSVExternal(filename string) ([][]string, error) {
-	h.logger.Debug("開始讀取外部 CSV 檔案", map[string]interface{}{
-		"filename": filename,
-	})
-
-	// 檢查文件大小並決定處理方式
-	fileInfo, err := h.largeFileHandler.GetFileInfo(filename)
-	if err != nil {
-		h.logger.Error("外部檔案路徑驗證失敗", err, map[string]interface{}{
-			"filename": filename,
-		})
-		return nil, err
-	} else if fileInfo.IsLarge {
-		h.logger.Info("檢測到大文件，使用流式讀取", map[string]interface{}{
-			"filename":   filename,
-			"file_size":  fileInfo.Size,
-			"line_count": fileInfo.LineCount,
-		})
-		// 對於大文件，返回錯誤提示用戶使用專門的大文件處理方法
-		return nil, errors.NewAppErrorWithDetails(
-			errors.ErrCodeFileTooLarge,
-			"文件過大，請使用大文件處理功能",
-			fmt.Sprintf("文件 %s 過大 (%d bytes)，建議使用流式處理", filename, fileInfo.Size),
-		)
-	}
-
-	// 使用經過 GetFileInfo 檢查的安全路徑（尊重白名單配置）
-	cleanPath := fileInfo.Path
-
-	// Check if it's a CSV file
-	if !strings.HasSuffix(strings.ToLower(cleanPath), ".csv") {
-		err := errors.NewAppErrorWithDetails(
-			errors.ErrCodeFileFormat,
-			"檔案格式無效",
-			fmt.Sprintf("檔案 '%s' 不是有效的 CSV 檔案", cleanPath),
-		)
-		h.logger.Error("檔案格式驗證失敗", err, map[string]interface{}{
-			"path": cleanPath,
-		})
-		return nil, err
-	}
-
-	file, err := os.Open(cleanPath)
-	if err != nil {
-		appErr := errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟檔案")
-		h.logger.Error("檔案開啟失敗", appErr, map[string]interface{}{
-			"path": cleanPath,
-		})
-		return nil, appErr
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			h.logger.Warn("關閉檔案時發生錯誤", map[string]interface{}{
-				"file":  file.Name(),
-				"error": closeErr.Error(),
-			})
-		}
-	}()
-
-	r := csv.NewReader(file)
-	records, err := r.ReadAll()
-	if err != nil {
-		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "無法讀取 CSV 資料")
-		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]interface{}{
-			"path": cleanPath,
-		})
-		return nil, appErr
-	}
-
-	// 驗證數據
-	if len(records) < 2 {
-		err := errors.NewAppErrorWithDetails(
-			errors.ErrCodeInsufficientData,
-			"資料不足",
-			"檔案至少需要包含標題行和一行數據",
-		)
-		h.logger.Error("CSV 資料驗證失敗", err, map[string]interface{}{
-			"path":         cleanPath,
-			"record_count": len(records),
-		})
-		return nil, err
-	}
-
-	// 驗證 CSV 資料結構
-	if err := h.validator.ValidateCSVData(records, cleanPath); err != nil {
-		h.logger.Error("CSV 資料結構驗證失敗", err, map[string]interface{}{
-			"path": cleanPath,
-		})
-		return nil, err
-	}
-
-	h.logger.Info("外部 CSV 檔案讀取成功", map[string]interface{}{
-		"path":         cleanPath,
-		"record_count": len(records),
-		"column_count": len(records[0]),
-	})
-
-	return records, nil
+// readOptions specifies options for reading CSV files.
+type readOptions struct {
+	logPrefix string
 }
 
-// ReadCSV 讀取 CSV 檔案（自動檢測大文件並使用相應處理方式）
-func (h *CSVHandler) ReadCSV(filename string) ([][]string, error) {
-	h.logger.Debug("開始讀取 CSV 檔案", map[string]interface{}{
-		"filename": filename,
-	})
-
-	// 檢查文件大小並決定處理方式（同時進行基本安全檢查）
+// checkFileSizeAndFormat validates file size and format before reading.
+func (h *CSVHandler) checkFileSizeAndFormat(filename string, opts readOptions) (string, error) {
 	fileInfo, err := h.largeFileHandler.GetFileInfo(filename)
 	if err != nil {
-		h.logger.Error("獲取文件信息失敗", err, map[string]interface{}{
-			"filename": filename,
-		})
-		return nil, err
+		h.logger.Error(opts.logPrefix+"檔案路徑驗證失敗", err, map[string]interface{}{"filename": filename})
+
+		return "", err
 	}
 
 	if fileInfo.IsLarge {
 		h.logger.Info("檢測到大文件，使用流式讀取", map[string]interface{}{
-			"filename":   filename,
-			"file_size":  fileInfo.Size,
-			"line_count": fileInfo.LineCount,
+			"filename": filename, "file_size": fileInfo.Size, "line_count": fileInfo.LineCount,
 		})
-		// 對於大文件，返回錯誤提示用戶使用專門的大文件處理方法
-		return nil, errors.NewAppErrorWithDetails(
-			errors.ErrCodeFileTooLarge,
-			"文件過大，請使用大文件處理功能",
+
+		return "", errors.NewAppErrorWithDetails(
+			errors.ErrCodeFileTooLarge, "文件過大，請使用大文件處理功能",
 			fmt.Sprintf("文件 %s 過大 (%d bytes)，建議使用流式處理", filename, fileInfo.Size),
 		)
 	}
 
-	// 使用已驗證的安全路徑
-	sanitizedPath := fileInfo.Path
+	cleanPath := fileInfo.Path
 
-	// Check if it's a CSV file
-	if !h.pathValidator.IsCSVFile(sanitizedPath) {
+	if !h.isCSVFile(cleanPath) {
 		err := errors.NewAppErrorWithDetails(
-			errors.ErrCodeFileFormat,
-			"檔案格式無效",
-			fmt.Sprintf("檔案 '%s' 不是有效的 CSV 檔案", sanitizedPath),
+			errors.ErrCodeFileFormat, "檔案格式無效",
+			fmt.Sprintf("檔案 '%s' 不是有效的 CSV 檔案", cleanPath),
 		)
-		h.logger.Error("檔案格式驗證失敗", err, map[string]interface{}{
-			"path": sanitizedPath,
-		})
-		return nil, err
+		h.logger.Error("檔案格式驗證失敗", err, map[string]interface{}{"path": cleanPath})
+
+		return "", err
 	}
 
-	file, err := os.Open(sanitizedPath)
+	return cleanPath, nil
+}
+
+// isCSVFile checks if the file has a CSV extension.
+func (h *CSVHandler) isCSVFile(path string) bool {
+	return h.pathValidator.IsCSVFile(path)
+}
+
+// readAndParseCSV opens and parses a CSV file.
+func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
+	file, err := os.Open(cleanPath) //nolint:gosec // cleanPath is sanitized and validated
 	if err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟檔案")
-		h.logger.Error("檔案開啟失敗", appErr, map[string]interface{}{
-			"path": sanitizedPath,
-		})
+		h.logger.Error("檔案開啟失敗", appErr, map[string]interface{}{"path": cleanPath})
+
 		return nil, appErr
 	}
 
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
 			h.logger.Warn("關閉檔案時發生錯誤", map[string]interface{}{
-				"file":  file.Name(),
-				"error": closeErr.Error(),
+				"file": file.Name(), "error": closeErr.Error(),
 			})
 		}
 	}()
 
-	r := csv.NewReader(file)
-	records, err := r.ReadAll()
+	records, err := csv.NewReader(file).ReadAll()
 	if err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "無法讀取 CSV 資料")
-		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]interface{}{
-			"path": sanitizedPath,
-		})
+		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]interface{}{"path": cleanPath})
+
 		return nil, appErr
 	}
 
-	// 驗證數據
+	return records, nil
+}
+
+// validateCSVRecords validates CSV records have sufficient data.
+func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) error {
 	if len(records) < 2 {
 		err := errors.NewAppErrorWithDetails(
-			errors.ErrCodeInsufficientData,
-			"資料不足",
-			"檔案至少需要包含標題行和一行數據",
+			errors.ErrCodeInsufficientData, "資料不足", "檔案至少需要包含標題行和一行數據",
 		)
 		h.logger.Error("CSV 資料驗證失敗", err, map[string]interface{}{
-			"path":         sanitizedPath,
-			"record_count": len(records),
+			"path": cleanPath, "record_count": len(records),
 		})
+
+		return err
+	}
+
+	if err := h.validator.ValidateCSVData(records, cleanPath); err != nil {
+		h.logger.Error("CSV 資料結構驗證失敗", err, map[string]interface{}{"path": cleanPath})
+
+		return fmt.Errorf("CSV 資料驗證失敗: %w", err)
+	}
+
+	return nil
+}
+
+// readCSVCore is the internal method that handles CSV reading logic.
+func (h *CSVHandler) readCSVCore(filename string, opts readOptions) ([][]string, error) {
+	h.logger.Debug("開始讀取"+opts.logPrefix+" CSV 檔案", map[string]interface{}{"filename": filename})
+
+	cleanPath, err := h.checkFileSizeAndFormat(filename, opts)
+	if err != nil {
 		return nil, err
 	}
 
-	// 驗證 CSV 資料結構
-	if err := h.validator.ValidateCSVData(records, sanitizedPath); err != nil {
-		h.logger.Error("CSV 資料結構驗證失敗", err, map[string]interface{}{
-			"path": sanitizedPath,
-		})
+	records, err := h.readAndParseCSV(cleanPath)
+	if err != nil {
 		return nil, err
 	}
 
-	h.logger.Info("CSV 檔案讀取成功", map[string]interface{}{
-		"path":         sanitizedPath,
-		"record_count": len(records),
-		"column_count": len(records[0]),
+	if err := h.validateCSVRecords(records, cleanPath); err != nil {
+		return nil, err
+	}
+
+	h.logger.Info(opts.logPrefix+"CSV 檔案讀取成功", map[string]interface{}{
+		"path": cleanPath, "record_count": len(records), "column_count": len(records[0]),
 	})
 
 	return records, nil
 }
 
-// WriteCSVToOutput 寫入CSV文件到輸出目錄
+// ReadCSVExternal 讀取外部 CSV 檔案（添加基本路徑驗證以提升安全性）.
+func (h *CSVHandler) ReadCSVExternal(filename string) ([][]string, error) {
+	return h.readCSVCore(filename, readOptions{
+		logPrefix: "外部 ",
+	})
+}
+
+// ReadCSV 讀取 CSV 檔案（自動檢測大文件並使用相應處理方式）.
+func (h *CSVHandler) ReadCSV(filename string) ([][]string, error) {
+	return h.readCSVCore(filename, readOptions{
+		logPrefix: "",
+	})
+}
+
+// WriteCSVToOutput 寫入CSV文件到輸出目錄.
 func (h *CSVHandler) WriteCSVToOutput(filename string, data [][]string) error {
-	// 確保輸出目錄存在
-	if err := os.MkdirAll(h.config.OutputDir, 0755); err != nil {
+	if err := os.MkdirAll(h.config.OutputDir, dirPermission); err != nil {
 		return fmt.Errorf("無法創建輸出目錄: %w", err)
 	}
 
-	// 使用安全路徑構建
 	fullPath, err := h.pathValidator.GetSafePath(h.config.OutputDir, filename)
 	if err != nil {
 		return fmt.Errorf("無法構建安全輸出路徑: %w", err)
 	}
+
 	return h.WriteCSV(fullPath, data)
 }
 
-// WriteCSV 寫入 CSV 檔案
+// WriteCSV 寫入 CSV 檔案.
 func (h *CSVHandler) WriteCSV(filename string, data [][]string) error {
 	h.logger.Debug("開始寫入 CSV 檔案", map[string]interface{}{
 		"filename":    filename,
@@ -408,39 +381,41 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) error {
 		"bom_enabled": h.config.BOMEnabled,
 	})
 
-	// Validate and sanitize the file path
 	sanitizedPath := h.pathValidator.SanitizePath(filename)
 	if err := h.pathValidator.ValidateFilePath(sanitizedPath); err != nil {
 		h.logger.Error("寫入路徑驗證失敗", err, map[string]interface{}{
 			"original_path":  filename,
 			"sanitized_path": sanitizedPath,
 		})
+
 		return fmt.Errorf("路徑驗證失敗: %w", err)
 	}
 
-	// Check if it's a CSV file
 	if !h.pathValidator.IsCSVFile(sanitizedPath) {
-		err := fmt.Errorf("檔案 '%s' 不是有效的 CSV 檔案", sanitizedPath)
+		err := fmt.Errorf("檔案 '%s': %w", sanitizedPath, errInvalidCSVFile)
 		h.logger.Error("檔案格式驗證失敗", err, map[string]interface{}{
 			"path": sanitizedPath,
 		})
+
 		return err
 	}
 
-	// Check if file already exists and warn (but allow overwrite for now)
 	if _, err := os.Stat(sanitizedPath); err == nil {
 		h.logger.Warn("檔案已存在，將被覆蓋", map[string]interface{}{
 			"path": sanitizedPath,
 		})
 	}
 
-	file, err := os.OpenFile(sanitizedPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	//nolint:gosec // sanitizedPath is sanitized and validated
+	file, err := os.OpenFile(sanitizedPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, csvFilePermission)
 	if err != nil {
 		h.logger.Error("無法建立輸出檔案", err, map[string]interface{}{
 			"path": sanitizedPath,
 		})
+
 		return fmt.Errorf("無法建立檔案 %s: %w", sanitizedPath, err)
 	}
+
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
 			h.logger.Warn("關閉輸出檔案時發生錯誤", map[string]interface{}{
@@ -450,7 +425,6 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) error {
 		}
 	}()
 
-	// 寫入 BOM（如果啟用）
 	if h.config.BOMEnabled {
 		if _, err := file.Write(BOMBytes); err != nil {
 			return fmt.Errorf("無法寫入 BOM 到 %s: %w", filename, err)
@@ -463,6 +437,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) error {
 			"path":     sanitizedPath,
 			"filename": filename,
 		})
+
 		return fmt.Errorf("無法寫入資料到 %s: %w", filename, err)
 	}
 
@@ -475,144 +450,40 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) error {
 	return nil
 }
 
-// ConvertMaxMeanResultsToCSV 將最大平均值結果轉換為 CSV 格式
-func (h *CSVHandler) ConvertMaxMeanResultsToCSV(headers []string, results []models.MaxMeanResult, startRange, endRange float64) [][]string {
-	data := make([][]string, 0, 6)
-
-	// 添加標題
-	data = append(data, headers)
-
-	// 創建結果行
-	startRangeTimes := make([]string, 1, len(headers))
-	endRangeTimes := make([]string, 1, len(headers))
-	startTimes := make([]string, 1, len(headers))
-	endTimes := make([]string, 1, len(headers))
-	maxMeans := make([]string, 1, len(headers))
-
-	startRangeTimes[0] = "開始範圍秒數"
-	endRangeTimes[0] = "結束範圍秒數"
-	startTimes[0] = "開始計算秒數"
-	endTimes[0] = "結束計算秒數"
-	maxMeans[0] = "最大平均值"
-
-	// 填充結果
-	for _, result := range results {
-		precision := fmt.Sprintf("%%.%df", h.config.Precision)
-
-		startRangeTimes = append(startRangeTimes, fmt.Sprintf(precision, startRange))
-		endRangeTimes = append(endRangeTimes, fmt.Sprintf(precision, endRange))
-		startTimes = append(startTimes, fmt.Sprintf(precision, result.StartTime/h.scalingMultiplier))
-		endTimes = append(endTimes, fmt.Sprintf(precision, result.EndTime/h.scalingMultiplier))
-		maxMeans = append(maxMeans, fmt.Sprintf(precision, result.MaxMean/h.scalingMultiplier))
-	}
-
-	data = append(data, startRangeTimes)
-	data = append(data, endRangeTimes)
-	data = append(data, startTimes)
-	data = append(data, endTimes)
-	data = append(data, maxMeans)
-
-	return data
+// ConvertMaxMeanResultsToCSV 將最大平均值結果轉換為 CSV 格式.
+func (h *CSVHandler) ConvertMaxMeanResultsToCSV(
+	headers []string,
+	results []models.MaxMeanResult,
+	startRange, endRange float64,
+) [][]string {
+	return h.converter.ConvertMaxMeanResults(headers, results, startRange, endRange)
 }
 
-// ConvertNormalizedDataToCSV 將標準化數據轉換為 CSV 格式
+// ConvertNormalizedDataToCSV 將標準化數據轉換為 CSV 格式.
 func (h *CSVHandler) ConvertNormalizedDataToCSV(dataset *models.EMGDataset) [][]string {
-	data := make([][]string, 0, len(dataset.Data)+1)
-
-	// 添加標題
-	data = append(data, dataset.Headers)
-
-	// 時間列使用原始精度，數據列使用配置精度
-	timePrecision := fmt.Sprintf("%%.%df", dataset.OriginalTimePrecision)
-	dataPrecision := fmt.Sprintf("%%.%df", h.config.Precision)
-
-	for _, emgData := range dataset.Data {
-		row := make([]string, 0, len(dataset.Headers))
-
-		// 時間列 - 使用原始檔案的時間精度
-		row = append(row, fmt.Sprintf(timePrecision, emgData.Time/h.scalingMultiplier))
-
-		// 數據列 - 使用配置的精度
-		for _, val := range emgData.Channels {
-			row = append(row, fmt.Sprintf(dataPrecision, val))
-		}
-
-		data = append(data, row)
-	}
-
-	return data
+	return h.converter.ConvertNormalizedData(dataset)
 }
 
-// ConvertPhaseAnalysisToCSV 將階段分析結果轉換為 CSV 格式
-func (h *CSVHandler) ConvertPhaseAnalysisToCSV(headers []string, result *models.PhaseAnalysisResult, maxTimeIndex map[int]float64) [][]string {
-	data := make([][]string, 0, len(result.MaxValues)+len(result.MeanValues)+2)
-
-	// 添加標題
-	data = append(data, headers)
-
-	precision := fmt.Sprintf("%%.%df", h.config.Precision)
-
-	// 最大值行
-	for i, phaseResult := range []models.PhaseAnalysisResult{*result} {
-		maxRow := make([]string, 1, len(headers))
-		maxRow[0] = phaseResult.PhaseName + " 最大值"
-
-		for j := 1; j < len(headers); j++ {
-			channelIdx := j - 1
-			if maxVal, exists := phaseResult.MaxValues[channelIdx]; exists {
-				maxRow = append(maxRow, fmt.Sprintf(precision, maxVal/h.scalingMultiplier))
-			} else {
-				maxRow = append(maxRow, "N/A")
-			}
-		}
-		data = append(data, maxRow)
-
-		// 平均值行
-		meanRow := make([]string, 1, len(headers))
-		meanRow[0] = phaseResult.PhaseName + " 平均值"
-
-		for j := 1; j < len(headers); j++ {
-			channelIdx := j - 1
-			if meanVal, exists := phaseResult.MeanValues[channelIdx]; exists {
-				meanRow = append(meanRow, fmt.Sprintf(precision, meanVal/h.scalingMultiplier))
-			} else {
-				meanRow = append(meanRow, "N/A")
-			}
-		}
-		data = append(data, meanRow)
-
-		// 只處理第一個結果（這個函數設計為處理單個階段）
-		if i == 0 {
-			break
-		}
-	}
-
-	// 最大值時間行
-	if len(maxTimeIndex) > 0 {
-		timeRow := make([]string, 1, len(headers))
-		timeRow[0] = "整個階段最大值出現在_秒"
-
-		for j := 1; j < len(headers); j++ {
-			channelIdx := j - 1
-			if timeVal, exists := maxTimeIndex[channelIdx]; exists {
-				timeRow = append(timeRow, fmt.Sprintf(fmt.Sprintf("%%.%df", h.config.Precision), timeVal/h.scalingMultiplier))
-			} else {
-				timeRow = append(timeRow, "N/A")
-			}
-		}
-		data = append(data, timeRow)
-	}
-
-	return data
+// ConvertPhaseAnalysisToCSV 將階段分析結果轉換為 CSV 格式.
+func (h *CSVHandler) ConvertPhaseAnalysisToCSV(
+	headers []string,
+	result *models.PhaseAnalysisResult,
+	maxTimeIndex map[int]float64,
+) [][]string {
+	return h.converter.ConvertPhaseAnalysis(headers, result, maxTimeIndex)
 }
 
-// GetFileInfo 獲取文件信息
+// GetFileInfo 獲取文件信息.
 func (h *CSVHandler) GetFileInfo(filename string) (*FileInfo, error) {
 	return h.largeFileHandler.GetFileInfo(filename)
 }
 
-// ProcessLargeFile 處理大文件
-func (h *CSVHandler) ProcessLargeFile(filename string, windowSize int, callback ProgressCallback) (*StreamingResult, error) {
+// ProcessLargeFile 處理大文件.
+func (h *CSVHandler) ProcessLargeFile(
+	filename string,
+	windowSize int,
+	callback ProgressCallback,
+) (*StreamingResult, error) {
 	h.logger.Info("開始處理大文件", map[string]interface{}{
 		"filename":    filename,
 		"window_size": windowSize,
@@ -621,7 +492,7 @@ func (h *CSVHandler) ProcessLargeFile(filename string, windowSize int, callback 
 	return h.largeFileHandler.ProcessLargeFileInChunks(filename, windowSize, callback)
 }
 
-// ReadLargeCSVStreaming 流式讀取大 CSV 文件
+// ReadLargeCSVStreaming 流式讀取大 CSV 文件.
 func (h *CSVHandler) ReadLargeCSVStreaming(filename string, callback ProgressCallback) (*StreamingResult, error) {
 	h.logger.Info("開始流式讀取大 CSV 文件", map[string]interface{}{
 		"filename": filename,
@@ -630,7 +501,7 @@ func (h *CSVHandler) ReadLargeCSVStreaming(filename string, callback ProgressCal
 	return h.largeFileHandler.ReadCSVStreaming(filename, callback)
 }
 
-// WriteLargeCSVStreaming 流式寫入大 CSV 文件
+// WriteLargeCSVStreaming 流式寫入大 CSV 文件.
 func (h *CSVHandler) WriteLargeCSVStreaming(filename string, data [][]string, callback ProgressCallback) error {
 	h.logger.Info("開始流式寫入大 CSV 文件", map[string]interface{}{
 		"filename":  filename,

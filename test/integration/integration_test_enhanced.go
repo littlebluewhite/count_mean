@@ -1,13 +1,6 @@
 package integration
 
 import (
-	"count_mean/internal/calculator"
-	"count_mean/internal/config"
-	"count_mean/internal/errors"
-	"count_mean/internal/io"
-	"count_mean/internal/logging"
-	"count_mean/internal/security"
-	"count_mean/internal/validation"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,18 +8,27 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/calculator"
+	"count_mean/internal/config"
+	"count_mean/internal/errors"
+	"count_mean/internal/io"
+	"count_mean/internal/logging"
+	"count_mean/internal/security"
+	"count_mean/internal/validation"
 )
 
-func TestIntegration_FullWorkflow(t *testing.T) {
+// TestIntegrationFullWorkflow tests the complete workflow of the application.
+func TestIntegrationFullWorkflow(t *testing.T) {
 	// Setup test directories
 	tempDir := t.TempDir()
 	inputDir := filepath.Join(tempDir, "input")
 	outputDir := filepath.Join(tempDir, "output")
 	operateDir := filepath.Join(tempDir, "operate")
 
-	require.NoError(t, os.MkdirAll(inputDir, 0755))
-	require.NoError(t, os.MkdirAll(outputDir, 0755))
-	require.NoError(t, os.MkdirAll(operateDir, 0755))
+	require.NoError(t, os.MkdirAll(inputDir, 0o755))
+	require.NoError(t, os.MkdirAll(outputDir, 0o755))
+	require.NoError(t, os.MkdirAll(operateDir, 0o755))
 
 	// Create test config
 	cfg := &config.AppConfig{
@@ -130,6 +132,7 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 
 		// Should be an AppError
 		var appErr *errors.AppError
+
 		assert.ErrorAs(t, err, &appErr)
 		assert.Equal(t, errors.ErrCodeFileNotFound, appErr.Code)
 
@@ -169,7 +172,7 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 		assert.Equal(t, cfg.PhaseLabels, loadedCfg.PhaseLabels)
 	})
 
-	t.Run("LoggingIntegration", func(t *testing.T) {
+	t.Run("LoggingIntegration", func(_ *testing.T) {
 		logger := logging.GetLogger("integration_test")
 
 		// Test different log levels
@@ -222,13 +225,14 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 	})
 }
 
-func TestIntegration_ErrorRecovery(t *testing.T) {
+// TestIntegrationErrorRecovery tests error recovery scenarios.
+func TestIntegrationErrorRecovery(t *testing.T) {
 	tempDir := t.TempDir()
 	inputDir := filepath.Join(tempDir, "input")
 	outputDir := filepath.Join(tempDir, "output")
 
-	require.NoError(t, os.MkdirAll(inputDir, 0755))
-	require.NoError(t, os.MkdirAll(outputDir, 0755))
+	require.NoError(t, os.MkdirAll(inputDir, 0o755))
+	require.NoError(t, os.MkdirAll(outputDir, 0o755))
 
 	cfg := &config.AppConfig{
 		ScalingFactor: 10,
@@ -263,6 +267,7 @@ func TestIntegration_ErrorRecovery(t *testing.T) {
 
 		// Should be a validation error
 		var validationErr *errors.ValidationError
+
 		assert.ErrorAs(t, err, &validationErr)
 	})
 
@@ -288,7 +293,8 @@ func TestIntegration_ErrorRecovery(t *testing.T) {
 	})
 }
 
-func TestIntegration_ConcurrentOperations(t *testing.T) {
+// TestIntegrationConcurrentOperations tests concurrent file operations.
+func TestIntegrationConcurrentOperations(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping concurrent operations test in short mode")
 	}
@@ -297,8 +303,8 @@ func TestIntegration_ConcurrentOperations(t *testing.T) {
 	inputDir := filepath.Join(tempDir, "input")
 	outputDir := filepath.Join(tempDir, "output")
 
-	require.NoError(t, os.MkdirAll(inputDir, 0755))
-	require.NoError(t, os.MkdirAll(outputDir, 0755))
+	require.NoError(t, os.MkdirAll(inputDir, 0o755))
+	require.NoError(t, os.MkdirAll(outputDir, 0o755))
 
 	cfg := &config.AppConfig{
 		ScalingFactor: 10,

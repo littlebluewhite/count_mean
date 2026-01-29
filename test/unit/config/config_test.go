@@ -112,8 +112,14 @@ func TestAppConfig_Validate(t *testing.T) {
 	t.Run("ValidPrecision_Boundary", func(t *testing.T) {
 		// 測試邊界值
 		configs := []*config.AppConfig{
-			{ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 0, OutputFormat: "csv", InputDir: "./input", OutputDir: "./output", OperateDir: "./value_operate"},
-			{ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 15, OutputFormat: "csv", InputDir: "./input", OutputDir: "./output", OperateDir: "./value_operate"},
+			{
+				ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 0,
+				OutputFormat: "csv", InputDir: "./input", OutputDir: "./output", OperateDir: "./value_operate",
+			},
+			{
+				ScalingFactor: 10, PhaseLabels: []string{"階段1"}, Precision: 15,
+				OutputFormat: "csv", InputDir: "./input", OutputDir: "./output", OperateDir: "./value_operate",
+			},
 		}
 		for _, cfg := range configs {
 			err := cfg.Validate()
@@ -197,7 +203,7 @@ func TestLoadConfig(t *testing.T) {
 			"operateDir": "./value_operate"
 		}`
 
-		err := os.WriteFile(configFile, []byte(validJSON), 0644)
+		err := os.WriteFile(configFile, []byte(validJSON), 0o644)
 		require.NoError(t, err)
 
 		loadedConfig, err := config.LoadConfig(configFile)
@@ -219,7 +225,7 @@ func TestLoadConfig(t *testing.T) {
 			"invalid_json": 
 		}`
 
-		err := os.WriteFile(configFile, []byte(invalidJSON), 0644)
+		err := os.WriteFile(configFile, []byte(invalidJSON), 0o644)
 		require.NoError(t, err)
 
 		loadedConfig, err := config.LoadConfig(configFile)
@@ -240,7 +246,7 @@ func TestLoadConfig(t *testing.T) {
 			"bom_enabled": true
 		}`
 
-		err := os.WriteFile(configFile, []byte(invalidConfig), 0644)
+		err := os.WriteFile(configFile, []byte(invalidConfig), 0o644)
 		require.NoError(t, err)
 
 		loadedConfig, err := config.LoadConfig(configFile)
@@ -257,9 +263,10 @@ func TestLoadConfig(t *testing.T) {
 		// 創建一個無權限訪問的目錄
 		tempDir := t.TempDir()
 		restrictedDir := filepath.Join(tempDir, "restricted")
-		err := os.Mkdir(restrictedDir, 0000) // 無權限
+		err := os.Mkdir(restrictedDir, 0o000) // 無權限
 		require.NoError(t, err)
-		defer os.Chmod(restrictedDir, 0755) // 清理時恢復權限
+
+		defer os.Chmod(restrictedDir, 0o755) // 清理時恢復權限
 
 		configFile := filepath.Join(restrictedDir, "config.json")
 		loadedConfig, err := config.LoadConfig(configFile)

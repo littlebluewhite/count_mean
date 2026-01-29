@@ -3,11 +3,11 @@ package parser
 import (
 	"testing"
 
-	"count_mean/internal/logging"
-	"count_mean/internal/parser"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/logging"
+	"count_mean/internal/parser"
 )
 
 func TestNewDataParser(t *testing.T) {
@@ -224,9 +224,9 @@ func TestParseRawData_WithScalingFactor(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// With scaling factor of -3, 1 becomes 1 * 10^(-3) = 0.001
+	// With scaling factor of -3, 1 becomes 1 times 10 to the power of -3, which equals 0.001
 	assert.Equal(t, 0.001, result.Data[0].Time)
-	// 500 * 10^(-3) = 0.5
+	// 500 times 10 to the power of -3 equals 0.5
 	assert.Equal(t, 0.5, result.Data[0].Channels[0])
 }
 
