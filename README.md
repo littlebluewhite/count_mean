@@ -1,188 +1,288 @@
-# EMG 數據分析工具 🧠⚡
+# count_mean — EMG 生物訊號分析工具
 
-[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=for-the-badge&logo=go)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Cross--Platform-brightgreen?style=for-the-badge)](https://github.com/)
+[![Platform](https://img.shields.io/badge/Platform-Cross--Platform-brightgreen?style=for-the-badge)](https://github.com/littlebluewhite/count_mean)
 
-> 一個高性能的肌電圖 (EMG) 數據分析工具，支持 GUI 和命令行操作，專門用於處理和分析生物電信號數據。
+> 基於 Go + Wails 的跨平台桌面應用，供運動科學研究者與復健治療師批量分析肌電圖（EMG）生物訊號。透過 Worker Pool 並行運算模型高效處理 1GB+ 大型資料集，產出 CSV 報表與 ECharts 互動式圖表。
 
-## ✨ 主要特色
+## 技術棧
 
-### 🎯 核心功能
-- **多格式支持**: CSV 文件處理和分析
-- **實時計算**: 高效的最大值和平均值計算
-- **雙界面**: GUI 圖形界面和 CLI 命令行工具
-- **多語言**: 完整的國際化支持 (中文/英文)
-- **高性能**: 內建基準測試和性能監控
+| 層級 | 技術 |
+|------|------|
+| 語言 | Go 1.25 |
+| 桌面框架 | Wails v2（嵌入式 Chromium） |
+| 前端 | Vite 7 + Vanilla JS |
+| 圖表 | go-echarts v2（ECharts） |
+| Excel | excelize v2 |
+| 科學繪圖 | gonum/plot |
+| 測試 | testify + Go benchmark |
+| Lint | golangci-lint（45+ linters） |
+| CI/CD | GitHub Actions |
 
-### 🏗️ 技術特色
-- **模組化設計**: 清晰的代碼架構和組件分離
-- **安全防護**: 路徑驗證、輸入清理、錯誤處理
-- **結構化日誌**: 詳細的操作記錄和調試信息
-- **配置靈活**: JSON 配置文件支持
-- **測試完整**: 豐富的單元測試和基準測試
+## 系統架構圖
 
-## 🛠️ 安裝與使用
+```mermaid
+graph TB
+    subgraph Frontend["Frontend（Wails 嵌入式 Chromium）"]
+        UI[Vite + Vanilla JS]
+        ECharts[ECharts 互動式圖表]
+    end
+
+    subgraph Bridge["Wails Bridge"]
+        Bind[自動綁定 Go ↔ JS]
+    end
+
+    subgraph Backend["Backend（Go）"]
+        Calculator[calculator<br/>MaxMean / Normalize / Phase]
+        Parsers[parsers<br/>CSV / EMG / Motion / ANC]
+        IO[io<br/>檔案讀寫]
+        Chart[chart<br/>ECharts 生成 / 降採樣]
+        Config[config<br/>JSON 組態管理]
+        Security[security<br/>PathValidator 路徑驗證]
+        I18n[i18n<br/>多語系支援]
+        Logging[logging<br/>結構化日誌]
+        PhaseSync[phase_sync<br/>階段同步分析]
+        Validation[validation<br/>輸入驗證與消毒]
+    end
+
+    UI --> Bind
+    ECharts --> Bind
+    Bind --> Calculator
+    Bind --> Parsers
+    Bind --> IO
+    Bind --> Chart
+    Bind --> Config
+    Bind --> Security
+    Bind --> I18n
+    Bind --> Logging
+    Bind --> PhaseSync
+    Bind --> Validation
+```
+
+## 資料處理流程
+
+```mermaid
+flowchart LR
+    A[用戶選擇檔案] --> B[PathValidator<br/>路徑驗證]
+    B --> C[CSV Reader<br/>串流讀取]
+    C --> D[Data Parser<br/>EMG / Motion / ANC 解析]
+    D --> E{計算處理}
+
+    E --> E1[MaxMean<br/>滑動視窗]
+    E --> E2[Normalize<br/>MVIC 正規化]
+    E --> E3[Phase Analysis<br/>動作階段分析]
+    E --> E4[Phase Sync<br/>階段同步分析]
+
+    E1 --> F[結果彙整]
+    E2 --> F
+    E3 --> F
+    E4 --> F
+
+    F --> G1[CSV 結果檔]
+    F --> G2[HTML 互動圖表<br/>ECharts]
+```
+
+## 並行運算模型（Worker Pool）
+
+```mermaid
+flowchart TB
+    Orch[Orchestrator<br/>工作分派] --> |分派 Jobs| WP[Worker Pool]
+
+    subgraph WP[Worker Pool]
+        W1[Worker 1<br/>goroutine]
+        W2[Worker 2<br/>goroutine]
+        W3[Worker N<br/>goroutine]
+    end
+
+    BPC[BackpressureController<br/>記憶體監控] -.-> |背壓控制| Orch
+
+    W1 --> RC[Result Collector<br/>結果收集]
+    W2 --> RC
+    W3 --> RC
+
+    W1 -.-> |進度回報| Prog[Progress Reporter<br/>前端進度條]
+    W2 -.-> Prog
+    W3 -.-> Prog
+
+    RC --> Output[最終輸出<br/>CSV + 圖表]
+```
+
+## 核心功能
+
+### MaxMean 滑動視窗計算
+
+對 EMG 訊號執行滑動視窗統計，在指定時間窗內找出最大平均值區間。支援可配置的視窗大小與步進參數，適用於肌肉出力峰值偵測。
+
+### MVIC 正規化
+
+以最大自主等長收縮（Maximum Voluntary Isometric Contraction）為基準，將原始 EMG 振幅正規化為 %MVIC。配置化的縮放因子（scaling factor: 10）與精度（precision: 10）確保數據一致性。
+
+### 動作階段分析
+
+自動辨識生物力學動作的四個階段：
+1. **啟跳下蹲階段**（Squat Phase）
+2. **啟跳上升階段**（Ascending Phase）
+3. **團身階段**（Body Tuck Phase）
+4. **下降階段**（Descent Phase）
+
+### 階段同步分析
+
+跨多個感測器通道的階段時序對齊，分析不同肌群在同一動作階段中的協調模式。
+
+### 互動式圖表（ECharts）
+
+透過 go-echarts 生成 HTML 互動圖表，支援 zoom、tooltip、多通道疊加顯示。針對大數據集自動執行降採樣（downsampling），確保瀏覽器渲染效能。
+
+### 大檔串流處理（1GB+）
+
+採用串流式 CSV 讀取搭配 Worker Pool 並行運算，BackpressureController 動態監控記憶體用量，避免 OOM。即使面對 GB 等級的資料集也能穩定處理。
+
+## 安裝與使用
 
 ### 快速開始
 
-1. **克隆專案**
-   `bash
-   git clone <repository-url>
-   cd count_mean
-   `
+```bash
+git clone https://github.com/littlebluewhite/count_mean.git
+cd count_mean
+go mod download
+```
 
-2. **安裝依賴**
-   `bash
-   go mod download
-   `
+### 開發環境設定
 
-3. **運行 GUI 版本**
-   `bash
-   go run main.go
-   `
+```bash
+make dev-setup              # 安裝所有開發工具（golangci-lint, gosec, wails）
+```
 
-4. **運行命令行版本**
-   `bash
-   go run main.go -cli
-   `
+### 運行
+
+```bash
+go run main.go              # 運行 GUI 應用
+go run main.go -cli         # 運行 CLI 模式
+```
+
+### 建置
+
+```bash
+make build                  # 當前平台
+make build-wails            # 完整 Wails 建置（含前端 npm build）
+make build-cross            # 所有平台（linux/windows/darwin, amd64/arm64）
+```
 
 ### 配置設定
 
-編輯 `config.json` 文件來自定義設定：
+編輯 `config.json` 自定義設定：
 
-`json
+```json
 {
-  "scaling_factor": 10,
+  "scalingFactor": 10,
   "precision": 10,
   "language": "zh-TW",
-  "log_level": "info"
+  "logLevel": "info",
+  "logFormat": "text",
+  "inputDir": "./input",
+  "outputDir": "./output"
 }
-`
+```
 
-## 📊 使用範例
+## 專案架構
 
-### 基本 CSV 處理
-
-`bash
-# 處理單個文件
-go run main.go -input data.csv -output result.csv
-
-# 批量處理
-go run main.go -batch -input ./input_dir -output ./output_dir
-`
-
-### 性能測試
-
-`bash
-# 運行性能基準測試
-go run benchmark_test_main.go
-
-# 只測試 CSV 處理性能
-go run benchmark_test_main.go -csv-only
-
-# 詳細輸出模式
-go run benchmark_test_main.go -verbose
-`
-
-## 🏗️ 專案架構
-
-`
+```
 count_mean/
 ├── main.go                    # 主程序入口
-├── gui/                       # GUI 界面組件
-│   ├── app.go                # Fyne 應用主體
-│   └── components/           # UI 組件
+├── gui/                       # Wails GUI 應用
 ├── internal/                  # 內部套件
-│   ├── calculator/           # 計算引擎
-│   ├── config/              # 配置管理
-│   ├── csv/                 # CSV 處理
-│   ├── logging/             # 日誌系統
-│   ├── i18n/                # 國際化
-│   ├── validator/           # 輸入驗證
-│   └── benchmark/           # 性能測試
-├── docs/                     # 文檔目錄
-├── benchmark_*.go            # 性能測試工具
-└── README.md                # 專案說明
-`
+│   ├── calculator/           # MaxMean / Normalizer / PhaseAnalyzer
+│   ├── parser/               # CSV / EMG / Motion / ANC 統一解析器
+│   ├── io/                   # CSVHandler（BOM）/ LargeFileHandler（串流）
+│   ├── models/               # EMGData / EMGDataset / MaxMeanResult
+│   ├── chart/                # go-echarts 圖表生成與降採樣
+│   ├── config/               # JSON 組態管理
+│   ├── i18n/                 # 多語系（zh-TW, zh-CN, en-US, ja-JP）
+│   ├── logging/              # 結構化日誌
+│   ├── phase_sync/           # 階段同步分析
+│   └── validation/           # 輸入驗證與消毒
+├── frontend/                  # Vite + Vanilla JS 前端
+├── test/                      # 測試目錄
+│   ├── unit/                 # 單元測試
+│   ├── integration/          # 整合測試
+│   ├── benchmark/            # 效能基準測試
+│   └── testdata/             # 測試資料
+├── docs/                      # 文檔
+│   ├── api.md
+│   ├── architecture.md
+│   ├── usage.md
+│   └── testing_automation.md
+└── config.json               # 應用配置
+```
 
-## 🧪 測試與基準
+## 測試與品質
 
 ### 運行測試
 
-`bash
-# 運行所有測試
-go test ./...
+```bash
+make test                   # 所有測試（單元 + 整合）
+make test-unit              # 僅單元測試
+make test-int               # 僅整合測試
+make test-race              # 競態條件檢測
+```
 
-# 運行特定測試
-go test ./internal/calculator
+### 效能基準測試
 
-# 包含基準測試
-go test -bench=. ./...
-`
+```bash
+make bench                  # 自定義基準測試
+make bench-std              # 標準 Go 基準測試（含記憶體統計）
+```
 
-### 性能基準測試
+### 測試覆蓋
 
-專案包含完整的性能測試套件：
+```bash
+make coverage               # 完整覆蓋率分析
+make coverage-html          # 產生 HTML 報告
+```
 
-- **CSV 處理測試**: 不同文件大小的讀取和處理性能
-- **數學計算測試**: 計算引擎的執行效率
-- **記憶體測試**: 記憶體使用和垃圾回收影響
-- **併發測試**: 多 goroutine 並發處理能力
+### 程式碼品質
 
-## 📖 API 文檔
+```bash
+make lint                   # golangci-lint（45+ linters）
+make lint-fix               # 自動修正 lint 問題
+make format                 # gofmt + goimports
+make ci                     # 完整 CI：test, bench, coverage, lint, security
+```
 
-詳細的 API 文檔請參考：
-- [API 參考](docs/api.md)
-- [架構說明](docs/architecture.md)
-- [使用指南](docs/usage.md)
+## 工程品質
 
-## 🌍 國際化支持
+| 指標 | 數據 |
+|------|------|
+| 程式碼規模 | ~11,600 LOC / 106 Go 檔 |
+| 測試覆蓋 | 37 個測試檔、目標 90% coverage |
+| 程式碼品質 | golangci-lint 嚴格規範（45+ linters、cyclomatic complexity ≤ 15） |
+| 安全防護 | PathValidator 路徑遍歷攻擊防禦 + gosec 掃描 |
+| 多語系 | 4 國語系（zh-TW, zh-CN, en-US, ja-JP） |
+| 跨平台 | Linux / Windows / macOS（Intel + Apple Silicon） |
+| CI/CD | GitHub Actions 自動建置 + 發布 |
 
-支持多語言界面：
+## 國際化支持
+
+支持 4 國語系界面：
 - 繁體中文 (zh-TW)
 - 簡體中文 (zh-CN)
 - 英文 (en-US)
+- 日文 (ja-JP)
 
 在 `config.json` 中設定 `language` 參數即可切換語言。
 
-## 🔧 開發說明
+## 文檔
 
-### 代碼風格
-- 遵循 Go 官方代碼規範
-- 使用 `gofmt` 格式化代碼
-- 包含完整的文檔註釋
+- [API 參考](docs/api.md)
+- [架構說明](docs/architecture.md)
+- [使用指南](docs/usage.md)
+- [測試自動化](docs/testing_automation.md)
 
-### 貢獻指南
-1. Fork 專案
-2. 創建功能分支
-3. 提交變更
-4. 發起 Pull Request
-
-## 📊 性能特色
-
-- **高效算法**: 優化的數學計算引擎
-- **記憶體管理**: 智能緩存和垃圾回收
-- **並發處理**: 支持多核心並行計算
-- **大文件支持**: 流式處理大型 CSV 文件
-
-## 🛡️ 安全特色
-
-- **路徑驗證**: 防止目錄遍歷攻擊
-- **輸入清理**: 嚴格的數據驗證
-- **錯誤處理**: 完善的異常捕捉機制
-- **日誌審計**: 詳細的操作記錄
-
-## 📜 授權條款
+## 授權條款
 
 本專案使用 MIT 授權條款。詳情請參閱 [LICENSE](LICENSE) 文件。
 
-## 🤝 貢獻與支持
-
-歡迎提交 Issue 和 Pull Request！
-
 ---
 
-**開發者**: [Your Name]  
-**最後更新**: 2025-07-07  
-**版本**: 1.0.0
+**GitHub：** https://github.com/littlebluewhite/count_mean
