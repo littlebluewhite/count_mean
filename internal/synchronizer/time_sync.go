@@ -4,16 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
-)
 
-// Sampling frequency constants.
-const (
-	// MotionFrequencyHz is the motion capture sampling frequency.
-	MotionFrequencyHz = 250.0
-	// EMGFrequencyHz is the EMG sampling frequency.
-	EMGFrequencyHz = 1000.0
-	// ForceFrequencyHz is the force plate sampling frequency.
-	ForceFrequencyHz = 1000.0
+	"count_mean/internal/parsers"
 )
 
 // Time synchronization errors.
@@ -36,9 +28,9 @@ type TimeSynchronizer struct {
 // NewTimeSynchronizer 創建新的時間同步器.
 func NewTimeSynchronizer() *TimeSynchronizer {
 	return &TimeSynchronizer{
-		motionFreq: MotionFrequencyHz,
-		emgFreq:    EMGFrequencyHz,
-		forceFreq:  ForceFrequencyHz,
+		motionFreq: parsers.FrequencyMotion,
+		emgFreq:    parsers.FrequencyEMG,
+		forceFreq:  parsers.FrequencyANC,
 	}
 }
 
