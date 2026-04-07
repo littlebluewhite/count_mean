@@ -3,6 +3,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -13,6 +14,9 @@ import (
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
 )
+
+// Version is set at build time via -ldflags "-X main.Version=vX.X.X".
+var Version = "dev"
 
 // Window dimensions for the application.
 const (
@@ -69,11 +73,11 @@ func main() {
 	}
 
 	// 創建應用實例
-	app := gui.NewApp(cfg)
+	app := gui.NewApp(cfg, Version)
 
 	// 創建 Wails 應用
 	err = wails.Run(&options.App{
-		Title:            "EMG 資料分析工具",
+		Title:            fmt.Sprintf("EMG 資料分析工具 %s", Version),
 		Width:            windowWidth,
 		Height:           windowHeight,
 		BackgroundColour: &options.RGBA{R: bgColorR, G: bgColorG, B: bgColorB, A: 1},

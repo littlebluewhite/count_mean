@@ -67,8 +67,10 @@ jobs:
         npm install
 
     - name: Build application
+      env:
+        APP_VERSION: v${{ github.run_number }}
       run: |
-        wails build -platform ${{ matrix.platform.target }} -clean
+        wails build -platform ${{ matrix.platform.target }} -clean -ldflags "-X main.Version=$APP_VERSION"
 
     - name: List build output (Unix)
       if: runner.os != 'Windows'

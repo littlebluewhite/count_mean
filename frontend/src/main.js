@@ -17,7 +17,8 @@ import {
     GenerateInteractiveChart,
     LoadPhaseManifest,
     GetAvailablePhases,
-    AnalyzePhaseSync
+    AnalyzePhaseSync,
+    GetVersion
 } from '../wailsjs/go/gui/App.js';
 import { OnFileDrop } from '../wailsjs/runtime/runtime.js';
 
@@ -32,6 +33,14 @@ class EMGAnalysisApp {
     async init() {
         // 載入配置
         this.config = await GetConfig();
+
+        // 顯示版本號
+        try {
+            const version = await GetVersion();
+            document.getElementById('versionText').textContent = version;
+        } catch (e) {
+            console.warn('無法取得版本號', e);
+        }
 
         // 初始化拖曳功能
         this.initDragAndDrop();

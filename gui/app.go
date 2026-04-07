@@ -50,10 +50,11 @@ type App struct {
 	validator         *validation.InputValidator
 	phaseSyncAnalyzer *phase_sync.PhaseSyncAnalyzer
 	progressManager   *ProgressManager
+	version           string
 }
 
 // NewApp creates a new App application struct.
-func NewApp(cfg *config.AppConfig) *App {
+func NewApp(cfg *config.AppConfig, version string) *App {
 	// 創建模組實例
 	csvHandler := io.NewCSVHandler(cfg)
 	maxMeanCalc := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
@@ -79,6 +80,7 @@ func NewApp(cfg *config.AppConfig) *App {
 		validator:         validator,
 		phaseSyncAnalyzer: phaseSyncAnalyzer,
 		progressManager:   progressManager,
+		version:           version,
 	}
 }
 
@@ -116,6 +118,11 @@ func (a *App) SaveConfig(cfg *config.AppConfig) error {
 func (a *App) ResetConfig() *config.AppConfig {
 	a.config = config.DefaultConfig()
 	return a.config
+}
+
+// GetVersion returns the application version string.
+func (a *App) GetVersion() string {
+	return a.version
 }
 
 // SelectFile opens a file dialog for file selection.

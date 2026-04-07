@@ -127,9 +127,13 @@ security:
 # BUILD TARGETS
 # ===================
 
+# Version injection via ldflags
+VERSION ?= dev
+LDFLAGS := -X 'main.Version=$(VERSION)'
+
 # Build for current platform
 build:
-	go build -o emg_gui_tool main.go
+	go build -ldflags "$(LDFLAGS)" -o emg_gui_tool main.go
 
 # Build Wails application
 build-wails:
@@ -161,12 +165,12 @@ build-all:
 build-cross:
 	@echo "Building for all platforms..."
 	mkdir -p dist
-	GOOS=linux GOARCH=amd64 go build -o dist/count_mean_linux_amd64 .
-	GOOS=linux GOARCH=arm64 go build -o dist/count_mean_linux_arm64 .
-	GOOS=windows GOARCH=amd64 go build -o dist/count_mean_windows_amd64.exe .
-	GOOS=windows GOARCH=arm64 go build -o dist/count_mean_windows_arm64.exe .
-	GOOS=darwin GOARCH=amd64 go build -o dist/count_mean_darwin_amd64 .
-	GOOS=darwin GOARCH=arm64 go build -o dist/count_mean_darwin_arm64 .
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/count_mean_linux_amd64 .
+	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o dist/count_mean_linux_arm64 .
+	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/count_mean_windows_amd64.exe .
+	GOOS=windows GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o dist/count_mean_windows_arm64.exe .
+	GOOS=darwin GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/count_mean_darwin_amd64 .
+	GOOS=darwin GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o dist/count_mean_darwin_arm64 .
 
 # ===================
 # DEVELOPMENT TARGETS
