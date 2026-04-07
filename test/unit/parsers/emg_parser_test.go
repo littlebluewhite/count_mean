@@ -14,7 +14,7 @@ import (
 func TestNewEMGParser(t *testing.T) {
 	parser := parsers.NewEMGParser()
 	assert.NotNil(t, parser)
-	assert.Equal(t, 0.001, parser.GetSampleInterval()) // 1000Hz = 0.001s interval
+	assert.Equal(t, 0.0, parser.GetSampleInterval()) // 尚未解析資料，頻率為 0
 }
 
 func TestEMGParser_ParseFile(t *testing.T) {
@@ -345,8 +345,61 @@ func TestCalculateEMGStatistics(t *testing.T) {
 
 func TestEMGParser_GetSampleInterval(t *testing.T) {
 	parser := parsers.NewEMGParser()
+
+	// 解析 1000Hz 資料後，interval 應為 0.001s
+	csvContent := "Time,Ch1\n0.000,100.0\n0.001,101.0\n0.002,102.0\n"
+	tmpFile, err := os.CreateTemp(t.TempDir(), "test_emg_freq_*.csv")
+	require.NoError(t, err)
+	_, err = tmpFile.WriteString(csvContent)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	_, err = parser.ParseFile(tmpFile.Name())
+	require.NoError(t, err)
+
 	interval := parser.GetSampleInterval()
 	assert.Equal(t, 0.001, interval) // 1000Hz = 0.001s
+}
+
+func TestEMGParser_DynamicFrequencyDetection(t *testing.T) {
+	tests := []struct {
+		name             string
+		csvContent       string
+		expectedInterval float64
+	}{
+		{
+			name:             "500Hz data",
+			csvContent:       "Time,Ch1\n0.000,100.0\n0.002,101.0\n0.004,102.0\n",
+			expectedInterval: 0.002,
+		},
+		{
+			name:             "1000Hz data",
+			csvContent:       "Time,Ch1\n0.000,100.0\n0.001,101.0\n0.002,102.0\n",
+			expectedInterval: 0.001,
+		},
+		{
+			name:             "2000Hz data",
+			csvContent:       "Time,Ch1\n0.000,100.0\n0.0005,101.0\n0.001,102.0\n",
+			expectedInterval: 0.0005,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := parsers.NewEMGParser()
+
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_emg_freq_*.csv")
+			require.NoError(t, err)
+			_, err = tmpFile.WriteString(tt.csvContent)
+			require.NoError(t, err)
+			require.NoError(t, tmpFile.Close())
+
+			_, err = parser.ParseFile(tmpFile.Name())
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectedInterval, parser.GetSampleInterval())
+		})
+	}
 }
 
 func TestValidateEMGData(t *testing.T) {

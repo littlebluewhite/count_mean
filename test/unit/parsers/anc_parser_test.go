@@ -17,7 +17,7 @@ import (
 func TestNewANCParser(t *testing.T) {
 	parser := parsers.NewANCParser()
 	assert.NotNil(t, parser)
-	assert.Equal(t, 0.001, parser.GetSampleInterval()) // 1000Hz = 0.001s interval
+	assert.Equal(t, 0.0, parser.GetSampleInterval()) // 尚未解析資料，頻率為 0
 }
 
 func TestANCParser_ParseFile(t *testing.T) {
@@ -240,6 +240,30 @@ func TestANCParser_GetDataInTimeRange(t *testing.T) {
 
 func TestANCParser_GetSampleInterval(t *testing.T) {
 	parser := parsers.NewANCParser()
+
+	// 解析含 1000Hz 資料的 ANC 檔案後，interval 應為 0.001s
+	ancContent := "1\tFile_Type:\tAMTI_FORCE_PLATE\tGeneration#:\t4\n" +
+		"2\tBoard_Type:\tOR6-5-1000\n" +
+		"3\tTrial_Name:\tTEST\tTrial#:\t1\tDuration(Sec.):\t1.000\t#Channels:\t2\n" +
+		"4\tBitDepth:\t16\tPreciseRate:\t1000.000\n" +
+		"5\t\n6\t\n7\t\n8\t\n" +
+		"9\tName\tFx\tFy\n" +
+		"10\tRate\t1000\t1000\n" +
+		"11\tRange\t2000\t2000\n" +
+		"12\tUnits\tN\tN\n" +
+		"0.000000\t0.1\t0.2\n" +
+		"0.001000\t0.2\t0.3\n" +
+		"0.002000\t0.3\t0.4\n"
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "test_anc_freq_*.anc")
+	require.NoError(t, err)
+	_, err = tmpFile.WriteString(ancContent)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	_, err = parser.ParseFile(tmpFile.Name())
+	require.NoError(t, err)
+
 	interval := parser.GetSampleInterval()
 	assert.Equal(t, 0.001, interval) // 1000Hz = 0.001s
 }

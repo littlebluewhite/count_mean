@@ -22,7 +22,7 @@ type ANCParser struct {
 // NewANCParser 創建新的 ANC 解析器.
 func NewANCParser() *ANCParser {
 	return &ANCParser{
-		frequency: FrequencyANC,
+		frequency: 0,
 	}
 }
 
@@ -162,6 +162,10 @@ func (p *ANCParser) parseANCTextFile(filePath string) (*models.ForceData, error)
 		return nil, err
 	}
 
+	if freq, freqErr := computeFrequencyFromTime(forceData.Time); freqErr == nil {
+		p.frequency = freq
+	}
+
 	return forceData, nil
 }
 
@@ -214,7 +218,7 @@ func (p *ANCParser) parseXLSXFile(filePath string) (*models.ForceData, error) {
 
 // parseANCFormatXLSX 解析 ANC 格式的 xlsx 檔案（有頭部資訊）.
 //
-//nolint:revive,err113 // unused-receiver: keep consistent API; dynamic errors with Chinese messages
+//nolint:err113 // dynamic errors with Chinese messages for user-facing output
 func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*models.ForceData, error) {
 	// ANC 格式結構：
 	// Row 1-8: 頭部資訊
@@ -273,12 +277,16 @@ func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*model
 		}
 	}
 
+	if freq, freqErr := computeFrequencyFromTime(forceData.Time); freqErr == nil {
+		p.frequency = freq
+	}
+
 	return forceData, nil
 }
 
 // parseSimpleXLSX 解析純數據表格式的 xlsx 檔案.
 //
-//nolint:revive,err113,stylecheck // unused-receiver; dynamic errors with Chinese messages; Excel is proper noun
+//nolint:err113,stylecheck // dynamic errors with Chinese messages; Excel is proper noun
 func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.ForceData, error) {
 	// 解析標題行（第一行應該包含 Time 和各通道名稱）
 	headerRow := rows[0]
@@ -325,6 +333,10 @@ func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.F
 		if len(channelData) != dataLen {
 			return nil, fmt.Errorf("通道 %s 的數據長度不一致", channelName)
 		}
+	}
+
+	if freq, freqErr := computeFrequencyFromTime(forceData.Time); freqErr == nil {
+		p.frequency = freq
 	}
 
 	return forceData, nil
@@ -456,7 +468,6 @@ func handleBitDepthLine(p *ANCParser, header *ANCHeader, content string) {
 
 	if val := p.extractValue(content, "PreciseRate:"); val != "" {
 		header.PreciseRate, _ = strconv.ParseFloat(val, 64) //nolint:errcheck // optional header field
-		p.frequency = header.PreciseRate
 	}
 }
 
@@ -608,6 +619,10 @@ func (p *ANCParser) GetDataInTimeRange(data *models.ForceData, startTime, endTim
 
 // GetSampleInterval 獲取採樣間隔（秒）.
 func (p *ANCParser) GetSampleInterval() float64 {
+	if p.frequency == 0 {
+		return 0
+	}
+
 	return 1.0 / p.frequency
 }
 

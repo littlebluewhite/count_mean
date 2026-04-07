@@ -21,16 +21,12 @@ var (
 // TimeSynchronizer 時間同步器.
 type TimeSynchronizer struct {
 	motionFreq float64 // Motion 採樣頻率
-	emgFreq    float64 // EMG 採樣頻率
-	forceFreq  float64 // 力板採樣頻率
 }
 
 // NewTimeSynchronizer 創建新的時間同步器.
 func NewTimeSynchronizer() *TimeSynchronizer {
 	return &TimeSynchronizer{
 		motionFreq: parsers.FrequencyMotion,
-		emgFreq:    parsers.FrequencyEMG,
-		forceFreq:  parsers.FrequencyANC,
 	}
 }
 

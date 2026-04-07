@@ -2,10 +2,6 @@ package parsers
 
 // Sampling frequency constants (Hz).
 const (
-	// FrequencyEMG is the default EMG sampling frequency (1000Hz).
-	FrequencyEMG = 1000.0
-	// FrequencyANC is the default ANC (force plate) sampling frequency (1000Hz).
-	FrequencyANC = 1000.0
 	// FrequencyMotion is the default Motion capture sampling frequency (250Hz).
 	FrequencyMotion = 250.0
 )

@@ -19,7 +19,7 @@ type EMGParser struct {
 func NewEMGParser() *EMGParser {
 	return &EMGParser{
 		skipHeader: true,
-		frequency:  FrequencyEMG,
+		frequency:  0,
 	}
 }
 
@@ -120,6 +120,10 @@ func (p *EMGParser) ParseFile(filepath string) (*models.PhaseSyncEMGData, error)
 
 	if err := validateEMGDataIntegrity(emgData); err != nil {
 		return nil, err
+	}
+
+	if freq, freqErr := computeFrequencyFromTime(emgData.Time); freqErr == nil {
+		p.frequency = freq
 	}
 
 	return emgData, nil
@@ -238,6 +242,10 @@ func CalculateEMGStatistics(data *models.PhaseSyncEMGData) (means, maxes map[str
 
 // GetSampleInterval 獲取採樣間隔（秒）.
 func (p *EMGParser) GetSampleInterval() float64 {
+	if p.frequency == 0 {
+		return 0
+	}
+
 	return 1.0 / p.frequency
 }
 
