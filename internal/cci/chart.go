@@ -82,7 +82,7 @@ func setCCIGlobalOptions(line *charts.Line, result *CCIAnalysisResult) {
 		Position:    "top",
 		Type:        "category",
 		Data:        toInterfaceSlice(pctLabels),
-		Name:        "Gait Cycle (%)",
+		Name:        "Time (%)",
 		BoundaryGap: opts.Bool(false),
 		AxisLabel: &opts.AxisLabel{
 			Show:     opts.Bool(true),
@@ -180,7 +180,6 @@ func createCCIToolboxOpts() opts.Toolbox {
 		},
 	}
 }
-
 
 // addCCIMeanSeries adds the 12 CCI mean curve series.
 // Colors are managed by ECharts default palette to match legend/tooltip dots.
@@ -302,6 +301,9 @@ func addCCICustomJS(line *charts.Line) {
 			});
 			myChart.on('restore', function() {
 				window.parent.postMessage('cci-chart-restored', '*');
+			});
+			myChart.on('legendselectchanged', function() {
+				window.parent.postMessage('cci-chart-legend-changed', '*');
 			});
 		}
 	`

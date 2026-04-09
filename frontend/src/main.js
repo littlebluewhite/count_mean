@@ -39,7 +39,7 @@ class EMGAnalysisApp {
         // 顯示版本號
         try {
             const version = await GetVersion();
-            document.getElementById('versionText').textContent = version;
+            document.getElementById('versionBadge').textContent = version;
         } catch (e) {
             console.warn('無法取得版本號', e);
         }
@@ -1353,6 +1353,7 @@ class EMGAnalysisApp {
                 <div style="margin: 1rem 0;">
                     <div id="cciChartContent"></div>
                     ${phaseCheckboxes}
+                    <div id="cciPhasePositions" style="margin-top: 0.5rem;"></div>
                     <div class="button-group" style="margin-top: 0.5rem;">
                         <button class="btn btn-primary" onclick="app.downloadCCIChart()">下載圖表</button>
                     </div>
@@ -1386,7 +1387,7 @@ class EMGAnalysisApp {
             const wrapper = document.getElementById('cciChartContent');
             const iframe = document.createElement('iframe');
             iframe.style.width = '100%';
-            iframe.style.height = '570px';
+            iframe.style.height = '620px';
             iframe.style.border = 'none';
             iframe.srcdoc = result.chartHTML;
             wrapper.appendChild(iframe);
@@ -1395,15 +1396,16 @@ class EMGAnalysisApp {
             iframe.onload = () => this.updateCCIPhaseLines();
         }
 
-        // Listen for restore event from iframe to re-apply phase lines
+        // Listen for restore/legend events from iframe to re-apply phase lines
         window.addEventListener('message', (e) => {
-            if (e.data === 'cci-chart-restored') {
+            if (e.data === 'cci-chart-restored' || e.data === 'cci-chart-legend-changed') {
                 setTimeout(() => this.updateCCIPhaseLines(), 100);
             }
         });
 
         // Store for download and phase line updates
         this._cciResult = result;
+        this._originalPctLabels = null;
     }
 
     // 更新 CCI 圖表的分期點垂直線
@@ -1418,43 +1420,137 @@ class EMGAnalysisApp {
         const chart = iframe.contentWindow.echarts.getInstanceByDom(chartEl);
         if (!chart) return;
 
-        // Get X-axis category labels to find nearest match
         const option = chart.getOption();
+        if (!this._originalPctLabels && option.xAxis && option.xAxis[1] && option.xAxis[1].data) {
+            this._originalPctLabels = option.xAxis[1].data.slice();
+        }
         const xLabels = (option.xAxis && option.xAxis[0] && option.xAxis[0].data) || [];
-
         const phaseTimes = this._cciResult.phaseTimes || {};
-        const phasePercents = this._cciResult.phasePercents || {};
 
-        const markData = [];
+        // Collect checked phases and their times
+        const checkedPhases = [];
         const checkboxes = document.querySelectorAll('[id^="phase_"]');
         checkboxes.forEach(cb => {
             if (cb.checked && phaseTimes[cb.value] !== undefined) {
-                const targetTime = phaseTimes[cb.value];
-                const pct = phasePercents[cb.value].toFixed(1);
-                // Find nearest X-axis category label
-                const nearest = this._findNearestLabel(targetTime, xLabels);
-                if (nearest) {
-                    markData.push({
-                        name: cb.value + ' (' + pct + '%)',
-                        xAxis: nearest,
-                        lineStyle: { type: 'dashed', color: '#888', width: 1 },
-                        label: { show: true, formatter: '{b}', position: 'end' }
-                    });
-                }
+                checkedPhases.push({ name: cb.value, time: phaseTimes[cb.value] });
             }
         });
 
-        if (option.series && option.series.length > 0) {
-            chart.setOption({
-                series: [{
-                    markLine: {
-                        silent: true,
-                        symbol: ['none', 'none'],
-                        data: markData
-                    }
-                }]
-            });
+        // Recalculate percentages: min checked = 0%, max checked = 100%
+        let minTime = Infinity, maxTime = -Infinity;
+        for (const p of checkedPhases) {
+            if (p.time < minTime) minTime = p.time;
+            if (p.time > maxTime) maxTime = p.time;
         }
+        const duration = maxTime - minTime;
+
+        // Rebuild secondary X-axis percentage labels based on checked phase range
+        let newPctLabels;
+        const allCheckboxes = document.querySelectorAll('[id^="phase_"]');
+        const allChecked = checkedPhases.length === allCheckboxes.length;
+        if (allChecked && this._originalPctLabels) {
+            newPctLabels = this._originalPctLabels;
+        } else if (checkedPhases.length >= 2 && duration > 0 && isFinite(duration)) {
+            newPctLabels = xLabels.map(label => {
+                const t = parseFloat(label);
+                return ((t - minTime) / duration * 100).toFixed(1) + '%';
+            });
+        } else if (this._originalPctLabels) {
+            newPctLabels = this._originalPctLabels;
+        } else {
+            newPctLabels = xLabels.map(() => '0.0%');
+        }
+
+        const recalcPercents = {};
+        for (const p of checkedPhases) {
+            recalcPercents[p.name] = duration > 0
+                ? ((p.time - minTime) / duration * 100)
+                : 0;
+        }
+
+        // Build markLine data with two-line labels
+        const markData = [];
+        for (const p of checkedPhases) {
+            const pct = recalcPercents[p.name].toFixed(1);
+            const nearest = this._findNearestLabel(p.time, xLabels);
+            if (nearest) {
+                markData.push({
+                    name: p.name + '\n(' + pct + '%)',
+                    xAxis: nearest,
+                    lineStyle: { type: 'dashed', color: '#888', width: 1 },
+                    label: { show: true, formatter: '{b}', position: 'end' }
+                });
+            }
+        }
+
+        // Find first visible (legend-selected) mean curve series for markLine attachment
+        if (option.series && option.series.length > 0) {
+            const legendSelected = (option.legend && option.legend[0] && option.legend[0].selected) || {};
+            let targetIdx = 0;
+            for (let i = 0; i < option.series.length; i++) {
+                const name = option.series[i].name;
+                if (name.includes(' -SD') || name.includes(' +SD')) continue;
+                if (legendSelected[name] !== false) {
+                    targetIdx = i;
+                    break;
+                }
+            }
+
+            // Clear markLine from previous holder, apply to new target
+            const seriesUpdate = option.series.map((s, i) => {
+                if (i === targetIdx) {
+                    return {
+                        markLine: {
+                            silent: true,
+                            symbol: ['none', 'none'],
+                            data: markData
+                        }
+                    };
+                }
+                if (s.markLine && s.markLine.data && s.markLine.data.length > 0) {
+                    return { markLine: { data: [] } };
+                }
+                return {};
+            });
+            chart.setOption({ series: seriesUpdate, xAxis: [{}, { data: newPctLabels }] });
+        }
+
+        // Update dynamic phase position display
+        this._updatePhasePositionDisplay(recalcPercents);
+    }
+
+    // 更新分期點位置顯示
+    _updatePhasePositionDisplay(recalcPercents) {
+        const container = document.getElementById('cciPhasePositions');
+        if (!container || !this._cciResult) return;
+
+        const phaseOrder = ['P0','P1','P2','S','C','D','T0','T','O','L'];
+        const available = phaseOrder.filter(p =>
+            this._cciResult.phaseTimes && this._cciResult.phaseTimes[p] !== undefined
+        );
+
+        const lines = available.map(p => {
+            const pct = recalcPercents[p];
+            const display = pct !== undefined ? pct.toFixed(1) + '%' : 'Null';
+            return '  ' + p + ': ' + display;
+        });
+
+        const pre = document.createElement('pre');
+        pre.className = 'result-pre';
+        pre.style.margin = '0.25rem 0 0 0';
+        pre.textContent = lines.join('\n');
+
+        container.textContent = '';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'result-info';
+        wrapper.style.marginTop = '0.5rem';
+        const label = document.createElement('p');
+        const strong = document.createElement('strong');
+        strong.textContent = '分期點位置 (步態週期 %)：';
+        label.appendChild(strong);
+        wrapper.appendChild(label);
+        wrapper.appendChild(pre);
+        container.appendChild(wrapper);
     }
 
     // 找到最接近目標時間的 X 軸標籤

@@ -31,6 +31,9 @@ jobs:
 
     runs-on: ${{ matrix.platform.os }}
 
+    env:
+      APP_VERSION: v${{ github.run_number }}
+
     steps:
     - uses: actions/checkout@v4
 
@@ -67,8 +70,6 @@ jobs:
         npm install
 
     - name: Build application
-      env:
-        APP_VERSION: v${{ github.run_number }}
       run: |
         wails build -platform ${{ matrix.platform.target }} -clean -ldflags "-X main.Version=$APP_VERSION"
 
@@ -95,9 +96,9 @@ jobs:
         mkdir -p artifacts
         if [ "${{ matrix.platform.target }}" = "linux/amd64" ]; then
           if [ -f "build/bin/count_mean" ]; then
-            cp build/bin/count_mean artifacts/EMG_tool-linux-amd64
+            cp build/bin/count_mean "artifacts/EMG_tool-${APP_VERSION}-linux-amd64"
           elif [ -f "build/bin/EMG_tool" ]; then
-            cp build/bin/EMG_tool artifacts/EMG_tool-linux-amd64
+            cp build/bin/EMG_tool "artifacts/EMG_tool-${APP_VERSION}-linux-amd64"
           else
             echo "Linux binary not found in build/bin/"
             echo "Looking for binary in all build subdirectories:"
@@ -108,11 +109,11 @@ jobs:
           APP_NAME="count_mean.app"
           if [ -d "build/bin/$APP_NAME" ]; then
             if [ "${{ matrix.platform.target }}" = "darwin/amd64" ]; then
-              cp -R "build/bin/$APP_NAME" "artifacts/EMG_tool-darwin-amd64.app"
-              cd artifacts && zip -r EMG_tool-darwin-amd64.zip EMG_tool-darwin-amd64.app && rm -rf EMG_tool-darwin-amd64.app
+              cp -R "build/bin/$APP_NAME" "artifacts/EMG_tool-${APP_VERSION}-darwin-amd64.app"
+              cd artifacts && zip -r "EMG_tool-${APP_VERSION}-darwin-amd64.zip" "EMG_tool-${APP_VERSION}-darwin-amd64.app" && rm -rf "EMG_tool-${APP_VERSION}-darwin-amd64.app"
             else
-              cp -R "build/bin/$APP_NAME" "artifacts/EMG_tool-darwin-arm64.app"
-              cd artifacts && zip -r EMG_tool-darwin-arm64.zip EMG_tool-darwin-arm64.app && rm -rf EMG_tool-darwin-arm64.app
+              cp -R "build/bin/$APP_NAME" "artifacts/EMG_tool-${APP_VERSION}-darwin-arm64.app"
+              cd artifacts && zip -r "EMG_tool-${APP_VERSION}-darwin-arm64.zip" "EMG_tool-${APP_VERSION}-darwin-arm64.app" && rm -rf "EMG_tool-${APP_VERSION}-darwin-arm64.app"
             fi
           else
             echo "macOS app not found at build/bin/$APP_NAME"
@@ -127,9 +128,9 @@ jobs:
       run: |
         New-Item -ItemType Directory -Force -Path artifacts
         if (Test-Path "build\bin\count_mean.exe") {
-          Copy-Item build\bin\count_mean.exe artifacts\EMG_tool-windows-amd64.exe
+          Copy-Item build\bin\count_mean.exe "artifacts\EMG_tool-$env:APP_VERSION-windows-amd64.exe"
         } elseif (Test-Path "build\bin\EMG_tool.exe") {
-          Copy-Item build\bin\EMG_tool.exe artifacts\EMG_tool-windows-amd64.exe
+          Copy-Item build\bin\EMG_tool.exe "artifacts\EMG_tool-$env:APP_VERSION-windows-amd64.exe"
         } else {
           echo "Windows executable not found"
           Get-ChildItem build\ -Recurse -Name "*.exe" | Write-Host
@@ -140,7 +141,7 @@ jobs:
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: EMG_tool-${{ matrix.platform.name }}
+        name: EMG_tool-v${{ github.run_number }}-${{ matrix.platform.name }}
         path: artifacts/EMG_tool-*
 
   release:

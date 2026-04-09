@@ -410,15 +410,6 @@ func GenerateReport(result *CCIAnalysisResult) string {
 			pr.PairName, mean, max))
 	}
 
-	sb.WriteString(fmt.Sprintf("\n分期點位置 (步態週期 %%):\n"))
-
-	phaseOrder := []string{"P0", "P1", "P2", "S", "C", "D", "T0", "T", "O", "L"}
-	for _, name := range phaseOrder {
-		if pct, ok := result.PhasePercents[name]; ok {
-			sb.WriteString(fmt.Sprintf("  %s: %.1f%%\n", name, pct))
-		}
-	}
-
 	return sb.String()
 }
 
