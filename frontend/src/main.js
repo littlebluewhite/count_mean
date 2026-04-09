@@ -18,6 +18,8 @@ import {
     LoadPhaseManifest,
     GetAvailablePhases,
     AnalyzePhaseSync,
+    AnalyzeCCI,
+    DownloadCCIChart,
     GetVersion
 } from '../wailsjs/go/gui/App.js';
 import { OnFileDrop } from '../wailsjs/runtime/runtime.js';
@@ -103,6 +105,9 @@ class EMGAnalysisApp {
             } else if (targetId === 'phaseSyncManifest') {
                 // 分期同步分析：載入主題
                 this.loadManifestSubjects(filePath);
+            } else if (targetId === 'cciManifest') {
+                // 共同收縮分析：載入主題
+                this.loadCCIManifestSubjects(filePath);
             }
         }
     }
@@ -133,6 +138,9 @@ class EMGAnalysisApp {
                 break;
             case 'phaseSync':
                 this.showPhaseSyncPanel();
+                break;
+            case 'cci':
+                this.showCCIPanel();
                 break;
             case 'config':
                 this.showConfigPanel();
@@ -1176,6 +1184,349 @@ class EMGAnalysisApp {
         resultDiv.style.display = 'block';
     }
     
+    // ==================== 共同收縮分析 (CCI Rudolph) ====================
+
+    // 共同收縮分析面板
+    showCCIPanel() {
+        const panel = document.getElementById('functionPanel');
+        panel.innerHTML = `
+            <div class="panel-header">
+                <h2>共同收縮分析 (CCI Rudolph)</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+            </div>
+
+            <div class="form-group">
+                <label>1. 選擇分期總檔案</label>
+                <div class="input-group drop-zone" data-drop-target="cciManifest" style="--wails-drop-target: drop;">
+                    <input type="text" id="cciManifest" class="form-control" placeholder="選擇或拖放分期總檔案 (.csv)" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectCCIManifest()">瀏覽</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>2. 選擇數據資料夾</label>
+                <div class="input-group">
+                    <input type="text" id="cciDataFolder" class="form-control" placeholder="選擇包含 EMG 數據檔案的資料夾" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectCCIDataFolder()">瀏覽</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>3. 選擇分析主題</label>
+                <select id="cciSubject" class="form-control" disabled>
+                    <option value="">請先載入分期總檔案</option>
+                </select>
+            </div>
+
+            <div class="button-group">
+                <button class="btn btn-primary" onclick="app.executeCCIAnalysis()">開始分析</button>
+                <button class="btn btn-secondary" onclick="app.showMainMenu()">返回</button>
+            </div>
+
+            <div id="cciResult" class="result-section" style="display: none;">
+                <h3>分析結果</h3>
+                <div id="cciResultContent"></div>
+            </div>
+        `;
+
+        this.showPanel(panel);
+    }
+
+    // 選擇 CCI 分期總檔案
+    async selectCCIManifest() {
+        try {
+            const filters = [{
+                displayName: 'CSV Files (*.csv)',
+                pattern: '*.csv'
+            }];
+            const file = await SelectFile('選擇分期總檔案', filters, 'open');
+
+            if (file) {
+                document.getElementById('cciManifest').value = file;
+                await this.loadCCIManifestSubjects(file);
+            }
+        } catch (err) {
+            console.error('選擇檔案失敗:', err);
+            await ShowError('錯誤', err.toString());
+        }
+    }
+
+    // 載入 CCI 分期總檔案的主題
+    async loadCCIManifestSubjects(manifestPath) {
+        try {
+            const subjects = await LoadPhaseManifest(manifestPath);
+            const select = document.getElementById('cciSubject');
+
+            select.innerHTML = '<option value="">請選擇主題</option>';
+            subjects.forEach((subject, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = subject;
+                select.appendChild(option);
+            });
+
+            select.disabled = false;
+            this.updateStatus(`已載入 ${subjects.length} 個主題`);
+        } catch (err) {
+            console.error('載入主題失敗:', err);
+            await ShowError('錯誤', `載入主題失敗: ${err}`);
+        }
+    }
+
+    // 選擇 CCI 數據資料夾
+    async selectCCIDataFolder() {
+        try {
+            const folder = await SelectDirectory('選擇數據資料夾');
+            if (folder) {
+                document.getElementById('cciDataFolder').value = folder;
+            }
+        } catch (err) {
+            console.error('選擇資料夾失敗:', err);
+            await ShowError('錯誤', err.toString());
+        }
+    }
+
+    // 執行 CCI 分析
+    async executeCCIAnalysis() {
+        try {
+            const manifestFile = document.getElementById('cciManifest').value;
+            const dataFolder = document.getElementById('cciDataFolder').value;
+            const subjectIndex = parseInt(document.getElementById('cciSubject').value);
+
+            if (!manifestFile || !dataFolder || isNaN(subjectIndex)) {
+                await ShowError('錯誤', '請填寫所有必要欄位');
+                return;
+            }
+
+            this.updateStatus('正在進行 CCI Rudolph 分析...');
+
+            const result = await AnalyzeCCI({
+                manifestFile,
+                dataFolder,
+                subjectIndex
+            });
+
+            if (result.success) {
+                this.showCCIResult(result);
+                await ShowMessage('成功', `分析完成！\nCSV: ${result.outputCSVPath}`);
+            } else {
+                await ShowError('錯誤', result.message);
+            }
+
+            this.updateStatus('分析完成');
+        } catch (err) {
+            console.error('CCI 分析失敗:', err);
+            await ShowError('錯誤', `分析失敗: ${err}`);
+            this.updateStatus('分析失敗');
+        }
+    }
+
+    // 顯示 CCI 分析結果
+    showCCIResult(result) {
+        const resultDiv = document.getElementById('cciResult');
+        const contentDiv = document.getElementById('cciResultContent');
+
+        // Build phase checkboxes
+        let phaseCheckboxes = '';
+        if (result.phasePercents) {
+            const phaseOrder = ['P0','P1','P2','S','C','D','T0','T','O','L'];
+            const available = phaseOrder.filter(p => result.phasePercents[p] !== undefined);
+            phaseCheckboxes = `
+                <div class="form-group" style="margin-top: 0.5rem;">
+                    <label><strong>分期點顯示：</strong></label>
+                    <div class="checkbox-group" style="display:flex;flex-wrap:wrap;gap:0.5rem;">
+                        ${available.map(p => `
+                            <div class="checkbox-item">
+                                <input type="checkbox" id="phase_${p}" value="${p}" checked
+                                       onchange="app.updateCCIPhaseLines()">
+                                <label for="phase_${p}">${p}</label>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        let chartSection = '';
+        if (result.chartHTML) {
+            chartSection = `
+                <div style="margin: 1rem 0;">
+                    <div id="cciChartContent"></div>
+                    ${phaseCheckboxes}
+                    <div class="button-group" style="margin-top: 0.5rem;">
+                        <button class="btn btn-primary" onclick="app.downloadCCIChart()">下載圖表</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        contentDiv.innerHTML = `
+            <div class="result-info">
+                <p><strong>主題：</strong>${result.subject}</p>
+                <p><strong>肌肉配對：</strong>${result.pairNames.join(', ')}</p>
+                <p><strong>CSV 輸出：</strong>${result.outputCSVPath}</p>
+            </div>
+
+            ${chartSection}
+
+            <div class="result-report">
+                <h4>分析報告</h4>
+                <pre class="result-pre">${result.report}</pre>
+            </div>
+
+            <div class="button-group">
+                <button class="btn btn-primary" onclick="app.openOutputFolder()">開啟輸出資料夾</button>
+            </div>
+        `;
+
+        resultDiv.style.display = 'block';
+
+        // Load interactive chart in iframe
+        if (result.chartHTML) {
+            const wrapper = document.getElementById('cciChartContent');
+            const iframe = document.createElement('iframe');
+            iframe.style.width = '100%';
+            iframe.style.height = '570px';
+            iframe.style.border = 'none';
+            iframe.srcdoc = result.chartHTML;
+            wrapper.appendChild(iframe);
+
+            // Draw phase lines once iframe loads
+            iframe.onload = () => this.updateCCIPhaseLines();
+        }
+
+        // Listen for restore event from iframe to re-apply phase lines
+        window.addEventListener('message', (e) => {
+            if (e.data === 'cci-chart-restored') {
+                setTimeout(() => this.updateCCIPhaseLines(), 100);
+            }
+        });
+
+        // Store for download and phase line updates
+        this._cciResult = result;
+    }
+
+    // 更新 CCI 圖表的分期點垂直線
+    updateCCIPhaseLines() {
+        const iframe = document.querySelector('#cciChartContent iframe');
+        if (!iframe || !iframe.contentWindow || !iframe.contentWindow.echarts) return;
+
+        const iframeDoc = iframe.contentDocument;
+        const chartEl = iframeDoc.querySelector('[_echarts_instance_]');
+        if (!chartEl) return;
+
+        const chart = iframe.contentWindow.echarts.getInstanceByDom(chartEl);
+        if (!chart) return;
+
+        // Get X-axis category labels to find nearest match
+        const option = chart.getOption();
+        const xLabels = (option.xAxis && option.xAxis[0] && option.xAxis[0].data) || [];
+
+        const phaseTimes = this._cciResult.phaseTimes || {};
+        const phasePercents = this._cciResult.phasePercents || {};
+
+        const markData = [];
+        const checkboxes = document.querySelectorAll('[id^="phase_"]');
+        checkboxes.forEach(cb => {
+            if (cb.checked && phaseTimes[cb.value] !== undefined) {
+                const targetTime = phaseTimes[cb.value];
+                const pct = phasePercents[cb.value].toFixed(1);
+                // Find nearest X-axis category label
+                const nearest = this._findNearestLabel(targetTime, xLabels);
+                if (nearest) {
+                    markData.push({
+                        name: cb.value + ' (' + pct + '%)',
+                        xAxis: nearest,
+                        lineStyle: { type: 'dashed', color: '#888', width: 1 },
+                        label: { show: true, formatter: '{b}', position: 'end' }
+                    });
+                }
+            }
+        });
+
+        if (option.series && option.series.length > 0) {
+            chart.setOption({
+                series: [{
+                    markLine: {
+                        silent: true,
+                        symbol: ['none', 'none'],
+                        data: markData
+                    }
+                }]
+            });
+        }
+    }
+
+    // 找到最接近目標時間的 X 軸標籤
+    _findNearestLabel(targetTime, labels) {
+        if (!labels || labels.length === 0) return null;
+        let nearest = labels[0];
+        let minDiff = Math.abs(parseFloat(labels[0]) - targetTime);
+        for (const label of labels) {
+            const diff = Math.abs(parseFloat(label) - targetTime);
+            if (diff < minDiff) {
+                minDiff = diff;
+                nearest = label;
+            }
+        }
+        return nearest;
+    }
+
+    // 下載 CCI 圖表為 PNG
+    async downloadCCIChart() {
+        const iframe = document.querySelector('#cciChartContent iframe');
+        if (!iframe) {
+            await ShowError('錯誤', '找不到圖表');
+            return;
+        }
+
+        try {
+            this.updateStatus('正在下載 CCI 圖表...');
+
+            await new Promise(resolve => {
+                if (iframe.contentDocument.readyState === 'complete') {
+                    resolve();
+                } else {
+                    iframe.onload = resolve;
+                }
+            });
+
+            const iframeWindow = iframe.contentWindow;
+            const iframeDocument = iframe.contentDocument;
+
+            if (!iframeWindow.echarts) {
+                throw new Error('ECharts 未找到');
+            }
+
+            const chartElement = iframeDocument.querySelector('[_echarts_instance_]');
+            if (!chartElement) {
+                throw new Error('找不到圖表元素');
+            }
+
+            const chartInstance = iframeWindow.echarts.getInstanceByDom(chartElement);
+            if (!chartInstance) {
+                throw new Error('找不到圖表實例');
+            }
+
+            const dataURL = chartInstance.getDataURL({
+                type: 'png',
+                pixelRatio: 2,
+                backgroundColor: '#fff'
+            });
+
+            const result = await DownloadCCIChart({
+                imageData: dataURL,
+                subject: this._cciResult.subject
+            });
+
+            this.updateStatus('圖表下載完成');
+            await ShowMessage('成功', `圖表已下載至：${result.outputPath}`);
+        } catch (err) {
+            this.updateStatus('圖表下載失敗');
+            await ShowError('錯誤', `下載失敗：${err.message || err}`);
+        }
+    }
+
     // 開啟輸出資料夾
     async openOutputFolder() {
         try {
@@ -1188,7 +1539,7 @@ class EMGAnalysisApp {
         } catch (err) {
             console.error('無法開啟輸出資料夾:', err);
             await ShowError('錯誤', '無法開啟輸出資料夾');
-        }
+        } 
     }
 }
 

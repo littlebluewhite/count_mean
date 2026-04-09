@@ -13,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/cci"
 	"count_mean/internal/chart"
 	"count_mean/internal/config"
 	"count_mean/internal/io"
@@ -49,6 +50,7 @@ type App struct {
 	chartGen          *chart.EChartsGenerator
 	validator         *validation.InputValidator
 	phaseSyncAnalyzer *phase_sync.PhaseSyncAnalyzer
+	cciAnalyzer       *cci.CCIAnalyzer
 	progressManager   *ProgressManager
 	version           string
 }
@@ -64,6 +66,7 @@ func NewApp(cfg *config.AppConfig, version string) *App {
 	validator := validation.NewInputValidator()
 	logger := logging.GetLogger("app")
 	phaseSyncAnalyzer := phase_sync.NewPhaseSyncAnalyzer()
+	cciAnalyzer := cci.NewCCIAnalyzer()
 	progressManager := NewProgressManager()
 
 	// 設置計算器的進度回調
@@ -79,6 +82,7 @@ func NewApp(cfg *config.AppConfig, version string) *App {
 		chartGen:          chartGen,
 		validator:         validator,
 		phaseSyncAnalyzer: phaseSyncAnalyzer,
+		cciAnalyzer:       cciAnalyzer,
 		progressManager:   progressManager,
 		version:           version,
 	}
