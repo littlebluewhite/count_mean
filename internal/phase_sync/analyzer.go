@@ -273,8 +273,19 @@ func (analyzer *PhaseSyncAnalyzer) runValidationPipeline(ctx *validationContext)
 	return nil
 }
 
-// AnalyzePhaseSync 執行分期同步分析.
-func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParams) (*models.EMGStatistics, error) {
+// LoadedPhaseSyncContext 表示完成驗證、EMG 解析與分期時間區間計算的中間結果，
+// 供需要相同前置步驟的多個分析流程共用。
+type LoadedPhaseSyncContext struct {
+	Manifest       *models.PhaseManifest
+	EMGData        *models.PhaseSyncEMGData
+	PhaseTimeRange *models.PhaseTimeRange
+}
+
+// LoadAndExtractRange 執行分期同步分析的前置流程：路徑驗證、manifest 解析、
+// EMG 檔案解析、分期時間區間計算與 EMG 時間範圍驗證。回傳給多個下游分析共用。
+func (analyzer *PhaseSyncAnalyzer) LoadAndExtractRange(
+	params *models.AnalysisParams,
+) (*LoadedPhaseSyncContext, error) {
 	// 1. 設置允許的基礎路徑
 	analyzer.pathValidator.SetAllowedBasePaths([]string{params.DataFolder})
 
@@ -306,11 +317,27 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 		return nil, err
 	}
 
+	manifestCopy := ctx.manifest
+
+	return &LoadedPhaseSyncContext{
+		Manifest:       &manifestCopy,
+		EMGData:        emgData,
+		PhaseTimeRange: phaseTimeRange,
+	}, nil
+}
+
+// AnalyzePhaseSync 執行分期同步分析.
+func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParams) (*models.EMGStatistics, error) {
+	loaded, err := analyzer.LoadAndExtractRange(params)
+	if err != nil {
+		return nil, err
+	}
+
 	// 6. 提取指定時間範圍的 EMG 數據
 	rangeResult, err := analyzer.emgParser.GetDataInTimeRange(
-		emgData,
-		phaseTimeRange.StartTime,
-		phaseTimeRange.EndTime,
+		loaded.EMGData,
+		loaded.PhaseTimeRange.StartTime,
+		loaded.PhaseTimeRange.EndTime,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("提取 EMG 時間範圍數據失敗: %w", err)
@@ -323,7 +350,7 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(params *models.AnalysisParam
 		rangeResult.ActualStartTime,
 		params.EndPhase,
 		rangeResult.ActualEndTime,
-		ctx.manifest.Subject,
+		loaded.Manifest.Subject,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("計算統計信息失敗: %w", err)

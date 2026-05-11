@@ -18,6 +18,7 @@ import {
     LoadPhaseManifest,
     GetAvailablePhases,
     AnalyzePhaseSync,
+    AnalyzeNormalizedPhaseSync,
     AnalyzeCCI,
     DownloadCCIChart,
     GetVersion
@@ -108,6 +109,9 @@ class EMGAnalysisApp {
             } else if (targetId === 'cciManifest') {
                 // 共同收縮分析：載入主題
                 this.loadCCIManifestSubjects(filePath);
+            } else if (targetId === 'normalizedPhaseSyncManifest') {
+                // 標準化分期同步分析：載入主題
+                this.loadNormalizedPhaseSyncSubjects(filePath);
             }
         }
     }
@@ -141,6 +145,9 @@ class EMGAnalysisApp {
                 break;
             case 'cci':
                 this.showCCIPanel();
+                break;
+            case 'normalizedPhaseSync':
+                this.showNormalizedPhaseSyncPanel();
                 break;
             case 'config':
                 this.showConfigPanel();
@@ -1621,6 +1628,275 @@ class EMGAnalysisApp {
             this.updateStatus('圖表下載失敗');
             await ShowError('錯誤', `下載失敗：${err.message || err}`);
         }
+    }
+
+    // ==================== 標準化分期同步分析 ====================
+
+    showNormalizedPhaseSyncPanel() {
+        const panel = document.getElementById('functionPanel');
+        const html = [
+            '<div class="panel-header">',
+            '<h2>標準化分期同步分析</h2>',
+            '<button class="btn-back" onclick="app.showMainMenu()">返回</button>',
+            '</div>',
+            '<p class="help-text" style="margin-bottom: 1rem;">',
+            '先以每條肌肉在「開始分期點~結束分期點」區間內的最大值做標準化，',
+            '再對標準化後的資料輸出分期同步統計。一次產生兩個檔案。',
+            '</p>',
+            '<div class="form-group">',
+            '<label>1. 選擇分期總檔案</label>',
+            '<div class="input-group drop-zone" data-drop-target="normalizedPhaseSyncManifest" style="--wails-drop-target: drop;">',
+            '<input type="text" id="normalizedPhaseSyncManifest" class="form-control" placeholder="選擇或拖放分期總檔案 (.csv)" readonly>',
+            '<button class="btn btn-secondary" onclick="app.selectNormalizedPhaseSyncManifest()">瀏覽</button>',
+            '</div></div>',
+            '<div class="form-group">',
+            '<label>2. 選擇數據資料夾</label>',
+            '<div class="input-group">',
+            '<input type="text" id="normalizedPhaseSyncDataFolder" class="form-control" placeholder="選擇包含 EMG 數據檔案的資料夾" readonly>',
+            '<button class="btn btn-secondary" onclick="app.selectNormalizedPhaseSyncDataFolder()">瀏覽</button>',
+            '</div></div>',
+            '<div class="form-group">',
+            '<label>3. 選擇分析主題</label>',
+            '<select id="normalizedPhaseSyncSubject" class="form-control" disabled>',
+            '<option value="">請先載入分期總檔案</option>',
+            '</select></div>',
+            '<div class="form-row">',
+            '<div class="form-group col-md-6">',
+            '<label>4. 開始分期點</label>',
+            '<select id="normalizedPhaseSyncStartPhase" class="form-control">',
+            '<option value="">請選擇</option></select></div>',
+            '<div class="form-group col-md-6">',
+            '<label>結束分期點</label>',
+            '<select id="normalizedPhaseSyncEndPhase" class="form-control">',
+            '<option value="">請選擇</option></select></div>',
+            '</div>',
+            '<div class="button-group">',
+            '<button class="btn btn-primary" onclick="app.executeNormalizedPhaseSyncAnalysis()">開始分析</button>',
+            '<button class="btn btn-secondary" onclick="app.showMainMenu()">返回</button>',
+            '</div>',
+            '<div id="normalizedPhaseSyncResult" class="result-section" style="display: none;">',
+            '<h3>分析結果</h3>',
+            '<div id="normalizedPhaseSyncResultContent"></div>',
+            '</div>'
+        ].join('');
+        panel.innerHTML = html;
+        this.showPanel(panel);
+        this.loadNormalizedPhaseSyncPhases();
+    }
+
+    async selectNormalizedPhaseSyncManifest() {
+        try {
+            const filters = [{ displayName: 'CSV Files (*.csv)', pattern: '*.csv' }];
+            const file = await SelectFile('選擇分期總檔案', filters, 'open');
+            if (file) {
+                document.getElementById('normalizedPhaseSyncManifest').value = file;
+                await this.loadNormalizedPhaseSyncSubjects(file);
+            }
+        } catch (err) {
+            console.error('選擇檔案失敗:', err);
+            await ShowError('錯誤', err.toString());
+        }
+    }
+
+    async loadNormalizedPhaseSyncSubjects(manifestPath) {
+        try {
+            const subjects = await LoadPhaseManifest(manifestPath);
+            const select = document.getElementById('normalizedPhaseSyncSubject');
+            select.innerHTML = '';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = '請選擇主題';
+            select.appendChild(placeholder);
+            subjects.forEach((subject, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = subject;
+                select.appendChild(option);
+            });
+            select.disabled = false;
+            this.updateStatus(`已載入 ${subjects.length} 個主題`);
+        } catch (err) {
+            console.error('載入主題失敗:', err);
+            await ShowError('錯誤', `載入主題失敗: ${err}`);
+        }
+    }
+
+    async selectNormalizedPhaseSyncDataFolder() {
+        try {
+            const folder = await SelectDirectory('選擇數據資料夾');
+            if (folder) {
+                document.getElementById('normalizedPhaseSyncDataFolder').value = folder;
+            }
+        } catch (err) {
+            console.error('選擇資料夾失敗:', err);
+            await ShowError('錯誤', err.toString());
+        }
+    }
+
+    async loadNormalizedPhaseSyncPhases() {
+        try {
+            const phases = await GetAvailablePhases();
+            const startSelect = document.getElementById('normalizedPhaseSyncStartPhase');
+            const endSelect = document.getElementById('normalizedPhaseSyncEndPhase');
+            const populate = (selectEl, list) => {
+                selectEl.innerHTML = '';
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = '請選擇';
+                selectEl.appendChild(placeholder);
+                list.forEach(phase => {
+                    const option = document.createElement('option');
+                    option.value = phase;
+                    option.textContent = phase;
+                    selectEl.appendChild(option);
+                });
+            };
+            populate(startSelect, phases.start);
+            populate(endSelect, phases.end);
+        } catch (err) {
+            console.error('載入分期點失敗:', err);
+        }
+    }
+
+    async executeNormalizedPhaseSyncAnalysis() {
+        try {
+            const manifestFile = document.getElementById('normalizedPhaseSyncManifest').value;
+            const dataFolder = document.getElementById('normalizedPhaseSyncDataFolder').value;
+            const subjectIndex = parseInt(document.getElementById('normalizedPhaseSyncSubject').value);
+            const startPhase = document.getElementById('normalizedPhaseSyncStartPhase').value;
+            const endPhase = document.getElementById('normalizedPhaseSyncEndPhase').value;
+
+            if (!manifestFile || !dataFolder || isNaN(subjectIndex) || !startPhase || !endPhase) {
+                await ShowError('錯誤', '請填寫所有必要欄位');
+                return;
+            }
+
+            this.updateStatus('正在進行標準化分期同步分析...');
+            const result = await AnalyzeNormalizedPhaseSync({
+                manifestFile, dataFolder, subjectIndex, startPhase, endPhase
+            });
+
+            if (result.success) {
+                this.showNormalizedPhaseSyncResult(result);
+                await ShowMessage(
+                    '成功',
+                    `分析完成！\n標準化 EMG: ${result.normalizedEMGPath}\n分期統計: ${result.phaseSyncCSVPath}`
+                );
+            } else {
+                await ShowError('錯誤', result.message);
+            }
+            this.updateStatus('分析完成');
+        } catch (err) {
+            console.error('標準化分期同步分析失敗:', err);
+            await ShowError('錯誤', `分析失敗: ${err}`);
+            this.updateStatus('分析失敗');
+        }
+    }
+
+    showNormalizedPhaseSyncResult(result) {
+        const resultDiv = document.getElementById('normalizedPhaseSyncResult');
+        const contentDiv = document.getElementById('normalizedPhaseSyncResultContent');
+        contentDiv.textContent = '';
+
+        const info = document.createElement('div');
+        info.className = 'result-info';
+        const fmtTime = t => (typeof t === 'number' ? t.toFixed(3) : '—');
+        const lines = [
+            ['主題：', result.subject],
+            ['分析區間：', `${result.startPhase} (${fmtTime(result.startTime)}s) → ${result.endPhase} (${fmtTime(result.endTime)}s)`],
+            ['Output 1（標準化 EMG）：', result.normalizedEMGPath],
+            ['Output 2（分期統計）：', result.phaseSyncCSVPath]
+        ];
+        lines.forEach(([label, value]) => {
+            const p = document.createElement('p');
+            const strong = document.createElement('strong');
+            strong.textContent = label;
+            p.appendChild(strong);
+            p.appendChild(document.createTextNode(value != null ? String(value) : ''));
+            info.appendChild(p);
+        });
+        contentDiv.appendChild(info);
+
+        if (result.channelNames && result.channelMaxes) {
+            const wrap = document.createElement('div');
+            wrap.style.marginTop = '1rem';
+            const h4 = document.createElement('h4');
+            h4.textContent = '各肌肉數值';
+            wrap.appendChild(h4);
+            const note = document.createElement('p');
+            note.className = 'help-text';
+            note.style.marginBottom = '0.5rem';
+            note.textContent = '「分期區間最大值」為標準化前的原始最大值（用作除數）；「標準化後區間平均」為標準化後在分期區間內的平均值。Output 2 中各肌肉最大值列為 1.000000 屬於設計使然。';
+            wrap.appendChild(note);
+
+            const table = document.createElement('table');
+            table.className = 'result-table';
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+            const thead = document.createElement('thead');
+            const headRow = document.createElement('tr');
+            ['肌肉', '分期區間最大值', '標準化後區間平均'].forEach((h, i) => {
+                const th = document.createElement('th');
+                th.textContent = h;
+                th.style.padding = '0.25rem 0.5rem';
+                th.style.textAlign = i === 0 ? 'left' : 'right';
+                headRow.appendChild(th);
+            });
+            thead.appendChild(headRow);
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            result.channelNames.forEach(name => {
+                const tr = document.createElement('tr');
+                const tdName = document.createElement('td');
+                tdName.textContent = name;
+                tdName.style.padding = '0.25rem 0.5rem';
+                const tdMax = document.createElement('td');
+                const maxVal = result.channelMaxes[name];
+                tdMax.textContent = typeof maxVal === 'number' ? maxVal.toFixed(6) : '—';
+                tdMax.style.textAlign = 'right';
+                tdMax.style.fontFamily = 'monospace';
+                tdMax.style.padding = '0.25rem 0.5rem';
+                const tdMean = document.createElement('td');
+                const meanVal = result.channelMeans ? result.channelMeans[name] : undefined;
+                tdMean.textContent = typeof meanVal === 'number' ? meanVal.toFixed(6) : '—';
+                tdMean.style.textAlign = 'right';
+                tdMean.style.fontFamily = 'monospace';
+                tdMean.style.padding = '0.25rem 0.5rem';
+                tr.appendChild(tdName);
+                tr.appendChild(tdMax);
+                tr.appendChild(tdMean);
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            wrap.appendChild(table);
+            contentDiv.appendChild(wrap);
+        }
+
+        if (result.report) {
+            const reportWrap = document.createElement('div');
+            reportWrap.className = 'result-report';
+            reportWrap.style.marginTop = '1rem';
+            const h4 = document.createElement('h4');
+            h4.textContent = '分析報告';
+            reportWrap.appendChild(h4);
+            const pre = document.createElement('pre');
+            pre.className = 'result-pre';
+            pre.textContent = result.report;
+            reportWrap.appendChild(pre);
+            contentDiv.appendChild(reportWrap);
+        }
+
+        const btnGroup = document.createElement('div');
+        btnGroup.className = 'button-group';
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary';
+        btn.textContent = '開啟輸出資料夾';
+        btn.onclick = () => this.openOutputFolder();
+        btnGroup.appendChild(btn);
+        contentDiv.appendChild(btnGroup);
+
+        resultDiv.style.display = 'block';
     }
 
     // 開啟輸出資料夾
