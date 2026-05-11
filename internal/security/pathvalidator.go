@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Path validation error definitions.
@@ -31,7 +32,11 @@ const (
 )
 
 // PathValidator provides secure path validation functionality.
+// The allowed base paths are protected by an RWMutex so that callers may
+// safely invoke SetAllowedBasePaths from one goroutine while another reads
+// the list via ValidateFilePath or GetAllowedBasePaths.
 type PathValidator struct {
+	mu               sync.RWMutex
 	allowedBasePaths []string
 }
 
@@ -100,14 +105,19 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 		return fmt.Errorf("%w: %s", ErrPathTraversalAbs, absPath)
 	}
 
+	// 取得允許路徑的快照，避免在驗證過程中與 SetAllowedBasePaths 競爭
+	pv.mu.RLock()
+	allowed := pv.allowedBasePaths
+	pv.mu.RUnlock()
+
 	// 靈活的白名單驗證機制 - 避免絕對路徑長度限制
-	if len(pv.allowedBasePaths) == 0 {
+	if len(allowed) == 0 {
 		// 如果沒有設定允許路徑，只進行基本安全檢查
 		return performBasicSecurityChecks(absPath)
 	}
 
 	// 檢查路徑是否在允許的基礎路徑內
-	for _, basePath := range pv.allowedBasePaths {
+	for _, basePath := range allowed {
 		if isPathWithinBase(absPath, basePath) {
 			return nil
 		}
@@ -288,6 +298,7 @@ func performBasicSecurityChecks(absPath string) error {
 }
 
 // SetAllowedBasePaths 動態設置允許的基礎路徑（支援長路徑）.
+// 寫鎖保護避免並行呼叫者覆蓋彼此設定的清單。
 func (pv *PathValidator) SetAllowedBasePaths(paths []string) {
 	absPaths := make([]string, 0, len(paths))
 
@@ -305,11 +316,16 @@ func (pv *PathValidator) SetAllowedBasePaths(paths []string) {
 		absPaths = append(absPaths, absPath)
 	}
 
+	pv.mu.Lock()
 	pv.allowedBasePaths = absPaths
+	pv.mu.Unlock()
 }
 
 // GetAllowedBasePaths 獲取當前允許的基礎路徑.
 func (pv *PathValidator) GetAllowedBasePaths() []string {
+	pv.mu.RLock()
+	defer pv.mu.RUnlock()
+
 	// 返回副本以防止外部修改
 	result := make([]string, len(pv.allowedBasePaths))
 	copy(result, pv.allowedBasePaths)
