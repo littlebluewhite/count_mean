@@ -1640,8 +1640,9 @@ class EMGAnalysisApp {
             '<button class="btn-back" onclick="app.showMainMenu()">返回</button>',
             '</div>',
             '<p class="help-text" style="margin-bottom: 1rem;">',
-            '先以每條肌肉在「開始分期點~結束分期點」區間內的最大值做標準化，',
-            '再對標準化後的資料輸出分期同步統計。一次產生兩個檔案。',
+            '先以每條肌肉在「標準化區間」內的最大值做標準化（除數），',
+            '再對標準化後的資料於「統計區間」內計算分期同步統計。一次產生兩個檔案。',
+            '標準化區間與統計區間可獨立選擇（預設兩者相同，可分別調整）。',
             '</p>',
             '<div class="form-group">',
             '<label>1. 選擇分期總檔案</label>',
@@ -1662,12 +1663,22 @@ class EMGAnalysisApp {
             '</select></div>',
             '<div class="form-row">',
             '<div class="form-group col-md-6">',
-            '<label>4. 開始分期點</label>',
-            '<select id="normalizedPhaseSyncStartPhase" class="form-control">',
+            '<label>4. 標準化開始分期點</label>',
+            '<select id="normalizedPhaseSyncNormStartPhase" class="form-control" data-touched="false">',
             '<option value="">請選擇</option></select></div>',
             '<div class="form-group col-md-6">',
-            '<label>結束分期點</label>',
-            '<select id="normalizedPhaseSyncEndPhase" class="form-control">',
+            '<label>標準化結束分期點</label>',
+            '<select id="normalizedPhaseSyncNormEndPhase" class="form-control" data-touched="false">',
+            '<option value="">請選擇</option></select></div>',
+            '</div>',
+            '<div class="form-row">',
+            '<div class="form-group col-md-6">',
+            '<label>5. 統計開始分期點</label>',
+            '<select id="normalizedPhaseSyncStatsStartPhase" class="form-control" data-touched="false">',
+            '<option value="">請選擇</option></select></div>',
+            '<div class="form-group col-md-6">',
+            '<label>統計結束分期點</label>',
+            '<select id="normalizedPhaseSyncStatsEndPhase" class="form-control" data-touched="false">',
             '<option value="">請選擇</option></select></div>',
             '</div>',
             '<div class="button-group">',
@@ -1736,10 +1747,8 @@ class EMGAnalysisApp {
     async loadNormalizedPhaseSyncPhases() {
         try {
             const phases = await GetAvailablePhases();
-            const startSelect = document.getElementById('normalizedPhaseSyncStartPhase');
-            const endSelect = document.getElementById('normalizedPhaseSyncEndPhase');
             const populate = (selectEl, list) => {
-                selectEl.innerHTML = '';
+                selectEl.replaceChildren();
                 const placeholder = document.createElement('option');
                 placeholder.value = '';
                 placeholder.textContent = '請選擇';
@@ -1751,11 +1760,42 @@ class EMGAnalysisApp {
                     selectEl.appendChild(option);
                 });
             };
-            populate(startSelect, phases.start);
-            populate(endSelect, phases.end);
+            const fills = [
+                ['normalizedPhaseSyncNormStartPhase', phases.start],
+                ['normalizedPhaseSyncNormEndPhase', phases.end],
+                ['normalizedPhaseSyncStatsStartPhase', phases.start],
+                ['normalizedPhaseSyncStatsEndPhase', phases.end],
+            ];
+            fills.forEach(([id, list]) => populate(document.getElementById(id), list));
+
+            this._bindNormalizedPhaseSyncMirror();
         } catch (err) {
             console.error('載入分期點失敗:', err);
         }
+    }
+
+    // _bindNormalizedPhaseSyncMirror 綁定第四點 → 第五點的「同步直到使用者觸碰」邏輯。
+    // 第五點 select 的 data-touched 屬性初始為 "false"，使用者一旦動過任一第五點
+    // select，該 select 的 data-touched 變 "true"，之後第四點變動不再 mirror 過去。
+    // 目的：常見情境（兩組區間相同）零學習成本，分歧情境（兩組區間不同）使用者可
+    // 自由獨立設定。
+    _bindNormalizedPhaseSyncMirror() {
+        const normStart = document.getElementById('normalizedPhaseSyncNormStartPhase');
+        const normEnd = document.getElementById('normalizedPhaseSyncNormEndPhase');
+        const statsStart = document.getElementById('normalizedPhaseSyncStatsStartPhase');
+        const statsEnd = document.getElementById('normalizedPhaseSyncStatsEndPhase');
+
+        const mirror = (src, dst) => () => {
+            if (dst.dataset.touched === 'false') {
+                dst.value = src.value;
+            }
+        };
+        normStart.addEventListener('change', mirror(normStart, statsStart));
+        normEnd.addEventListener('change', mirror(normEnd, statsEnd));
+
+        const markTouched = el => () => { el.dataset.touched = 'true'; };
+        statsStart.addEventListener('change', markTouched(statsStart));
+        statsEnd.addEventListener('change', markTouched(statsEnd));
     }
 
     async executeNormalizedPhaseSyncAnalysis() {
@@ -1763,17 +1803,23 @@ class EMGAnalysisApp {
             const manifestFile = document.getElementById('normalizedPhaseSyncManifest').value;
             const dataFolder = document.getElementById('normalizedPhaseSyncDataFolder').value;
             const subjectIndex = parseInt(document.getElementById('normalizedPhaseSyncSubject').value);
-            const startPhase = document.getElementById('normalizedPhaseSyncStartPhase').value;
-            const endPhase = document.getElementById('normalizedPhaseSyncEndPhase').value;
+            const normStartPhase = document.getElementById('normalizedPhaseSyncNormStartPhase').value;
+            const normEndPhase = document.getElementById('normalizedPhaseSyncNormEndPhase').value;
+            const statsStartPhase = document.getElementById('normalizedPhaseSyncStatsStartPhase').value;
+            const statsEndPhase = document.getElementById('normalizedPhaseSyncStatsEndPhase').value;
 
-            if (!manifestFile || !dataFolder || isNaN(subjectIndex) || !startPhase || !endPhase) {
+            if (!manifestFile || !dataFolder || isNaN(subjectIndex)
+                || !normStartPhase || !normEndPhase
+                || !statsStartPhase || !statsEndPhase) {
                 await ShowError('錯誤', '請填寫所有必要欄位');
                 return;
             }
 
             this.updateStatus('正在進行標準化分期同步分析...');
             const result = await AnalyzeNormalizedPhaseSync({
-                manifestFile, dataFolder, subjectIndex, startPhase, endPhase
+                manifestFile, dataFolder, subjectIndex,
+                normStartPhase, normEndPhase,
+                statsStartPhase, statsEndPhase
             });
 
             if (result.success) {
@@ -1803,7 +1849,10 @@ class EMGAnalysisApp {
         const fmtTime = t => (typeof t === 'number' ? t.toFixed(3) : '—');
         const lines = [
             ['主題：', result.subject],
-            ['分析區間：', `${result.startPhase} (${fmtTime(result.startTime)}s) → ${result.endPhase} (${fmtTime(result.endTime)}s)`],
+            ['標準化區間：',
+                `${result.normStartPhase} (${fmtTime(result.normStartTime)}s) → ${result.normEndPhase} (${fmtTime(result.normEndTime)}s)`],
+            ['統計區間：',
+                `${result.statsStartPhase} (${fmtTime(result.statsStartTime)}s) → ${result.statsEndPhase} (${fmtTime(result.statsEndTime)}s)`],
             ['Output 1（標準化 EMG）：', result.normalizedEMGPath],
             ['Output 2（分期統計）：', result.phaseSyncCSVPath]
         ];
@@ -1826,7 +1875,7 @@ class EMGAnalysisApp {
             const note = document.createElement('p');
             note.className = 'help-text';
             note.style.marginBottom = '0.5rem';
-            note.textContent = '「分期區間最大值」為標準化前的原始最大值（用作除數）；「標準化後區間平均」為標準化後在分期區間內的平均值。Output 2 中各肌肉最大值列為 1.000000 屬於設計使然。';
+            note.textContent = '「標準化區間最大值」為標準化前在標準化區間內的原始最大值（用作除數）；「標準化後區間平均」為標準化後在統計區間內的平均值。Output 2 中各肌肉最大值在「標準化區間與統計區間相同時」會列為 1.000000（區間內 max 除以自己 = 1）；當兩區間不同時，該數值為 max(統計區間) / max(標準化區間)，可能小於或大於 1。';
             wrap.appendChild(note);
 
             const table = document.createElement('table');
@@ -1835,7 +1884,7 @@ class EMGAnalysisApp {
             table.style.borderCollapse = 'collapse';
             const thead = document.createElement('thead');
             const headRow = document.createElement('tr');
-            ['肌肉', '分期區間最大值', '標準化後區間平均'].forEach((h, i) => {
+            ['肌肉', '標準化區間最大值', '標準化後區間平均'].forEach((h, i) => {
                 const th = document.createElement('th');
                 th.textContent = h;
                 th.style.padding = '0.25rem 0.5rem';

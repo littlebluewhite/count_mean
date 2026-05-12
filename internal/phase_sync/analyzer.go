@@ -273,17 +273,21 @@ func (analyzer *PhaseSyncAnalyzer) runValidationPipeline(ctx *validationContext)
 	return nil
 }
 
-// LoadedPhaseSyncContext 表示完成驗證、EMG 解析與分期時間區間計算的中間結果，
-// 供需要相同前置步驟的多個分析流程共用。
+// LoadedPhaseSyncContext 表示完成驗證與 EMG 解析的中間結果，供需要相同前置步驟
+// 的多個分析流程共用。PhaseTimeRange 由 LoadAndExtractRange 在內部一併計算後填入；
+// 直接呼叫 Load 取得的 context 中 PhaseTimeRange 為 nil，需後續呼叫 ResolvePhaseRange
+// 取得具體區間。
 type LoadedPhaseSyncContext struct {
 	Manifest       *models.PhaseManifest
 	EMGData        *models.PhaseSyncEMGData
 	PhaseTimeRange *models.PhaseTimeRange
 }
 
-// LoadAndExtractRange 執行分期同步分析的前置流程：路徑驗證、manifest 解析、
-// EMG 檔案解析、分期時間區間計算與 EMG 時間範圍驗證。回傳給多個下游分析共用。
-func (analyzer *PhaseSyncAnalyzer) LoadAndExtractRange(
+// Load 執行分期同步分析的前置載入流程：路徑驗證、manifest 解析、EMG 檔案解析。
+// 不計算任何分期時間範圍（PhaseTimeRange 為 nil），供需要對同一份載入資料解析多組
+// 不同分期區間的工作流共用（例如標準化分期同步分析需要分別解析 normalize 範圍與
+// statistics 範圍）。後續呼叫 ResolvePhaseRange 取得具體時間區間。
+func (analyzer *PhaseSyncAnalyzer) Load(
 	params *models.AnalysisParams,
 ) (*LoadedPhaseSyncContext, error) {
 	// 1. 設置允許的基礎路徑
@@ -301,29 +305,69 @@ func (analyzer *PhaseSyncAnalyzer) LoadAndExtractRange(
 		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
 	}
 
-	// 4. 計算分期時間範圍
-	phaseTimeRange, err := analyzer.phaseCalculator.GetPhaseTimeRange(
-		ctx.manifest.PhasePoints,
-		params.StartPhase,
-		params.EndPhase,
-		ctx.manifest.EMGMotionOffset,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("計算分期時間範圍失敗: %w", err)
-	}
-
-	// 5. 驗證 EMG 時間範圍
-	if err := validateEMGTimeRange(emgData, phaseTimeRange, ctx.manifest.EMGMotionOffset); err != nil {
-		return nil, err
-	}
-
 	manifestCopy := ctx.manifest
 
 	return &LoadedPhaseSyncContext{
 		Manifest:       &manifestCopy,
 		EMGData:        emgData,
-		PhaseTimeRange: phaseTimeRange,
+		PhaseTimeRange: nil,
 	}, nil
+}
+
+// ResolvePhaseRange 從已 Load 的 context 解析指定的一對分期點為時間範圍，
+// 並驗證該範圍落在 EMG 資料時間範圍內。同一個 LoadedPhaseSyncContext 可重複呼叫
+// 此函式以取得多組不同分期區間。
+//
+// 先呼叫 phaseCalculator.ValidatePhaseOrder 顯式驗證 start < end（嚴格小於）
+// 與 phase 名稱合法性。這個驗證對「直接走 Load + ResolvePhaseRange」的呼叫端
+// （例如標準化分期同步分析對 Stats 那組區間）至關重要——否則 start == end 的
+// 退化情形會穿透到 GetPhaseTimeRange，產生 zero-duration 區間。對「走
+// LoadAndExtractRange」的呼叫端則與 Load 內 pipeline 的 validatePhaseOrder
+// 形成冗餘檢查（無害）。
+func (analyzer *PhaseSyncAnalyzer) ResolvePhaseRange(
+	loaded *LoadedPhaseSyncContext,
+	startPhase, endPhase string,
+) (*models.PhaseTimeRange, error) {
+	if err := analyzer.phaseCalculator.ValidatePhaseOrder(startPhase, endPhase); err != nil {
+		return nil, fmt.Errorf("分期點順序驗證失敗: %w", err)
+	}
+
+	phaseTimeRange, err := analyzer.phaseCalculator.GetPhaseTimeRange(
+		loaded.Manifest.PhasePoints,
+		startPhase,
+		endPhase,
+		loaded.Manifest.EMGMotionOffset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("計算分期時間範圍失敗: %w", err)
+	}
+
+	if err := validateEMGTimeRange(loaded.EMGData, phaseTimeRange, loaded.Manifest.EMGMotionOffset); err != nil {
+		return nil, err
+	}
+
+	return phaseTimeRange, nil
+}
+
+// LoadAndExtractRange 為 Load + ResolvePhaseRange 的薄包裝，保留給只需要單一
+// 分期區間的呼叫端使用（例如 AnalyzePhaseSync）。需要多組區間時請改用 Load
+// 搭配多次 ResolvePhaseRange。
+func (analyzer *PhaseSyncAnalyzer) LoadAndExtractRange(
+	params *models.AnalysisParams,
+) (*LoadedPhaseSyncContext, error) {
+	loaded, err := analyzer.Load(params)
+	if err != nil {
+		return nil, err
+	}
+
+	phaseTimeRange, err := analyzer.ResolvePhaseRange(loaded, params.StartPhase, params.EndPhase)
+	if err != nil {
+		return nil, err
+	}
+
+	loaded.PhaseTimeRange = phaseTimeRange
+
+	return loaded, nil
 }
 
 // AnalyzePhaseSync 執行分期同步分析.
