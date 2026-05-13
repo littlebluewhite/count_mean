@@ -12,6 +12,17 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"count_mean/internal/models"
+	"count_mean/internal/security/fsperm"
+)
+
+// ANC capacity bounds — Duration × PreciseRate 來自 attacker-controlled header；
+// 沒有 clamp 時 1e308 級乘積 → int 溢位 / make() panic。
+//
+// maxANCSampleCapacity = 100M samples ≈ 800MB float64 per channel：real-world
+// 最長練習 1hr × 10kHz = 36M，留 ~3× 緩衝；超過視為惡意 header，退回 default。
+const (
+	maxANCSampleCapacity = 100_000_000
+	defaultANCCapacity   = 1024
 )
 
 // ANCParser ANC力板檔案解析器.
@@ -63,7 +74,7 @@ func (p *ANCParser) ParseFile(filePath string) (*models.ForceData, error) {
 
 // initForceDataFromHeader initializes ForceData structure from ANC header.
 func initForceDataFromHeader(header *ANCHeader) *models.ForceData {
-	capacity := int(header.Duration * header.PreciseRate)
+	capacity := clampANCCapacity(header.Duration * header.PreciseRate)
 	forceData := &models.ForceData{
 		Time:    make([]float64, 0, capacity),
 		Forces:  make(map[string][]float64),
@@ -77,22 +88,35 @@ func initForceDataFromHeader(header *ANCHeader) *models.ForceData {
 	return forceData
 }
 
+// clampANCCapacity 把使用者 header 推算出的容量限制在合理範圍。
+// NaN / Inf / 負值 / 超過 maxANCSampleCapacity 視為惡意 header，回退到 default
+// 預配空間，後續 append 仍會動態擴展，不影響正確檔案的解析；只是擋掉 panic / OOM。
+func clampANCCapacity(raw float64) int {
+	if math.IsNaN(raw) || math.IsInf(raw, 0) || raw < 0 || raw > maxANCSampleCapacity {
+		return defaultANCCapacity
+	}
+
+	return int(raw)
+}
+
 // parseANCDataLine parses a single data line and appends to forceData.
 func parseANCDataLine(fields, channelNames []string, forceData *models.ForceData) bool {
-	timeValue, err := strconv.ParseFloat(fields[0], 64)
-	if err != nil {
+	if len(fields) == 0 {
+		return false
+	}
+
+	timeValue, ok := ParseFloatCell(fields[0])
+	if !ok {
 		return false
 	}
 
 	forceData.Time = append(forceData.Time, timeValue)
 
 	for i, channelName := range channelNames {
-		value := 0.0
+		var value float64
 
 		if i+1 < len(fields) {
-			if parsed, parseErr := strconv.ParseFloat(fields[i+1], 64); parseErr == nil {
-				value = parsed
-			}
+			value, _ = ParseFloatCell(fields[i+1])
 		}
 
 		forceData.Forces[channelName] = append(forceData.Forces[channelName], value)
@@ -117,7 +141,7 @@ func validateForceDataIntegrity(forceData *models.ForceData) error {
 
 // parseANCTextFile 解析文字格式的 ANC 檔案.
 func (p *ANCParser) parseANCTextFile(filePath string) (*models.ForceData, error) {
-	file, err := os.Open(filePath) //nolint:gosec // filePath is validated by caller
+	file, err := os.OpenFile(filePath, fsperm.ReadFlags, 0) //nolint:gosec // filePath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
 	if err != nil {
 		return nil, fmt.Errorf("無法開啟 ANC 檔案 %s: %w", filePath, err)
 	}
@@ -342,25 +366,6 @@ func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.F
 	return forceData, nil
 }
 
-// parseChannelValue parses a single channel value from a row.
-func parseChannelValue(row []string, colIdx int) float64 {
-	if colIdx >= len(row) {
-		return 0
-	}
-
-	valueStr := strings.TrimSpace(row[colIdx])
-	if valueStr == "" {
-		return 0
-	}
-
-	value, err := strconv.ParseFloat(valueStr, 64)
-	if err != nil {
-		return 0
-	}
-
-	return value
-}
-
 // parseDataRow parses a single data row and appends values to forceData.
 // Returns false if the row should be skipped.
 func parseDataRow(row, channelNames []string, forceData *models.ForceData) bool {
@@ -368,20 +373,20 @@ func parseDataRow(row, channelNames []string, forceData *models.ForceData) bool 
 		return false
 	}
 
-	timeStr := strings.TrimSpace(row[0])
-	if timeStr == "" {
-		return false
-	}
-
-	timeValue, err := strconv.ParseFloat(timeStr, 64)
-	if err != nil {
+	timeValue, ok := ParseFloatCell(row[0])
+	if !ok {
 		return false
 	}
 
 	forceData.Time = append(forceData.Time, timeValue)
 
 	for i, channelName := range channelNames {
-		value := parseChannelValue(row, i+1)
+		var value float64
+
+		if i+1 < len(row) {
+			value, _ = ParseFloatCell(row[i+1])
+		}
+
 		forceData.Forces[channelName] = append(forceData.Forces[channelName], value)
 	}
 
@@ -577,39 +582,17 @@ func (p *ANCParser) GetDataInTimeRange(data *models.ForceData, startTime, endTim
 		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", startTime, endTime)
 	}
 
-	// 將時間轉換為整數毫秒進行比較，避免浮點數精度問題
-	startTimeMs := int64(math.Round(startTime * 1000))
-	endTimeMs := int64(math.Round(endTime * 1000))
-
-	// 找到時間範圍的索引
-	startIdx := -1
-	endIdx := -1
-
-	for i, t := range data.Time {
-		tMs := int64(math.Round(t * 1000))
-		if startIdx == -1 && tMs >= startTimeMs {
-			startIdx = i
-		}
-
-		if tMs <= endTimeMs {
-			endIdx = i
-		} else if endIdx != -1 {
-			break
-		}
+	startIdx, endIdx, err := FindTimeRangeIndices(data.Time, startTime, endTime)
+	if err != nil {
+		return nil, err
 	}
 
-	if startIdx == -1 || endIdx == -1 || startIdx > endIdx {
-		return nil, fmt.Errorf("找不到有效的時間範圍數據")
-	}
-
-	// 創建子集數據
 	rangeData := &models.ForceData{
 		Time:    data.Time[startIdx : endIdx+1],
 		Forces:  make(map[string][]float64),
 		Headers: data.Headers,
 	}
 
-	// 複製力值數據
 	for channelName, forceData := range data.Forces {
 		rangeData.Forces[channelName] = forceData[startIdx : endIdx+1]
 	}
@@ -628,35 +611,16 @@ func (p *ANCParser) GetSampleInterval() float64 {
 
 // ValidateForceData 驗證力板數據.
 //
-//nolint:err113,dupl // dynamic errors with Chinese messages; similar validation pattern is intentional
+//nolint:err113 // dynamic error message with Chinese for user-facing output
 func ValidateForceData(data *models.ForceData) error {
 	if data == nil {
-		return fmt.Errorf("力板數據為空")
+		return fmt.Errorf("力板數據為空: %w", ErrNilData)
 	}
 
-	if len(data.Time) == 0 {
-		return fmt.Errorf("力板時間序列為空")
-	}
-
-	if len(data.Forces) == 0 {
-		return fmt.Errorf("力板沒有任何通道數據")
-	}
-
-	// 檢查時間序列是否遞增
-	for i := 1; i < len(data.Time); i++ {
-		if data.Time[i] <= data.Time[i-1] {
-			return fmt.Errorf("力板時間序列在索引 %d 處不是遞增的", i)
-		}
-	}
-
-	// 檢查所有通道數據長度一致
-	expectedLen := len(data.Time)
-	for channelName, forceData := range data.Forces {
-		if len(forceData) != expectedLen {
-			return fmt.Errorf("通道 %s 的數據長度 (%d) 與時間序列長度 (%d) 不符",
-				channelName, len(forceData), expectedLen)
-		}
-	}
-
-	return nil
+	return ValidateTimeSeries(data.Time, data.Forces, TimeSeriesLabels{
+		DataName:     "力板",
+		SeriesName:   "時間序列",
+		SeriesPos:    "索引",
+		ChannelLabel: "通道",
+	})
 }

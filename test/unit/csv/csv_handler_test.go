@@ -1,6 +1,7 @@
 package csv_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,8 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/config"
+	"count_mean/internal/csvutil"
 	"count_mean/internal/io"
 	"count_mean/internal/models"
+	"count_mean/internal/security/fsperm"
 )
 
 func TestNewCSVHandler(t *testing.T) {
@@ -29,7 +32,9 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 	handler := io.NewCSVHandler(cfg)
 
 	t.Run("FileNotExists", func(t *testing.T) {
-		records, err := handler.ReadCSV("nonexistent.csv")
+		// 用 allowlist 內不存在的檔，避免被 readCSVCore 的路徑驗證先擋下，
+		// 仍保留「file-not-found」測試意圖。
+		records, err := handler.ReadCSV(filepath.Join(tempDir, "nonexistent.csv"))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "無法獲取文件信息")
 		require.Nil(t, records)
@@ -39,7 +44,7 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 		csvFile := filepath.Join(tempDir, "test.csv")
 
 		csvContent := "Time,Ch1,Ch2\n1.0,100,50\n2.0,200,100\n"
-		err := os.WriteFile(csvFile, []byte(csvContent), 0o644)
+		err := os.WriteFile(csvFile, []byte(csvContent), fsperm.FilePerm)
 		require.NoError(t, err)
 
 		records, err := handler.ReadCSV(csvFile)
@@ -53,7 +58,7 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 	t.Run("EmptyFile", func(t *testing.T) {
 		csvFile := filepath.Join(tempDir, "empty.csv")
 
-		err := os.WriteFile(csvFile, []byte(""), 0o644)
+		err := os.WriteFile(csvFile, []byte(""), fsperm.FilePerm)
 		require.NoError(t, err)
 
 		records, err := handler.ReadCSV(csvFile)
@@ -66,7 +71,7 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 		csvFile := filepath.Join(tempDir, "header_only.csv")
 
 		csvContent := "Time,Ch1,Ch2\n"
-		err := os.WriteFile(csvFile, []byte(csvContent), 0o644)
+		err := os.WriteFile(csvFile, []byte(csvContent), fsperm.FilePerm)
 		require.NoError(t, err)
 
 		records, err := handler.ReadCSV(csvFile)
@@ -80,7 +85,7 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 
 		// 包含未封閉的引號
 		csvContent := "Time,Ch1\n1.0,\"unclosed quote\n2.0,100\n"
-		err := os.WriteFile(csvFile, []byte(csvContent), 0o644)
+		err := os.WriteFile(csvFile, []byte(csvContent), fsperm.FilePerm)
 		require.NoError(t, err)
 
 		records, err := handler.ReadCSV(csvFile)
@@ -118,7 +123,7 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 
 		// 檢查BOM
 		require.True(t, len(content) >= 3)
-		require.Equal(t, io.BOMBytes, content[:3])
+		require.Equal(t, csvutil.BOMBytes(), content[:3])
 
 		// 檢查CSV內容
 		csvContent := string(content[3:])
@@ -156,7 +161,7 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 		// 不應包含BOM
 		csvContent := string(content)
 		require.True(t, strings.HasPrefix(csvContent, "Time,Ch1"))
-		require.False(t, strings.HasPrefix(csvContent, string(io.BOMBytes)))
+		require.False(t, strings.HasPrefix(csvContent, string(csvutil.BOMBytes())))
 	})
 
 	t.Run("InvalidDirectory", func(t *testing.T) {
@@ -193,7 +198,7 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 
 		// 如果啟用BOM，文件應只包含BOM
 		if cfg.BOMEnabled {
-			require.Equal(t, io.BOMBytes, content)
+			require.Equal(t, csvutil.BOMBytes(), content)
 		} else {
 			require.Empty(t, content)
 		}
@@ -429,19 +434,42 @@ func TestCSVHandler_ConvertPhaseAnalysisToCSV(t *testing.T) {
 	})
 }
 
-func TestCSVHandler_ReadCSVFromPrompt(t *testing.T) {
-	cfg := config.DefaultConfig()
-	handler := io.NewCSVHandler(cfg)
-
-	// 注意：這個測試難以自動化，因為它需要標準輸入
-	// 在實際環境中，可以使用依賴注入來提供可測試的輸入源
-	t.Run("MethodExists", func(t *testing.T) {
-		// 只測試方法存在，不測試互動邏輯
-		require.NotNil(t, handler.ReadCSVFromPrompt)
-	})
+func TestBOMBytes(t *testing.T) {
+	require.Equal(t, []byte{0xEF, 0xBB, 0xBF}, csvutil.BOMBytes())
+	require.Len(t, csvutil.BOMBytes(), 3)
 }
 
-func TestBOMBytes(t *testing.T) {
-	require.Equal(t, []byte{0xEF, 0xBB, 0xBF}, io.BOMBytes)
-	require.Len(t, io.BOMBytes, 3)
+// TestCSVHandler_ReadCSV_StripsLeadingBOM 釘住 cross-compare review 真正 bug:
+// readAndParseCSV 過去直接 csv.NewReader 沒處理 UTF-8 BOM，導致 Excel 匯出的
+// CSV 開頭 0xEF 0xBB 0xBF 會污染 records[0][0]，下游 GetCSVHeaders 等 caller
+// 把帶 BOM 的字串回傳給前端 / 用於 channel 比對都會 broken。
+// parsers/csv_reader.go 已在 PR-E 用 PeekBOM 修，這條 io 路徑漏修，testdata
+// 過去全部無 BOM 沒能 cover。
+func TestCSVHandler_ReadCSV_StripsLeadingBOM(t *testing.T) {
+	tempDir := t.TempDir()
+	csvPath := filepath.Join(tempDir, "bom.csv")
+
+	// 用 csvutil.BOMBytes() 而非字面值避免 source 含 illegal BOM
+	content := append([]byte{}, csvutil.BOMBytes()...)
+	content = append(content, []byte("Time,Ch1,Ch2\n0.001,100,200\n")...)
+	require.NoError(t, os.WriteFile(csvPath, content, fsperm.FilePerm))
+
+	cfg := config.DefaultConfig()
+	cfg.InputDir = tempDir
+	cfg.OutputDir = tempDir
+	cfg.OperateDir = tempDir
+	handler := io.NewCSVHandler(cfg)
+
+	records, err := handler.ReadCSV(csvPath)
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+
+	// headers 必須是純字串不含 BOM (regression: 過去回傳 U+FEFF + "Time")
+	// 用 csvutil.BOMBytes() 動態比對而非字面 BOM 字元，避免 Go source 含 illegal BOM
+	require.Equal(t, "Time", records[0][0])
+	require.False(t, bytes.HasPrefix([]byte(records[0][0]), csvutil.BOMBytes()),
+		"records[0][0] still has BOM prefix: %q", records[0][0])
+
+	// 資料列不該被誤剝 (BOM 只剝檔頭一次)
+	require.Equal(t, "0.001", records[1][0])
 }

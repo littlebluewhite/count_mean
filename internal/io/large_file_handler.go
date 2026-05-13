@@ -9,8 +9,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"time"
 
 	"count_mean/internal/config"
@@ -20,6 +18,8 @@ import (
 	"count_mean/internal/security"
 	"count_mean/internal/validation"
 	"count_mean/util"
+	"count_mean/internal/csvutil"
+	"count_mean/internal/security/fsperm"
 )
 
 // Buffer size constants.
@@ -107,8 +107,10 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 	// 清理路徑
 	sanitizedPath := h.pathValidator.SanitizePath(filename)
 
-	// 檢查路徑遍歷攻擊
-	if strings.Contains(sanitizedPath, "..") {
+	// 檢查路徑遍歷攻擊：用 element-based 比對而非 substring，與 PathValidator
+	// 一致 — 含字面雙點的合法檔名（report..v2.csv）不應被誤拒
+	// （codex Wave 6 second-pass P2）。
+	if security.HasTraversalElement(sanitizedPath) {
 		return nil, errors.NewAppErrorWithDetails(
 			errors.ErrCodePathValidation,
 			"路徑包含遍歷字符",
@@ -164,7 +166,7 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 
 // scanFileStructure 快速掃描文件結構.
 func (h *LargeFileHandler) scanFileStructure(filename string) (int64, int, error) {
-	file, err := os.Open(filename) //nolint:gosec // filename is sanitized and validated
+	file, err := os.OpenFile(filename, fsperm.ReadFlags, 0) //nolint:gosec // filename sanitized and validated; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with WriteFlags)
 	if err != nil {
 		return 0, 0, fmt.Errorf("無法開啟文件 %s: %w", filename, err)
 	}
@@ -178,7 +180,14 @@ func (h *LargeFileHandler) scanFileStructure(filename string) (int64, int, error
 		}
 	}()
 
-	reader := csv.NewReader(bufio.NewReaderSize(file, h.bufferSize))
+	// BOM 處理: Excel 匯出的 UTF-8 CSV 帶 0xEF 0xBB 0xBF 前綴,若不剝除 firstRow[0]
+	// 會帶 U+FEFF,造成欄位/標題比對失敗。與 internal/io/csv_handler.go:230 對稱:
+	// bufio + PeekBOM + csv.NewReader 三段式。
+	bufReader := bufio.NewReaderSize(file, h.bufferSize)
+	if _, err := csvutil.PeekBOM(bufReader); err != nil {
+		return 0, 0, fmt.Errorf("BOM 偵測失敗 %s: %w", filename, err)
+	}
+	reader := csv.NewReader(bufReader)
 
 	// 讀取第一行獲取列數
 	firstRow, err := reader.Read()
@@ -196,7 +205,7 @@ func (h *LargeFileHandler) scanFileStructure(filename string) (int64, int, error
 	// 計算剩餘行數
 	for {
 		_, err := reader.Read()
-		if err == io.EOF {
+		if stderrors.Is(err, io.EOF) {
 			break
 		}
 
@@ -229,35 +238,6 @@ type streamingContext struct {
 // recordProcessor 記錄處理器函數類型.
 type recordProcessor func(ctx *streamingContext, record []string) error
 
-// ReadCSVStreaming 流式讀取大 CSV 文件.
-func (h *LargeFileHandler) ReadCSVStreaming(filename string, callback ProgressCallback) (*StreamingResult, error) {
-	h.logger.Info("開始流式讀取 CSV 文件", map[string]interface{}{
-		"filename":   filename,
-		"chunk_size": h.chunkSize,
-	})
-
-	chunk := h.bufferPool.GetStringArray()
-	defer h.bufferPool.PutStringArray(chunk)
-
-	processor := func(_ *streamingContext, record []string) error {
-		// 深拷貝記錄以避免引用問題
-		recordCopy := make([]string, len(record))
-		copy(recordCopy, record)
-		chunk = append(chunk, recordCopy)
-
-		// 定期清理塊數據以釋放記憶體（保留標題行）
-		if len(chunk) > h.chunkSize+1 {
-			headerRow := chunk[0]
-			chunk = chunk[:1]
-			chunk[0] = headerRow
-		}
-
-		return nil
-	}
-
-	return h.processStreamingFile(filename, callback, processor, nil)
-}
-
 // processStreamingFile 通用流式文件處理.
 func (h *LargeFileHandler) processStreamingFile(
 	filename string,
@@ -273,14 +253,20 @@ func (h *LargeFileHandler) processStreamingFile(
 		return nil, err
 	}
 
-	file, err := os.Open(fileInfo.Path)
+	file, err := os.OpenFile(fileInfo.Path, fsperm.ReadFlags, 0) //nolint:gosec // fileInfo.Path resolved from validated input; fsperm.ReadFlags adds O_NOFOLLOW
 	if err != nil {
 		return nil, errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟文件")
 	}
 
 	defer h.closeFileWithLog(file, fileInfo.Path)
 
-	reader := csv.NewReader(bufio.NewReaderSize(file, h.bufferSize))
+	// BOM 處理: 對稱於 scanFileStructure。Excel UTF-8 CSV 的 0xEF 0xBB 0xBF
+	// 前綴若不剝除會污染 ctx.headers[0] 進而干擾 channel 名稱對映。
+	bufReader := bufio.NewReaderSize(file, h.bufferSize)
+	if _, err := csvutil.PeekBOM(bufReader); err != nil {
+		return nil, errors.WrapError(err, errors.ErrCodeDataParsing, "BOM 偵測失敗")
+	}
+	reader := csv.NewReader(bufReader)
 
 	// 讀取標題行
 	headers, err := reader.Read()
@@ -333,13 +319,20 @@ func (h *LargeFileHandler) processStreamingFile(
 }
 
 // executeStreamingLoop 執行流式處理循環.
+//
+// 記憶體壓力檢查改在 reportProgressIfNeeded 內進行（每 progressInterval 筆一次）
+// 而非每筆 row 都跑：checkMemoryUsage 內部呼叫 runtime.ReadMemStats，是 STW-ish
+// 操作，30M-row 大檔每筆都跑會把 O(n×channels) 演算法的成本完全抵銷
+// （Wave 6 review P1 — code-debugger 抓到，benchmark 證實）。
+// 入口先做一次 cold-start check，避免起始時就已超出 memoryLimit 仍進入 loop。
 func (h *LargeFileHandler) executeStreamingLoop(ctx *streamingContext, processor recordProcessor) error {
-	for {
-		// 檢查並處理記憶體壓力
-		ctx.progressInterval = h.handleMemoryPressure(ctx.processedLines, ctx.progressInterval)
+	if err := h.checkMemoryUsage(); err != nil {
+		return fmt.Errorf("streaming 過程記憶體不足: %w", err)
+	}
 
+	for {
 		record, err := ctx.reader.Read()
-		if err == io.EOF {
+		if stderrors.Is(err, io.EOF) {
 			break
 		}
 
@@ -374,54 +367,41 @@ func (h *LargeFileHandler) executeStreamingLoop(ctx *streamingContext, processor
 
 		ctx.processedLines++
 
-		// 報告進度
-		h.reportProgressIfNeeded(ctx)
+		// 報告進度與檢查記憶體壓力（同頻率）
+		if err := h.reportProgressIfNeeded(ctx); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// handleMemoryPressure 處理記憶體壓力.
-func (h *LargeFileHandler) handleMemoryPressure(processedLines, progressInterval int64) int64 {
+// reportProgressIfNeeded 在需要時報告進度並做記憶體壓力檢查。
+//
+// 兩件事共用 progressInterval 觸發條件：runtime.ReadMemStats 是 STW-ish
+// 操作，每筆 row 跑會把 sliding window 的 O(n×channels) 優化全部抵銷；
+// 每 progressInterval 跑一次足夠 fail-fast 也避免 hot-path overhead。
+func (h *LargeFileHandler) reportProgressIfNeeded(ctx *streamingContext) error {
+	if ctx.processedLines-ctx.lastProgress < ctx.progressInterval {
+		return nil
+	}
+
+	h.reportProgress(ctx)
+	ctx.lastProgress = ctx.processedLines
+
+	// 記錄緩衝區池統計
+	poolStats := h.bufferPool.GetStats()
+	h.logger.Debug("緩衝區池統計", map[string]interface{}{
+		"reuse_ratio":       poolStats.ReuseRatio,
+		"string_array_gets": poolStats.StringArrayGets,
+		"string_array_puts": poolStats.StringArrayPuts,
+	})
+
 	if err := h.checkMemoryUsage(); err != nil {
-		h.logger.Warn("記憶體使用過高，觸發垃圾回收", map[string]interface{}{
-			"processed_lines": processedLines,
-			"error":           err.Error(),
-		})
-		runtime.GC()
-
-		// 如果記憶體仍然過高，減少塊大小
-		if err := h.checkMemoryUsage(); err != nil {
-			newInterval := progressInterval / 2
-			if newInterval < 100 {
-				newInterval = 100
-			}
-
-			h.logger.Warn("減少進度報告間隔", map[string]interface{}{
-				"new_interval": newInterval,
-			})
-
-			return newInterval
-		}
+		return fmt.Errorf("streaming 過程記憶體不足: %w", err)
 	}
 
-	return progressInterval
-}
-
-// reportProgressIfNeeded 在需要時報告進度.
-func (h *LargeFileHandler) reportProgressIfNeeded(ctx *streamingContext) {
-	if ctx.processedLines-ctx.lastProgress >= ctx.progressInterval {
-		h.reportProgress(ctx)
-		ctx.lastProgress = ctx.processedLines
-
-		// 記錄緩衝區池統計
-		poolStats := h.bufferPool.GetStats()
-		h.logger.Debug("緩衝區池統計", map[string]interface{}{
-			"reuse_ratio":       poolStats.ReuseRatio,
-			"string_array_gets": poolStats.StringArrayGets,
-			"string_array_puts": poolStats.StringArrayPuts,
-		})
-	}
+	return nil
 }
 
 // reportProgress 報告當前進度.
@@ -457,13 +437,39 @@ func (h *LargeFileHandler) closeFileWithLog(file *os.File, path string) {
 	}
 }
 
-// slidingWindowState 滑動視窗計算狀態.
+// slidingWindowState 滑動視窗計算狀態（true streaming, O(n × k)）。
+//
+// 演算法核心：固定大小 ring buffer 記錄當前 window 的每筆 channel 值，
+// 配合 per-channel rolling sum (windowSums)。每筆記錄只做 O(channels)
+// 加減；window 滿了之後每筆記錄做一次 max 比較。取代舊版「每筆都重新
+// 遍歷整個 dataBuffer 計算所有 window」的 O(windowSize² × channels) 災難。
+//
+// 數值穩定性：rolling sum 長期累積會有 ULP 級漂移（float64 加減非結合）。
+// 每 recalibInterval 筆從 ring 重新累加一次校準，攤平到 < 1% overhead。
+//
+// **並行契約：non-thread-safe — 必須由單一 goroutine 連續呼叫 feed()**。
+// 目前唯一 caller 是 ProcessLargeFileInChunks 的 serial reader loop；如果未來把
+// chunk reading 並行化（例如分檔讀 + worker pool），必須為每個 worker 各別建一個
+// slidingWindowState，或在 caller 那層加 mutex；不可共享同一實例（cross-compare review）。
 type slidingWindowState struct {
-	dataBuffer       []models.EMGData
+	windowSize      int
+	scalingFactor   int
+	recalibInterval int // 動態：max(10*windowSize, 10_000)
+
+	// Ring buffer：[windowSize][channels] 與時間軸（用於 best start time）
+	ringValues  [][]float64
+	ringTimes   []float64
+	ringIdx     int
+	recordsSeen int
+
+	// Per-channel rolling state
+	windowSums       []float64
 	channelMaxMeans  []float64
 	channelBestTimes [][2]float64
-	windowSize       int
-	scalingFactor    int
+
+	// 觀測性：channel-count 不一致而被靜默丟棄的 row 數。streaming 結束時
+	// 由 caller 報告，避免 operator 在資料毀損時毫無察覺。
+	droppedRowCount uint64
 }
 
 // ProcessLargeFileInChunks 分塊處理大文件.
@@ -478,9 +484,8 @@ func (h *LargeFileHandler) ProcessLargeFileInChunks(
 		"chunk_size":  h.chunkSize,
 	})
 
-	// 初始化滑動視窗狀態
+	// 初始化滑動視窗狀態（ring buffer 自有，無需 pool defer cleanup）
 	state := h.initSlidingWindowState(windowSize)
-	defer h.bufferPool.PutEMGDataSlice(state.dataBuffer)
 
 	// 創建記錄處理器
 	processor := func(ctx *streamingContext, record []string) error {
@@ -497,32 +502,219 @@ func (h *LargeFileHandler) ProcessLargeFileInChunks(
 		return nil, err
 	}
 
+	// 若有 channel-count 不一致而被丟棄的 row，提醒 operator 資料可能受損。
+	if state.droppedRowCount > 0 {
+		h.logger.Warn("streaming 過程中丟棄通道數不符的 row", map[string]interface{}{
+			"filename":          filename,
+			"dropped_row_count": state.droppedRowCount,
+			"expected_channels": len(state.windowSums),
+		})
+	}
+
 	// 記錄最終統計信息
 	h.logFinalStats(result)
 
 	return result, nil
 }
 
+// minRecalibInterval 保證即使 windowSize 很小也不要太頻繁校準。
+const minRecalibInterval = 10_000
+
+// chooseRecalibInterval 計算數值穩定性校準週期：
+//
+//	max(10 × windowSize, 10_000)
+//
+// rolling sum 在每筆記錄做加減，IEEE 754 不結合性會讓 sum 長期偏離真值
+// 約 1e-13 量級。每 N 筆完整重算一次將漂移歸零；N 取 10×windowSize 讓
+// 校準成本 O(windowSize × channels) 攤平到 < 1% overhead，floor 10_000
+// 保護小 windowSize 情境。
+func chooseRecalibInterval(windowSize int) int {
+	if windowSize <= 0 {
+		return minRecalibInterval
+	}
+	interval := 10 * windowSize
+	if interval < minRecalibInterval {
+		return minRecalibInterval
+	}
+	return interval
+}
+
 // initSlidingWindowState 初始化滑動視窗狀態.
 func (h *LargeFileHandler) initSlidingWindowState(windowSize int) *slidingWindowState {
 	return &slidingWindowState{
-		dataBuffer:    h.bufferPool.GetEMGDataSlice(),
-		windowSize:    windowSize,
-		scalingFactor: h.config.ScalingFactor,
+		windowSize:      windowSize,
+		scalingFactor:   h.config.ScalingFactor,
+		recalibInterval: chooseRecalibInterval(windowSize),
 	}
 }
 
-// initChannelArrays 初始化通道陣列（在第一次處理記錄時調用）.
-func (state *slidingWindowState) initChannelArrays(channelCount int) {
-	if state.channelMaxMeans != nil {
+// initialRingCap 是 ring 動態 grow 的初始 cap，避免小檔大 windowSize 立刻 alloc
+// 不必要的 (windowSize × channels) float storage。配合 ring 動態 grow，N < windowSize
+// 的場景記憶體只長到 N。
+const initialRingCap = 64
+
+// initSumsAndMaxIfNeeded 只 alloc per-channel 大小（O(channels)）。ring 本身延後
+// 在 appendToRing 動態 grow，避免小檔大 windowSize 時 over-allocate 整個 ring。
+func (state *slidingWindowState) initSumsAndMaxIfNeeded(channelCount int) {
+	if state.channelMaxMeans != nil || channelCount == 0 || state.windowSize <= 0 {
 		return
 	}
 
+	state.windowSums = make([]float64, channelCount)
 	state.channelMaxMeans = make([]float64, channelCount)
 	state.channelBestTimes = make([][2]float64, channelCount)
 
 	for i := range state.channelMaxMeans {
 		state.channelMaxMeans[i] = math.Inf(-1) // 支援全負值資料集
+	}
+}
+
+// isFiniteRow 檢查 channels 內所有值皆 finite。NaN/Inf 進 rolling sum 後會
+// 永久汙染（NaN - NaN 仍 NaN），導致該 channel 後續所有 window 都被棄選。
+func isFiniteRow(channels []float64) bool {
+	for _, v := range channels {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return false
+		}
+	}
+	return true
+}
+
+// resetForNonFiniteRow 在遇到 NaN/Inf row 時清空 rolling 狀態，使下一個完整 window
+// 必須由 NaN/Inf 之後的有效 row 重新填滿。等價於 legacy「window 跨越 NaN row 不入選 max」
+// 的語意（legacy 把 NaN 加進 rolling sum → 該 window sum=NaN → mean=NaN → IEEE 754 下
+// 永不會 > 現有 max）。channelMaxMeans/channelBestTimes 保留先前已建立的 max。
+//
+// 注意：isFiniteRow 是 row-level rejection — 即使只有單 channel NaN 整筆視為無效。
+// 這比 legacy 的 per-channel NaN 略保守（NaN 出現在一個 channel 時，另一 channel 也
+// 暫時失去當下 window），但避免 stitching 非相鄰 row 造成 over-reported max。
+func (state *slidingWindowState) resetForNonFiniteRow() {
+	state.recordsSeen = 0
+	state.ringIdx = 0
+	if state.ringValues != nil {
+		state.ringValues = state.ringValues[:0]
+		state.ringTimes = state.ringTimes[:0]
+	}
+	for c := range state.windowSums {
+		state.windowSums[c] = 0
+	}
+}
+
+// feed 把單筆 EMG 資料推入 streaming state，分兩階段：
+//
+//  1. recordsSeen < windowSize：appendToRing 動態 grow，直到 ring 第一次填滿
+//  2. recordsSeen >= windowSize：rollRing wrap-around，rolling sum 扣舊加新
+//
+// 每筆 O(channels) — 取代舊版 O(windowSize² × channels)。
+// NaN/Inf 記錄觸發 ring 重置，避免後續 window 跨越非相鄰 row（codex review P2：早期
+// 只 return 不前進會把 NaN 前後的非相鄰 row 當成相鄰，造成 over-reported max）。
+func (state *slidingWindowState) feed(emgData *models.EMGData) {
+	state.initSumsAndMaxIfNeeded(len(emgData.Channels))
+	if state.channelMaxMeans == nil {
+		return
+	}
+	// Wave 5 PR3 belt-and-suspenders：執行 executeStreamingLoop 上游已透過
+	// header check 擋住 channel-count mid-stream 變動，但若未來新 caller 繞過
+	// header gate（或 emgData.Channels 被 buffer pool 借出時長度漂移），
+	// 此處直接 return 避免 rollRing 撞到 ringValues[slot] 容量越界 panic。
+	// 累計 droppedRowCount 讓 ProcessLargeFileInChunks 結束時可以 log warning，
+	// 避免靜默丟 row 而 operator 無感。
+	if len(emgData.Channels) != len(state.windowSums) {
+		state.droppedRowCount++
+		return
+	}
+	if !isFiniteRow(emgData.Channels) {
+		state.resetForNonFiniteRow()
+		return
+	}
+
+	if state.recordsSeen < state.windowSize {
+		state.appendToRing(emgData)
+		return
+	}
+	state.rollRing(emgData)
+}
+
+// appendToRing 在 ring 尚未填滿時動態 grow 並 append。
+// recordsSeen 從 0 累計到 windowSize 的這段時間 ring 容量隨需求 2x 成長，
+// 確保「N < windowSize」的小檔場景不會預先 alloc 整個 windowSize × channels。
+func (state *slidingWindowState) appendToRing(emgData *models.EMGData) {
+	channelCount := len(emgData.Channels)
+
+	if state.ringValues == nil {
+		capHint := initialRingCap
+		if state.windowSize < capHint {
+			capHint = state.windowSize
+		}
+		state.ringValues = make([][]float64, 0, capHint)
+		state.ringTimes = make([]float64, 0, capHint)
+	}
+
+	row := make([]float64, channelCount)
+	copy(row, emgData.Channels)
+	state.ringValues = append(state.ringValues, row)
+	state.ringTimes = append(state.ringTimes, emgData.Time)
+
+	for c, v := range emgData.Channels {
+		state.windowSums[c] += v
+	}
+	state.recordsSeen++
+
+	if state.recordsSeen < state.windowSize {
+		return
+	}
+
+	// 第一次填滿：ringIdx 指向下一筆要覆寫的位置（oldest slot = 0）
+	state.ringIdx = 0
+	state.compareMax(emgData.Time)
+}
+
+// rollRing 處理 ring 已填滿後的每筆記錄：扣舊加新、wrap-around、週期校準、比較 max。
+func (state *slidingWindowState) rollRing(emgData *models.EMGData) {
+	slot := state.ringIdx
+	for c, v := range emgData.Channels {
+		state.windowSums[c] -= state.ringValues[slot][c]
+		state.windowSums[c] += v
+		state.ringValues[slot][c] = v
+	}
+	state.ringTimes[slot] = emgData.Time
+	state.ringIdx = (slot + 1) % state.windowSize
+	state.recordsSeen++
+
+	if state.recalibInterval > 0 && state.recordsSeen%state.recalibInterval == 0 {
+		state.recalibrate()
+	}
+
+	state.compareMax(emgData.Time)
+}
+
+// compareMax 用當前 windowSums 對每個 channel 比較 max-mean。
+// 增量後的 ringIdx 即「oldest slot」，剛好對應 window 起點時間。
+func (state *slidingWindowState) compareMax(endTime float64) {
+	startSlot := state.ringIdx
+	startTime := state.ringTimes[startSlot]
+	windowSizeF := float64(state.windowSize)
+
+	for c, sum := range state.windowSums {
+		mean := sum / windowSizeF
+		if mean > state.channelMaxMeans[c] {
+			state.channelMaxMeans[c] = mean
+			state.channelBestTimes[c] = [2]float64{startTime, endTime}
+		}
+	}
+}
+
+// recalibrate 從 ring 直接重新累加 windowSums，消除 rolling 累積的 float drift。
+// 代價 O(windowSize × channels)，每 recalibInterval 筆呼叫一次。
+func (state *slidingWindowState) recalibrate() {
+	for c := range state.windowSums {
+		state.windowSums[c] = 0
+	}
+	for slot := 0; slot < state.windowSize; slot++ {
+		row := state.ringValues[slot]
+		for c, v := range row {
+			state.windowSums[c] += v
+		}
 	}
 }
 
@@ -532,7 +724,6 @@ func (h *LargeFileHandler) processSlidingWindowRecord(
 	record []string,
 	state *slidingWindowState,
 ) error {
-	// 解析數據行
 	emgData, err := h.parseDataRow(record, state.scalingFactor)
 	if err != nil {
 		h.logger.Debug("解析數據行失敗，跳過", map[string]interface{}{
@@ -540,65 +731,50 @@ func (h *LargeFileHandler) processSlidingWindowRecord(
 			"line":  ctx.processedLines + 1,
 		})
 		// 故意返回 nil 以跳過錯誤行，繼續處理剩餘數據
-		// 這是數據處理的常見模式，允許容錯處理
 		return nil //nolint:nilerr // Intentionally skip invalid rows and continue processing
 	}
 
-	// 延遲初始化通道陣列
-	state.initChannelArrays(len(emgData.Channels))
+	state.feed(emgData)
 
-	// 添加到數據緩衝區
-	state.dataBuffer = append(state.dataBuffer, *emgData)
-
-	// 當緩衝區達到滑動視窗大小時，開始計算
-	if len(state.dataBuffer) >= state.windowSize {
-		h.calculateSlidingWindow(state.dataBuffer, state.windowSize, state.channelMaxMeans, state.channelBestTimes)
-		state.dataBuffer = h.manageDataBuffer(state.dataBuffer, state.windowSize)
-	}
+	// ring buffer 已 copy in，parseDataRow 借出的 channels slice 立刻歸還 pool。
+	// Put 後立即 nil 別名，避免未來新增 post-feed 邏輯誤讀已歸還 pool 的 slot
+	// 造成 race against next GetFloat64Slice (Wave 5 PR3 defensive)。
+	h.bufferPool.PutFloat64Slice(emgData.Channels)
+	emgData.Channels = nil
 
 	return nil
 }
 
-// manageDataBuffer 管理數據緩衝區大小.
-func (h *LargeFileHandler) manageDataBuffer(dataBuffer []models.EMGData, windowSize int) []models.EMGData {
-	bufferLimit := windowSize * 3
-
-	if len(dataBuffer) < bufferLimit {
-		return dataBuffer
-	}
-
-	keepCount := windowSize * 2
-	if keepCount >= len(dataBuffer) {
-		return dataBuffer
-	}
-
-	// 使用安全的切片操作，避免數據丟失
-	copy(dataBuffer, dataBuffer[len(dataBuffer)-keepCount:])
-	dataBuffer = dataBuffer[:keepCount]
-
-	h.logger.Debug("緩衝區清理", map[string]interface{}{
-		"new_size":     len(dataBuffer),
-		"keep_count":   keepCount,
-		"buffer_limit": bufferLimit,
-	})
-
-	return dataBuffer
-}
-
 // buildSlidingWindowResults 構建滑動視窗結果.
-func (*LargeFileHandler) buildSlidingWindowResults(state *slidingWindowState) []models.MaxMeanResult {
+//
+// channelMaxMeans[i] 在 initSumsAndMaxIfNeeded 初始化為 -Inf（支援全負值資料集），
+// 若 channel 從未產生完整 window（recordsSeen < windowSize 或所有 row 都是 NaN/Inf
+// 被 resetForNonFiniteRow 攔下），值會停在 -Inf。-Inf 無法被 encoding/json marshal，
+// 會讓 GUI 的 JSON 回應整支炸掉。改成跳過該 channel 並 log warning，避免毒化
+// 下游序列化路徑（Wave 6 review P2 — code-debugger 抓到）。
+func (h *LargeFileHandler) buildSlidingWindowResults(state *slidingWindowState) []models.MaxMeanResult {
 	if state.channelMaxMeans == nil {
 		return make([]models.MaxMeanResult, 0)
 	}
 
-	results := make([]models.MaxMeanResult, len(state.channelMaxMeans))
-	for i := 0; i < len(state.channelMaxMeans); i++ {
-		results[i] = models.MaxMeanResult{
+	results := make([]models.MaxMeanResult, 0, len(state.channelMaxMeans))
+	for i := range state.channelMaxMeans {
+		if math.IsInf(state.channelMaxMeans[i], -1) {
+			h.logger.Warn("通道未產生完整滑動視窗，跳過結果", map[string]interface{}{
+				"channel_index": i + 1,
+				"records_seen":  state.recordsSeen,
+				"window_size":   state.windowSize,
+			})
+
+			continue
+		}
+
+		results = append(results, models.MaxMeanResult{
 			ColumnIndex: i + 1,
 			StartTime:   state.channelBestTimes[i][0],
 			EndTime:     state.channelBestTimes[i][1],
 			MaxMean:     state.channelMaxMeans[i],
-		}
+		})
 	}
 
 	return results
@@ -664,187 +840,4 @@ func (h *LargeFileHandler) parseDataRow(record []string, scalingFactor int) (*mo
 		Time:     timeVal,
 		Channels: channels,
 	}, nil
-}
-
-// calculateSlidingWindow 計算滑動視窗.
-func (*LargeFileHandler) calculateSlidingWindow(
-	data []models.EMGData,
-	windowSize int,
-	maxMeans []float64,
-	bestTimes [][2]float64,
-) {
-	if len(data) < windowSize {
-		return
-	}
-
-	channelCount := len(data[0].Channels)
-
-	// 對每個通道計算滑動視窗
-	for channelIdx := 0; channelIdx < channelCount; channelIdx++ {
-		for startIdx := 0; startIdx <= len(data)-windowSize; startIdx++ {
-			// 計算這個視窗的平均值
-			sum := 0.0
-
-			for i := startIdx; i < startIdx+windowSize; i++ {
-				if channelIdx < len(data[i].Channels) {
-					sum += data[i].Channels[channelIdx]
-				}
-			}
-
-			mean := sum / float64(windowSize)
-
-			// 更新最大平均值
-			if mean > maxMeans[channelIdx] {
-				maxMeans[channelIdx] = mean
-				bestTimes[channelIdx][0] = data[startIdx].Time
-				bestTimes[channelIdx][1] = data[startIdx+windowSize-1].Time
-			}
-		}
-	}
-}
-
-// WriteCSVStreaming 流式寫入 CSV 文件.
-func (h *LargeFileHandler) WriteCSVStreaming(filename string, data [][]string, callback ProgressCallback) error {
-	h.logger.Info("開始流式寫入 CSV 文件", map[string]interface{}{
-		"filename":  filename,
-		"row_count": len(data),
-	})
-
-	// 驗證路徑
-	sanitizedPath, err := h.validateWritePath(filename)
-	if err != nil {
-		return err
-	}
-
-	// 創建文件和緩衝寫入器
-	file, bufferedWriter, err := h.createBufferedWriter(sanitizedPath)
-	if err != nil {
-		return err
-	}
-
-	defer h.closeFileWithLog(file, sanitizedPath)
-	defer h.flushBufferWithLog(bufferedWriter, sanitizedPath)
-
-	// 寫入 BOM（如果啟用）
-	if err := h.writeBOMIfEnabled(bufferedWriter); err != nil {
-		return err
-	}
-
-	// 執行寫入
-	if err := h.executeCSVWrite(bufferedWriter, data, callback); err != nil {
-		return err
-	}
-
-	h.logger.Info("流式寫入完成", map[string]interface{}{
-		"filename":  sanitizedPath,
-		"row_count": len(data),
-	})
-
-	return nil
-}
-
-// validateWritePath 驗證寫入路徑.
-func (h *LargeFileHandler) validateWritePath(filename string) (string, error) {
-	sanitizedPath := h.pathValidator.SanitizePath(filename)
-	if err := h.pathValidator.ValidateFilePath(sanitizedPath); err != nil {
-		return "", errors.WrapError(err, errors.ErrCodePathValidation, "路徑驗證失敗")
-	}
-
-	return sanitizedPath, nil
-}
-
-// File permission constants.
-const filePermission = 0o600 // File permission mode for created files.
-
-// createBufferedWriter 創建緩衝寫入器.
-func (h *LargeFileHandler) createBufferedWriter(path string) (*os.File, *bufio.Writer, error) {
-	//nolint:gosec // path is validated
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, filePermission)
-	if err != nil {
-		return nil, nil, errors.WrapError(err, errors.ErrCodeFileNotFound, "無法創建文件")
-	}
-
-	bufferedWriter := bufio.NewWriterSize(file, h.bufferSize)
-
-	return file, bufferedWriter, nil
-}
-
-// flushBufferWithLog 刷新緩衝區並記錄錯誤.
-func (h *LargeFileHandler) flushBufferWithLog(writer *bufio.Writer, path string) {
-	if flushErr := writer.Flush(); flushErr != nil {
-		h.logger.Warn("刷新緩衝區時發生錯誤", map[string]interface{}{
-			"file":  path,
-			"error": flushErr.Error(),
-		})
-	}
-}
-
-// writeBOMIfEnabled 如果啟用則寫入 BOM.
-func (h *LargeFileHandler) writeBOMIfEnabled(writer *bufio.Writer) error {
-	if !h.config.BOMEnabled {
-		return nil
-	}
-
-	if _, err := writer.Write(BOMBytes); err != nil {
-		return fmt.Errorf("無法寫入 BOM: %w", err)
-	}
-
-	return nil
-}
-
-// executeCSVWrite 執行 CSV 寫入.
-func (h *LargeFileHandler) executeCSVWrite(
-	bufferedWriter *bufio.Writer,
-	data [][]string,
-	callback ProgressCallback,
-) error {
-	writer := csv.NewWriter(bufferedWriter)
-	totalRows := len(data)
-
-	for i, row := range data {
-		if err := writer.Write(row); err != nil {
-			return fmt.Errorf("寫入第 %d 行失敗: %w", i+1, err)
-		}
-
-		if err := h.flushAndReportProgress(writer, i, totalRows, callback); err != nil {
-			return err
-		}
-	}
-
-	writer.Flush()
-
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("最終刷新失敗: %w", err)
-	}
-
-	// 最終進度回調
-	if callback != nil {
-		callback(int64(totalRows), int64(totalRows), fullProgress)
-	}
-
-	return nil
-}
-
-// flushAndReportProgress 定期刷新並報告進度.
-func (h *LargeFileHandler) flushAndReportProgress(
-	writer *csv.Writer,
-	currentRow, totalRows int,
-	callback ProgressCallback,
-) error {
-	if currentRow%h.chunkSize != 0 {
-		return nil
-	}
-
-	writer.Flush()
-
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("刷新寫入緩衝區失敗: %w", err)
-	}
-
-	if callback != nil {
-		percentage := float64(currentRow+1) / float64(totalRows) * 100
-		callback(int64(currentRow+1), int64(totalRows), percentage)
-	}
-
-	return nil
 }

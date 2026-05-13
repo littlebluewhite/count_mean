@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"count_mean/internal/csvutil"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 )
@@ -34,7 +35,7 @@ func TestExportPhaseSyncDataToCSV_WritesBOM(t *testing.T) {
 	content, err := os.ReadFile(outPath) //nolint:gosec // test file in t.TempDir
 	require.NoError(t, err)
 
-	bom := []byte{0xEF, 0xBB, 0xBF}
+	bom := csvutil.BOMBytes()
 	require.True(t, bytes.HasPrefix(content, bom), "output must start with UTF-8 BOM")
 }
 
@@ -50,7 +51,7 @@ func TestExportPhaseSyncDataToCSV_HeaderOrderPreserved(t *testing.T) {
 	require.NoError(t, err)
 
 	// 去掉 BOM 後，第一列應為 Time,MuscleA,MuscleB
-	body := strings.TrimPrefix(string(content), string([]byte{0xEF, 0xBB, 0xBF}))
+	body := strings.TrimPrefix(string(content), string(csvutil.BOMBytes()))
 	firstLine := strings.SplitN(body, "\n", 2)[0]
 	require.Equal(t, "Time,MuscleA,MuscleB", strings.TrimSpace(firstLine))
 }
@@ -65,7 +66,7 @@ func TestExportPhaseSyncDataToCSV_PrecisionApplied(t *testing.T) {
 	content, err := os.ReadFile(outPath) //nolint:gosec // test file in t.TempDir
 	require.NoError(t, err)
 
-	body := strings.TrimPrefix(string(content), string([]byte{0xEF, 0xBB, 0xBF}))
+	body := strings.TrimPrefix(string(content), string(csvutil.BOMBytes()))
 	lines := strings.Split(strings.TrimSpace(body), "\n")
 	require.GreaterOrEqual(t, len(lines), 4) // header + 3 data rows
 
@@ -84,7 +85,7 @@ func TestExportPhaseSyncDataToCSV_DefaultPrecisionWhenZero(t *testing.T) {
 	require.NoError(t, err)
 
 	// 預設精度 6，第一筆值 0.1 應寫成 0.100000
-	body := strings.TrimPrefix(string(content), string([]byte{0xEF, 0xBB, 0xBF}))
+	body := strings.TrimPrefix(string(content), string(csvutil.BOMBytes()))
 	lines := strings.Split(strings.TrimSpace(body), "\n")
 	require.Contains(t, lines[1], "0.100000")
 }

@@ -21,13 +21,13 @@ const normalizedPhaseSyncPrecision = 6
 //
 // 兩組區間可以重疊或完全分離，由使用者自行選擇；後端不檢查互相關係。
 type NormalizedPhaseSyncParams struct {
-	ManifestFile    string `json:"manifestFile"`
-	DataFolder      string `json:"dataFolder"`
-	SubjectIndex    int    `json:"subjectIndex"`
-	NormStartPhase  string `json:"normStartPhase"`
-	NormEndPhase    string `json:"normEndPhase"`
-	StatsStartPhase string `json:"statsStartPhase"`
-	StatsEndPhase   string `json:"statsEndPhase"`
+	ManifestFile    string            `json:"manifestFile"`
+	DataFolder      string            `json:"dataFolder"`
+	SubjectIndex    int               `json:"subjectIndex"`
+	NormStartPhase  models.PhasePoint `json:"normStartPhase"`
+	NormEndPhase    models.PhasePoint `json:"normEndPhase"`
+	StatsStartPhase models.PhasePoint `json:"statsStartPhase"`
+	StatsEndPhase   models.PhasePoint `json:"statsEndPhase"`
 }
 
 // NormalizedPhaseSyncResult 標準化分期同步分析結果。
@@ -38,12 +38,12 @@ type NormalizedPhaseSyncResult struct {
 	NormalizedEMGPath string             `json:"normalizedEMGPath"`
 	PhaseSyncCSVPath  string             `json:"phaseSyncCSVPath"`
 	Subject           string             `json:"subject"`
-	NormStartPhase    string             `json:"normStartPhase"`
-	NormEndPhase      string             `json:"normEndPhase"`
+	NormStartPhase    models.PhasePoint  `json:"normStartPhase"`
+	NormEndPhase      models.PhasePoint  `json:"normEndPhase"`
 	NormStartTime     float64            `json:"normStartTime"`
 	NormEndTime       float64            `json:"normEndTime"`
-	StatsStartPhase   string             `json:"statsStartPhase"`
-	StatsEndPhase     string             `json:"statsEndPhase"`
+	StatsStartPhase   models.PhasePoint  `json:"statsStartPhase"`
+	StatsEndPhase     models.PhasePoint  `json:"statsEndPhase"`
 	StatsStartTime    float64            `json:"statsStartTime"`
 	StatsEndTime      float64            `json:"statsEndTime"`
 	ChannelNames      []string           `json:"channelNames"`
@@ -66,6 +66,8 @@ type NormalizedPhaseSyncResult struct {
 //     {subject}_normalized_norm-{normStart}-{normEnd}_stats-{statsStart}-{statsEnd}.csv
 //     （欄位與既有「分期同步分析」相同；檔名同時帶兩組分期點以避免不同設定的輸出混淆）
 func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (*NormalizedPhaseSyncResult, error) {
+	outputDir := a.state.Load().config.OutputDir
+
 	a.logger.Info("開始標準化分期同步分析", map[string]interface{}{"params": params})
 
 	if err := validateNormalizedPhaseSyncParams(params); err != nil {
@@ -114,9 +116,13 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (*Nor
 	}
 
 	// 4. 撰寫 Output 1：標準化後的 EMG CSV
-	safeSubject := safeSubjectName(loaded.Manifest.Subject)
+	// 與 cci_handlers.go / chart_helpers.go 對稱:同樣是「前端可控 subject 字串拼進
+	// 檔案路徑」場景,統一用 calculator.SanitizeFileName 而非各自手刻副本 —
+	// 之前的本地 safeSubjectName 副本已於 Wave 6 PR2 移除(cross-compare review P1
+	// 「對稱修補不完整」pattern 收尾)。
+	safeSubject := calculator.SanitizeFileName(loaded.Manifest.Subject)
 	normalizedEMGPath := filepath.Join(
-		a.config.OutputDir,
+		outputDir,
 		fmt.Sprintf("%s_normalized.csv", safeSubject),
 	)
 
@@ -142,11 +148,13 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (*Nor
 
 	stats, err := statsCalc.CalculateStatistics(
 		rangeResult.Data,
-		params.StatsStartPhase,
-		rangeResult.ActualStartTime,
-		params.StatsEndPhase,
-		rangeResult.ActualEndTime,
-		loaded.Manifest.Subject,
+		calculator.StatisticsParams{
+			Subject:    loaded.Manifest.Subject,
+			StartPhase: params.StatsStartPhase,
+			StartTime:  rangeResult.ActualStartTime,
+			EndPhase:   params.StatsEndPhase,
+			EndTime:    rangeResult.ActualEndTime,
+		},
 	)
 	if err != nil {
 		a.logger.Error("計算標準化統計失敗", err, map[string]interface{}{})
@@ -156,7 +164,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (*Nor
 	// 6. 撰寫 Output 2：標準化資料的分期同步統計 CSV
 	// 檔名同時帶 norm 與 stats 兩組分期點，避免不同設定的輸出互相覆蓋或混淆。
 	phaseSyncCSVPath := filepath.Join(
-		a.config.OutputDir,
+		outputDir,
 		fmt.Sprintf(
 			"%s_normalized_norm-%s-%s_stats-%s-%s.csv",
 			safeSubject,
@@ -227,33 +235,4 @@ func failedNormalizedPhaseSyncResult(message string) *NormalizedPhaseSyncResult 
 		Success: false,
 		Message: message,
 	}
-}
-
-// safeSubjectName 將 subject 名稱中可能造成檔案系統問題的字元換成底線。
-// 與 calculator.sanitizeFileName 邏輯一致，但保留在 gui 套件內避免改動 calculator API。
-func safeSubjectName(name string) string {
-	replacements := map[rune]rune{
-		'/':  '_',
-		'\\': '_',
-		':':  '_',
-		'*':  '_',
-		'?':  '_',
-		'"':  '_',
-		'<':  '_',
-		'>':  '_',
-		'|':  '_',
-		' ':  '_',
-	}
-
-	result := make([]rune, 0, len(name))
-
-	for _, ch := range name {
-		if replacement, ok := replacements[ch]; ok {
-			result = append(result, replacement)
-		} else {
-			result = append(result, ch)
-		}
-	}
-
-	return string(result)
 }

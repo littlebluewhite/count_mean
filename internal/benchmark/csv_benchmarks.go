@@ -1,6 +1,7 @@
 package benchmark
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -12,13 +13,13 @@ import (
 	"count_mean/internal/calculator"
 	"count_mean/internal/config"
 	"count_mean/internal/io"
+	"count_mean/internal/security/fsperm"
 )
 
 // CSV benchmark constants.
 const (
-	csvDirPermission = 0o750 // Directory permission for temp files
-	randomValueRange = 500   // Range for random value generation (-500 to 500)
-	randomValueScale = 1000  // Scale factor for random values
+	randomValueRange = 500  // Range for random value generation (-500 to 500)
+	randomValueScale = 1000 // Scale factor for random values
 )
 
 // CSVBenchmarks CSV 相關性能測試.
@@ -32,7 +33,7 @@ type CSVBenchmarks struct {
 func NewCSVBenchmarks(cfg *config.AppConfig) (*CSVBenchmarks, error) {
 	tempDir := filepath.Join(os.TempDir(), "emg_benchmark_"+strconv.FormatInt(time.Now().Unix(), 10))
 
-	if err := os.MkdirAll(tempDir, csvDirPermission); err != nil {
+	if err := os.MkdirAll(tempDir, fsperm.DirPerm); err != nil {
 		return nil, fmt.Errorf("無法創建臨時目錄: %w", err)
 	}
 
@@ -161,7 +162,7 @@ func (cb *CSVBenchmarks) BenchmarkMaxMeanCalculation() {
 			fileSize,
 			func() error {
 				calc := calculator.NewMaxMeanCalculator(cb.config.ScalingFactor)
-				_, calcErr := calc.CalculateFromRawDataWithRange(data, windowSize, 0.0, float64(rowCount))
+				_, calcErr := calc.CalculateFromRawDataWithRange(context.Background(), data, windowSize, 0.0, float64(rowCount))
 
 				return calcErr //nolint:wrapcheck // benchmark errors don't need wrapping
 			},
@@ -296,7 +297,7 @@ func (cb *CSVBenchmarks) BenchmarkConcurrentProcessing() {
 						}
 
 						calc := calculator.NewMaxMeanCalculator(cb.config.ScalingFactor)
-						_, calcErr := calc.CalculateFromRawDataWithRange(data, 100, 0.0, float64(rowCount))
+						_, calcErr := calc.CalculateFromRawDataWithRange(context.Background(), data, 100, 0.0, float64(rowCount))
 						results <- calcErr
 					}(file)
 				}
@@ -348,7 +349,7 @@ func (cb *CSVBenchmarks) BenchmarkMemoryUsage() {
 
 				calc := calculator.NewMaxMeanCalculator(cb.config.ScalingFactor)
 
-				_, calcErr := calc.CalculateFromRawDataWithRange(data, 100, 0.0, float64(rowCount))
+				_, calcErr := calc.CalculateFromRawDataWithRange(context.Background(), data, 100, 0.0, float64(rowCount))
 				if calcErr != nil {
 					return calcErr //nolint:wrapcheck // benchmark errors don't need wrapping
 				}

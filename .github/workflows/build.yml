@@ -69,6 +69,12 @@ jobs:
         cd frontend
         npm install
 
+    - name: Run Go tests with race detector
+      # gui/wails_binding_test.go 的 atomic.Pointer race-only test 在無 -race
+      # 環境會 t.Skip — CI 必須帶 race 才能驗 concurrency fix（atomic.Pointer
+      # 等）沒退化。-short 減少 fixture-heavy tests 在 CI 拖慢時間。
+      run: go test -race -short ./...
+
     - name: Build application
       run: |
         wails build -platform ${{ matrix.platform.target }} -clean -ldflags "-X main.Version=$APP_VERSION"

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+
+	"count_mean/internal/logging"
 )
 
 // Memory threshold constants.
@@ -17,10 +19,9 @@ const (
 )
 
 // Static errors for memory checks.
-var (
-	errMemoryOverLimit = stderrors.New("記憶體使用超過限制")
-	errMemoryUsageHigh = stderrors.New("記憶體使用率過高")
-)
+// 注意：先前的 errMemoryUsageHigh（95-100% 使用率）已移除 — 詳見
+// evaluateMemoryThresholds 的 cross-compare review 修法說明。
+var errMemoryOverLimit = stderrors.New("記憶體使用超過限制")
 
 // MemoryStats 記憶體統計信息.
 type MemoryStats struct {
@@ -111,6 +112,56 @@ func safeUint64ToInt64(value uint64) int64 {
 	return int64(value)
 }
 
+// evaluateMemoryThresholds 把純粹的「依 stats 決定要不要 return error + 記錄分級警告」
+// 邏輯抽出，方便用 fake MemoryStats 在 unit test 裡驗證 threshold 決策。
+//
+// 修法歷史：cross-compare review（Claude vs codex）抓到 95-100% 區間會 return
+// errMemoryUsageHigh，但這時 stats.IsOverLimit 仍為 false（< memoryLimit）。
+// 上游 executeStreamingLoop 把任何 error 當 fatal abort，於是 user 在記憶體
+// 仍低於 limit 時就被 abort — 與舊版 handleMemoryPressure 只 warn 的行為矛盾。
+// 修法：只在 stats.IsOverLimit==true 時 return error；95% 改純 log，不中斷。
+func evaluateMemoryThresholds(stats *MemoryStats, limit int64, logger *logging.Logger) error {
+	if stats.IsOverLimit {
+		logger.Warn("記憶體使用超過限制", map[string]interface{}{
+			"current_mb":  stats.Alloc / 1024 / 1024,
+			"limit_mb":    limit / 1024 / 1024,
+			"usage_ratio": stats.UsageRatio,
+		})
+
+		return fmt.Errorf(
+			"%w: %d MB > %d MB (%.2f%%)",
+			errMemoryOverLimit,
+			stats.Alloc/1024/1024, limit/1024/1024, stats.UsageRatio*fullProgress,
+		)
+	}
+
+	if stats.UsageRatio > memoryWarningThreshold {
+		logger.Warn("記憶體使用接近限制", map[string]interface{}{
+			"current_mb":  stats.Alloc / 1024 / 1024,
+			"limit_mb":    limit / 1024 / 1024,
+			"usage_ratio": stats.UsageRatio,
+		})
+
+		if stats.UsageRatio > memoryCriticalThreshold {
+			logger.Info("記憶體使用率超過95%，距離 limit 仍在容忍範圍 — streaming 繼續但建議調整 chunk size 或 memoryLimit")
+		}
+	}
+
+	if stats.HeapSys > 0 {
+		heapEfficiency := float64(stats.HeapInuse) / float64(stats.HeapSys)
+		if heapEfficiency < heapEfficiencyThreshold {
+			logger.Warn("堆記憶體效率低", map[string]interface{}{
+				"heap_efficiency": heapEfficiency,
+				"heap_inuse_mb":   stats.HeapInuse / 1024 / 1024,
+				"heap_sys_mb":     stats.HeapSys / 1024 / 1024,
+				"heap_idle_mb":    stats.HeapIdle / 1024 / 1024,
+			})
+		}
+	}
+
+	return nil
+}
+
 // checkMemoryUsage 檢查記憶體使用.
 func (h *LargeFileHandler) checkMemoryUsage() error {
 	stats := h.getDetailedMemoryStats()
@@ -134,55 +185,7 @@ func (h *LargeFileHandler) checkMemoryUsage() error {
 		"limit_mb":        h.memoryLimit / 1024 / 1024,
 	})
 
-	// 多級記憶體檢查
-	if stats.IsOverLimit {
-		h.logger.Warn("記憶體使用超過限制", map[string]interface{}{
-			"current_mb":  stats.Alloc / 1024 / 1024,
-			"limit_mb":    h.memoryLimit / 1024 / 1024,
-			"usage_ratio": stats.UsageRatio,
-		})
-
-		return fmt.Errorf(
-			"%w: %d MB > %d MB (%.2f%%)",
-			errMemoryOverLimit,
-			stats.Alloc/1024/1024, h.memoryLimit/1024/1024, stats.UsageRatio*fullProgress,
-		)
-	}
-
-	// 檢查是否接近限制 (90%)
-	if stats.UsageRatio > memoryWarningThreshold {
-		h.logger.Warn("記憶體使用接近限制", map[string]interface{}{
-			"current_mb":  stats.Alloc / 1024 / 1024,
-			"limit_mb":    h.memoryLimit / 1024 / 1024,
-			"usage_ratio": stats.UsageRatio,
-		})
-
-		// 建議執行GC
-		if stats.UsageRatio > memoryCriticalThreshold {
-			h.logger.Info("記憶體使用率超過95%，建議執行GC")
-
-			return fmt.Errorf(
-				"%w: %.2f%%",
-				errMemoryUsageHigh,
-				stats.UsageRatio*fullProgress,
-			)
-		}
-	}
-
-	// 檢查堆碎片化
-	if stats.HeapSys > 0 {
-		heapEfficiency := float64(stats.HeapInuse) / float64(stats.HeapSys)
-		if heapEfficiency < heapEfficiencyThreshold {
-			h.logger.Warn("堆記憶體效率低", map[string]interface{}{
-				"heap_efficiency": heapEfficiency,
-				"heap_inuse_mb":   stats.HeapInuse / 1024 / 1024,
-				"heap_sys_mb":     stats.HeapSys / 1024 / 1024,
-				"heap_idle_mb":    stats.HeapIdle / 1024 / 1024,
-			})
-		}
-	}
-
-	return nil
+	return evaluateMemoryThresholds(stats, h.memoryLimit, h.logger)
 }
 
 // getMemoryUsage 獲取當前記憶體使用.

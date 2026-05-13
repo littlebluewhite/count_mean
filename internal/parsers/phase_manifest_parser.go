@@ -1,6 +1,7 @@
 package parsers
 
 import (
+	"bufio"
 	"encoding/csv"
 	"fmt"
 	"os"
@@ -8,7 +9,13 @@ import (
 	"strings"
 
 	"count_mean/internal/models"
+	"count_mean/internal/csvutil"
+	"count_mean/internal/security/fsperm"
 )
+
+// phaseManifestReaderBufSize 是 manifest CSV 讀取的 bufio buffer 大小 (32 KiB)。
+// Manifest 檔通常 < 1 MiB,32K 已足夠 amortize syscall。
+const phaseManifestReaderBufSize = 32 * 1024
 
 // PhaseManifestParser 分期總檔案解析器.
 type PhaseManifestParser struct {
@@ -26,7 +33,7 @@ func NewPhaseManifestParser() *PhaseManifestParser {
 //
 //nolint:err113 // dynamic errors with Chinese messages for user-facing output
 func (p *PhaseManifestParser) ParseFile(filepath string) ([]models.PhaseManifest, error) {
-	file, err := os.Open(filepath) //nolint:gosec // filepath is validated by caller
+	file, err := os.OpenFile(filepath, fsperm.ReadFlags, 0) //nolint:gosec // filepath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
 	if err != nil {
 		return nil, fmt.Errorf("無法開啟檔案 %s: %w", filepath, err)
 	}
@@ -37,7 +44,14 @@ func (p *PhaseManifestParser) ParseFile(filepath string) ([]models.PhaseManifest
 		}
 	}()
 
-	reader := csv.NewReader(file)
+	// BOM 處理: Excel 匯出的 UTF-8 manifest CSV 帶 0xEF 0xBB 0xBF 前綴若不剝除,
+	// records[startRow][0] 會帶 U+FEFF,Subject 比對失敗。
+	// 與 internal/io/csv_handler.go:230 / large_file_handler.go 對稱: bufio + PeekBOM。
+	bufReader := bufio.NewReaderSize(file, phaseManifestReaderBufSize)
+	if _, err := csvutil.PeekBOM(bufReader); err != nil {
+		return nil, fmt.Errorf("BOM 偵測失敗: %w", err)
+	}
+	reader := csv.NewReader(bufReader)
 	reader.TrimLeadingSpace = true
 	reader.LazyQuotes = true
 
@@ -199,33 +213,34 @@ func parseInt(value, fieldName string) (int, error) {
 	return result, nil
 }
 
-// GetPhaseValue 根據分期點名稱獲取對應的值.
+// GetPhaseValue 根據分期點獲取對應的值。回傳值與 phase.IsMotionIndex() 一致：
+// false 表示力板時間 (float64)，true 表示 motion index (int → float64 cast)。
 //
 //nolint:err113 // dynamic errors with Chinese messages for user-facing output
-func GetPhaseValue(points *models.PhasePoints, phaseName string) (float64, bool, error) {
-	switch phaseName {
-	case "P0":
-		return points.P0, false, nil // false 表示是力板時間
-	case "P1":
+func GetPhaseValue(points *models.PhasePoints, phase models.PhasePoint) (float64, bool, error) {
+	switch phase {
+	case models.PhaseP0:
+		return points.P0, false, nil
+	case models.PhaseP1:
 		return points.P1, false, nil
-	case "P2":
+	case models.PhaseP2:
 		return points.P2, false, nil
-	case "S":
+	case models.PhaseS:
 		return points.S, false, nil
-	case "C":
+	case models.PhaseC:
 		return points.C, false, nil
-	case "D":
-		return float64(points.D), true, nil // true 表示是 motion index
-	case "T0":
+	case models.PhaseD:
+		return float64(points.D), true, nil
+	case models.PhaseT0:
 		return points.T0, false, nil
-	case "T":
+	case models.PhaseT:
 		return points.T, false, nil
-	case "O":
+	case models.PhaseO:
 		return float64(points.O), true, nil
-	case "L":
+	case models.PhaseL:
 		return points.L, false, nil
 	default:
-		return 0, false, fmt.Errorf("未知的分期點: %s", phaseName)
+		return 0, false, fmt.Errorf("未知的分期點: %s", phase)
 	}
 }
 
@@ -255,30 +270,22 @@ func ValidatePhaseManifest(manifest *models.PhaseManifest) error {
 	points := manifest.PhasePoints
 
 	// 檢查力板時間的順序（如果值不為0）
-	var forceTimePoints []struct {
-		name  string
+	type phaseTimePoint struct {
+		name  models.PhasePoint
 		value float64
 	}
+	var forceTimePoints []phaseTimePoint
 
 	if points.P0 > 0 {
-		forceTimePoints = append(forceTimePoints, struct {
-			name  string
-			value float64
-		}{"P0", points.P0})
+		forceTimePoints = append(forceTimePoints, phaseTimePoint{models.PhaseP0, points.P0})
 	}
 
 	if points.P1 > 0 {
-		forceTimePoints = append(forceTimePoints, struct {
-			name  string
-			value float64
-		}{"P1", points.P1})
+		forceTimePoints = append(forceTimePoints, phaseTimePoint{models.PhaseP1, points.P1})
 	}
 
 	if points.P2 > 0 {
-		forceTimePoints = append(forceTimePoints, struct {
-			name  string
-			value float64
-		}{"P2", points.P2})
+		forceTimePoints = append(forceTimePoints, phaseTimePoint{models.PhaseP2, points.P2})
 	}
 
 	// 驗證時間順序

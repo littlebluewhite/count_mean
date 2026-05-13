@@ -24,11 +24,12 @@ func setupNormalizedPhaseSyncTestApp(t *testing.T) *App {
 		OutputDir: t.TempDir(),
 	}
 
-	return &App{
-		config:            cfg,
+	app := &App{
 		logger:            logging.GetLogger("normalized_phase_sync_test"),
 		phaseSyncAnalyzer: phase_sync.NewPhaseSyncAnalyzer(),
 	}
+	app.state.Store(&appState{config: cfg})
+	return app
 }
 
 // writeMinimalMotionFile 建立最小 Motion CSV（4 行 metadata + 指定行數資料）。
@@ -114,10 +115,10 @@ func TestAnalyzeNormalizedPhaseSync_SameRangeBackwardCompat(t *testing.T) {
 
 	assert.FileExists(t, result.NormalizedEMGPath)
 	assert.FileExists(t, result.PhaseSyncCSVPath)
-	assert.Equal(t, "P0", result.NormStartPhase)
-	assert.Equal(t, "P2", result.NormEndPhase)
-	assert.Equal(t, "P0", result.StatsStartPhase)
-	assert.Equal(t, "P2", result.StatsEndPhase)
+	assert.Equal(t, "P0", string(result.NormStartPhase))
+	assert.Equal(t, "P2", string(result.NormEndPhase))
+	assert.Equal(t, "P0", string(result.StatsStartPhase))
+	assert.Equal(t, "P2", string(result.StatsEndPhase))
 	assert.InDelta(t, result.NormStartTime, result.StatsStartTime, 1e-9,
 		"同範圍時 NormStartTime 與 StatsStartTime 應相同")
 	assert.InDelta(t, result.NormEndTime, result.StatsEndTime, 1e-9,
@@ -147,10 +148,10 @@ func TestAnalyzeNormalizedPhaseSync_DifferentRanges(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Success, "Message: %s", result.Message)
 
-	assert.Equal(t, "P0", result.NormStartPhase)
-	assert.Equal(t, "P2", result.NormEndPhase)
-	assert.Equal(t, "P1", result.StatsStartPhase)
-	assert.Equal(t, "P2", result.StatsEndPhase)
+	assert.Equal(t, "P0", string(result.NormStartPhase))
+	assert.Equal(t, "P2", string(result.NormEndPhase))
+	assert.Equal(t, "P1", string(result.StatsStartPhase))
+	assert.Equal(t, "P2", string(result.StatsEndPhase))
 
 	assert.Less(t, result.NormStartTime, result.StatsStartTime,
 		"Norm 起始時間（P0=0.1）應早於 Stats 起始時間（P1=0.2）")

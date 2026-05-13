@@ -5,6 +5,10 @@
 //   - Motion capture data in CSV format
 //   - Phase manifest files for phase synchronization analysis
 //
+// In addition to format-specific parsers, the package exposes DataParser, a
+// shared helper that turns already-tokenised CSV records into EMGDataset for
+// MaxMeanCalculator, Normalizer and PhaseAnalyzer.
+//
 // Each parser handles format-specific details like headers, sampling rates,
 // and data structure while providing a consistent interface for data access.
 package parsers

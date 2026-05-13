@@ -1,14 +1,26 @@
 package parsers
 
-import "errors"
+import (
+	"errors"
+
+	apperrors "count_mean/internal/errors"
+)
 
 // Error definitions for the parsers package.
 // All errors use wrapped static errors as required by err113 linter.
+//
+// 注意：ErrInsufficientData 與 ErrInvalidTimeRange 為跨套件共用 sentinel —
+// 改為 alias 指向 internal/errors 的同名變數，讓 errors.Is(err, parsers.ErrXxx)
+// 與 errors.Is(err, apperrors.ErrXxx) 在跨套件呼叫鏈中都能 match。
+// 中文訊息由 DataParser 在 return path 內以 fmt.Errorf wrap 提供，避免 sentinel
+// 本身改為 wrap 而破壞 errors.Is 非對稱性（cross-package CalculatorError 比對）。
+//
+//nolint:gochecknoglobals // sentinel error variables
 var (
 	// ErrFileEmpty indicates an empty input file.
 	ErrFileEmpty = errors.New("file is empty")
-	// ErrInsufficientData indicates insufficient data rows.
-	ErrInsufficientData = errors.New("insufficient data rows")
+	// ErrInsufficientData 是 apperrors.ErrInsufficientData 的別名。
+	ErrInsufficientData = apperrors.ErrInsufficientData
 	// ErrInvalidFormat indicates invalid file format.
 	ErrInvalidFormat = errors.New("invalid file format")
 	// ErrNoChannels indicates no valid channels found.
@@ -17,8 +29,8 @@ var (
 	ErrNoValidData = errors.New("no valid data rows")
 	// ErrInconsistentLength indicates data length inconsistency.
 	ErrInconsistentLength = errors.New("data length inconsistent")
-	// ErrInvalidTimeRange indicates invalid time range.
-	ErrInvalidTimeRange = errors.New("invalid time range")
+	// ErrInvalidTimeRange 是 apperrors.ErrInvalidTimeRange 的別名。
+	ErrInvalidTimeRange = apperrors.ErrInvalidTimeRange
 	// ErrTimeRangeNotFound indicates no data in time range.
 	ErrTimeRangeNotFound = errors.New("no data found in time range")
 	// ErrIndexNotFound indicates index not found.

@@ -42,15 +42,18 @@ test: test-unit test-int
 	@echo "✓ All tests completed successfully!"
 
 test-unit:
-	@echo "Running unit tests..."
-	go test -v ./internal/... ./gui/...
+	@echo "Running unit tests with race detector..."
+	# -race 必開：gui/wails_binding_test.go 的 race-only test 在無 race
+	# 環境會 t.Skip（非 PASS）；CI 路徑必須帶 -race 才能驗 atomic.Pointer
+	# 等 concurrency fix 沒退化。詳見 gui/race_enabled.go。
+	go test -race -v ./internal/... ./gui/...
 
 test-int:
 	@echo "Running integration tests..."
 	go test -v ./test/integration/...
 
 test-race:
-	@echo "Running race condition tests..."
+	@echo "Running race condition tests across the whole tree (super-set of test-unit)..."
 	go test -race -short ./...
 
 # Benchmark targets (Task 13.1)

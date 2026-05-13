@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"count_mean/internal/models"
+	"count_mean/internal/csvutil"
 )
 
 // CSV result row count constants.
@@ -33,8 +34,8 @@ func (c *CSVConverter) ConvertMaxMeanResults(
 ) [][]string {
 	data := make([][]string, 0, maxMeanResultRowCount)
 
-	// Add headers
-	data = append(data, headers)
+	// Add headers (sanitize against CSV formula injection on write)
+	data = append(data, csvutil.SanitizeHeaderRow(headers))
 
 	// Create result rows
 	startRangeTimes := c.buildRow("開始範圍秒數", len(headers))
@@ -61,8 +62,8 @@ func (c *CSVConverter) ConvertMaxMeanResults(
 func (c *CSVConverter) ConvertNormalizedData(dataset *models.EMGDataset) [][]string {
 	data := make([][]string, 0, len(dataset.Data)+1)
 
-	// Add headers
-	data = append(data, dataset.Headers)
+	// Add headers (sanitize against CSV formula injection on write)
+	data = append(data, csvutil.SanitizeHeaderRow(dataset.Headers))
 
 	// Time column uses original precision, data columns use config precision
 	timePrecision := fmt.Sprintf("%%.%df", dataset.OriginalTimePrecision)
@@ -93,8 +94,8 @@ func (c *CSVConverter) ConvertPhaseAnalysis(
 ) [][]string {
 	data := make([][]string, 0, len(result.MaxValues)+len(result.MeanValues)+2)
 
-	// Add headers
-	data = append(data, headers)
+	// Add headers (sanitize against CSV formula injection on write)
+	data = append(data, csvutil.SanitizeHeaderRow(headers))
 
 	// Max values row
 	maxRow := c.buildRow(result.PhaseName+" 最大值", len(headers))

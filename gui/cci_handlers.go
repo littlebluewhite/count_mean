@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
+	"count_mean/internal/calculator"
 	"count_mean/internal/cci"
+	"count_mean/internal/security/fsperm"
 )
 
 // CCIParams 共同收縮分析參數.
@@ -57,7 +58,8 @@ func (a *App) AnalyzeCCI(params CCIParams) (*CCIResult, error) {
 	}
 
 	// Export CSV
-	csvPath, err := a.cciAnalyzer.ExportToCSV(analysisResult, a.config.OutputDir)
+	s := a.state.Load()
+	csvPath, err := a.cciAnalyzer.ExportToCSV(analysisResult, s.config.OutputDir)
 	if err != nil {
 		return failedCCIResult(fmt.Sprintf("CSV 導出失敗: %v", err)), nil
 	}
@@ -108,12 +110,15 @@ func (a *App) DownloadCCIChart(params CCIDownloadParams) (*ChartResult, error) {
 		return nil, fmt.Errorf("解碼圖片數據失敗: %w", err)
 	}
 
+	// params.Subject 來自前端，需先 sanitize 避免路徑穿越（"../x" 之類）。
+	safeSubject := calculator.SanitizeFileName(params.Subject)
+	s := a.state.Load()
 	outputPath := filepath.Join(
-		a.config.OutputDir,
-		fmt.Sprintf("%s_CCI_Rudolph.png", params.Subject),
+		s.config.OutputDir,
+		fmt.Sprintf("%s_CCI_Rudolph.png", safeSubject),
 	)
 
-	if err := os.WriteFile(outputPath, pngData, chartFileMode); err != nil {
+	if err := fsperm.WriteFileNoFollow(outputPath, pngData); err != nil {
 		return nil, fmt.Errorf("保存圖片失敗: %w", err)
 	}
 

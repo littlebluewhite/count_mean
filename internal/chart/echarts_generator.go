@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
@@ -15,6 +14,7 @@ import (
 
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
+	"count_mean/internal/security/fsperm"
 )
 
 // Sentinel errors for dataset validation.
@@ -27,14 +27,12 @@ var (
 
 // Chart configuration constants.
 const (
-	defaultLineWidth    = 1.5   // 預設線條寬度
-	directoryPermission = 0o750 // 目錄權限
-	filePermission      = 0o600 // 文件權限
-	scientificLowBound  = 1e-3  // 科學記號下界
-	scientificHighBound = 1e6   // 科學記號上界
-	dataZoomStart       = 0     // 數據縮放起始位置
-	dataZoomEnd         = 100   // 數據縮放結束位置
-	dpiDivisor          = 100   // DPI除數用於計算pixelRatio
+	defaultLineWidth    = 1.5  // 預設線條寬度
+	scientificLowBound  = 1e-3 // 科學記號下界
+	scientificHighBound = 1e6  // 科學記號上界
+	dataZoomStart       = 0    // 數據縮放起始位置
+	dataZoomEnd         = 100  // 數據縮放結束位置
+	dpiDivisor          = 100  // DPI除數用於計算pixelRatio
 )
 
 // EChartsGenerator 使用 go-echarts 生成互動式圖表.
@@ -227,7 +225,8 @@ func (*EChartsGenerator) addInteractiveChartSeries(
 	colors := getDefaultChartColors()
 
 	for idx, colIndex := range columnsToShow {
-		if colIndex >= len(dataset.Headers) || colIndex == 0 {
+		// colIndex 0 表示時間欄；負值會讓 extractColumnLineData 走 Channels[colIdx-1] panic。
+		if colIndex <= 0 || colIndex >= len(dataset.Headers) {
 			continue
 		}
 
@@ -265,13 +264,14 @@ func resolveColumnName(
 func saveChartToFile(line *charts.Line, outputPath string) error {
 	// 確保輸出目錄存在
 	outputDir := filepath.Dir(outputPath)
-	if err := os.MkdirAll(outputDir, directoryPermission); err != nil {
+	if err := os.MkdirAll(outputDir, fsperm.DirPerm); err != nil {
 		return fmt.Errorf("創建輸出目錄失敗: %w", err)
 	}
 
 	// 創建HTML文件
 	// G304: outputPath comes from trusted application code
-	file, err := os.OpenFile(filepath.Clean(outputPath), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, filePermission)
+	// 使用 fsperm.WriteFlags 以在 Unix 上自動帶 O_NOFOLLOW，阻擋 symlink-swap TOCTOU。
+	file, err := os.OpenFile(filepath.Clean(outputPath), fsperm.WriteFlags, fsperm.FilePerm)
 	if err != nil {
 		return fmt.Errorf("創建輸出文件失敗: %w", err)
 	}
@@ -341,7 +341,8 @@ func applySimpleChartOptions(line *charts.Line, config *InteractiveChartConfig) 
 // addSimpleChartSeries 添加簡化的圖表數據系列（無顏色配置）.
 func addSimpleChartSeries(line *charts.Line, dataset *models.EMGDataset, columnsToShow []int) {
 	for _, colIndex := range columnsToShow {
-		if colIndex >= len(dataset.Headers) || colIndex == 0 {
+		// colIndex 0 表示時間欄；負值會讓 extractColumnLineData 走 Channels[colIdx-1] panic。
+		if colIndex <= 0 || colIndex >= len(dataset.Headers) {
 			continue
 		}
 
@@ -591,7 +592,8 @@ func addComparisonSeries(
 // addDatasetSeries 為單個數據集添加系列.
 func addDatasetSeries(line *charts.Line, dataset *models.EMGDataset, label string, selectedColumns []int) {
 	for _, colIdx := range selectedColumns {
-		if colIdx >= len(dataset.Headers) || colIdx == 0 {
+		// colIdx 0 表示時間欄；負值會讓 extractColumnLineData 走 Channels[colIdx-1] panic。
+		if colIdx <= 0 || colIdx >= len(dataset.Headers) {
 			continue
 		}
 
@@ -619,8 +621,13 @@ func extractTimeData(dataset *models.EMGDataset) []float64 {
 }
 
 // extractColumnLineData 提取欄位的折線數據.
+// colIdx <= 0 視為缺欄並填 0；caller 應在迴圈內已過濾，但 defensive check 防 panic。
 func extractColumnLineData(dataset *models.EMGDataset, colIdx int) []opts.LineData {
 	lineData := make([]opts.LineData, len(dataset.Data))
+
+	if colIdx <= 0 {
+		return lineData
+	}
 
 	for i, data := range dataset.Data {
 		value := 0.0
@@ -632,246 +639,4 @@ func extractColumnLineData(dataset *models.EMGDataset, colIdx int) []opts.LineDa
 	}
 
 	return lineData
-}
-
-// BatchExportCharts 批量導出圖表.
-func (e *EChartsGenerator) BatchExportCharts(
-	dataset *models.EMGDataset,
-	columnGroups [][]int,
-	baseConfig InteractiveChartConfig, //nolint:gocritic // hugeParam: Config intentionally copied for modification
-	outputDir string,
-) error {
-	for i, columns := range columnGroups {
-		config := baseConfig
-		config.SelectedColumns = columns
-		config.Title = fmt.Sprintf("%s - Group %d", baseConfig.Title, i+1)
-
-		outputPath := filepath.Join(outputDir, fmt.Sprintf("chart_group_%d.html", i+1))
-		if err := e.GenerateInteractiveChart(dataset, &config, outputPath); err != nil {
-			e.logger.Error("批量導出失敗", err, map[string]interface{}{
-				"group": i + 1,
-			})
-
-			return err
-		}
-	}
-
-	return nil
-}
-
-// ValidateDataset 驗證數據集.
-func ValidateDataset(dataset *models.EMGDataset) error {
-	if dataset == nil {
-		return ErrDatasetNil
-	}
-
-	if len(dataset.Headers) == 0 {
-		return ErrDatasetNoHeaders
-	}
-
-	if len(dataset.Data) == 0 {
-		return ErrDatasetNoData
-	}
-
-	// 檢查數據一致性
-	expectedChannels := len(dataset.Headers) - 1
-	for i, data := range dataset.Data {
-		if len(data.Channels) != expectedChannels {
-			return fmt.Errorf("%w: 第 %d 行期望 %d, 實際 %d",
-				ErrDatasetChannelMismatch, i+1, expectedChannels, len(data.Channels))
-		}
-	}
-
-	return nil
-}
-
-// OptimizeForLargeDataset 針對大數據集優化.
-func OptimizeForLargeDataset(dataset *models.EMGDataset, maxPoints int) *models.EMGDataset {
-	if len(dataset.Data) <= maxPoints {
-		return dataset
-	}
-
-	// 使用 LTTB (Largest Triangle Three Buckets) 算法進行降採樣
-	return lttbDownsample(dataset, maxPoints)
-}
-
-// GenerateRealtimeChart 生成實時更新圖表.
-func GenerateRealtimeChart(config *InteractiveChartConfig, outputPath string) error {
-	line := charts.NewLine()
-
-	// 設置全局選項
-	line.SetGlobalOptions(
-		charts.WithTitleOpts(opts.Title{
-			Title: config.Title + " (實時)",
-		}),
-		charts.WithTooltipOpts(opts.Tooltip{
-			Show:    opts.Bool(true),
-			Trigger: "axis",
-		}),
-	)
-
-	// 添加實時更新JavaScript
-	realtimeJS := `
-		let myChart = %MY_ECHARTS%;
-		let data = [];
-		let now = new Date();
-		let value = Math.random() * 1000;
-
-		// 初始化數據
-		for (let i = 0; i < 100; i++) {
-			data.push({
-				name: now.toString(),
-				value: [
-					now.getTime(),
-					Math.round(Math.random() * 1000)
-				]
-			});
-			now = new Date(now.getTime() + 1000);
-		}
-
-		// 更新數據
-		setInterval(function() {
-			for (let i = 0; i < 5; i++) {
-				data.shift();
-				now = new Date(now.getTime() + 1000);
-				data.push({
-					name: now.toString(),
-					value: [
-						now.getTime(),
-						Math.round(Math.random() * 1000)
-					]
-				});
-			}
-
-			myChart.setOption({
-				series: [{
-					data: data
-				}]
-			});
-		}, 1000);
-	`
-
-	line.AddJSFuncStrs(opts.FuncOpts(realtimeJS))
-
-	// 創建輸出文件
-	// G304: outputPath comes from trusted application code
-	file, err := os.OpenFile(filepath.Clean(outputPath), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, filePermission)
-	if err != nil {
-		return fmt.Errorf("創建輸出文件失敗: %w", err)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	if err := line.Render(file); err != nil {
-		return fmt.Errorf("渲染圖表失敗: %w", err)
-	}
-
-	return nil
-}
-
-// FormatValue 格式化數值顯示.
-func FormatValue(value float64, precision int) string {
-	if math.Abs(value) < scientificLowBound || math.Abs(value) > scientificHighBound {
-		return strconv.FormatFloat(value, 'e', precision, 64)
-	}
-
-	return strconv.FormatFloat(value, 'f', precision, 64)
-}
-
-// GenerateCustomTheme 生成自定義主題.
-func GenerateCustomTheme() string {
-	return `
-		{
-			"color": ["#2E86C1", "#28B463", "#F39C12", "#E74C3C", "#8E44AD", "#34495E"],
-			"backgroundColor": "rgba(252, 252, 252, 1)",
-			"textStyle": {},
-			"title": {
-				"textStyle": {
-					"color": "#2C3E50"
-				},
-				"subtextStyle": {
-					"color": "#7F8C8D"
-				}
-			},
-			"line": {
-				"itemStyle": {
-					"borderWidth": 2
-				},
-				"lineStyle": {
-					"width": 2
-				},
-				"symbolSize": 4,
-				"symbol": "circle",
-				"smooth": false
-			},
-			"categoryAxis": {
-				"axisLine": {
-					"show": true,
-					"lineStyle": {
-						"color": "#BDC3C7"
-					}
-				},
-				"axisTick": {
-					"show": true,
-					"lineStyle": {
-						"color": "#BDC3C7"
-					}
-				},
-				"axisLabel": {
-					"show": true,
-					"textStyle": {
-						"color": "#34495E"
-					}
-				},
-				"splitLine": {
-					"show": true,
-					"lineStyle": {
-						"color": ["#ECF0F1"]
-					}
-				},
-				"splitArea": {
-					"show": false,
-					"areaStyle": {
-						"color": ["rgba(250,250,250,0.3)", "rgba(200,200,200,0.3)"]
-					}
-				}
-			},
-			"valueAxis": {
-				"axisLine": {
-					"show": true,
-					"lineStyle": {
-						"color": "#BDC3C7"
-					}
-				},
-				"axisTick": {
-					"show": true,
-					"lineStyle": {
-						"color": "#BDC3C7"
-					}
-				},
-				"axisLabel": {
-					"show": true,
-					"textStyle": {
-						"color": "#34495E"
-					}
-				},
-				"splitLine": {
-					"show": true,
-					"lineStyle": {
-						"color": ["#ECF0F1"]
-					}
-				},
-				"splitArea": {
-					"show": false,
-					"areaStyle": {
-						"color": ["rgba(250,250,250,0.3)", "rgba(200,200,200,0.3)"]
-					}
-				}
-			}
-		}
-	`
 }

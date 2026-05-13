@@ -101,7 +101,7 @@ func TestRangeNormalizer_NormalizeByRangeMax_ZeroMaxReturnsError(t *testing.T) {
 	data := &models.PhaseSyncEMGData{
 		Time: []float64{0.0, 0.1, 0.2, 0.3, 0.4},
 		Channels: map[string][]float64{
-			"ZeroMuscle": {0.0, 0.0, 0.0, 0.0, 0.0},
+			"ZeroMuscle":   {0.0, 0.0, 0.0, 0.0, 0.0},
 			"NormalMuscle": {1.0, 2.0, 3.0, 4.0, 5.0},
 		},
 		Headers: []string{"ZeroMuscle", "NormalMuscle"},

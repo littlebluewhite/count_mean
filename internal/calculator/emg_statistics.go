@@ -9,6 +9,8 @@ import (
 
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
+	"count_mean/internal/csvutil"
+	"count_mean/internal/security/fsperm"
 )
 
 // Report formatting constants.
@@ -45,11 +47,7 @@ func NewEMGStatisticsCalculator(precision int) *EMGStatisticsCalculator {
 // CalculateStatistics 計算 EMG 數據的統計信息.
 func (*EMGStatisticsCalculator) CalculateStatistics(
 	emgData *models.PhaseSyncEMGData,
-	startPhase string,
-	startTime float64,
-	endPhase string,
-	endTime float64,
-	subject string,
+	params StatisticsParams,
 ) (*models.EMGStatistics, error) {
 	// 驗證輸入數據
 	if err := parsers.ValidateEMGData(emgData); err != nil {
@@ -61,11 +59,11 @@ func (*EMGStatisticsCalculator) CalculateStatistics(
 
 	// 創建統計結果
 	stats := &models.EMGStatistics{
-		Subject:      subject,
-		StartPhase:   startPhase,
-		StartTime:    startTime,
-		EndPhase:     endPhase,
-		EndTime:      endTime,
+		Subject:      params.Subject,
+		StartPhase:   params.StartPhase,
+		StartTime:    params.StartTime,
+		EndPhase:     params.EndPhase,
+		EndTime:      params.EndTime,
 		ChannelNames: emgData.Headers,
 		ChannelMeans: means,
 		ChannelMaxes: maxes,
@@ -104,14 +102,17 @@ func buildChannelValueRow(
 }
 
 // writeCSVWithBOM creates a file with UTF-8 BOM and returns a CSV writer.
+//
+// fsperm.WriteFlags 含 O_NOFOLLOW (unix) 拒絕 symlink；攻擊者無法在 OutputDir
+// 植入 symlink 把寫入導向 /etc/passwd 等敏感檔。
 func writeCSVWithBOM(outputPath string) (*os.File, *csv.Writer, error) {
-	file, err := os.Create(outputPath) //nolint:gosec // G304: outputPath is validated by caller
+	//nolint:gosec // G304: outputPath is validated by caller
+	file, err := os.OpenFile(outputPath, fsperm.WriteFlags, fsperm.FilePerm)
 	if err != nil {
 		return nil, nil, fmt.Errorf("無法創建輸出檔案 %s: %w", outputPath, err)
 	}
 
-	bomBytes := []byte{0xEF, 0xBB, 0xBF}
-	if _, err := file.Write(bomBytes); err != nil {
+	if err := csvutil.WriteBOM(file); err != nil {
 		if closeErr := file.Close(); closeErr != nil {
 			_ = closeErr
 		}
@@ -123,34 +124,33 @@ func writeCSVWithBOM(outputPath string) (*os.File, *csv.Writer, error) {
 }
 
 // ExportToCSV 將統計結果導出為 CSV 檔案.
+// Flush 與 Close 的錯誤都會被回傳：磁碟滿等狀況下 csv.Writer 把錯誤延後到 Flush 才丟，
+// 若僅在 defer 中忽略，caller 會看到 nil 但檔案內容不完整。
 func (calc *EMGStatisticsCalculator) ExportToCSV(
 	stats *models.EMGStatistics,
 	outputPath string,
-) error {
+) (err error) {
 	file, writer, err := writeCSVWithBOM(outputPath)
 	if err != nil {
 		return err
 	}
 
 	defer func() {
-		writer.Flush()
-
-		if closeErr := file.Close(); closeErr != nil {
-			_ = closeErr
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("關閉檔案失敗: %w", closeErr)
 		}
 	}()
 
 	channelCount := len(stats.ChannelNames)
 
-	// Define all rows to write
 	rows := []struct {
 		row      []string
 		errorMsg string
 	}{
-		{append([]string{""}, stats.ChannelNames...), "寫入標題行失敗"},
-		{buildUniformRow("開始分期點", stats.StartPhase, channelCount), "寫入開始分期點失敗"},
+		{csvutil.SanitizeHeaderRow(append([]string{""}, stats.ChannelNames...)), "寫入標題行失敗"},
+		{buildUniformRow("開始分期點", string(stats.StartPhase), channelCount), "寫入開始分期點失敗"},
 		{buildUniformRow("開始時間", calc.formatFloat(stats.StartTime), channelCount), "寫入開始時間失敗"},
-		{buildUniformRow("結束分期點", stats.EndPhase, channelCount), "寫入結束分期點失敗"},
+		{buildUniformRow("結束分期點", string(stats.EndPhase), channelCount), "寫入結束分期點失敗"},
 		{buildUniformRow("結束時間", calc.formatFloat(stats.EndTime), channelCount), "寫入結束時間失敗"},
 		{buildUniformRow("時間差值", calc.formatFloat(stats.EndTime-stats.StartTime), channelCount), "寫入時間差值失敗"},
 		{buildChannelValueRow("平均值", stats.ChannelNames, stats.ChannelMeans, calc), "寫入平均值失敗"},
@@ -163,6 +163,11 @@ func (calc *EMGStatisticsCalculator) ExportToCSV(
 		}
 	}
 
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return fmt.Errorf("CSV flush 失敗: %w", err)
+	}
+
 	return nil
 }
 
@@ -173,17 +178,16 @@ func (calc *EMGStatisticsCalculator) formatFloat(value float64) string {
 }
 
 // GenerateOutputFileName 生成輸出檔案名.
-func GenerateOutputFileName(subject, startPhase, endPhase string) string {
-	// 移除特殊字符
-	safeSubject := sanitizeFileName(subject)
+func GenerateOutputFileName(subject string, startPhase, endPhase models.PhasePoint) string {
+	safeSubject := SanitizeFileName(subject)
 
-	// 生成檔案名: Subject_StartPhase-EndPhase_statistics.csv
 	return fmt.Sprintf("%s_%s-%s_statistics.csv", safeSubject, startPhase, endPhase)
 }
 
-// sanitizeFileName 清理檔案名中的特殊字符.
-func sanitizeFileName(name string) string {
-	// 替換不安全的字符
+// SanitizeFileName 把可能造成路徑穿越或檔名衝突的字元替換為底線。
+// 防範手段：把 /、\、:、*、?、"、<、>、|、空白都替換為 _，使 caller 可以安全地
+// 將外部輸入（如 manifest.Subject 或前端傳入的字串）直接組進 filepath.Join 的尾段。
+func SanitizeFileName(name string) string {
 	replacements := map[rune]rune{
 		'/':  '_',
 		'\\': '_',
@@ -235,32 +239,37 @@ func ValidateStatisticsParams(params *StatisticsParams) error {
 // StatisticsParams 統計參數.
 type StatisticsParams struct {
 	Subject    string
-	StartPhase string
+	StartPhase models.PhasePoint
 	StartTime  float64
-	EndPhase   string
+	EndPhase   models.PhasePoint
 	EndTime    float64
 }
 
 // FormatStatisticsReport 格式化統計報告.
+// 使用 strings.Builder 取代 `report += fmt.Sprintf(...)`，避免在迴圈內每次 reallocate。
 func FormatStatisticsReport(stats *models.EMGStatistics) string {
-	report := "EMG 統計分析報告\n"
-	report += "================\n"
-	report += fmt.Sprintf("主題: %s\n", stats.Subject)
-	report += fmt.Sprintf("分析區間: %s (%.3fs) → %s (%.3fs)\n",
+	var sb strings.Builder
+	sb.Grow(256 + len(stats.ChannelNames)*64)
+
+	sb.WriteString("EMG 統計分析報告\n")
+	sb.WriteString("================\n")
+	fmt.Fprintf(&sb, "主題: %s\n", stats.Subject)
+	fmt.Fprintf(&sb, "分析區間: %s (%.3fs) → %s (%.3fs)\n",
 		stats.StartPhase, stats.StartTime,
 		stats.EndPhase, stats.EndTime)
-	report += fmt.Sprintf("持續時間: %.3f 秒\n", stats.EndTime-stats.StartTime)
-	report += fmt.Sprintf("通道數量: %d\n\n", len(stats.ChannelNames))
+	fmt.Fprintf(&sb, "持續時間: %.3f 秒\n", stats.EndTime-stats.StartTime)
+	fmt.Fprintf(&sb, "通道數量: %d\n\n", len(stats.ChannelNames))
 
-	report += "各通道統計結果:\n"
-	report += fmt.Sprintf("%-20s %15s %15s\n", "通道名稱", "平均值", "最大值")
-	report += fmt.Sprintf("%s\n", strings.Repeat("-", reportSeparatorWidth))
+	sb.WriteString("各通道統計結果:\n")
+	fmt.Fprintf(&sb, "%-20s %15s %15s\n", "通道名稱", "平均值", "最大值")
+	sb.WriteString(strings.Repeat("-", reportSeparatorWidth))
+	sb.WriteByte('\n')
 
 	for _, channelName := range stats.ChannelNames {
 		mean := stats.ChannelMeans[channelName]
 		maxVal := stats.ChannelMaxes[channelName]
-		report += fmt.Sprintf("%-20s %15.6f %15.6f\n", channelName, mean, maxVal)
+		fmt.Fprintf(&sb, "%-20s %15.6f %15.6f\n", channelName, mean, maxVal)
 	}
 
-	return report
+	return sb.String()
 }

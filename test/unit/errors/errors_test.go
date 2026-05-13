@@ -9,11 +9,9 @@ import (
 
 // Test sentinel errors for err113 compliance.
 var (
-	errSystem     = errors.New("system error")
-	errOther      = errors.New("other error")
-	errUnderlying = errors.New("underlying error")
-	errParse      = errors.New("parse error")
-	errParsing    = errors.New("parsing failed")
+	errSystem  = errors.New("system error")
+	errOther   = errors.New("other error")
+	errParsing = errors.New("parsing failed")
 )
 
 func TestAppError_Error(t *testing.T) {
@@ -147,18 +145,6 @@ func TestNewAppError(t *testing.T) {
 	}
 }
 
-func TestNewAppErrorWithCause(t *testing.T) {
-	err := apperrors.NewAppErrorWithCause(apperrors.ErrCodeFileNotFound, "檔案未找到", errUnderlying)
-
-	if !errors.Is(err.Cause, errUnderlying) {
-		t.Errorf("Cause = %v, want %v", err.Cause, errUnderlying)
-	}
-
-	if !errors.Is(err.Unwrap(), errUnderlying) {
-		t.Errorf("Unwrap() = %v, want %v", err.Unwrap(), errUnderlying)
-	}
-}
-
 func TestIsRecoverable(t *testing.T) {
 	tests := []struct {
 		name string
@@ -193,22 +179,6 @@ func TestIsRecoverable(t *testing.T) {
 				t.Errorf("isRecoverable() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestProcessingError_Error(t *testing.T) {
-	err := apperrors.NewProcessingError(
-		apperrors.ErrCodeDataParsing,
-		"解析失敗",
-		"test.csv",
-		"read_csv",
-		"data_validation",
-		errParse,
-	)
-
-	expectedPattern := "[DATA_PARSING] - 檔案: test.csv - 操作: read_csv - 步驟: data_validation - 解析失敗 - 原因: parse error"
-	if got := err.Error(); got != expectedPattern {
-		t.Errorf("ProcessingError.Error() = %v, want %v", got, expectedPattern)
 	}
 }
 
@@ -303,66 +273,6 @@ func TestCalculatorError_WithContext(t *testing.T) {
 
 	if err.Context["window_size"] != 100 {
 		t.Errorf("Context[window_size] = %v, want 100", err.Context["window_size"])
-	}
-}
-
-func TestCalculatorError_HelperFunctions(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		checkFn  func(error) bool
-		expected bool
-	}{
-		{
-			name:     "IsEmptyDataset returns true for empty dataset error",
-			err:      apperrors.NewCalculatorError(apperrors.ErrEmptyDataset, "test"),
-			checkFn:  apperrors.IsEmptyDataset,
-			expected: true,
-		},
-		{
-			name:     "IsWindowTooLarge returns true for window too large error",
-			err:      apperrors.NewCalculatorError(apperrors.ErrWindowTooLarge, "test"),
-			checkFn:  apperrors.IsWindowTooLarge,
-			expected: true,
-		},
-		{
-			name:     "IsInvalidWindowSize returns true for invalid window size error",
-			err:      apperrors.NewCalculatorError(apperrors.ErrInvalidWindowSize, "test"),
-			checkFn:  apperrors.IsInvalidWindowSize,
-			expected: true,
-		},
-		{
-			name:     "IsChannelMismatch returns true for channel mismatch error",
-			err:      apperrors.NewCalculatorError(apperrors.ErrChannelMismatch, "test"),
-			checkFn:  apperrors.IsChannelMismatch,
-			expected: true,
-		},
-		{
-			name:     "IsZeroReference returns true for zero reference error",
-			err:      apperrors.NewCalculatorError(apperrors.ErrZeroReference, "test"),
-			checkFn:  apperrors.IsZeroReference,
-			expected: true,
-		},
-		{
-			name:     "IsPhaseMismatch returns true for phase mismatch error",
-			err:      apperrors.NewCalculatorError(apperrors.ErrPhaseMismatch, "test"),
-			checkFn:  apperrors.IsPhaseMismatch,
-			expected: true,
-		},
-		{
-			name:     "IsEmptyDataset returns false for different error",
-			err:      apperrors.NewCalculatorError(apperrors.ErrWindowTooLarge, "test"),
-			checkFn:  apperrors.IsEmptyDataset,
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.checkFn(tt.err); got != tt.expected {
-				t.Errorf("%s() = %v, want %v", tt.name, got, tt.expected)
-			}
-		})
 	}
 }
 

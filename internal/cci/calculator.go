@@ -13,15 +13,15 @@ const (
 
 // MusclePair defines a pair of EMG channels for CCI calculation.
 type MusclePair struct {
-	Name     string // e.g., "RA/ES"
-	Muscle1  string // short name: "RA"
-	Muscle2  string // short name: "ES"
+	Name    string // e.g., "RA/ES"
+	Muscle1 string // short name: "RA"
+	Muscle2 string // short name: "ES"
 }
 
 // CCIResult holds the CCI calculation result for one muscle pair.
 type CCIResult struct {
 	PairName string
-	Values   []float64 // CCI values normalized to 101 points (0-100%)
+	Values   []float64 // CCI time-series values; length aligned with CCIAnalysisResult.TimeValues
 }
 
 // CCIAnalysisResult holds the complete analysis result.
@@ -32,7 +32,6 @@ type CCIAnalysisResult struct {
 	PhasePercents map[string]float64   // phase name -> % position in gait cycle
 	PhaseTimes    map[string]float64   // phase name -> actual time in seconds
 	MeanCurves    map[string][]float64 // pair name -> mean CCI curve
-	SDCurves      map[string][]float64 // pair name -> SD of CCI curve
 	GaitStartTime float64              // actual EMG time at gait cycle 0%
 	GaitEndTime   float64              // actual EMG time at gait cycle 100%
 }
@@ -58,7 +57,17 @@ func DefaultMusclePairs() []MusclePair {
 // CalculateCCIRudolph computes CCI for a single time point.
 // Formula: CCI = (EMG_s / EMG_l) * (EMG_s + EMG_l)
 // where EMG_s is the smaller value and EMG_l is the larger value.
+//
+// Rudolph 公式假設輸入為 rectified EMG（非負、有限數值）。對於 NaN / ±Inf /
+// 負值輸入回傳 math.NaN()，使下游 (writeCSVFile 等) 可以偵測並回報錯誤，
+// 避免污染統計結果。
 func CalculateCCIRudolph(emg1, emg2 float64) float64 {
+	if math.IsNaN(emg1) || math.IsNaN(emg2) ||
+		math.IsInf(emg1, 0) || math.IsInf(emg2, 0) ||
+		emg1 < 0 || emg2 < 0 {
+		return math.NaN()
+	}
+
 	emgS := math.Min(emg1, emg2)
 	emgL := math.Max(emg1, emg2)
 
@@ -85,51 +94,17 @@ func CalculateCCITimeSeries(ch1Data, ch2Data []float64) ([]float64, error) {
 	return result, nil
 }
 
-// NormalizeToGaitCycle resamples data to numPoints evenly spaced points using linear interpolation.
-func NormalizeToGaitCycle(data []float64, numPoints int) []float64 {
-	if len(data) == 0 || numPoints <= 0 {
-		return nil
-	}
-
-	if len(data) == 1 {
-		result := make([]float64, numPoints)
-		for i := range result {
-			result[i] = data[0]
-		}
-
-		return result
-	}
-
-	result := make([]float64, numPoints)
-	srcLen := float64(len(data) - 1)
-
-	for i := 0; i < numPoints; i++ {
-		pos := float64(i) / float64(numPoints-1) * srcLen
-		idx := int(pos)
-
-		if idx >= len(data)-1 {
-			result[i] = data[len(data)-1]
-			continue
-		}
-
-		frac := pos - float64(idx)
-		result[i] = data[idx]*(1-frac) + data[idx+1]*frac
-	}
-
-	return result
-}
-
 // shortNameMap maps normalized prefixes to standard short muscle names.
 var shortNameMap = map[string]string{
-	"RA":   "RA",
-	"ES":   "ES",
-	"IL":   "IL",
-	"GMAX": "GMax",
-	"RF":   "RF",
-	"BF":   "BF",
-	"TAIO": "TAIO",
+	"RA":    "RA",
+	"ES":    "ES",
+	"IL":    "IL",
+	"GMAX":  "GMax",
+	"RF":    "RF",
+	"BF":    "BF",
+	"TAIO":  "TAIO",
 	"TA&IO": "TAIO",
-	"MF":   "MF",
+	"MF":    "MF",
 }
 
 // MapHeaderToShortName extracts the short muscle name from an EMG header.
@@ -184,43 +159,4 @@ func BuildChannelMap(headers []string) (map[string]string, error) {
 	}
 
 	return channelMap, nil
-}
-
-// ComputeMeanAndSD calculates pointwise mean and standard deviation.
-func ComputeMeanAndSD(curves [][]float64) ([]float64, []float64) {
-	if len(curves) == 0 {
-		return nil, nil
-	}
-
-	n := len(curves[0])
-	mean := make([]float64, n)
-	sd := make([]float64, n)
-	count := float64(len(curves))
-
-	// Calculate mean
-	for _, curve := range curves {
-		for i := 0; i < n && i < len(curve); i++ {
-			mean[i] += curve[i]
-		}
-	}
-
-	for i := range mean {
-		mean[i] /= count
-	}
-
-	// Calculate SD
-	if len(curves) > 1 {
-		for _, curve := range curves {
-			for i := 0; i < n && i < len(curve); i++ {
-				diff := curve[i] - mean[i]
-				sd[i] += diff * diff
-			}
-		}
-
-		for i := range sd {
-			sd[i] = math.Sqrt(sd[i] / (count - 1))
-		}
-	}
-
-	return mean, sd
 }

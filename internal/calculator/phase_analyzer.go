@@ -7,7 +7,7 @@ import (
 	calcerrors "count_mean/internal/errors"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
-	"count_mean/internal/parser"
+	"count_mean/internal/parsers"
 	"count_mean/util"
 )
 
@@ -19,7 +19,7 @@ type PhaseAnalyzer struct {
 	scalingFactor int
 	phaseLabels   []string
 	logger        *logging.Logger
-	dataParser    *parser.DataParser
+	dataParser    *parsers.DataParser
 }
 
 // NewPhaseAnalyzer 創建新的階段分析器.
@@ -30,7 +30,7 @@ func NewPhaseAnalyzer(scalingFactor int, phaseLabels []string) *PhaseAnalyzer {
 		scalingFactor: scalingFactor,
 		phaseLabels:   phaseLabels,
 		logger:        logger,
-		dataParser:    parser.NewDataParserWithLogger(scalingFactor, logger),
+		dataParser:    parsers.NewDataParserWithLogger(scalingFactor, logger),
 	}
 }
 
@@ -92,6 +92,13 @@ func (p *PhaseAnalyzer) collectPhaseData(dataset *models.EMGDataset, phases []mo
 }
 
 // assignDataToPhases 將數據點分配到對應的階段.
+//
+// 嚴格不等式（>, <）是刻意設計：避免落在 phase.Start / phase.End 的邊界樣本
+// 同時計入兩個相鄰 phase 造成 double counting。對於 EMG / gait 分析，phase
+// 邊界通常是事件時間點（heel strike、起跳離地等），該瞬間樣本歸屬本來就
+// 不明確；寧可丟一個樣本也不要污染兩端 phase 的統計值。
+// (post-review 2026-05-13：確認此 intent 並 lock in，避免未來 reviewer 再次
+// 誤判為 boundary bug。)
 func (*PhaseAnalyzer) assignDataToPhases(
 	data models.EMGData, phases []models.TimeRange, phaseData []map[int][]float64,
 ) {

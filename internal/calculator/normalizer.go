@@ -7,7 +7,7 @@ import (
 	calcerrors "count_mean/internal/errors"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
-	"count_mean/internal/parser"
+	"count_mean/internal/parsers"
 	"count_mean/util"
 )
 
@@ -15,7 +15,7 @@ import (
 type Normalizer struct {
 	scalingFactor int
 	logger        *logging.Logger
-	dataParser    *parser.DataParser
+	dataParser    *parsers.DataParser
 }
 
 // NewNormalizer 創建新的標準化器.
@@ -25,7 +25,7 @@ func NewNormalizer(scalingFactor int) *Normalizer {
 	return &Normalizer{
 		scalingFactor: scalingFactor,
 		logger:        logger,
-		dataParser:    parser.NewDataParserWithLogger(scalingFactor, logger),
+		dataParser:    parsers.NewDataParserWithLogger(scalingFactor, logger),
 	}
 }
 
@@ -107,12 +107,31 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 		}
 	}
 
-	// 標準化每一行數據
-	for _, data := range dataset.Data {
-		normalizedChannels := make([]float64, len(data.Channels))
+	// 預配 totalPoints*channelCount 大小的 buffer，逐 row 切 sub-slice：
+	// 30 萬點 × 16 channel 級別下，per-row make 會產生 30 萬次 allocation；
+	// 改用三索引切片 buf[i:j:j] 限制 cap，未來若有 append(channels, ...) 也只會新配置不會寫穿。
+	// 下游消費者 (csv writer / convertNormalizedDataToArray / chart) 全部僅讀，sub-slice 安全。
+	totalPoints := len(dataset.Data)
+	channelCount := len(refValues)
 
-		for i, val := range data.Channels {
-			normalizedChannels[i] = val / refValues[i]
+	var buffer []float64
+	if totalPoints > 0 && channelCount > 0 {
+		buffer = make([]float64, totalPoints*channelCount)
+	}
+
+	for i, data := range dataset.Data {
+		var normalizedChannels []float64
+
+		if len(data.Channels) == channelCount && buffer != nil {
+			start := i * channelCount
+			end := start + channelCount
+			normalizedChannels = buffer[start:end:end]
+		} else {
+			normalizedChannels = make([]float64, len(data.Channels))
+		}
+
+		for j, val := range data.Channels {
+			normalizedChannels[j] = val / refValues[j]
 		}
 
 		normalizedData := models.EMGData{
@@ -144,7 +163,7 @@ func (n *Normalizer) NormalizeFromRawData(records, reference [][]string) (*model
 		"reference_records": len(reference),
 	})
 
-	dataset, err := n.dataParser.ParseRawDataWithOptions(records, parser.ParseOptions{
+	dataset, err := n.dataParser.ParseRawDataWithOptions(records, parsers.ParseOptions{
 		DetectTimePrecision: true,
 		LogVerbose:          true,
 	})

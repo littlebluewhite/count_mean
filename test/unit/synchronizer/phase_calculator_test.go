@@ -19,8 +19,8 @@ func TestPhaseCalculator_ValidatePhaseOrder(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		startPhase string
-		endPhase   string
+		startPhase models.PhasePoint
+		endPhase   models.PhasePoint
 		expectErr  bool
 		errorMsg   string
 	}{
@@ -125,8 +125,8 @@ func TestPhaseCalculator_GetPhaseTimeRange(t *testing.T) {
 	tests := []struct {
 		name            string
 		phasePoints     models.PhasePoints
-		startPhase      string
-		endPhase        string
+		startPhase      models.PhasePoint
+		endPhase        models.PhasePoint
 		emgMotionOffset int
 		expectErr       bool
 		errorMsg        string
@@ -283,125 +283,40 @@ func TestPhaseCalculator_GetPhaseTimeRange(t *testing.T) {
 func TestGetAvailableStartPhases(t *testing.T) {
 	phases := synchronizer.GetAvailableStartPhases()
 
-	expected := []string{"P0", "P1", "P2", "S", "C", "D", "T0", "T", "O", "L"}
+	expected := []models.PhasePoint{
+		models.PhaseP0, models.PhaseP1, models.PhaseP2, models.PhaseS, models.PhaseC,
+		models.PhaseD, models.PhaseT0, models.PhaseT, models.PhaseO, models.PhaseL,
+	}
 	assert.Equal(t, expected, phases)
 
 	// Verify length
 	assert.Len(t, phases, 10)
 
 	// Verify specific phases are present
-	assert.Contains(t, phases, "P0")
-	assert.Contains(t, phases, "S")
-	assert.Contains(t, phases, "L")
+	assert.Contains(t, phases, models.PhaseP0)
+	assert.Contains(t, phases, models.PhaseS)
+	assert.Contains(t, phases, models.PhaseL)
 }
 
 func TestGetAvailableEndPhases(t *testing.T) {
 	phases := synchronizer.GetAvailableEndPhases()
 
-	expected := []string{"P1", "P2", "S", "C", "D", "T0", "T", "O", "L"}
+	expected := []models.PhasePoint{
+		models.PhaseP1, models.PhaseP2, models.PhaseS, models.PhaseC, models.PhaseD,
+		models.PhaseT0, models.PhaseT, models.PhaseO, models.PhaseL,
+	}
 	assert.Equal(t, expected, phases)
 
 	// Verify length
 	assert.Len(t, phases, 9)
 
 	// Verify P0 is not included (cannot be end phase)
-	assert.NotContains(t, phases, "P0")
+	assert.NotContains(t, phases, models.PhaseP0)
 
 	// Verify other phases are present
-	assert.Contains(t, phases, "P1")
-	assert.Contains(t, phases, "S")
-	assert.Contains(t, phases, "L")
-}
-
-func TestGetPhaseInfo(t *testing.T) {
-	phaseInfo := synchronizer.GetPhaseInfo()
-
-	// Verify length
-	assert.Len(t, phaseInfo, 10)
-
-	// Create a map for easier lookup
-	infoMap := make(map[string]synchronizer.PhaseInfo)
-	for _, info := range phaseInfo {
-		infoMap[info.Name] = info
-	}
-
-	// Verify specific phase info
-	tests := []struct {
-		name         string
-		expectedType string
-		hasDesc      bool
-	}{
-		{"P0", "force", true},
-		{"P1", "force", true},
-		{"P2", "force", true},
-		{"S", "force", true},
-		{"C", "force", true},
-		{"D", "motion", true},
-		{"T0", "force", true},
-		{"T", "force", true},
-		{"O", "motion", true},
-		{"L", "force", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			info, exists := infoMap[tt.name]
-			assert.True(t, exists, "Phase %s should exist", tt.name)
-			assert.Equal(t, tt.expectedType, info.Type)
-			assert.Equal(t, tt.name, info.Name)
-
-			if tt.hasDesc {
-				assert.NotEmpty(t, info.Description)
-			}
-		})
-	}
-}
-
-func TestFormatPhaseTime(t *testing.T) {
-	tests := []struct {
-		name             string
-		value            float64
-		phaseType        string
-		expectedContains string
-	}{
-		{
-			name:             "force time",
-			value:            1.234,
-			phaseType:        synchronizer.PhaseTypeForce,
-			expectedContains: "1.234 秒",
-		},
-		{
-			name:             "motion index",
-			value:            250.0,
-			phaseType:        synchronizer.PhaseTypeMotion,
-			expectedContains: "Index: 250",
-		},
-		{
-			name:             "decimal motion index",
-			value:            250.7,
-			phaseType:        synchronizer.PhaseTypeMotion,
-			expectedContains: "Index: 250", // Should be converted to int
-		},
-		{
-			name:             "zero force time",
-			value:            0.0,
-			phaseType:        synchronizer.PhaseTypeForce,
-			expectedContains: "0.000 秒",
-		},
-		{
-			name:             "zero motion index",
-			value:            0.0,
-			phaseType:        synchronizer.PhaseTypeMotion,
-			expectedContains: "Index: 0",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := synchronizer.FormatPhaseTime(tt.value, tt.phaseType)
-			assert.Contains(t, result, tt.expectedContains)
-		})
-	}
+	assert.Contains(t, phases, models.PhaseP1)
+	assert.Contains(t, phases, models.PhaseS)
+	assert.Contains(t, phases, models.PhaseL)
 }
 
 func TestPhaseCalculator_GetPhaseTimeRange_EdgeCases(t *testing.T) {
@@ -430,8 +345,8 @@ func TestPhaseCalculator_GetPhaseTimeRange_EdgeCases(t *testing.T) {
 
 	tests := []struct {
 		name            string
-		startPhase      string
-		endPhase        string
+		startPhase      models.PhasePoint
+		endPhase        models.PhasePoint
 		emgMotionOffset int
 		expectErr       bool
 	}{
@@ -499,7 +414,7 @@ func BenchmarkPhaseCalculator_ValidatePhaseOrder(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = pc.ValidatePhaseOrder("P0", "L")
+		_ = pc.ValidatePhaseOrder(models.PhaseP0, models.PhaseL)
 	}
 }
 
@@ -522,7 +437,7 @@ func BenchmarkPhaseCalculator_GetPhaseTimeRange(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, _ = pc.GetPhaseTimeRange(phasePoints, "P0", "L", 100)
+		_, _ = pc.GetPhaseTimeRange(phasePoints, models.PhaseP0, models.PhaseL, 100)
 	}
 }
 
@@ -531,23 +446,6 @@ func BenchmarkGetAvailableStartPhases(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		_ = synchronizer.GetAvailableStartPhases()
-	}
-}
-
-func BenchmarkGetPhaseInfo(b *testing.B) {
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		_ = synchronizer.GetPhaseInfo()
-	}
-}
-
-func BenchmarkFormatPhaseTime(b *testing.B) {
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		_ = synchronizer.FormatPhaseTime(123.456, synchronizer.PhaseTypeForce)
-		_ = synchronizer.FormatPhaseTime(250.0, synchronizer.PhaseTypeMotion)
 	}
 }
 
@@ -575,11 +473,11 @@ func TestPhaseCalculator_ConcurrentAccess(t *testing.T) {
 		go func() {
 			for j := 0; j < 100; j++ {
 				// Test ValidatePhaseOrder
-				err := pc.ValidatePhaseOrder("P0", "L")
+				err := pc.ValidatePhaseOrder(models.PhaseP0, models.PhaseL)
 				assert.NoError(t, err)
 
 				// Test GetPhaseTimeRange
-				result, err := pc.GetPhaseTimeRange(phasePoints, "P0", "L", 100)
+				result, err := pc.GetPhaseTimeRange(phasePoints, models.PhaseP0, models.PhaseL, 100)
 				assert.NoError(t, err)
 				assert.NotNil(t, result)
 			}

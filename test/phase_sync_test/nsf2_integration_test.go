@@ -1,6 +1,7 @@
 package phase_sync_test
 
 import (
+	"context"
 	"math"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"count_mean/internal/models"
 	"count_mean/internal/phase_sync"
+	"count_mean/internal/security/fsperm"
 )
 
 const (
@@ -31,7 +33,7 @@ func TestNSF2_T_to_O_Analysis(t *testing.T) {
 	}
 
 	// Ensure output directory exists
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, fsperm.DirPerm); err != nil {
 		t.Fatalf("Failed to create output directory: %v", err)
 	}
 
@@ -48,7 +50,7 @@ func TestNSF2_T_to_O_Analysis(t *testing.T) {
 	}
 
 	// Execute analysis
-	stats, err := analyzer.AnalyzePhaseSync(params)
+	stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
@@ -147,7 +149,7 @@ func TestNSF2_P0_to_P1_Analysis(t *testing.T) {
 	}
 
 	// Ensure output directory exists
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, fsperm.DirPerm); err != nil {
 		t.Fatalf("Failed to create output directory: %v", err)
 	}
 
@@ -164,7 +166,7 @@ func TestNSF2_P0_to_P1_Analysis(t *testing.T) {
 	}
 
 	// Execute analysis
-	stats, err := analyzer.AnalyzePhaseSync(params)
+	stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}

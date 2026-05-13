@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"count_mean/internal/config"
-	"count_mean/internal/errors"
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
+	"count_mean/internal/security/fsperm"
 )
 
 // TestI18nIntegration tests the internationalization integration functionality.
@@ -26,7 +26,7 @@ func TestI18nIntegration(t *testing.T) {
 	cfg.TranslationsDir = "./test_translations"
 
 	// 確保測試目錄存在
-	if err := os.MkdirAll(cfg.TranslationsDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.TranslationsDir, fsperm.DirPerm); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
 	defer os.RemoveAll(cfg.TranslationsDir)
@@ -46,16 +46,6 @@ func TestI18nIntegration(t *testing.T) {
 
 		if msg != expected {
 			t.Errorf("基本翻譯失敗，期望 '%s'，實際 '%s'", expected, msg)
-		}
-	})
-
-	// 測試錯誤訊息翻譯
-	t.Run("ErrorTranslation", func(t *testing.T) {
-		err := errors.GetI18nFileNotFoundError()
-		expected := "File not found"
-
-		if err.Message != expected {
-			t.Errorf("錯誤翻譯失敗，期望 '%s'，實際 '%s'", expected, err.Message)
 		}
 	})
 

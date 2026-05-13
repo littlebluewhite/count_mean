@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"count_mean/internal/i18n"
+	"count_mean/internal/security/fsperm"
 )
 
 func TestI18n_Basic(t *testing.T) {
@@ -83,7 +84,7 @@ func TestI18n_WithArgs(t *testing.T) {
 func TestI18n_FileOperations(t *testing.T) {
 	// 創建臨時目錄
 	tmpDir := "./test_translations"
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+	if err := os.MkdirAll(tmpDir, fsperm.DirPerm); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)

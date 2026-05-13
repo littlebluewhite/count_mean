@@ -61,48 +61,18 @@ func NewPathValidator(allowedBasePaths []string) *PathValidator {
 }
 
 // ValidateFilePath validates that a file path is within allowed directories.
+//
+// 用於受控的內部讀寫路徑 (InputDir / OutputDir / OperateDir)。對於使用者選的
+// 任意檔（GUI file dialog 回來的絕對路徑），改用 ValidateExternalPath，否則
+// 路徑落在 allowedBasePaths 外會被 reject。
 func (pv *PathValidator) ValidateFilePath(path string) error {
-	// 允許空路徑
 	if path == "" {
 		return nil
 	}
 
-	// URL 解碼 - 如果解碼失敗，使用原始路徑（允許包含 % 符號的路徑）
-	decodedPath, err := url.QueryUnescape(path)
+	absPath, decodedPath, err := pv.validatePathFormat(path)
 	if err != nil {
-		// 解碼失敗時使用原始路徑，允許包含 % 或空格的 Windows 路徑
-		decodedPath = path
-	}
-
-	// 檢查基本路徑遍歷模式（放寬 URL 編碼變體的限制）
-	suspiciousPatterns := []string{
-		"..",     // 標準路徑遍歷
-		"..\\",   // Windows 風格
-		"../",    // Unix 風格
-		"\\..\\", // 反斜線變體
-		"/..",    // 絕對路徑變體
-	}
-
-	// 只檢查解碼後的路徑（放寬原始路徑中 % 編碼的限制）
-	checkPathLower := strings.ToLower(decodedPath)
-	for _, pattern := range suspiciousPatterns {
-		if strings.Contains(checkPathLower, strings.ToLower(pattern)) {
-			return fmt.Errorf("%w: %s", ErrPathTraversal, pattern)
-		}
-	}
-
-	// 使用解碼後的路徑進行清理，防止編碼繞過
-	cleanPath := filepath.Clean(decodedPath)
-
-	// Get absolute path using decoded and cleaned path
-	absPath, err := filepath.Abs(cleanPath)
-	if err != nil {
-		return fmt.Errorf("無法解析路徑 '%s': %w", decodedPath, err)
-	}
-
-	// 最終檢查：確保絕對路徑不包含遍歷模式
-	if strings.Contains(absPath, "..") {
-		return fmt.Errorf("%w: %s", ErrPathTraversalAbs, absPath)
+		return err
 	}
 
 	// 取得允許路徑的快照，避免在驗證過程中與 SetAllowedBasePaths 競爭
@@ -124,6 +94,133 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 	}
 
 	return fmt.Errorf("%w: %s", ErrPathOutOfScope, decodedPath)
+}
+
+// ValidateExternalPath validates an externally-selected path (e.g. from a GUI
+// file dialog) without enforcing the allowed-base-paths whitelist. The same
+// path-format prechecks as ValidateFilePath are applied (URL decode, traversal
+// patterns, absolute resolution) followed by performBasicSecurityChecks which
+// blocks system-sensitive prefixes (/etc, /root, C:\Windows, ...) and enforces
+// path-length limits. Use this for GetCSVHeaders / chart preview / any reader
+// where the user has explicitly chosen the file.
+func (pv *PathValidator) ValidateExternalPath(path string) error {
+	if path == "" {
+		return nil
+	}
+
+	absPath, _, err := pv.validatePathFormat(path)
+	if err != nil {
+		return err
+	}
+
+	return performBasicSecurityChecks(absPath)
+}
+
+// validatePathFormat performs the URL-decode + traversal + absolute-resolution
+// prechecks shared by ValidateFilePath and ValidateExternalPath. Returns the
+// cleaned absolute path and the URL-decoded original (used for error messages).
+//
+// Traversal 檢查改為 element-based（filepath.Clean 後 split 比對 `..` element）
+// 取代過去的 substring scan：substring `..` 會誤拒含雙點的合法檔名，例如
+// `report..v2.csv`、`backup..2024.csv`、`/Users/foo..bar/data.csv`
+// （Wave 6 review P2 — codex + professional/debugger/security 三個 agent 收斂）。
+func (*PathValidator) validatePathFormat(path string) (absPath, decodedPath string, err error) {
+	// URL 解碼 — loop until idempotent (cap 4 層深度) 以擋雙重編碼繞過：
+	// 單層 decode 對 `..%252Fetc%252Fpasswd` 只變成 `..%2Fetc%2Fpasswd`，
+	// HasTraversalElement 依 / 與 \ split 不會切到 `%2F`，整段被當成單一 element
+	// `..%2Fetc...` 比對 `..` 失敗，攻擊 bypass。loop decode 直到不變、或設深度
+	// 上限（防超長 encoded payload 形成 DoS 與無限解碼），然後拒絕仍含 % 的 path。
+	decoded := path
+	for i := 0; i < 4; i++ {
+		next, decodeErr := url.QueryUnescape(decoded)
+		if decodeErr != nil || next == decoded {
+			break
+		}
+		decoded = next
+	}
+	// 若仍含 literal `%`，視為「無法完全 decode 的可疑 input」直接拒。合法檔名
+	// 不會含 raw `%`（URL-encoded form 寫進 path）；同時 4 層 loop 上限避免
+	// DoS。Wave 7 security review P3 — codex / security-specialist 收斂。
+	if strings.Contains(decoded, "%") {
+		return "", decoded, fmt.Errorf("%w: 路徑含 URL-encoded 殘留：%s", ErrPathTraversal, decoded)
+	}
+
+	// Pre-Clean element check：interior `..`（例如 `./input/../output/test.csv`）
+	// 在 Clean 後會被解析消去，但這種跨目錄寫法本身就值得擋，因此在 Clean 之前
+	// 先 split 比對 `..` element。filename 含字面雙點（`report..v2.csv`）的 path
+	// element 不會被誤拒。
+	if HasTraversalElement(decoded) {
+		return "", decoded, fmt.Errorf("%w: %s", ErrPathTraversal, decoded)
+	}
+
+	cleanPath := filepath.Clean(decoded)
+
+	abs, absErr := filepath.Abs(cleanPath)
+	if absErr != nil {
+		return "", decoded, fmt.Errorf("無法解析路徑 '%s': %w", decoded, absErr)
+	}
+
+	if HasTraversalElement(abs) {
+		return "", decoded, fmt.Errorf("%w: %s", ErrPathTraversalAbs, abs)
+	}
+
+	return abs, decoded, nil
+}
+
+// HasTraversalElement reports whether any path element equals "..".
+// Splits on both `/` and `\` so cross-platform paths receive a consistent check
+// regardless of which separator the caller passed in.
+//
+// Exported so downstream packages (e.g. internal/io) can apply the same
+// element-aware semantics instead of substring `..` checks that misclassify
+// legitimate filenames like `report..v2.csv`.
+func HasTraversalElement(path string) bool {
+	parts := strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	for _, part := range parts {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// filterTraversalElements rebuilds path stripping any path element that is
+// literally `..`. Filenames that merely contain `..` as a substring (e.g.
+// `report..v2.csv`) are preserved.
+//
+// Replaces the previous `strings.ReplaceAll(path, "..", "")` in SanitizePath,
+// which silently mangled legitimate filenames into different paths — turning
+// GetSafePath into a vector that could read or overwrite the wrong file once
+// the mangled name happened to exist on disk (codex Wave 6 second-pass P2).
+func filterTraversalElements(path string) string {
+	if path == "" {
+		return path
+	}
+
+	leading := ""
+	switch {
+	case strings.HasPrefix(path, "/"):
+		leading = "/"
+	case strings.HasPrefix(path, "\\"):
+		leading = "\\"
+	}
+
+	parts := strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	filtered := parts[:0]
+	for _, part := range parts {
+		if part != ".." {
+			filtered = append(filtered, part)
+		}
+	}
+
+	if len(filtered) == 0 {
+		return leading
+	}
+	return leading + strings.Join(filtered, string(filepath.Separator))
 }
 
 // ValidateDirectoryPath validates that a directory path is within allowed directories.
@@ -195,8 +292,11 @@ func SanitizePath(path string) string {
 	// 最終清理路徑
 	finalPath := filepath.Clean(result.String())
 
-	// 額外安全檢查：移除任何剩餘的路徑遍歷模式
-	finalPath = strings.ReplaceAll(finalPath, "..", "")
+	// 額外安全檢查：以 element-based 過濾移除剩餘的 `..` element。
+	// 不使用 strings.ReplaceAll(..., "..", "") 因為 substring 替換會把
+	// `report..v2.csv` 改寫成 `reportv2.csv`，造成 validation 通過但實際
+	// 讀寫到不同檔案的 silent misroute（codex Wave 6 second-pass P2）。
+	finalPath = filterTraversalElements(finalPath)
 
 	return finalPath
 }
@@ -212,8 +312,15 @@ func (pv *PathValidator) GetSafePath(basePath, filename string) (string, error) 
 		return "", fmt.Errorf("基礎路徑無效: %w", err)
 	}
 
-	// 在清理之前檢查文件名是否包含路徑遍歷攻擊
-	if strings.Contains(filename, "..") {
+	// 在清理之前檢查文件名是否包含路徑遍歷攻擊；改為 element-based 比對，
+	// 與 validatePathFormat 同步（substring `..` 會誤拒 `report..v2.csv` 等合法檔名）。
+	// 先 URL-decode 才比對：攻擊者常用 `..%2F..%2F` 繞過原始字串 check。
+	decodedFilename, decodeErr := url.QueryUnescape(filename)
+	if decodeErr != nil {
+		decodedFilename = filename
+	}
+
+	if HasTraversalElement(decodedFilename) {
 		return "", fmt.Errorf("%w: %s", ErrFilenameTraversal, filename)
 	}
 
