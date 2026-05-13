@@ -289,10 +289,7 @@ func SanitizePath(path string) string {
 			_, _ = result.WriteRune(r) // WriteRune on strings.Builder never fails
 		}
 	}
-	// filepath.Clean 後再 ToSlash 強制 forward-slash 輸出，讓 Windows 與 Unix
-	// 中間值一致；下游 caller 接 filepath.Abs/Join 會再 normalize 成 OS native
-	// separator，end-to-end 行為不變。
-	finalPath := filepath.ToSlash(filepath.Clean(result.String()))
+	finalPath := filepath.Clean(result.String())
 
 	// 額外安全檢查：以 element-based 過濾移除剩餘的 `..` element。
 	// 不使用 strings.ReplaceAll(..., "..", "") 因為 substring 替換會把
@@ -300,7 +297,11 @@ func SanitizePath(path string) string {
 	// 讀寫到不同檔案的 silent misroute（codex Wave 6 second-pass P2）。
 	finalPath = filterTraversalElements(finalPath)
 
-	return finalPath
+	// 強制 forward-slash 輸出，讓 Windows 與 Unix 中間值一致。filterTraversalElements
+	// 用 filepath.Separator 重組（Windows 上是 \），所以 ToSlash 必須在它之後做。
+	// 下游 caller 接 filepath.Abs/Join 會再 normalize 成 OS native separator，
+	// end-to-end 行為不變。
+	return filepath.ToSlash(finalPath)
 }
 
 // SanitizePath sanitizes a file path (method wrapper).
