@@ -21,6 +21,10 @@ func TestPathValidator_ConcurrentSetAndValidate(t *testing.T) {
 	const goroutines = 32
 	const iterations = 200
 
+	// outer scope 取一次 t.TempDir()，避免 goroutine 內呼叫 t.TempDir() 的不確定性；
+	// 子路徑用 filepath.Join 組合，已是 absolute，不需再 filepath.Abs。
+	tmpRoot := t.TempDir()
+
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 
@@ -28,11 +32,7 @@ func TestPathValidator_ConcurrentSetAndValidate(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 
-			base, err := filepath.Abs(fmt.Sprintf("/tmp/race-test-%d", idx))
-			if err != nil {
-				t.Errorf("goroutine %d: failed to compute absolute path: %v", idx, err)
-				return
-			}
+			base := filepath.Join(tmpRoot, fmt.Sprintf("race-test-%d", idx))
 
 			for j := 0; j < iterations; j++ {
 				validator.SetAllowedBasePaths([]string{base})
@@ -52,10 +52,8 @@ func TestPathValidator_ConcurrentSetAndValidate(t *testing.T) {
 // returned by GetAllowedBasePaths is an independent copy. Mutating it must
 // not affect the validator's internal state.
 func TestPathValidator_GetAllowedBasePathsReturnsCopy(t *testing.T) {
-	expected, err := filepath.Abs("/tmp/copy-test")
-	if err != nil {
-		t.Fatalf("filepath.Abs failed: %v", err)
-	}
+	tmpDir := t.TempDir()
+	expected := filepath.Join(tmpDir, "copy-test")
 
 	validator := security.NewPathValidator([]string{expected})
 
@@ -64,7 +62,7 @@ func TestPathValidator_GetAllowedBasePathsReturnsCopy(t *testing.T) {
 		t.Fatalf("unexpected initial allow-list: %v", got)
 	}
 
-	got[0] = "/tmp/tampered"
+	got[0] = filepath.Join(tmpDir, "tampered")
 
 	again := validator.GetAllowedBasePaths()
 	if len(again) != 1 || again[0] != expected {

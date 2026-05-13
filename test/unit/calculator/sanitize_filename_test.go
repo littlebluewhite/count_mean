@@ -43,12 +43,14 @@ func TestSanitizeFileName_PathTraversal(t *testing.T) {
 				t.Errorf("SanitizeFileName(%q) = %q; must NOT contain %q (path-traversal risk)",
 					tc.input, got, tc.mustNot)
 			}
-			// 額外驗證：sanitized 結果與 OutputDir 組合後，filepath.Clean 不會逃出
-			joined := filepath.Join("/tmp/output", got)
+			// 額外驗證：sanitized 結果與 OutputDir 組合後，filepath.Clean 不會逃出。
+			// 用 t.TempDir() 取代寫死 /tmp/output，cross-platform 自動正確。
+			outputDir := t.TempDir()
+			joined := filepath.Join(outputDir, got)
 			cleaned := filepath.Clean(joined)
-			if !strings.HasPrefix(cleaned, "/tmp/output") {
-				t.Errorf("filepath.Join(/tmp/output, SanitizeFileName(%q)=%q) → %q escapes OutputDir",
-					tc.input, got, cleaned)
+			if !strings.HasPrefix(cleaned, outputDir) {
+				t.Errorf("filepath.Join(%q, SanitizeFileName(%q)=%q) → %q escapes OutputDir",
+					outputDir, tc.input, got, cleaned)
 			}
 		})
 	}

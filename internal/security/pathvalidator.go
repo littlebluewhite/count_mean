@@ -289,8 +289,10 @@ func SanitizePath(path string) string {
 			_, _ = result.WriteRune(r) // WriteRune on strings.Builder never fails
 		}
 	}
-	// 最終清理路徑
-	finalPath := filepath.Clean(result.String())
+	// filepath.Clean 後再 ToSlash 強制 forward-slash 輸出，讓 Windows 與 Unix
+	// 中間值一致；下游 caller 接 filepath.Abs/Join 會再 normalize 成 OS native
+	// separator，end-to-end 行為不變。
+	finalPath := filepath.ToSlash(filepath.Clean(result.String()))
 
 	// 額外安全檢查：以 element-based 過濾移除剩餘的 `..` element。
 	// 不使用 strings.ReplaceAll(..., "..", "") 因為 substring 替換會把
@@ -382,9 +384,14 @@ func performBasicSecurityChecks(absPath string) error {
 		"\\System32\\",        // 相對 Windows 系統路徑
 	}
 
-	absPathLower := strings.ToLower(absPath)
+	// 用 filepath.ToSlash 統一比對 forward-slash：sensitivePatterns 列表混用
+	// `/etc/`、`C:\Windows\`、`\System32\` 等多種 separator，原本 strings.Contains
+	// 在 Windows 上的 `c:\etc\passwd` 找不到 `/etc/`（separator 不符）—— 真實
+	// 安全破口。改 ToSlash 後 `c:/etc/passwd` 能命中 `/etc/`，跨平台等價。
+	absPathSlash := filepath.ToSlash(strings.ToLower(absPath))
 	for _, pattern := range sensitivePatterns {
-		if strings.Contains(absPathLower, strings.ToLower(pattern)) {
+		patternSlash := filepath.ToSlash(strings.ToLower(pattern))
+		if strings.Contains(absPathSlash, patternSlash) {
 			return fmt.Errorf("%w: %s", ErrSensitiveDirectory, pattern)
 		}
 	}

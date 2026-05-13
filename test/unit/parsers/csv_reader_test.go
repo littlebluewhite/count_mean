@@ -2,6 +2,7 @@ package parsers
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"count_mean/internal/csvutil"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security/fsperm"
+	"count_mean/test/testutil"
 )
 
 func TestReadCSVDirect(t *testing.T) {
@@ -158,14 +160,14 @@ func TestReadCSVDirect(t *testing.T) {
 
 func TestReadCSVDirect_FileNotFound(t *testing.T) {
 	_, err := parsers.ReadCSVDirect("nonexistent_file.csv")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no such file or directory")
+	// 用 errors.Is 比對 fs.ErrNotExist 避免依賴 OS-specific 訊息文字
+	// （Unix: "no such file or directory"，Windows: "The system cannot find the file specified."）
+	require.Error(t, err)
+	require.ErrorIs(t, err, fs.ErrNotExist)
 }
 
 func TestReadCSVDirect_FilePermissionDenied(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("跳過權限測試，因為正在以 root 用戶運行")
-	}
+	testutil.SkipIfChmodIneffective(t)
 
 	// 創建測試文件
 	tmpDir := t.TempDir()
@@ -182,10 +184,11 @@ func TestReadCSVDirect_FilePermissionDenied(t *testing.T) {
 		_ = os.Chmod(tmpFilePath, fsperm.FilePerm) // 恢復權限以便清理
 	}()
 
-	// 測試權限被拒絕的情況
+	// require.Error 在 err == nil 時直接 FailNow，根本性消除「err.Error() 對 nil 呼叫」
+	// 的 panic 機制；errors.Is 比對 fs.ErrPermission 跨平台等價。
 	_, err = parsers.ReadCSVDirect(tmpFilePath)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "permission denied")
+	require.Error(t, err)
+	require.ErrorIs(t, err, fs.ErrPermission)
 }
 
 func TestReadCSVDirect_InvalidDirectory(t *testing.T) {

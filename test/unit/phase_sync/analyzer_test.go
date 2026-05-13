@@ -244,7 +244,7 @@ TestSubject,motion.csv,force.csv,emg.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350
 
 	params := &models.AnalysisParams{
 		ManifestFile: manifestFile,
-		DataFolder:   "/tmp",
+		DataFolder:   t.TempDir(), // platform-correct base; motion.csv inside doesn't exist → "Motion 檔案不存在"
 		StartPhase:   "P0",
 		EndPhase:     "P2",
 		SubjectIndex: 0,
@@ -274,7 +274,10 @@ TestSubject,%s,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, motion
 
 	params := &models.AnalysisParams{
 		ManifestFile: manifestFile,
-		DataFolder:   "/some/other/path", // This should be ignored for absolute paths
+		// DataFolder is ignored for absolute motion paths; use t.TempDir() to avoid
+		// Windows path concatenation syntax error (/some/other/path/C:\... 在 Windows
+		// 上被 OS 先以 syntax error 攔截，無法觸達 "Motion 檔案不存在" 那條路徑）。
+		DataFolder:   t.TempDir(),
 		StartPhase:   "P0",
 		EndPhase:     "P2",
 		SubjectIndex: 0,

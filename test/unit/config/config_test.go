@@ -10,6 +10,7 @@ import (
 
 	"count_mean/internal/config"
 	"count_mean/internal/security/fsperm"
+	"count_mean/test/testutil"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -257,9 +258,7 @@ func TestLoadConfig(t *testing.T) {
 	})
 
 	t.Run("PermissionDenied", func(t *testing.T) {
-		if os.Geteuid() == 0 {
-			t.Skip("跳過權限測試（以root用戶運行）")
-		}
+		testutil.SkipIfChmodIneffective(t)
 
 		// 創建一個無權限訪問的目錄
 		tempDir := t.TempDir()
