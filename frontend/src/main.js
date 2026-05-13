@@ -21,6 +21,7 @@ import {
     AnalyzeNormalizedPhaseSync,
     AnalyzeCCI,
     DownloadCCIChart,
+    AnalyzeMuscleRatio,
     GetVersion
 } from '../wailsjs/go/gui/App.js';
 import { OnFileDrop } from '../wailsjs/runtime/runtime.js';
@@ -148,6 +149,9 @@ class EMGAnalysisApp {
                 break;
             case 'normalizedPhaseSync':
                 this.showNormalizedPhaseSyncPanel();
+                break;
+            case 'muscleRatio':
+                this.showMuscleRatioPanel();
                 break;
             case 'config':
                 this.showConfigPanel();
@@ -1946,6 +1950,206 @@ class EMGAnalysisApp {
         contentDiv.appendChild(btnGroup);
 
         resultDiv.style.display = 'block';
+    }
+
+    // ==================== 肌肉比值分析 ====================
+
+    // 肌肉比值分析面板：兩步驟批次處理
+    showMuscleRatioPanel() {
+        const panel = document.getElementById('functionPanel');
+        // 純靜態模板（無 dynamic user input），與既有 showCCIPanel / showPhaseSyncPanel 對稱
+        panel.innerHTML = `
+            <div class="panel-header">
+                <h2>肌肉比值分析</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+            </div>
+
+            <p class="help-text">
+                批次計算 manifest 中所有 subject 的 4 對右側肌肉比值：
+                <strong>R.RA/R.ES</strong>、<strong>R.IL/R.GMax</strong>、<strong>R.RF/R.BF</strong>、<strong>R.TA&amp;IO/R.MF</strong>。
+                每個 subject 產出兩個 CSV：完整時間序列 + 分期點切片（10 個分期 + 9 個中間時間點 = 19 列）。
+            </p>
+
+            <div class="form-group">
+                <label>1. 選擇分期總檔案</label>
+                <div class="input-group drop-zone" data-drop-target="muscleRatioManifest" style="--wails-drop-target: drop;">
+                    <input type="text" id="muscleRatioManifest" class="form-control" placeholder="選擇或拖放分期總檔案 (.csv)" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectMuscleRatioManifest()">瀏覽</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>2. 選擇數據資料夾</label>
+                <div class="input-group">
+                    <input type="text" id="muscleRatioDataFolder" class="form-control" placeholder="選擇包含 EMG 數據檔案的資料夾" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectMuscleRatioDataFolder()">瀏覽</button>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button class="btn btn-primary" onclick="app.executeMuscleRatioAnalysis()">開始批次分析</button>
+                <button class="btn btn-secondary" onclick="app.showMainMenu()">返回</button>
+            </div>
+
+            <div id="muscleRatioResult" class="result-section" style="display: none;">
+                <h3>分析結果</h3>
+                <div id="muscleRatioResultContent"></div>
+            </div>
+        `;
+
+        this.showPanel(panel);
+    }
+
+    // 選擇肌肉比值分期總檔案
+    async selectMuscleRatioManifest() {
+        try {
+            const filters = [{
+                displayName: 'CSV Files (*.csv)',
+                pattern: '*.csv'
+            }];
+            const file = await SelectFile('選擇分期總檔案', filters, 'open');
+
+            if (file) {
+                document.getElementById('muscleRatioManifest').value = file;
+            }
+        } catch (err) {
+            console.error('選擇檔案失敗:', err);
+            await ShowError('錯誤', err.toString());
+        }
+    }
+
+    // 選擇肌肉比值數據資料夾
+    async selectMuscleRatioDataFolder() {
+        try {
+            const folder = await SelectDirectory('選擇數據資料夾');
+            if (folder) {
+                document.getElementById('muscleRatioDataFolder').value = folder;
+            }
+        } catch (err) {
+            console.error('選擇資料夾失敗:', err);
+            await ShowError('錯誤', err.toString());
+        }
+    }
+
+    // 執行肌肉比值批次分析
+    async executeMuscleRatioAnalysis() {
+        // 找到呼叫此函式的按鈕並 disable，避免雙擊產生兩個並發 RPC（會搶寫同一個輸出檔）
+        const btn = document.querySelector('#functionPanel .btn-primary');
+        if (btn) btn.disabled = true;
+
+        try {
+            const manifestFile = document.getElementById('muscleRatioManifest').value;
+            const dataFolder = document.getElementById('muscleRatioDataFolder').value;
+
+            if (!manifestFile || !dataFolder) {
+                await ShowError('錯誤', '請選擇分期總檔案與數據資料夾');
+                return;
+            }
+
+            this.updateStatus('正在批次計算肌肉比值...');
+
+            const result = await AnalyzeMuscleRatio({ manifestFile, dataFolder });
+
+            this.showMuscleRatioResult(result);
+
+            // status 必須與 success 一致；部分失敗時顯示「分析完成」會誤導
+            if (result.success) {
+                this.updateStatus('分析完成');
+                await ShowMessage('完成', result.message);
+            } else {
+                this.updateStatus('部分失敗');
+                await ShowError('部分失敗', result.message);
+            }
+        } catch (err) {
+            console.error('肌肉比值分析失敗:', err);
+            await ShowError('錯誤', `分析失敗: ${err}`);
+            this.updateStatus('分析失敗');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    // 顯示肌肉比值批次結果（用 DOM API 避免 XSS：subject / error 可能來自外部 manifest 內容）
+    showMuscleRatioResult(result) {
+        const resultDiv = document.getElementById('muscleRatioResult');
+        const contentDiv = document.getElementById('muscleRatioResultContent');
+        contentDiv.textContent = '';
+
+        const summary = document.createElement('p');
+        const strong = document.createElement('strong');
+        const count = result.subjects ? result.subjects.length : 0;
+        strong.textContent = `共 ${count} 個主題`;
+        summary.appendChild(strong);
+        summary.appendChild(document.createTextNode(`：${result.message || ''}`));
+        contentDiv.appendChild(summary);
+
+        if (!result.subjects || result.subjects.length === 0) {
+            resultDiv.style.display = '';
+            return;
+        }
+
+        const table = document.createElement('table');
+        table.className = 'result-table';
+        table.style.width = '100%';
+        table.style.borderCollapse = 'collapse';
+        table.style.marginTop = '0.5rem';
+
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        ['主題', '狀態', 'Output 1 (時間序列)', 'Output 2 (分期切片)', '訊息'].forEach(h => {
+            const th = document.createElement('th');
+            th.textContent = h;
+            th.style.padding = '0.25rem 0.5rem';
+            th.style.textAlign = 'left';
+            th.style.borderBottom = '1px solid #ddd';
+            headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        result.subjects.forEach(sr => {
+            const tr = document.createElement('tr');
+
+            const tdName = document.createElement('td');
+            tdName.textContent = sr.subject;
+            tdName.style.padding = '0.25rem 0.5rem';
+            tr.appendChild(tdName);
+
+            const tdStatus = document.createElement('td');
+            tdStatus.textContent = sr.success ? '✓' : '✗';
+            tdStatus.style.padding = '0.25rem 0.5rem';
+            tdStatus.style.color = sr.success ? '#2a9d3f' : '#c0392b';
+            tdStatus.style.fontWeight = 'bold';
+            tr.appendChild(tdStatus);
+
+            const tdAll = document.createElement('td');
+            tdAll.textContent = sr.outputAllPath || '—';
+            tdAll.style.padding = '0.25rem 0.5rem';
+            tdAll.style.fontFamily = 'monospace';
+            tdAll.style.fontSize = '0.85em';
+            tr.appendChild(tdAll);
+
+            const tdPhase = document.createElement('td');
+            tdPhase.textContent = sr.outputPhasePath || '—';
+            tdPhase.style.padding = '0.25rem 0.5rem';
+            tdPhase.style.fontFamily = 'monospace';
+            tdPhase.style.fontSize = '0.85em';
+            tr.appendChild(tdPhase);
+
+            const tdErr = document.createElement('td');
+            tdErr.textContent = sr.error || '';
+            tdErr.style.padding = '0.25rem 0.5rem';
+            tdErr.style.fontSize = '0.85em';
+            tdErr.style.color = sr.error ? '#c0392b' : 'inherit';
+            tr.appendChild(tdErr);
+
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        contentDiv.appendChild(table);
+
+        resultDiv.style.display = '';
     }
 
     // 開啟輸出資料夾

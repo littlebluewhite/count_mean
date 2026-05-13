@@ -20,6 +20,7 @@ import (
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
+	"count_mean/internal/muscle_ratio"
 	"count_mean/internal/phase_sync"
 	"count_mean/internal/synchronizer"
 	"count_mean/internal/validation"
@@ -55,15 +56,16 @@ type appState struct {
 
 // App struct.
 type App struct {
-	ctx               context.Context          //nolint:containedctx // Required by Wails framework
-	state             atomic.Pointer[appState] // 取代原 5 個 mutable 欄位,保證 swap 原子性
-	logger            *logging.Logger
-	chartGen          *chart.EChartsGenerator
-	validator         *validation.InputValidator
-	phaseSyncAnalyzer *phase_sync.PhaseSyncAnalyzer
-	cciAnalyzer       *cci.CCIAnalyzer
-	progressManager   *ProgressManager
-	version           string
+	ctx                 context.Context          //nolint:containedctx // Required by Wails framework
+	state               atomic.Pointer[appState] // 取代原 5 個 mutable 欄位,保證 swap 原子性
+	logger              *logging.Logger
+	chartGen            *chart.EChartsGenerator
+	validator           *validation.InputValidator
+	phaseSyncAnalyzer   *phase_sync.PhaseSyncAnalyzer
+	cciAnalyzer         *cci.CCIAnalyzer
+	muscleRatioAnalyzer *muscle_ratio.Analyzer
+	progressManager     *ProgressManager
+	version             string
 }
 
 // buildAppState 把 cfg 與 5 個受 config 影響的 dependency 打包成 immutable snapshot。
@@ -87,13 +89,14 @@ func NewApp(cfg *config.AppConfig, version string) *App {
 	initialState.maxMeanCalc.SetProgressCallback(progressManager.CreateProgressCallback())
 
 	a := &App{
-		logger:            logging.GetLogger("app"),
-		chartGen:          chart.NewEChartsGenerator(),
-		validator:         validation.NewInputValidator(),
-		phaseSyncAnalyzer: phase_sync.NewPhaseSyncAnalyzer(),
-		cciAnalyzer:       cci.NewCCIAnalyzer(),
-		progressManager:   progressManager,
-		version:           version,
+		logger:              logging.GetLogger("app"),
+		chartGen:            chart.NewEChartsGenerator(),
+		validator:           validation.NewInputValidator(),
+		phaseSyncAnalyzer:   phase_sync.NewPhaseSyncAnalyzer(),
+		cciAnalyzer:         cci.NewCCIAnalyzer(),
+		muscleRatioAnalyzer: muscle_ratio.NewAnalyzer(),
+		progressManager:     progressManager,
+		version:             version,
 	}
 	a.state.Store(initialState)
 	return a

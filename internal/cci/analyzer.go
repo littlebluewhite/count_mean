@@ -29,11 +29,14 @@ type CCIParams struct {
 }
 
 // CCIAnalyzer orchestrates the CCI Rudolph analysis pipeline.
-// 不持有 PathValidator — 改為每個分析請求在 loadEMGData 內 new 一個 request-scoped instance，
-// 避免多請求並行時互相覆寫 base path。
+//
+// Concurrency model:
+//   - PathValidator 不掛在 struct 上（request-scoped）— commit 1287572 修過的 race。
+//   - EMGParser 也不掛在 struct 上：`ParseFile` 寫 `frequency` field，並行 RPC 呼叫共用 instance
+//     會觸發 write/write race（與 muscle_ratio.Analyzer 對稱修正）。
+//   - manifestParser 與 timeSynchronizer 是 stateless（無 mutable field write），可安全共用。
 type CCIAnalyzer struct {
 	manifestParser   *parsers.PhaseManifestParser
-	emgParser        *parsers.EMGParser
 	timeSynchronizer *synchronizer.TimeSynchronizer
 	logger           *logging.Logger
 }
@@ -42,7 +45,6 @@ type CCIAnalyzer struct {
 func NewCCIAnalyzer() *CCIAnalyzer {
 	return &CCIAnalyzer{
 		manifestParser:   parsers.NewPhaseManifestParser(),
-		emgParser:        parsers.NewEMGParser(),
 		timeSynchronizer: synchronizer.NewTimeSynchronizer(),
 		logger:           logging.GetLogger("cci_analyzer"),
 	}
@@ -77,7 +79,9 @@ func (a *CCIAnalyzer) AnalyzeCCI(params *CCIParams) (*CCIAnalysisResult, error) 
 		return nil, err
 	}
 
-	rangeResult, err := a.emgParser.GetDataInTimeRange(emgData, gaitStart, gaitEnd)
+	// GetDataInTimeRange 標 unused-receiver（pure function 形式），per-call new 維持與 ParseFile
+	// 相同的 ownership 模式而非把 parser 掛上 struct。
+	rangeResult, err := parsers.NewEMGParser().GetDataInTimeRange(emgData, gaitStart, gaitEnd)
 	if err != nil {
 		return nil, fmt.Errorf("提取步態週期 EMG 數據失敗: %w", err)
 	}
@@ -110,9 +114,11 @@ func (a *CCIAnalyzer) loadAndValidate(params *CCIParams) (*models.PhaseManifest,
 }
 
 // loadEMGData resolves EMG file path and parses EMG data.
-// 改用 request-scoped PathValidator：原本 a.pathValidator 是 analyzer instance 持有的
-// singleton，每個並發請求都會 SetAllowedBasePaths 覆寫，造成跨請求污染。
-// 改為每次呼叫 new 一個 PathValidator，base path 屬於該請求。
+//
+// 路徑解析走 security.ResolveLenientPath（與 muscle_ratio 共用）。原本用
+// PathValidator.GetSafePath 會誤拒含字面 "%" 的 BTS 匯出檔名（例 "SF_8_BTS%_*.csv"），
+// 對標準 project data 整批不可用；lenient 版本保留 ".." / 絕對路徑 / 結果落在 baseFolder 外
+// 的防護，但允許 literal "%"。
 func (a *CCIAnalyzer) loadEMGData(
 	dataFolder string, manifest *models.PhaseManifest,
 ) (*models.PhaseSyncEMGData, error) {
@@ -121,9 +127,7 @@ func (a *CCIAnalyzer) loadEMGData(
 		baseFolder = resolved
 	}
 
-	pathValidator := security.NewPathValidator([]string{baseFolder})
-
-	emgPath, err := pathValidator.GetSafePath(baseFolder, manifest.EMGFile)
+	emgPath, err := security.ResolveLenientPath(baseFolder, manifest.EMGFile)
 	if err != nil {
 		return nil, fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
 	}
@@ -132,7 +136,10 @@ func (a *CCIAnalyzer) loadEMGData(
 		return nil, fmt.Errorf("EMG 檔案不存在: %s", emgPath)
 	}
 
-	emgData, err := a.emgParser.ParseFile(emgPath)
+	// Per-request EMGParser — see struct doc comment for race rationale.
+	emgParser := parsers.NewEMGParser()
+
+	emgData, err := emgParser.ParseFile(emgPath)
 	if err != nil {
 		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
 	}
