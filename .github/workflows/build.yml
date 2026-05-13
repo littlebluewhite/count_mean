@@ -69,6 +69,14 @@ jobs:
         cd frontend
         npm install
 
+    - name: Stub frontend/dist for go test
+      # main.go:34 `//go:embed all:frontend/dist` 要求目錄存在且至少一個檔案，
+      # 否則 root package 在 `go test ./...` 編譯期就 setup failed。實際 frontend
+      # 由後續 `wails build` 產生；這裡只放 placeholder 讓 embed 模式有東西可匹配。
+      run: |
+        mkdir -p frontend/dist
+        touch frontend/dist/.gitkeep
+
     - name: Run Go tests with race detector
       # gui/wails_binding_test.go 的 atomic.Pointer race-only test 在無 -race
       # 環境會 t.Skip — CI 必須帶 race 才能驗 concurrency fix（atomic.Pointer
