@@ -15,11 +15,11 @@ const normalizedPhaseSyncPrecision = 6
 
 // NormalizedPhaseSyncParams 標準化分期同步分析參數。
 type NormalizedPhaseSyncParams struct {
-	ManifestFile string `json:"manifestFile"`
-	DataFolder   string `json:"dataFolder"`
-	StartPhase   string `json:"startPhase"`
-	EndPhase     string `json:"endPhase"`
-	SubjectIndex int    `json:"subjectIndex"`
+	ManifestFile string            `json:"manifestFile"`
+	DataFolder   string            `json:"dataFolder"`
+	StartPhase   models.PhasePoint `json:"startPhase"`
+	EndPhase     models.PhasePoint `json:"endPhase"`
+	SubjectIndex int               `json:"subjectIndex"`
 }
 
 // NormalizedPhaseSyncResult 標準化分期同步分析結果。
@@ -27,8 +27,8 @@ type NormalizedPhaseSyncResult struct {
 	NormalizedEMGPath string             `json:"normalizedEMGPath"`
 	PhaseSyncCSVPath  string             `json:"phaseSyncCSVPath"`
 	Subject           string             `json:"subject"`
-	StartPhase        string             `json:"startPhase"`
-	EndPhase          string             `json:"endPhase"`
+	StartPhase        models.PhasePoint  `json:"startPhase"`
+	EndPhase          models.PhasePoint  `json:"endPhase"`
 	StartTime         float64            `json:"startTime"`
 	EndTime           float64            `json:"endTime"`
 	ChannelNames      []string           `json:"channelNames"`
@@ -49,6 +49,8 @@ type NormalizedPhaseSyncResult struct {
 //  5. 將統計結果輸出為 Output 2：{subject}_normalized_{start}_{end}.csv
 //     （欄位與既有「分期同步分析」相同）
 func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (*NormalizedPhaseSyncResult, error) {
+	outputDir := a.state.Load().config.OutputDir
+
 	a.logger.Info("開始標準化分期同步分析", map[string]interface{}{"params": params})
 
 	if err := validateNormalizedPhaseSyncParams(params); err != nil {
@@ -82,9 +84,13 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (*Nor
 	}
 
 	// 撰寫 Output 1：標準化後的 EMG CSV
-	safeSubject := safeSubjectName(loaded.Manifest.Subject)
+	// 與 cci_handlers.go / chart_helpers.go 對稱:同樣是「前端可控 subject 字串拼進
+	// 檔案路徑」場景,統一用 calculator.SanitizeFileName 而非各自手刻副本 —
+	// 之前的本地 safeSubjectName 副本已於 Wave 6 PR2 移除(cross-compare review P1
+	// 「對稱修補不完整」pattern 收尾)。
+	safeSubject := calculator.SanitizeFileName(loaded.Manifest.Subject)
 	normalizedEMGPath := filepath.Join(
-		a.config.OutputDir,
+		outputDir,
 		fmt.Sprintf("%s_normalized.csv", safeSubject),
 	)
 
@@ -110,11 +116,13 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (*Nor
 
 	stats, err := statsCalc.CalculateStatistics(
 		rangeResult.Data,
-		params.StartPhase,
-		rangeResult.ActualStartTime,
-		params.EndPhase,
-		rangeResult.ActualEndTime,
-		loaded.Manifest.Subject,
+		calculator.StatisticsParams{
+			Subject:    loaded.Manifest.Subject,
+			StartPhase: params.StartPhase,
+			StartTime:  rangeResult.ActualStartTime,
+			EndPhase:   params.EndPhase,
+			EndTime:    rangeResult.ActualEndTime,
+		},
 	)
 	if err != nil {
 		a.logger.Error("計算標準化統計失敗", err, map[string]interface{}{})
@@ -123,7 +131,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (*Nor
 
 	// 撰寫 Output 2：標準化資料的分期同步統計 CSV
 	phaseSyncCSVPath := filepath.Join(
-		a.config.OutputDir,
+		outputDir,
 		fmt.Sprintf("%s_normalized_%s_%s.csv", safeSubject, params.StartPhase, params.EndPhase),
 	)
 
@@ -170,6 +178,11 @@ func validateNormalizedPhaseSyncParams(params NormalizedPhaseSyncParams) error {
 		return ErrNoPhaseSelection
 	}
 
+	if !params.StartPhase.IsValid() || !params.EndPhase.IsValid() {
+		return fmt.Errorf("StartPhase=%q EndPhase=%q: %w",
+			params.StartPhase, params.EndPhase, ErrInvalidPhasePoint)
+	}
+
 	return nil
 }
 
@@ -180,33 +193,4 @@ func failedNormalizedPhaseSyncResult(message string) *NormalizedPhaseSyncResult 
 		Success: false,
 		Message: message,
 	}
-}
-
-// safeSubjectName 將 subject 名稱中可能造成檔案系統問題的字元換成底線。
-// 與 calculator.sanitizeFileName 邏輯一致，但保留在 gui 套件內避免改動 calculator API。
-func safeSubjectName(name string) string {
-	replacements := map[rune]rune{
-		'/':  '_',
-		'\\': '_',
-		':':  '_',
-		'*':  '_',
-		'?':  '_',
-		'"':  '_',
-		'<':  '_',
-		'>':  '_',
-		'|':  '_',
-		' ':  '_',
-	}
-
-	result := make([]rune, 0, len(name))
-
-	for _, ch := range name {
-		if replacement, ok := replacements[ch]; ok {
-			result = append(result, replacement)
-		} else {
-			result = append(result, ch)
-		}
-	}
-
-	return string(result)
 }

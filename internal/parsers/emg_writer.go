@@ -7,10 +7,9 @@ import (
 	"strconv"
 
 	"count_mean/internal/models"
+	"count_mean/internal/csvutil"
+	"count_mean/internal/security/fsperm"
 )
-
-// utf8BOM 為 UTF-8 Byte-Order Mark；寫在檔案開頭可讓 Excel 開啟 CSV 時正確識別編碼。
-var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 // defaultEMGCSVPrecision 為 EMG CSV 預設小數位數，與分期同步分析統計輸出一致。
 const defaultEMGCSVPrecision = 6
@@ -25,11 +24,15 @@ const defaultEMGCSVPrecision = 6
 // precision 控制浮點數欄位的小數位數；若 <= 0 則使用預設值 6。
 //
 // 此函式不負責路徑驗證 — 呼叫端必須先確認 outputPath 在允許範圍內。
+//
+// Flush 與 Close 的錯誤都顯式透過 named return 回傳：csv.Writer 把寫入錯誤延後到
+// Flush 才丟，磁碟滿/網路磁碟掉線等情境若靠裸 defer 忽略，caller 拿到 nil 但檔案
+// 實際內容不完整。對齊 cci/analyzer.go:writeCSVFile 與 emg_statistics.go:ExportToCSV。
 func ExportPhaseSyncDataToCSV(
 	data *models.PhaseSyncEMGData,
 	outputPath string,
 	precision int,
-) error {
+) (err error) {
 	if data == nil {
 		return fmt.Errorf("EMG 數據為空")
 	}
@@ -38,21 +41,26 @@ func ExportPhaseSyncDataToCSV(
 		precision = defaultEMGCSVPrecision
 	}
 
-	file, err := os.Create(outputPath) //nolint:gosec // outputPath validated by caller
+	// fsperm.WriteFlags 含 O_NOFOLLOW (unix) 拒絕 symlink；FilePerm=0o600 限定 owner 讀寫。
+	//nolint:gosec // outputPath validated by caller
+	file, err := os.OpenFile(outputPath, fsperm.WriteFlags, fsperm.FilePerm)
 	if err != nil {
 		return fmt.Errorf("無法創建輸出檔案 %s: %w", outputPath, err)
 	}
 
-	defer func() { _ = file.Close() }()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("關閉檔案失敗: %w", closeErr)
+		}
+	}()
 
-	if _, err := file.Write(utf8BOM); err != nil {
+	if err := csvutil.WriteBOM(file); err != nil {
 		return fmt.Errorf("無法寫入 BOM: %w", err)
 	}
 
 	writer := csv.NewWriter(file)
-	defer writer.Flush()
 
-	if err := writer.Write(buildEMGCSVHeader(data.Headers)); err != nil {
+	if err := writer.Write(csvutil.SanitizeHeaderRow(buildEMGCSVHeader(data.Headers))); err != nil {
 		return fmt.Errorf("寫入標頭失敗: %w", err)
 	}
 

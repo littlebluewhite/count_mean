@@ -1,6 +1,7 @@
 package calculator
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"runtime"
@@ -9,7 +10,7 @@ import (
 	calcerrors "count_mean/internal/errors"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
-	"count_mean/internal/parser"
+	"count_mean/internal/parsers"
 )
 
 // MaxWorkerCount is the maximum number of worker goroutines for parallel calculation.
@@ -31,7 +32,7 @@ type MaxMeanCalculator struct {
 	workerCount            int
 	progressCallback       models.ProgressCallback
 	backpressureController *models.BackpressureController
-	dataParser             *parser.DataParser
+	dataParser             *parsers.DataParser
 	slidingWindow          *SlidingWindowCalculator
 }
 
@@ -81,9 +82,16 @@ func NewMaxMeanCalculator(scalingFactor int) *MaxMeanCalculator {
 		logger:                 logger,
 		workerCount:            workerCount,
 		backpressureController: models.NewBackpressureController(backpressureConfig),
-		dataParser:             parser.NewDataParserWithLogger(scalingFactor, logger),
+		dataParser:             parsers.NewDataParserWithLogger(scalingFactor, logger),
 		slidingWindow:          NewSlidingWindowCalculator(),
 	}
+}
+
+// ScalingFactor exposes the calculator's configured scaling factor. Used by gui
+// snapshot-consistency tests to assert that a captured *appState's config and
+// maxMeanCalc agree (i.e., no torn snapshot across atomic.Pointer reads).
+func (c *MaxMeanCalculator) ScalingFactor() int {
+	return c.scalingFactor
 }
 
 // SetProgressCallback 設置進度回調函數.
@@ -93,13 +101,6 @@ func (c *MaxMeanCalculator) SetProgressCallback(callback models.ProgressCallback
 	}
 
 	c.progressCallback = callback
-}
-
-// SetBackpressureConfig 設置背壓控制配置.
-func (c *MaxMeanCalculator) SetBackpressureConfig(config *models.BackpressureConfig) {
-	if config != nil {
-		c.backpressureController = models.NewBackpressureController(config)
-	}
 }
 
 // GetBackpressureStats 獲取背壓統計信息.
@@ -130,17 +131,24 @@ func (c *MaxMeanCalculator) getMemoryUsageInfo() map[string]interface{} {
 }
 
 // Calculate 計算指定窗口大小的最大平均值.
-func (c *MaxMeanCalculator) Calculate(dataset *models.EMGDataset, windowSize int) ([]models.MaxMeanResult, error) {
-	return c.calculateWithOptions(dataset, windowSize, CalculationOptions{})
+// ctx 用於取消長時間執行的計算；GUI 與 CLI 應傳入可取消的 context，
+// 不確定來源時使用 context.Background()。
+func (c *MaxMeanCalculator) Calculate(
+	ctx context.Context,
+	dataset *models.EMGDataset,
+	windowSize int,
+) ([]models.MaxMeanResult, error) {
+	return c.calculateWithOptions(ctx, dataset, windowSize, CalculationOptions{})
 }
 
 // CalculateWithRange 計算指定時間範圍內的最大平均值.
 func (c *MaxMeanCalculator) CalculateWithRange(
+	ctx context.Context,
 	dataset *models.EMGDataset,
 	windowSize int,
 	startRange, endRange float64,
 ) ([]models.MaxMeanResult, error) {
-	return c.calculateWithOptions(dataset, windowSize, CalculationOptions{
+	return c.calculateWithOptions(ctx, dataset, windowSize, CalculationOptions{
 		StartRange: startRange,
 		EndRange:   endRange,
 	})
@@ -148,30 +156,27 @@ func (c *MaxMeanCalculator) CalculateWithRange(
 
 // calculateWithOptions 統一的計算入口點.
 func (c *MaxMeanCalculator) calculateWithOptions(
+	ctx context.Context,
 	dataset *models.EMGDataset,
 	windowSize int,
 	opts CalculationOptions,
 ) ([]models.MaxMeanResult, error) {
-	// 參數驗證
 	if err := c.validateInput(dataset, windowSize); err != nil {
 		return nil, err
 	}
 
 	isRanged := opts.StartRange != 0 || opts.EndRange != 0
 
-	// 記錄開始日誌
 	c.logCalculationStart(dataset, windowSize, opts, isRanged)
 
-	// 計算數據範圍索引
 	startIdx, endIdx, err := c.resolveDataRange(dataset, windowSize, opts, isRanged)
 	if err != nil {
 		return nil, err
 	}
 
-	// 創建協調器並執行計算
 	orch := c.newOrchestrator(dataset, windowSize, startIdx, endIdx, isRanged)
 
-	return orch.execute()
+	return orch.execute(ctx)
 }
 
 // validateInput 驗證輸入參數.
@@ -339,7 +344,7 @@ func (c *MaxMeanCalculator) newOrchestrator(
 }
 
 // execute 執行計算流程.
-func (o *orchestrator) execute() ([]models.MaxMeanResult, error) {
+func (o *orchestrator) execute(ctx context.Context) ([]models.MaxMeanResult, error) {
 	results := make([]models.MaxMeanResult, o.channelCount)
 
 	// 調整工作協程數
@@ -378,20 +383,24 @@ func (o *orchestrator) execute() ([]models.MaxMeanResult, error) {
 	for w := 0; w < actualWorkerCount; w++ {
 		wg.Add(1)
 
-		go o.worker(jobs, resultsChan, &wg)
+		go o.worker(ctx, jobs, resultsChan, &wg)
 	}
 
-	// 發送任務
+	// 發送任務；若 ctx 取消，停止發送並關閉 jobs，worker 會自然退出
 	go func() {
 		defer close(jobs)
 
 		for channelIdx := 0; channelIdx < o.channelCount; channelIdx++ {
-			jobs <- calculationJob{
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- calculationJob{
 				channelIdx: channelIdx,
 				provider:   o.provider,
 				windowSize: o.windowSize,
 				startIdx:   o.startIdx,
 				endIdx:     o.endIdx,
+			}:
 			}
 		}
 	}()
@@ -403,7 +412,7 @@ func (o *orchestrator) execute() ([]models.MaxMeanResult, error) {
 	}()
 
 	// 收集結果
-	if err := o.collectResults(results, resultsChan); err != nil {
+	if err := o.collectResults(ctx, results, resultsChan); err != nil {
 		return nil, err
 	}
 
@@ -414,19 +423,35 @@ func (o *orchestrator) execute() ([]models.MaxMeanResult, error) {
 }
 
 // worker 工作協程.
-func (o *orchestrator) worker(jobs <-chan calculationJob, results chan<- channelResult, wg *sync.WaitGroup) {
+// 同時聽 ctx.Done() 與 jobs channel：ctx 取消時立即停工，避免長計算無法中斷。
+func (o *orchestrator) worker(
+	ctx context.Context,
+	jobs <-chan calculationJob,
+	results chan<- channelResult,
+	wg *sync.WaitGroup,
+) {
 	defer wg.Done()
 
-	for job := range jobs {
-		results <- o.processJob(job)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job, ok := <-jobs:
+			if !ok {
+				return
+			}
+			results <- o.processJob(ctx, job)
+		}
 	}
 }
 
 // processJob 處理單個計算任務.
-func (o *orchestrator) processJob(job calculationJob) channelResult {
-	// 背壓控制
+func (o *orchestrator) processJob(ctx context.Context, job calculationJob) channelResult {
+	// 背壓控制；ctx 取消時 WaitForCapacity 立即回傳，processJob 也帶錯誤退出。
 	if o.calc.backpressureController != nil {
-		o.calc.backpressureController.WaitForCapacity()
+		if err := o.calc.backpressureController.WaitForCapacity(ctx); err != nil {
+			return channelResult{channelIdx: job.channelIdx, err: err}
+		}
 		o.calc.backpressureController.RecordJobStart()
 	}
 
@@ -468,50 +493,62 @@ func (o *orchestrator) processJob(job calculationJob) channelResult {
 }
 
 // collectResults 收集計算結果.
-func (o *orchestrator) collectResults(results []models.MaxMeanResult, resultsChan <-chan channelResult) error {
+// 在 worker 投遞結果與 ctx 取消之間 select，避免主執行緒在 ctx 已取消後仍等候慢 worker。
+func (o *orchestrator) collectResults(
+	ctx context.Context,
+	results []models.MaxMeanResult,
+	resultsChan <-chan channelResult,
+) error {
 	processedCount := 0
 
-	for result := range resultsChan {
-		if result.err != nil {
-			errMsg := "通道計算失敗"
-			if o.isRanged {
-				errMsg = "通道範圍計算失敗"
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result, ok := <-resultsChan:
+			if !ok {
+				return nil
 			}
 
-			o.calc.logger.Error(errMsg, result.err, map[string]interface{}{
+			if result.err != nil {
+				errMsg := "通道計算失敗"
+				if o.isRanged {
+					errMsg = "通道範圍計算失敗"
+				}
+
+				o.calc.logger.Error(errMsg, result.err, map[string]interface{}{
+					"channel_index": result.channelIdx + 1,
+					"start_idx":     o.startIdx,
+					"end_idx":       o.endIdx,
+				})
+
+				return fmt.Errorf("通道 %d 計算失敗: %w", result.channelIdx+1, result.err)
+			}
+
+			results[result.channelIdx] = result.result
+			processedCount++
+
+			// 報告進度
+			channelName := fmt.Sprintf("Ch%d", result.channelIdx+1)
+			if len(o.dataset.Headers) > result.channelIdx+1 {
+				channelName = o.dataset.Headers[result.channelIdx+1]
+			}
+
+			status := fmt.Sprintf("通道 %s 計算完成", channelName)
+			if o.isRanged {
+				status = fmt.Sprintf("範圍計算: 通道 %s 完成", channelName)
+			}
+
+			if o.progressTracker != nil {
+				o.progressTracker.UpdateProgress(processedCount, status, result.channelIdx+1, channelName)
+			}
+
+			o.calc.logger.Debug("通道計算完成", map[string]interface{}{
 				"channel_index": result.channelIdx + 1,
-				"start_idx":     o.startIdx,
-				"end_idx":       o.endIdx,
+				"progress":      fmt.Sprintf("%d/%d", processedCount, o.channelCount),
 			})
-
-			return fmt.Errorf("通道 %d 計算失敗: %w", result.channelIdx+1, result.err)
 		}
-
-		results[result.channelIdx] = result.result
-		processedCount++
-
-		// 報告進度
-		channelName := fmt.Sprintf("Ch%d", result.channelIdx+1)
-		if len(o.dataset.Headers) > result.channelIdx+1 {
-			channelName = o.dataset.Headers[result.channelIdx+1]
-		}
-
-		status := fmt.Sprintf("通道 %s 計算完成", channelName)
-		if o.isRanged {
-			status = fmt.Sprintf("範圍計算: 通道 %s 完成", channelName)
-		}
-
-		if o.progressTracker != nil {
-			o.progressTracker.UpdateProgress(processedCount, status, result.channelIdx+1, channelName)
-		}
-
-		o.calc.logger.Debug("通道計算完成", map[string]interface{}{
-			"channel_index": result.channelIdx + 1,
-			"progress":      fmt.Sprintf("%d/%d", processedCount, o.channelCount),
-		})
 	}
-
-	return nil
 }
 
 // finalize 完成計算後的處理.
@@ -542,14 +579,14 @@ func (o *orchestrator) finalize(results []models.MaxMeanResult) {
 		o.calc.logger.Info("最大平均值計算完成", logCtx)
 	}
 
-	// 記錄背壓控制統計
+	// 記錄背壓控制統計。
+	// 注意：peak_memory_mb / average_workers / throttle_events 在 391f347 Wave 4 PR8
+	// 移除 backpressure monitor 後就沒有 writer 了，會永遠是 0 — cross-compare review
+	// P2 抓到這個 misleading observability，這次清掉避免假象。
 	if o.calc.backpressureController != nil {
 		stats := o.calc.backpressureController.GetStats()
 
 		statsLogCtx := map[string]interface{}{
-			"peak_memory_mb":      stats.PeakMemoryUsage / 1024 / 1024,
-			"average_workers":     stats.AverageWorkers,
-			"throttle_events":     stats.ThrottleEvents,
 			"processing_time_ms":  stats.TotalProcessingTime.Milliseconds(),
 			"throughput_jobs_sec": stats.ThroughputJobsPerSec,
 		}
@@ -560,18 +597,14 @@ func (o *orchestrator) finalize(results []models.MaxMeanResult) {
 		}
 	}
 
-	// 主動觸發垃圾回收
-	runtime.GC()
-
-	if o.isRanged {
-		o.calc.logger.Debug("範圍計算完成後觸發垃圾回收")
-	} else {
-		o.calc.logger.Debug("計算完成後觸發垃圾回收")
-	}
 }
 
 // CalculateFromRawData 從原始字符串數據計算.
-func (c *MaxMeanCalculator) CalculateFromRawData(records [][]string, windowSize int) ([]models.MaxMeanResult, error) {
+func (c *MaxMeanCalculator) CalculateFromRawData(
+	ctx context.Context,
+	records [][]string,
+	windowSize int,
+) ([]models.MaxMeanResult, error) {
 	c.logger.Info("開始從原始數據計算最大平均值", map[string]interface{}{
 		"record_count": len(records),
 		"window_size":  windowSize,
@@ -583,11 +616,12 @@ func (c *MaxMeanCalculator) CalculateFromRawData(records [][]string, windowSize 
 		return nil, fmt.Errorf("解析數據失敗: %w", err)
 	}
 
-	return c.Calculate(dataset, windowSize)
+	return c.Calculate(ctx, dataset, windowSize)
 }
 
 // CalculateFromRawDataWithRange 從原始字符串數據計算指定時間範圍內的最大平均值.
 func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(
+	ctx context.Context,
 	records [][]string,
 	windowSize int,
 	startRange, endRange float64,
@@ -605,5 +639,5 @@ func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(
 		return nil, fmt.Errorf("解析數據失敗: %w", err)
 	}
 
-	return c.CalculateWithRange(dataset, windowSize, startRange, endRange)
+	return c.CalculateWithRange(ctx, dataset, windowSize, startRange, endRange)
 }

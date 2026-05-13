@@ -11,20 +11,6 @@ import (
 	"count_mean/internal/parsers"
 )
 
-// Phase order constants for validation.
-const (
-	phaseOrderP0 = 1
-	phaseOrderP1 = 2
-	phaseOrderP2 = 3
-	phaseOrderS  = 4
-	phaseOrderC  = 5
-	phaseOrderD  = 6
-	phaseOrderT0 = 7
-	phaseOrderT  = 8
-	phaseOrderO  = 9
-	phaseOrderL  = 10
-)
-
 // PhaseTypeMotion represents the motion phase type.
 const PhaseTypeMotion = "motion"
 
@@ -58,8 +44,8 @@ func NewPhaseCalculator() *PhaseCalculator {
 //nolint:gocritic // hugeParam: phasePoints passed by value for API compatibility
 func (pc *PhaseCalculator) GetPhaseTimeRange(
 	phasePoints models.PhasePoints,
-	startPhase string,
-	endPhase string,
+	startPhase models.PhasePoint,
+	endPhase models.PhasePoint,
 	emgMotionOffset int,
 ) (*models.PhaseTimeRange, error) {
 	// 獲取開始分期點的值和類型
@@ -115,33 +101,16 @@ func (pc *PhaseCalculator) GetPhaseTimeRange(
 }
 
 // ValidatePhaseOrder 驗證分期點的順序.
-func (*PhaseCalculator) ValidatePhaseOrder(startPhase, endPhase string) error {
-	// 定義分期點的順序
-	phaseOrder := map[string]int{
-		"P0": phaseOrderP0,
-		"P1": phaseOrderP1,
-		"P2": phaseOrderP2,
-		"S":  phaseOrderS,
-		"C":  phaseOrderC,
-		"D":  phaseOrderD,
-		"T0": phaseOrderT0,
-		"T":  phaseOrderT,
-		"O":  phaseOrderO,
-		"L":  phaseOrderL,
-	}
-
-	startOrder, startExists := phaseOrder[startPhase]
-	endOrder, endExists := phaseOrder[endPhase]
-
-	if !startExists {
+func (*PhaseCalculator) ValidatePhaseOrder(startPhase, endPhase models.PhasePoint) error {
+	if !startPhase.IsValid() {
 		return fmt.Errorf("開始分期點 %s: %w", startPhase, ErrUnknownPhase)
 	}
 
-	if !endExists {
+	if !endPhase.IsValid() {
 		return fmt.Errorf("結束分期點 %s: %w", endPhase, ErrUnknownPhase)
 	}
 
-	if startOrder >= endOrder {
+	if startPhase.Order() >= endPhase.Order() {
 		return fmt.Errorf("開始分期點 %s 與結束分期點 %s: %w", startPhase, endPhase, ErrPhaseOrderInvalid)
 	}
 
@@ -149,43 +118,13 @@ func (*PhaseCalculator) ValidatePhaseOrder(startPhase, endPhase string) error {
 }
 
 // GetAvailableStartPhases 獲取可用的開始分期點.
-func GetAvailableStartPhases() []string {
-	return []string{"P0", "P1", "P2", "S", "C", "D", "T0", "T", "O", "L"}
+func GetAvailableStartPhases() []models.PhasePoint {
+	return models.AllPhases()
 }
 
 // GetAvailableEndPhases 獲取可用的結束分期點.
-func GetAvailableEndPhases() []string {
-	return []string{"P1", "P2", "S", "C", "D", "T0", "T", "O", "L"}
-}
-
-// PhaseInfo 分期點信息.
-type PhaseInfo struct {
-	Name        string
-	Description string
-	Type        string // "force" or "motion"
-}
-
-// GetPhaseInfo 獲取分期點的詳細信息.
-func GetPhaseInfo() []PhaseInfo {
-	return []PhaseInfo{
-		{Name: "P0", Description: "準備期開始", Type: PhaseTypeForce},
-		{Name: "P1", Description: "準備期第一階段", Type: PhaseTypeForce},
-		{Name: "P2", Description: "準備期第二階段", Type: PhaseTypeForce},
-		{Name: "S", Description: "啟動瞬間", Type: PhaseTypeForce},
-		{Name: "C", Description: "下蹲加速減速轉換瞬間", Type: PhaseTypeForce},
-		{Name: "D", Description: "下蹲結束時間", Type: PhaseTypeMotion},
-		{Name: "T0", Description: "正沖涼結束時間", Type: PhaseTypeForce},
-		{Name: "T", Description: "起跳瞬間", Type: PhaseTypeForce},
-		{Name: "O", Description: "展體轉間", Type: PhaseTypeMotion},
-		{Name: "L", Description: "著地瞬間", Type: PhaseTypeForce},
-	}
-}
-
-// FormatPhaseTime 格式化分期點時間顯示.
-func FormatPhaseTime(value float64, phaseType string) string {
-	if phaseType == PhaseTypeMotion {
-		return fmt.Sprintf("Index: %d", int(value))
-	}
-
-	return fmt.Sprintf("%.3f 秒", value)
+// 結束分期點不能是第一個 (P0)，因為必須在開始分期點之後。
+func GetAvailableEndPhases() []models.PhasePoint {
+	all := models.AllPhases()
+	return all[1:]
 }

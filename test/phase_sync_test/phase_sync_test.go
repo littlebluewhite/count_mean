@@ -1,6 +1,7 @@
 package phase_sync_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 
 	"count_mean/internal/models"
 	"count_mean/internal/phase_sync"
+	"count_mean/internal/security/fsperm"
 )
 
 func TestPhaseSyncAnalysis_NSF2(t *testing.T) {
@@ -27,7 +29,7 @@ func TestPhaseSyncAnalysis_NSF2(t *testing.T) {
 	}
 
 	// 確保輸出目錄存在
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, fsperm.DirPerm); err != nil {
 		t.Fatalf("無法創建輸出目錄: %v", err)
 	}
 
@@ -44,7 +46,7 @@ func TestPhaseSyncAnalysis_NSF2(t *testing.T) {
 	}
 
 	// 執行分析
-	stats, err := analyzer.AnalyzePhaseSync(params)
+	stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)
 	if err != nil {
 		t.Fatalf("分析失敗: %v", err)
 	}

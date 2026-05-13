@@ -3,6 +3,7 @@
 package models
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"time"
@@ -15,8 +16,6 @@ const (
 	defaultThrottleThreshold     = 0.9  // 90%
 	defaultWorkerReductionFactor = 0.5  // 減少50%工作協程
 	defaultGCIntervalSeconds     = 5
-	severeThrottleWorkerFactor   = 0.25 // Worker reduction factor under severe memory pressure
-	moderateThrottleWorkerFactor = 0.5  // Worker reduction factor under moderate memory pressure
 )
 
 // BackpressureConfig 代表背壓控制配置.
@@ -44,77 +43,56 @@ func DefaultBackpressureConfig() *BackpressureConfig {
 }
 
 // BackpressureStats 代表背壓控制統計信息.
+//
+// 監控生命週期（Start/Stop/monitor/adjustWorkers/maybeRunGC）移除後，
+// PeakMemoryUsage / AverageWorkers / ThrottleEvents / GCTriggers 四個欄位
+// 失去生產者，對外永遠回 0，徒增 telemetry 噪音與認知負擔。
+// Wave 6 review 後一併刪除（frontend grep 確認無消費者）。
 type BackpressureStats struct {
-	PeakMemoryUsage      uint64        `json:"peak_memory_usage"`       // 峰值記憶體使用量(bytes)
-	AverageWorkers       float64       `json:"average_workers"`         // 平均工作協程數
-	ThrottleEvents       int           `json:"throttle_events"`         // 限流事件次數
 	TotalProcessingTime  time.Duration `json:"total_processing_time"`   // 總處理時間
 	ThroughputJobsPerSec float64       `json:"throughput_jobs_per_sec"` // 吞吐量(任務/秒)
-	GCTriggers           int           `json:"gc_triggers"`             // GC觸發次數
 }
 
 // BackpressureController 代表背壓控制器.
+// 移除監控生命週期後 isActive / stopChan / lastGCTime / workerSumTotal /
+// checkCount 都無 reader，一併刪除欄位。
 type BackpressureController struct {
-	config         *BackpressureConfig
-	stats          BackpressureStats
-	mutex          sync.RWMutex
-	activeJobs     int
-	startTime      time.Time
-	lastGCTime     time.Time
-	isActive       bool
-	stopChan       chan struct{}
-	workerCount    int
-	totalJobs      int
-	workerSumTotal float64 // 用於計算平均工作協程數
-	checkCount     int     // 檢查次數，用於計算平均值
+	config      *BackpressureConfig
+	stats       BackpressureStats
+	mutex       sync.RWMutex
+	activeJobs  int
+	startTime   time.Time
+	workerCount int
+	totalJobs   int
 }
 
 // NewBackpressureController 創建新的背壓控制器.
+//
+// CheckInterval <= 0 會被 normalize 為預設值：WaitForCapacity 用 time.NewTicker，
+// 對 non-positive interval 會 panic（"non-positive interval for NewTicker"）；
+// caller 傳 zero-value config（例如自行 new BackpressureConfig 但沒設這欄）時
+// 應拿到 sane default 而非 crash（codex Wave 6 second-pass P3）。
 func NewBackpressureController(config *BackpressureConfig) *BackpressureController {
 	if config == nil {
 		config = DefaultBackpressureConfig()
 	}
 
+	if config.CheckInterval <= 0 {
+		config.CheckInterval = 100 * time.Millisecond
+	}
+
 	return &BackpressureController{
 		config:      config,
-		stopChan:    make(chan struct{}),
 		workerCount: config.MaxWorkers,
 		startTime:   time.Now(),
-		lastGCTime:  time.Now(),
 	}
 }
 
-// Start 啟動背壓控制器.
-func (bc *BackpressureController) Start() {
-	bc.mutex.Lock()
-	defer bc.mutex.Unlock()
-
-	if bc.isActive {
-		return
-	}
-
-	bc.isActive = true
-	bc.startTime = time.Now()
-	bc.lastGCTime = time.Now()
-
-	// 啟動監控協程
-	go bc.monitor()
-}
-
-// Stop 停止背壓控制器.
-func (bc *BackpressureController) Stop() {
-	bc.mutex.Lock()
-	defer bc.mutex.Unlock()
-
-	if !bc.isActive {
-		return
-	}
-
-	bc.isActive = false
-	close(bc.stopChan)
-}
-
-// Reset 重置統計信息.
+// Reset 重置統計信息。
+// 完整監控生命週期（Start/Stop/monitor/adjustWorkers/maybeRunGC）已移除：
+// 整套從未在 production code path 被呼叫；adjustWorkers 動態調整 worker 的邏輯
+// 是「實作了但沒接上」的死碼，maybeRunGC 內的 runtime.GC() 也屬於 hot path
+// latency spike 來源。保留 Reset 與 GetOptimalWorkerCount 作為仍有用的工具。
 func (bc *BackpressureController) Reset() {
 	bc.mutex.Lock()
 	defer bc.mutex.Unlock()
@@ -122,78 +100,8 @@ func (bc *BackpressureController) Reset() {
 	bc.stats = BackpressureStats{}
 	bc.activeJobs = 0
 	bc.totalJobs = 0
-	bc.workerSumTotal = 0
-	bc.checkCount = 0
 	bc.startTime = time.Now()
-	bc.lastGCTime = time.Now()
 	bc.workerCount = bc.config.MaxWorkers
-}
-
-// monitor 監控記憶體使用並調整工作協程數.
-func (bc *BackpressureController) monitor() {
-	ticker := time.NewTicker(bc.config.CheckInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-bc.stopChan:
-			return
-		case <-ticker.C:
-			bc.adjustWorkers()
-			bc.maybeRunGC()
-		}
-	}
-}
-
-// adjustWorkers 根據記憶體使用情況調整工作協程數.
-func (bc *BackpressureController) adjustWorkers() {
-	bc.mutex.Lock()
-	defer bc.mutex.Unlock()
-
-	memUsageRatio := bc.getMemoryUsageRatio()
-
-	// 更新峰值記憶體使用量
-	var memStats runtime.MemStats
-
-	runtime.ReadMemStats(&memStats)
-
-	if memStats.Alloc > bc.stats.PeakMemoryUsage {
-		bc.stats.PeakMemoryUsage = memStats.Alloc
-	}
-
-	// 根據記憶體使用率調整工作協程數
-	var newWorkerCount int
-	if memUsageRatio >= bc.config.ThrottleThreshold {
-		// 記憶體使用率超過90%，大幅減少工作協程
-		newWorkerCount = max(1, int(float64(bc.config.MaxWorkers)*severeThrottleWorkerFactor))
-		bc.stats.ThrottleEvents++
-	} else if memUsageRatio >= bc.config.MemoryThreshold {
-		// 記憶體使用率在80%-90%之間，適度減少工作協程
-		newWorkerCount = max(1, int(float64(bc.config.MaxWorkers)*moderateThrottleWorkerFactor))
-	} else {
-		// 記憶體使用率正常，使用完整工作協程數
-		newWorkerCount = bc.config.MaxWorkers
-	}
-
-	bc.workerCount = newWorkerCount
-
-	// 更新統計信息
-	bc.workerSumTotal += float64(bc.workerCount)
-	bc.checkCount++
-	bc.stats.AverageWorkers = bc.workerSumTotal / float64(bc.checkCount)
-}
-
-// maybeRunGC 在需要時觸發垃圾回收.
-func (bc *BackpressureController) maybeRunGC() {
-	bc.mutex.Lock()
-	defer bc.mutex.Unlock()
-
-	if time.Since(bc.lastGCTime) >= bc.config.GCInterval {
-		runtime.GC()
-
-		bc.lastGCTime = time.Now()
-		bc.stats.GCTriggers++
-	}
 }
 
 // getMemoryUsageRatio 獲取記憶體使用率.
@@ -207,16 +115,16 @@ func (bc *BackpressureController) getMemoryUsageRatio() float64 {
 	return float64(memStats.Alloc) / float64(maxMemoryBytes)
 }
 
-// MemoryUsageRatio 公開的記憶體使用率獲取方法.
-func (bc *BackpressureController) MemoryUsageRatio() float64 {
+// memoryUsageRatio RLock-protected 記憶體使用率獲取方法（GetMemoryUsageInfo 內部用）.
+func (bc *BackpressureController) memoryUsageRatio() float64 {
 	bc.mutex.RLock()
 	defer bc.mutex.RUnlock()
 
 	return bc.getMemoryUsageRatio()
 }
 
-// IsThrottled 檢查是否正在限流.
-func (bc *BackpressureController) IsThrottled() bool {
+// isThrottled RLock-protected 檢查是否正在限流（GetMemoryUsageInfo 內部用）.
+func (bc *BackpressureController) isThrottled() bool {
 	bc.mutex.RLock()
 	defer bc.mutex.RUnlock()
 
@@ -231,11 +139,30 @@ func (bc *BackpressureController) GetOptimalWorkerCount() int {
 	return bc.workerCount
 }
 
-// WaitForCapacity 等待有足夠的容量處理新任務.
-func (bc *BackpressureController) WaitForCapacity() {
-	for bc.getMemoryUsageRatio() >= bc.config.ThrottleThreshold {
-		time.Sleep(bc.config.CheckInterval)
-		runtime.Gosched() // 讓出CPU時間片
+// WaitForCapacity 等待有足夠的容量處理新任務。
+// 若 ctx 在等待期間被取消，立即回傳 ctx.Err()；正常結束回傳 nil。
+//
+// 用 Ticker（而非 time.After）避免 ctx 取消時 leak 未觸發的 timer：
+// time.After 直到觸發前都留在 runtime time wheel，若 CheckInterval 較長且
+// ctx 反覆取消重建，會堆積 timer goroutine（Wave 6 review P2）。
+func (bc *BackpressureController) WaitForCapacity(ctx context.Context) error {
+	if bc.getMemoryUsageRatio() < bc.config.ThrottleThreshold {
+		return nil
+	}
+
+	ticker := time.NewTicker(bc.config.CheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if bc.getMemoryUsageRatio() < bc.config.ThrottleThreshold {
+				return nil
+			}
+			runtime.Gosched() // 讓出CPU時間片
+		}
 	}
 }
 
@@ -259,25 +186,19 @@ func (bc *BackpressureController) RecordJobComplete() {
 }
 
 // GetStats 獲取統計信息.
+// 衍生欄位（TotalProcessingTime、ThroughputJobsPerSec）只計算到回傳值中，
+// 不寫回 bc.stats，避免在 RLock 下污染共用狀態（多 reader 會 race）。
 func (bc *BackpressureController) GetStats() BackpressureStats {
 	bc.mutex.RLock()
 	defer bc.mutex.RUnlock()
 
-	// 更新處理時間和吞吐量
-	bc.stats.TotalProcessingTime = time.Since(bc.startTime)
-	if bc.stats.TotalProcessingTime.Seconds() > 0 {
-		bc.stats.ThroughputJobsPerSec = float64(bc.totalJobs) / bc.stats.TotalProcessingTime.Seconds()
+	snapshot := bc.stats
+	snapshot.TotalProcessingTime = time.Since(bc.startTime)
+	if snapshot.TotalProcessingTime.Seconds() > 0 {
+		snapshot.ThroughputJobsPerSec = float64(bc.totalJobs) / snapshot.TotalProcessingTime.Seconds()
 	}
 
-	return bc.stats
-}
-
-// GetActiveJobs 獲取當前活躍任務數.
-func (bc *BackpressureController) GetActiveJobs() int {
-	bc.mutex.RLock()
-	defer bc.mutex.RUnlock()
-
-	return bc.activeJobs
+	return snapshot
 }
 
 // GetMemoryUsageInfo 獲取記憶體使用信息（用於日誌記錄）.
@@ -291,8 +212,8 @@ func (bc *BackpressureController) GetMemoryUsageInfo() map[string]interface{} {
 		"total_alloc_mb": memStats.TotalAlloc / 1024 / 1024,
 		"sys_mb":         memStats.Sys / 1024 / 1024,
 		"num_gc":         memStats.NumGC,
-		"usage_ratio":    bc.MemoryUsageRatio(),
-		"is_throttled":   bc.IsThrottled(),
+		"usage_ratio":    bc.memoryUsageRatio(),
+		"is_throttled":   bc.isThrottled(),
 	}
 
 	return info

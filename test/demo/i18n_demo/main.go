@@ -9,6 +9,7 @@ import (
 	"count_mean/internal/config"
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
+	"count_mean/internal/security/fsperm"
 )
 
 // 示範國際化功能
@@ -32,7 +33,7 @@ func main() {
 	}
 
 	// 保存翻譯文件到磁盤（供用戶自定義）
-	if err := os.MkdirAll(cfg.TranslationsDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.TranslationsDir, fsperm.DirPerm); err != nil {
 		logger.Error("創建翻譯目錄失敗", err)
 		return
 	}

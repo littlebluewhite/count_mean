@@ -10,12 +10,7 @@ import (
 	"time"
 
 	"count_mean/internal/models"
-)
-
-// File permission constants.
-const (
-	dirPermission  = 0o750 // Directory permission mode.
-	filePermission = 0o600 // File permission mode.
+	"count_mean/internal/security/fsperm"
 )
 
 // Configuration validation errors.
@@ -80,7 +75,7 @@ func DefaultConfig() *AppConfig {
 
 // LoadConfig 從檔案載入配置.
 func LoadConfig(filename string) (*AppConfig, error) {
-	file, err := os.Open(filename) //nolint:gosec // filename is provided by caller, validated at application level
+	file, err := os.OpenFile(filename, fsperm.ReadFlags, 0) //nolint:gosec // filename provided by caller, validated at app level; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// 如果檔案不存在，返回默認配置
@@ -114,7 +109,7 @@ func LoadConfig(filename string) (*AppConfig, error) {
 // SaveConfig 保存配置到檔案.
 func (c *AppConfig) SaveConfig(filename string) error {
 	//nolint:gosec // filename provided by caller
-	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, filePermission)
+	file, err := os.OpenFile(filename, fsperm.WriteFlags, fsperm.FilePerm)
 	if err != nil {
 		return fmt.Errorf("無法創建配置檔案: %w", err)
 	}
@@ -181,7 +176,7 @@ func (c *AppConfig) EnsureDirectories() error {
 	dirs := []string{c.InputDir, c.OutputDir, c.OperateDir, c.LogDirectory, c.TranslationsDir}
 
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, dirPermission); err != nil {
+		if err := os.MkdirAll(dir, fsperm.DirPerm); err != nil {
 			return fmt.Errorf("無法創建目錄 %s: %w", dir, err)
 		}
 	}

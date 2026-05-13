@@ -2,11 +2,10 @@ package parsers
 
 import (
 	"fmt"
-	"math"
-	"strconv"
 	"strings"
 
 	"count_mean/internal/models"
+	"count_mean/util"
 )
 
 // EMGParser EMG檔案解析器.
@@ -65,22 +64,16 @@ func parseEMGDataRow(record, headers []string, emgData *models.PhaseSyncEMGData)
 		return false
 	}
 
-	timeValue, err := strconv.ParseFloat(strings.TrimSpace(record[0]), 64)
-	if err != nil {
+	timeValue, ok := ParseFloatCell(record[0])
+	if !ok {
 		return false
 	}
 
 	emgData.Time = append(emgData.Time, timeValue)
 
 	for j := 1; j < len(headers) && j < len(record); j++ {
-		channelName := headers[j]
-
-		value, parseErr := strconv.ParseFloat(strings.TrimSpace(record[j]), 64)
-		if parseErr != nil {
-			value = 0
-		}
-
-		emgData.Channels[channelName] = append(emgData.Channels[channelName], value)
+		value, _ := ParseFloatCell(record[j])
+		emgData.Channels[headers[j]] = append(emgData.Channels[headers[j]], value)
 	}
 
 	return true
@@ -161,44 +154,21 @@ func (p *EMGParser) GetDataInTimeRange(
 		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", startTime, endTime)
 	}
 
-	// 將時間轉換為整數毫秒進行比較，避免浮點數精度問題
-	startTimeMs := int64(math.Round(startTime * 1000))
-	endTimeMs := int64(math.Round(endTime * 1000))
-
-	// 找到時間範圍的索引
-	startIdx := -1
-	endIdx := -1
-
-	for i, t := range data.Time {
-		tMs := int64(math.Round(t * 1000))
-		if startIdx == -1 && tMs >= startTimeMs {
-			startIdx = i
-		}
-
-		if tMs <= endTimeMs {
-			endIdx = i
-		} else if endIdx != -1 {
-			break
-		}
+	startIdx, endIdx, err := FindTimeRangeIndices(data.Time, startTime, endTime)
+	if err != nil {
+		return nil, err
 	}
 
-	if startIdx == -1 || endIdx == -1 || startIdx > endIdx {
-		return nil, fmt.Errorf("找不到有效的時間範圍數據")
-	}
-
-	// 創建子集數據
 	rangeData := &models.PhaseSyncEMGData{
 		Time:     data.Time[startIdx : endIdx+1],
 		Channels: make(map[string][]float64),
 		Headers:  data.Headers,
 	}
 
-	// 複製通道數據
 	for channelName, channelData := range data.Channels {
 		rangeData.Channels[channelName] = channelData[startIdx : endIdx+1]
 	}
 
-	// 返回實際選取的時間範圍
 	return &EMGTimeRangeResult{
 		Data:            rangeData,
 		ActualStartTime: data.Time[startIdx],
@@ -221,20 +191,9 @@ func CalculateEMGStatistics(data *models.PhaseSyncEMGData) (means, maxes map[str
 			continue
 		}
 
-		// 計算平均值
-		sum := 0.0
-		_max := channelData[0]
-
-		for _, value := range channelData {
-			sum += value
-
-			if value > _max {
-				_max = value
-			}
-		}
-
-		means[channelName] = sum / float64(len(channelData))
-		maxes[channelName] = _max
+		means[channelName] = util.ArrayMean(channelData)
+		maxVal, _ := util.ArrayMax(channelData)
+		maxes[channelName] = maxVal
 	}
 
 	return means, maxes
@@ -251,35 +210,16 @@ func (p *EMGParser) GetSampleInterval() float64 {
 
 // ValidateEMGData 驗證 EMG 數據.
 //
-//nolint:err113,dupl // dynamic errors with Chinese messages; similar validation pattern is intentional
+//nolint:err113 // dynamic error message with Chinese for user-facing output
 func ValidateEMGData(data *models.PhaseSyncEMGData) error {
 	if data == nil {
-		return fmt.Errorf("EMG 數據為空")
+		return fmt.Errorf("EMG 數據為空: %w", ErrNilData)
 	}
 
-	if len(data.Time) == 0 {
-		return fmt.Errorf("EMG 時間序列為空")
-	}
-
-	if len(data.Channels) == 0 {
-		return fmt.Errorf("EMG 沒有任何通道數據")
-	}
-
-	// 檢查時間序列是否遞增
-	for i := 1; i < len(data.Time); i++ {
-		if data.Time[i] <= data.Time[i-1] {
-			return fmt.Errorf("EMG 時間序列在索引 %d 處不是遞增的", i)
-		}
-	}
-
-	// 檢查所有通道數據長度一致
-	expectedLen := len(data.Time)
-	for channelName, channelData := range data.Channels {
-		if len(channelData) != expectedLen {
-			return fmt.Errorf("通道 %s 的數據長度 (%d) 與時間序列長度 (%d) 不符",
-				channelName, len(channelData), expectedLen)
-		}
-	}
-
-	return nil
+	return ValidateTimeSeries(data.Time, data.Channels, TimeSeriesLabels{
+		DataName:     "EMG",
+		SeriesName:   "時間序列",
+		SeriesPos:    "索引",
+		ChannelLabel: "通道",
+	})
 }

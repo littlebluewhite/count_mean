@@ -5,6 +5,7 @@ import (
 
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
+	"count_mean/util"
 )
 
 // ErrZeroChannelMax 表示某條肌肉在指定分期區間內最大值為零，
@@ -84,12 +85,7 @@ func computeChannelMaxes(
 			}
 		}
 
-		maxVal := channelData[0]
-		for _, v := range channelData[1:] {
-			if v > maxVal {
-				maxVal = v
-			}
-		}
+		maxVal, _ := util.ArrayMax(channelData)
 
 		if maxVal == 0 {
 			return nil, &ErrZeroChannelMax{

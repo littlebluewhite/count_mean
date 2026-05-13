@@ -1,6 +1,7 @@
 package parsers
 
 import (
+	"bufio"
 	"encoding/csv"
 	"fmt"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"strings"
 
 	"count_mean/internal/models"
+	"count_mean/internal/csvutil"
+	"count_mean/internal/security/fsperm"
 )
 
 // MotionParser Motion檔案解析器.
@@ -34,7 +37,7 @@ func NewMotionParser() *MotionParser {
 //
 //nolint:revive // keep consistent API
 func (p *MotionParser) readCSVRecords(filepath string) ([][]string, error) {
-	file, err := os.Open(filepath) //nolint:gosec // filepath is validated by caller
+	file, err := os.OpenFile(filepath, fsperm.ReadFlags, 0) //nolint:gosec // filepath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
 	if err != nil {
 		return nil, fmt.Errorf("無法開啟 Motion 檔案 %s: %w", filepath, err)
 	}
@@ -45,7 +48,16 @@ func (p *MotionParser) readCSVRecords(filepath string) ([][]string, error) {
 		}
 	}()
 
-	reader := csv.NewReader(file)
+	// Buffered single-pass 與 ReadCSVDirect 對稱：bufio + PeekBOM 取代過去
+	// 直接 csv.NewReader(file) 無 BOM 偵測的不對稱 — Motion CSV 若由 Excel 匯出
+	// 含 UTF-8 BOM (0xEF 0xBB 0xBF)，第一個欄位（如 Series header label）會被汙染。
+	// reader.ReadAll() 仍會 materialize [][]string；非 row-by-row 流式（cross-compare review）。
+	bufReader := bufio.NewReaderSize(file, csvReaderBufSize)
+	if _, err := csvutil.PeekBOM(bufReader); err != nil {
+		return nil, fmt.Errorf("讀取 Motion BOM 失敗: %w", err)
+	}
+
+	reader := csv.NewReader(bufReader)
 	reader.TrimLeadingSpace = true
 	reader.LazyQuotes = true
 	reader.FieldsPerRecord = -1
@@ -121,11 +133,7 @@ func (p *MotionParser) parseDataRecord(record, headers []string, motionData *mod
 	motionData.Indices = append(motionData.Indices, indexValue)
 
 	for j := 1; j < len(headers) && j < len(record); j++ {
-		value, err := strconv.ParseFloat(strings.TrimSpace(record[j]), 64)
-		if err != nil {
-			value = 0
-		}
-
+		value, _ := ParseFloatCell(record[j])
 		motionData.Data[headers[j]] = append(motionData.Data[headers[j]], value)
 	}
 
@@ -316,34 +324,17 @@ func (p *MotionParser) GetDataInIndexRange(
 		return nil, fmt.Errorf("開始 index %d 不能大於結束 index %d", startIndex, endIndex)
 	}
 
-	// 找到 index 範圍的位置
-	startPos := -1
-	endPos := -1
-
-	for i, idx := range data.Indices {
-		if startPos == -1 && idx >= startIndex {
-			startPos = i
-		}
-
-		if idx <= endIndex {
-			endPos = i
-		} else if endPos != -1 {
-			break
-		}
+	startPos, endPos, err := FindIndexRangeIndices(data.Indices, startIndex, endIndex)
+	if err != nil {
+		return nil, err
 	}
 
-	if startPos == -1 || endPos == -1 || startPos > endPos {
-		return nil, fmt.Errorf("找不到有效的 index 範圍數據")
-	}
-
-	// 創建子集數據
 	rangeData := &models.MotionData{
 		Indices: data.Indices[startPos : endPos+1],
 		Data:    make(map[string][]float64),
 		Headers: data.Headers,
 	}
 
-	// 複製數據
 	for columnName, columnData := range data.Data {
 		rangeData.Data[columnName] = columnData[startPos : endPos+1]
 	}
@@ -353,35 +344,16 @@ func (p *MotionParser) GetDataInIndexRange(
 
 // ValidateMotionData 驗證 Motion 數據.
 //
-//nolint:err113,dupl,stylecheck // Chinese dynamic errors; similar validation pattern; Motion is proper noun
+//nolint:err113,stylecheck // dynamic Chinese error message; Motion is proper noun
 func ValidateMotionData(data *models.MotionData) error {
 	if data == nil {
-		return fmt.Errorf("Motion 數據為空")
+		return fmt.Errorf("Motion 數據為空: %w", ErrNilData)
 	}
 
-	if len(data.Indices) == 0 {
-		return fmt.Errorf("Motion index 序列為空")
-	}
-
-	if len(data.Data) == 0 {
-		return fmt.Errorf("Motion 沒有任何數據列")
-	}
-
-	// 檢查 index 序列是否遞增
-	for i := 1; i < len(data.Indices); i++ {
-		if data.Indices[i] <= data.Indices[i-1] {
-			return fmt.Errorf("Motion index 在位置 %d 處不是遞增的", i)
-		}
-	}
-
-	// 檢查所有數據列長度一致
-	expectedLen := len(data.Indices)
-	for columnName, columnData := range data.Data {
-		if len(columnData) != expectedLen {
-			return fmt.Errorf("列 %s 的數據長度 (%d) 與 index 序列長度 (%d) 不符",
-				columnName, len(columnData), expectedLen)
-		}
-	}
-
-	return nil
+	return ValidateTimeSeries(data.Indices, data.Data, TimeSeriesLabels{
+		DataName:     "Motion",
+		SeriesName:   "index 序列",
+		SeriesPos:    "位置",
+		ChannelLabel: "列",
+	})
 }

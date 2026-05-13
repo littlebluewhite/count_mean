@@ -28,19 +28,19 @@ type PhasePoints struct {
 
 // AnalysisParams 分析參數.
 type AnalysisParams struct {
-	ManifestFile string // 分期總檔案路徑
-	DataFolder   string // 數據資料夾路徑
-	StartPhase   string // 開始分期點
-	EndPhase     string // 結束分期點
-	SubjectIndex int    // 選擇的主題索引（從0開始）
+	ManifestFile string     // 分期總檔案路徑
+	DataFolder   string     // 數據資料夾路徑
+	StartPhase   PhasePoint // 開始分期點
+	EndPhase     PhasePoint // 結束分期點
+	SubjectIndex int        // 選擇的主題索引（從0開始）
 }
 
 // EMGStatistics EMG 統計結果.
 type EMGStatistics struct {
 	Subject      string             // 主題名稱
-	StartPhase   string             // 開始分期點
+	StartPhase   PhasePoint         // 開始分期點
 	StartTime    float64            // 開始時間（EMG時間）
-	EndPhase     string             // 結束分期點
+	EndPhase     PhasePoint         // 結束分期點
 	EndTime      float64            // 結束時間（EMG時間）
 	ChannelNames []string           // 通道名稱列表
 	ChannelMeans map[string]float64 // 各通道平均值

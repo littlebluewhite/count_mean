@@ -116,16 +116,6 @@ func NewAppError(code ErrorCode, message string) *AppError {
 	}
 }
 
-// NewAppErrorWithCause creates a new application error with a cause.
-func NewAppErrorWithCause(code ErrorCode, message string, cause error) *AppError {
-	return &AppError{
-		Code:        code,
-		Message:     message,
-		Cause:       cause,
-		Recoverable: IsRecoverable(code),
-	}
-}
-
 // NewAppErrorWithDetails creates a new application error with details.
 func NewAppErrorWithDetails(code ErrorCode, message, details string) *AppError {
 	return &AppError{
@@ -159,74 +149,6 @@ func IsRecoverable(code ErrorCode) bool {
 	}
 
 	return true
-}
-
-var (
-	// ErrFileNotFound 是預定義的檔案未找到錯誤。
-	ErrFileNotFound = NewAppError(ErrCodeFileNotFound, "檔案未找到")
-	// ErrInvalidPath 是預定義的無效路徑錯誤。
-	ErrInvalidPath = NewAppError(ErrCodePathValidation, "無效的檔案路徑")
-	// ErrInvalidCSV 是預定義的無效 CSV 格式錯誤。
-	ErrInvalidCSV = NewAppError(ErrCodeFileFormat, "無效的 CSV 檔案格式")
-	// ErrConfigLoad 是預定義的配置載入失敗錯誤。
-	ErrConfigLoad = NewAppError(ErrCodeConfigLoad, "配置載入失敗")
-	// ErrFileTooLarge 是預定義的檔案過大錯誤。
-	ErrFileTooLarge = NewAppError(ErrCodeFileTooLarge, "檔案過大，請使用大文件處理功能")
-)
-
-// ProcessingError represents errors that occur during data processing.
-type ProcessingError struct {
-	*AppError
-	File      string `json:"file,omitempty"`
-	Operation string `json:"operation,omitempty"`
-	Step      string `json:"step,omitempty"`
-}
-
-// NewProcessingError creates a new processing error.
-func NewProcessingError(code ErrorCode, message, file, operation, step string, cause error) *ProcessingError {
-	return &ProcessingError{
-		AppError: &AppError{
-			Code:        code,
-			Message:     message,
-			Cause:       cause,
-			Recoverable: IsRecoverable(code),
-			Context: map[string]interface{}{
-				"file":      file,
-				"operation": operation,
-				"step":      step,
-			},
-		},
-		File:      file,
-		Operation: operation,
-		Step:      step,
-	}
-}
-
-// Error returns a formatted error message for ProcessingError.
-func (e *ProcessingError) Error() string {
-	var parts []string
-
-	parts = append(parts, fmt.Sprintf("[%s]", e.Code))
-
-	if e.File != "" {
-		parts = append(parts, fmt.Sprintf("檔案: %s", e.File))
-	}
-
-	if e.Operation != "" {
-		parts = append(parts, fmt.Sprintf("操作: %s", e.Operation))
-	}
-
-	if e.Step != "" {
-		parts = append(parts, fmt.Sprintf("步驟: %s", e.Step))
-	}
-
-	parts = append(parts, e.Message)
-
-	if e.Cause != nil {
-		parts = append(parts, fmt.Sprintf("原因: %s", e.Cause.Error()))
-	}
-
-	return strings.Join(parts, " - ")
 }
 
 // ValidationError represents input validation errors.

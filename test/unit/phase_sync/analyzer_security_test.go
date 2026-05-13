@@ -1,6 +1,7 @@
 package phase_sync //nolint:revive // underscore in package name matches directory structure
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"count_mean/internal/models"
 	"count_mean/internal/phase_sync"
+	"count_mean/internal/security/fsperm"
 )
 
 // TestPhaseSyncAnalyzer_PathTraversalAttack tests that path traversal attacks are prevented.
@@ -23,7 +25,7 @@ func TestPhaseSyncAnalyzer_PathTraversalAttack(t *testing.T) {
 	// Create a folder outside the data folder to simulate an attack target
 	targetFolder := t.TempDir()
 	targetFile := filepath.Join(targetFolder, "secret.csv")
-	err := os.WriteFile(targetFile, []byte("sensitive data"), 0o644)
+	err := os.WriteFile(targetFile, []byte("sensitive data"), fsperm.FilePerm)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -93,7 +95,7 @@ TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 			}
 
 			// Execute analysis - should fail with path validation error
-			stats, err := analyzer.AnalyzePhaseSync(params)
+			stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)
 
 			assert.Error(t, err, "Expected error for: %s", tt.description)
 			assert.Nil(t, stats, "Stats should be nil for: %s", tt.description)
@@ -117,7 +119,7 @@ func TestPhaseSyncAnalyzer_ValidPathsAllowed(t *testing.T) {
 
 	// Create a subdirectory within data folder
 	subDir := filepath.Join(dataFolder, "subdir")
-	err := os.MkdirAll(subDir, 0o755)
+	err := os.MkdirAll(subDir, fsperm.DirPerm)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -154,7 +156,7 @@ func TestPhaseSyncAnalyzer_ValidPathsAllowed(t *testing.T) {
 
 			emgDir := filepath.Dir(emgFilePath)
 			if emgDir != dataFolder {
-				err := os.MkdirAll(emgDir, 0o755)
+				err := os.MkdirAll(emgDir, fsperm.DirPerm)
 				require.NoError(t, err)
 			}
 
@@ -166,7 +168,7 @@ func TestPhaseSyncAnalyzer_ValidPathsAllowed(t *testing.T) {
 0.003,13,23,33,43,53,63
 0.004,14,24,34,44,54,64
 `
-			err := os.WriteFile(emgFilePath, []byte(emgContent), 0o644)
+			err := os.WriteFile(emgFilePath, []byte(emgContent), fsperm.FilePerm)
 			require.NoError(t, err)
 
 			// Create manifest with valid EMG path
@@ -185,7 +187,7 @@ TestSubject,motion.csv,force.csv,%s,0,0.0,0.001,0.002,0.0015,0.0018,2,0.0025,0.0
 
 			// Execute analysis - path validation should succeed
 			// (Analysis may still fail due to missing motion/force files, but path validation should pass)
-			_, err = analyzer.AnalyzePhaseSync(params)
+			_, err = analyzer.AnalyzePhaseSync(context.Background(), params)
 
 			// We expect the error NOT to be about path validation
 			if err != nil {
@@ -212,7 +214,7 @@ func TestPhaseSyncAnalyzer_AbsolutePathMustBeInDataFolder(t *testing.T) {
 0.0,10,20,30,40,50,60
 0.001,11,21,31,41,51,61
 `
-	err := os.WriteFile(emgFile, []byte(emgContent), 0o644)
+	err := os.WriteFile(emgFile, []byte(emgContent), fsperm.FilePerm)
 	require.NoError(t, err)
 
 	t.Run("absolute path inside data folder - should be allowed", func(t *testing.T) {
@@ -230,7 +232,7 @@ TestSubject,motion.csv,force.csv,%s,0,0.0,0.001,0.002,0.0015,0.0018,2,0.0025,0.0
 			SubjectIndex: 0,
 		}
 
-		_, err := analyzer.AnalyzePhaseSync(params)
+		_, err := analyzer.AnalyzePhaseSync(context.Background(), params)
 		// Path validation should succeed (analysis may fail for other reasons)
 		if err != nil {
 			assert.NotContains(t, err.Error(), "EMG 檔案路徑驗證失敗",
@@ -244,7 +246,7 @@ TestSubject,motion.csv,force.csv,%s,0,0.0,0.001,0.002,0.0015,0.0018,2,0.0025,0.0
 		// Create a file outside the data folder
 		outsideFolder := t.TempDir()
 		outsideFile := filepath.Join(outsideFolder, "external.csv")
-		err := os.WriteFile(outsideFile, []byte("external data"), 0o644)
+		err := os.WriteFile(outsideFile, []byte("external data"), fsperm.FilePerm)
 		require.NoError(t, err)
 
 		// Create manifest with absolute path that is OUTSIDE data folder
@@ -261,7 +263,7 @@ TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 			SubjectIndex: 0,
 		}
 
-		stats, err := analyzer.AnalyzePhaseSync(params)
+		stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)
 
 		assert.Error(t, err, "Absolute path outside data folder should be blocked")
 		assert.Nil(t, stats)
@@ -285,7 +287,7 @@ func TestPhaseSyncAnalyzer_SymbolicLinkAttack(t *testing.T) {
 	// Create a target folder outside the data folder
 	targetFolder := t.TempDir()
 	targetFile := filepath.Join(targetFolder, "sensitive.csv")
-	err := os.WriteFile(targetFile, []byte("sensitive data"), 0o644)
+	err := os.WriteFile(targetFile, []byte("sensitive data"), fsperm.FilePerm)
 	require.NoError(t, err)
 
 	// Create a symlink inside the data folder pointing to the target file
@@ -310,7 +312,7 @@ TestSubject,motion.csv,force.csv,symlink.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0
 		SubjectIndex: 0,
 	}
 
-	stats, err := analyzer.AnalyzePhaseSync(params)
+	stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)
 
 	// The symlink attack should be blocked by path validation
 	// The resolved path will be outside the allowed base path

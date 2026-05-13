@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
 	"count_mean/internal/security"
+	"count_mean/internal/security/fsperm"
 	"count_mean/internal/validation"
 )
 
@@ -26,9 +28,9 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 	outputDir := filepath.Join(tempDir, "output")
 	operateDir := filepath.Join(tempDir, "operate")
 
-	require.NoError(t, os.MkdirAll(inputDir, 0o755))
-	require.NoError(t, os.MkdirAll(outputDir, 0o755))
-	require.NoError(t, os.MkdirAll(operateDir, 0o755))
+	require.NoError(t, os.MkdirAll(inputDir, fsperm.DirPerm))
+	require.NoError(t, os.MkdirAll(outputDir, fsperm.DirPerm))
+	require.NoError(t, os.MkdirAll(operateDir, fsperm.DirPerm))
 
 	// Create test config
 	cfg := &config.AppConfig{
@@ -71,7 +73,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 
 		// Test calculator
 		calculator := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
-		results, err := calculator.CalculateFromRawData(records, 2)
+		results, err := calculator.CalculateFromRawData(context.Background(), records, 2)
 		require.NoError(t, err)
 		assert.Len(t, results, 2) // Two channels
 
@@ -213,7 +215,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 
 		// Test processing large dataset
 		calculator := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
-		results, err := calculator.CalculateFromRawData(largeData, 10)
+		results, err := calculator.CalculateFromRawData(context.Background(), largeData, 10)
 		require.NoError(t, err)
 		assert.Len(t, results, 3) // Three channels
 
@@ -231,8 +233,8 @@ func TestIntegrationErrorRecovery(t *testing.T) {
 	inputDir := filepath.Join(tempDir, "input")
 	outputDir := filepath.Join(tempDir, "output")
 
-	require.NoError(t, os.MkdirAll(inputDir, 0o755))
-	require.NoError(t, os.MkdirAll(outputDir, 0o755))
+	require.NoError(t, os.MkdirAll(inputDir, fsperm.DirPerm))
+	require.NoError(t, os.MkdirAll(outputDir, fsperm.DirPerm))
 
 	cfg := &config.AppConfig{
 		ScalingFactor: 10,
@@ -287,7 +289,7 @@ func TestIntegrationErrorRecovery(t *testing.T) {
 
 		// Calculator should handle parsing errors gracefully
 		calculator := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
-		_, err = calculator.CalculateFromRawData(invalidData, 2)
+		_, err = calculator.CalculateFromRawData(context.Background(), invalidData, 2)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "解析")
 	})
@@ -303,8 +305,8 @@ func TestIntegrationConcurrentOperations(t *testing.T) {
 	inputDir := filepath.Join(tempDir, "input")
 	outputDir := filepath.Join(tempDir, "output")
 
-	require.NoError(t, os.MkdirAll(inputDir, 0o755))
-	require.NoError(t, os.MkdirAll(outputDir, 0o755))
+	require.NoError(t, os.MkdirAll(inputDir, fsperm.DirPerm))
+	require.NoError(t, os.MkdirAll(outputDir, fsperm.DirPerm))
 
 	cfg := &config.AppConfig{
 		ScalingFactor: 10,

@@ -1,13 +1,16 @@
 package parsers
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"count_mean/internal/csvutil"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 )
@@ -448,7 +451,7 @@ func TestValidateMotionData(t *testing.T) {
 				Headers: []string{},
 			},
 			wantErr: true,
-			errMsg:  "Motion 沒有任何數據列",
+			errMsg:  "Motion 沒有任何列數據",
 		},
 		{
 			name: "non-increasing indices",
@@ -460,7 +463,7 @@ func TestValidateMotionData(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errMsg:  "Motion index 在位置 2 處不是遞增的",
+			errMsg:  "Motion index 序列在位置 2 處不是遞增的",
 		},
 		{
 			name: "mismatched data length",
@@ -721,4 +724,52 @@ Index,X,Y,Z,RX,RY,RZ
 		index := parser.TimeToIndex(0.008)
 		assert.Equal(t, 3, index) // time 0.008 -> index 3
 	})
+}
+
+// TestMotionParser_StripsBOMFromFirstField 鎖定 Wave 4 PR-E 補上的
+// readCSVRecords BOM 處理。EMG 之前在 csv_reader.go 已用 csvutil.TrimBOM 剝
+// BOM，Motion 路徑曾完全沒處理 — Excel 匯出的 Motion CSV 開頭 0xEF 0xBB 0xBF
+// 會汙染 records[0][0]。
+//
+// 對稱修復後的契約：
+//  1. BOM-prefixed Motion CSV 能順利 ParseFile，不報錯。
+//  2. 解析結果（Headers、Data keys）不含 BOM bytes。
+//
+// 若未來 Motion structure 改成「第一列當 header 用」，此 test 會立刻發現
+// BOM 汙染回流。
+func TestMotionParser_StripsBOMFromFirstField(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "motion_bom.csv")
+
+	csvBody := `Trunk Angle,X Cat,Y Cat,Z Cat
+Subcat A,Subcat B,Subcat C,Subcat D
+Additional metadata
+Index,X,Y,Z
+1,10.5,20.3,30.8
+2,11.2,21.7,31.2
+3,9.8,19.1,29.5
+`
+
+	f, err := os.Create(path) //nolint:gosec // tmpDir is t.TempDir()
+	require.NoError(t, err)
+	_, err = f.Write(csvutil.BOMBytes())
+	require.NoError(t, err)
+	_, err = f.WriteString(csvBody)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	data, err := parsers.NewMotionParser().ParseFile(path)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	assert.Equal(t, []int{1, 2, 3}, data.Indices)
+
+	for _, header := range data.Headers {
+		assert.Falsef(t, bytes.Contains([]byte(header), csvutil.BOMBytes()),
+			"header %q must not contain UTF-8 BOM", header)
+	}
+	for key := range data.Data {
+		assert.Falsef(t, bytes.Contains([]byte(key), csvutil.BOMBytes()),
+			"data key %q must not contain UTF-8 BOM", key)
+	}
 }

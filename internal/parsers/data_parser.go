@@ -1,22 +1,24 @@
-// Package parser provides data parsing functionality for EMG data files,
-// including CSV parsing and data format conversion.
-package parser
+package parsers
 
 import (
 	"errors"
 	"fmt"
 
+	apperrors "count_mean/internal/errors"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
 	"count_mean/util"
 )
 
-// Parser errors.
+// DataParser 私有錯誤。
+//
+// ErrInsufficientData 定義於 errors.go（alias 到 apperrors.ErrInsufficientData）;
+// validateRecords 用 inline wrap 提供中文訊息（maxmean_test 斷言該子字串），
+// 同時不破壞 errors.Is 跨套件對稱性。
 var (
-	ErrNilInput         = errors.New("輸入數據不能為 nil")
-	ErrInsufficientData = errors.New("數據至少需要包含標題行和一行數據")
-	ErrEmptyDataset     = errors.New("解析後數據集為空，所有行都被跳過")
-	ErrSkipRow          = errors.New("skip row")
+	ErrNilInput     = errors.New("輸入數據不能為 nil")
+	ErrEmptyDataset = errors.New("解析後數據集為空，所有行都被跳過")
+	ErrSkipRow      = errors.New("skip row")
 )
 
 // DataParser 處理原始字符串數據的解析，統一提供給 MaxMeanCalculator、Normalizer 和 PhaseAnalyzer 使用.
@@ -73,9 +75,10 @@ func (p *DataParser) validateRecords(records [][]string) error {
 	}
 
 	if len(records) < 2 {
-		p.logger.Error("原始數據結構驗證失敗", ErrInsufficientData, map[string]interface{}{"record_count": len(records)})
+		err := fmt.Errorf("數據至少需要包含標題行和一行數據: %w", apperrors.ErrInsufficientData)
+		p.logger.Error("原始數據結構驗證失敗", err, map[string]interface{}{"record_count": len(records)})
 
-		return ErrInsufficientData
+		return err
 	}
 
 	return nil
@@ -121,7 +124,13 @@ func (p *DataParser) parseChannels(row []string, rowNumber int) ([]float64, erro
 // parseDataRow 解析單一數據行，返回 EMGData.
 // 如果應該跳過該行，返回 ErrSkipRow 錯誤.
 func (p *DataParser) parseDataRow(row []string, rowNumber int, opts ParseOptions) (*models.EMGData, error) {
-	if len(row) < 2 || row[0] == "" {
+	// 先排除空 row 再讀 row[0]，避免在非 encoding/csv 來源傳入 []string{} 時 panic。
+	if len(row) == 0 {
+		return nil, ErrSkipRow
+	}
+
+	// 經過上面 guard，len(row) 至少是 1。只剩兩條 skip 條件：單欄列（無 channel 值）或空白時間。
+	if len(row) == 1 || row[0] == "" {
 		if opts.LogVerbose && row[0] == "" {
 			p.logger.Debug("跳過空白時間行", map[string]interface{}{"row_number": rowNumber})
 		}

@@ -1,13 +1,14 @@
 package gui
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"count_mean/internal/io"
 	"count_mean/internal/models"
+	"count_mean/internal/parsers"
 )
 
 // File type constants for SelectFile dialog.
@@ -24,15 +25,20 @@ const (
 	SuffixPhaseAnalysis = "_階段分析"
 )
 
-// ReadCSVWithPathValidation reads a CSV file with automatic path validation.
-func (a *App) ReadCSVWithPathValidation(filePath, baseDir string) ([][]string, error) {
+// readCSVWithPathValidation reads a CSV file with automatic path validation.
+//
+// `s` 是呼叫端 (entry method) 取得的 *appState snapshot — 必須由 caller 顯式
+// 傳入,不在這裡再做一次 a.state.Load()。否則 SaveConfig 在 entry 與 helper 之間
+// 觸發時,entry 用舊 snapshot 算結果但 helper 讀到的 csvHandler 已是新 cfg 的版本,
+// 即 cross-compare review fresh hunt 抓到的「snapshot 撕裂」邏輯 race。
+func (a *App) readCSVWithPathValidation(s *appState, filePath, baseDir string) ([][]string, error) {
 	filename := filepath.Base(filePath)
 	if err := a.validator.ValidateFilename(filename); err != nil {
 		return nil, fmt.Errorf("檔案名稱驗證失敗: %w", err)
 	}
 
 	if isExternalPath(filePath, baseDir) {
-		records, err := a.csvHandler.ReadCSVExternal(filePath)
+		records, err := s.csvHandler.ReadCSVExternal(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("讀取外部檔案失敗: %w", err)
 		}
@@ -40,7 +46,7 @@ func (a *App) ReadCSVWithPathValidation(filePath, baseDir string) ([][]string, e
 		return records, nil
 	}
 
-	records, err := a.csvHandler.ReadCSV(filePath)
+	records, err := s.csvHandler.ReadCSV(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("讀取檔案失敗: %w", err)
 	}
@@ -70,15 +76,11 @@ func ResolveTimeRange(records [][]string, startTime, endTime float64) (float64, 
 	var start, end float64
 
 	if len(records) > 1 && len(records[1]) > 0 {
-		if val, err := strconv.ParseFloat(records[1][0], 64); err == nil {
-			start = val
-		}
+		start, _ = parsers.ParseFloatCell(records[1][0])
 	}
 
 	if len(records) > 1 && len(records[len(records)-1]) > 0 {
-		if val, err := strconv.ParseFloat(records[len(records)-1][0], 64); err == nil {
-			end = val
-		}
+		end, _ = parsers.ParseFloatCell(records[len(records)-1][0])
 	}
 
 	return start, end
@@ -107,13 +109,23 @@ func convertMaxMeanResultsToArray(results []models.MaxMeanResult) [][]float64 {
 }
 
 // calculateWithTimeRange performs MaxMean calculation with optional time range.
-func (a *App) calculateWithTimeRange(
+//
+// 接 *appState snapshot 而非自行 a.state.Load(),保證與 entry method 看到的
+// maxMeanCalc 為同一實例 — 避免 SaveConfig 觸發後 entry / helper 用到不同
+// ScalingFactor 配置（snapshot 撕裂）。
+//
+// ctx 由 entry methods 透過 a.context() 取得 Wails Startup 設定的 lifecycle
+// context — Wails Shutdown 時會 cancel 該 ctx，maxmean 的 worker / collect /
+// WaitForCapacity 會收到取消信號並中止長計算。
+func (*App) calculateWithTimeRange(
+	ctx context.Context,
+	s *appState,
 	records [][]string,
 	windowSize int,
 	startRange, endRange float64,
 ) ([]models.MaxMeanResult, error) {
 	if startRange == 0 && endRange == 0 {
-		results, err := a.maxMeanCalc.CalculateFromRawData(records, windowSize)
+		results, err := s.maxMeanCalc.CalculateFromRawData(ctx, records, windowSize)
 		if err != nil {
 			return nil, fmt.Errorf("計算最大平均值失敗: %w", err)
 		}
@@ -121,7 +133,7 @@ func (a *App) calculateWithTimeRange(
 		return results, nil
 	}
 
-	results, err := a.maxMeanCalc.CalculateFromRawDataWithRange(records, windowSize, startRange, endRange)
+	results, err := s.maxMeanCalc.CalculateFromRawDataWithRange(ctx, records, windowSize, startRange, endRange)
 	if err != nil {
 		return nil, fmt.Errorf("計算指定範圍最大平均值失敗: %w", err)
 	}

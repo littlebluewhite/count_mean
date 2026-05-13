@@ -9,7 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"count_mean/internal/csvutil"
 	"count_mean/internal/parsers"
+	"count_mean/internal/security/fsperm"
 )
 
 func TestReadCSVDirect(t *testing.T) {
@@ -133,7 +135,7 @@ func TestReadCSVDirect(t *testing.T) {
 			tmpDir := t.TempDir()
 			tmpFilePath := filepath.Join(tmpDir, "test_csv.csv")
 
-			err := os.WriteFile(tmpFilePath, []byte(tt.csvContent), 0o644)
+			err := os.WriteFile(tmpFilePath, []byte(tt.csvContent), fsperm.FilePerm)
 			require.NoError(t, err)
 
 			// 測試 ReadCSVDirect
@@ -169,7 +171,7 @@ func TestReadCSVDirect_FilePermissionDenied(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpFilePath := filepath.Join(tmpDir, "test_permission.csv")
 
-	err := os.WriteFile(tmpFilePath, []byte("test,data\n1,2"), 0o644)
+	err := os.WriteFile(tmpFilePath, []byte("test,data\n1,2"), fsperm.FilePerm)
 	require.NoError(t, err)
 
 	// 移除讀取權限
@@ -177,7 +179,7 @@ func TestReadCSVDirect_FilePermissionDenied(t *testing.T) {
 	require.NoError(t, err)
 
 	defer func() {
-		_ = os.Chmod(tmpFilePath, 0o644) // 恢復權限以便清理
+		_ = os.Chmod(tmpFilePath, fsperm.FilePerm) // 恢復權限以便清理
 	}()
 
 	// 測試權限被拒絕的情況
@@ -200,7 +202,7 @@ func TestReadCSVDirect_BinaryFile(t *testing.T) {
 
 	// 寫入二進制數據
 	binaryData := []byte{0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xFD}
-	err := os.WriteFile(tmpFilePath, binaryData, 0o644)
+	err := os.WriteFile(tmpFilePath, binaryData, fsperm.FilePerm)
 	require.NoError(t, err)
 
 	// 二進制文件應該仍能讀取，但可能產生意外結果
@@ -253,10 +255,10 @@ func TestReadCSVDirect_UTF8WithBOM(t *testing.T) {
 	tmpFilePath := filepath.Join(tmpDir, "test_bom.csv")
 
 	// UTF-8 BOM + CSV 內容
-	bomBytes := []byte{0xEF, 0xBB, 0xBF}
+	bomBytes := csvutil.BOMBytes()
 	csvContent := "Name,Value\n測試,123\n"
 
-	file, err := os.OpenFile(tmpFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	file, err := os.OpenFile(tmpFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fsperm.FilePerm)
 	require.NoError(t, err)
 
 	_, err = file.Write(bomBytes)
@@ -282,7 +284,7 @@ func TestReadCSVDirect_RelativeAndAbsolutePaths(t *testing.T) {
 	tmpFilePath := filepath.Join(tmpDir, "test_path.csv")
 
 	csvContent := "A,B\n1,2\n"
-	err := os.WriteFile(tmpFilePath, []byte(csvContent), 0o644)
+	err := os.WriteFile(tmpFilePath, []byte(csvContent), fsperm.FilePerm)
 	require.NoError(t, err)
 
 	// 測試絕對路徑

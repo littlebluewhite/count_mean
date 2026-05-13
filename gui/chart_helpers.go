@@ -5,22 +5,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
-	"gonum.org/v1/plot/vg"
-
+	"count_mean/internal/calculator"
 	"count_mean/internal/chart"
 	"count_mean/internal/models"
-)
-
-// Chart generation constants.
-const (
-	chartDefaultWidth  = 800   // 預設圖表寬度
-	chartDefaultHeight = 600   // 預設圖表高度
-	chartFileMode      = 0o600 // 文件權限
+	"count_mean/internal/parsers"
+	"count_mean/internal/security/fsperm"
 )
 
 // Chart generation errors.
@@ -41,19 +33,9 @@ func buildDatasetFromRecords(records [][]string) *models.EMGDataset {
 	copy(dataset.Headers, records[0])
 
 	for i := 1; i < len(records); i++ {
-		row := records[i]
-
-		timeVal, err := strconv.ParseFloat(row[0], 64)
-		if err != nil {
+		timeVal, channels, ok := parsers.ParseTimeAndChannels(records[i], 1)
+		if !ok {
 			continue
-		}
-
-		channels := make([]float64, len(row)-1)
-
-		for j := 1; j < len(row); j++ {
-			if val, err := strconv.ParseFloat(row[j], 64); err == nil {
-				channels[j-1] = val
-			}
 		}
 
 		dataset.Data = append(dataset.Data, models.EMGData{Time: timeVal, Channels: channels})
@@ -63,9 +45,12 @@ func buildDatasetFromRecords(records [][]string) *models.EMGDataset {
 }
 
 // GenerateInteractiveChart returns HTML content of an interactive chart.
+//
+// 走 readCSVWithPathValidation 路由（同 GetCSVHeaders），避免使用者透過 file
+// dialog 餵入任意絕對路徑後 bypass 驗證。
 func (a *App) GenerateInteractiveChart(params *InteractiveChartParams) (string, error) {
-	// 讀取 CSV 檔案
-	records, err := a.csvHandler.ReadCSV(params.FilePath)
+	s := a.state.Load()
+	records, err := a.readCSVWithPathValidation(s, params.FilePath, s.config.InputDir)
 	if err != nil {
 		return "", fmt.Errorf("讀取 CSV 檔案失敗: %w", err)
 	}
@@ -115,9 +100,13 @@ func (a *App) savePNGFromBase64(params ChartParams) (*ChartResult, error) {
 
 	fileName := filepath.Base(params.FilePath)
 	baseName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-	outputPath := filepath.Join(a.config.OutputDir, fmt.Sprintf("%s_%s.png", baseName, params.Title))
+	// params.Title 來自前端，需先 sanitize 避免路徑穿越（"../x" 之類）。
+	// 與 cci_handlers.go:114 的 params.Subject 處理對稱（cross-compare review 補 Wave 2 缺漏）。
+	safeTitle := calculator.SanitizeFileName(params.Title)
+	s := a.state.Load()
+	outputPath := filepath.Join(s.config.OutputDir, fmt.Sprintf("%s_%s.png", baseName, safeTitle))
 
-	if err := os.WriteFile(outputPath, pngData, chartFileMode); err != nil {
+	if err := fsperm.WriteFileNoFollow(outputPath, pngData); err != nil {
 		return nil, fmt.Errorf("保存圖片失敗: %w", err)
 	}
 
@@ -134,64 +123,13 @@ func (a *App) savePNGFromBase64(params ChartParams) (*ChartResult, error) {
 }
 
 // GenerateChart 依照目前預覽設定輸出 PNG 到 output_dir.
+// 僅支援透過 params.ImageData 帶入前端 canvas 截圖的路徑；舊版的靜態 PNG
+// 生成路徑（chart.Generator）已移除，因為它建出 chartConfig 後從未實際寫檔，
+// 卻回傳 Success — 對前端是 silent bug。前端缺 ImageData 應改用互動圖表。
 func (a *App) GenerateChart(params ChartParams) (*ChartResult, error) {
-	if params.ImageData != "" {
-		return a.savePNGFromBase64(params)
+	if params.ImageData == "" {
+		return nil, ErrInvalidImageFormat
 	}
 
-	a.logger.Info("開始生成圖表", map[string]interface{}{
-		"file_path": params.FilePath,
-		"columns":   params.Columns,
-		"title":     params.Title,
-	})
-
-	if params.FilePath == "" {
-		return nil, ErrNoDataFile
-	}
-
-	if len(params.Columns) == 0 {
-		return nil, ErrNoColumns
-	}
-
-	records, err := a.ReadCSVWithPathValidation(params.FilePath, a.config.InputDir)
-	if err != nil {
-		return nil, fmt.Errorf("讀取 CSV 檔案失敗: %w", err)
-	}
-
-	if len(records) < 2 {
-		return nil, ErrInvalidCSVFormat
-	}
-
-	dataset := buildDatasetFromRecords(records)
-
-	// 準備圖表配置
-	chartConfig := chart.Config{
-		Title:      params.Title,
-		XAxisLabel: "Time (s)",
-		YAxisLabel: "Value",
-		Width:      vg.Length(chartDefaultWidth),
-		Height:     vg.Length(chartDefaultHeight),
-		Columns:    make([]string, len(params.Columns)),
-	}
-
-	for i, colIndex := range params.Columns {
-		if colIndex < len(dataset.Headers) {
-			chartConfig.Columns[i] = dataset.Headers[colIndex]
-		}
-	}
-
-	outputPath := filepath.Join(a.config.OutputDir, fmt.Sprintf("%s_chart.png",
-		strings.TrimSuffix(filepath.Base(params.FilePath), filepath.Ext(params.FilePath))))
-
-	a.logger.Info("圖表生成完成", map[string]interface{}{
-		"output_file":  outputPath,
-		"column_count": len(params.Columns),
-		"data_points":  len(dataset.Data),
-	})
-
-	return &ChartResult{
-		OutputPath: outputPath,
-		Success:    true,
-		Message:    fmt.Sprintf("圖表已成功生成並保存到: %s", outputPath),
-	}, nil
+	return a.savePNGFromBase64(params)
 }

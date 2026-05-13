@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/config"
+	"count_mean/internal/security/fsperm"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -203,7 +204,7 @@ func TestLoadConfig(t *testing.T) {
 			"operateDir": "./value_operate"
 		}`
 
-		err := os.WriteFile(configFile, []byte(validJSON), 0o644)
+		err := os.WriteFile(configFile, []byte(validJSON), fsperm.FilePerm)
 		require.NoError(t, err)
 
 		loadedConfig, err := config.LoadConfig(configFile)
@@ -225,7 +226,7 @@ func TestLoadConfig(t *testing.T) {
 			"invalid_json": 
 		}`
 
-		err := os.WriteFile(configFile, []byte(invalidJSON), 0o644)
+		err := os.WriteFile(configFile, []byte(invalidJSON), fsperm.FilePerm)
 		require.NoError(t, err)
 
 		loadedConfig, err := config.LoadConfig(configFile)
@@ -246,7 +247,7 @@ func TestLoadConfig(t *testing.T) {
 			"bom_enabled": true
 		}`
 
-		err := os.WriteFile(configFile, []byte(invalidConfig), 0o644)
+		err := os.WriteFile(configFile, []byte(invalidConfig), fsperm.FilePerm)
 		require.NoError(t, err)
 
 		loadedConfig, err := config.LoadConfig(configFile)
@@ -266,7 +267,7 @@ func TestLoadConfig(t *testing.T) {
 		err := os.Mkdir(restrictedDir, 0o000) // 無權限
 		require.NoError(t, err)
 
-		defer os.Chmod(restrictedDir, 0o755) // 清理時恢復權限
+		defer os.Chmod(restrictedDir, fsperm.DirPerm) // 清理時恢復權限
 
 		configFile := filepath.Join(restrictedDir, "config.json")
 		loadedConfig, err := config.LoadConfig(configFile)

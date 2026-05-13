@@ -10,12 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-)
 
-// File permission constants.
-const (
-	dirPermission  = 0o750 // Directory permission mode.
-	filePermission = 0o600 // File permission mode.
+	"count_mean/internal/security/fsperm"
 )
 
 // Locale represents a supported locale.
@@ -424,7 +420,7 @@ func (i *I18n) SaveTranslations(translationsDir string) error {
 	defer i.mutex.RUnlock()
 
 	// Ensure directory exists
-	if err := os.MkdirAll(translationsDir, dirPermission); err != nil {
+	if err := os.MkdirAll(translationsDir, fsperm.DirPerm); err != nil {
 		return fmt.Errorf("無法創建翻譯目錄: %w", err)
 	}
 
@@ -437,7 +433,7 @@ func (i *I18n) SaveTranslations(translationsDir string) error {
 			return fmt.Errorf("序列化翻譯失敗 %s: %w", locale, err)
 		}
 
-		if err := os.WriteFile(filename, data, filePermission); err != nil {
+		if err := fsperm.WriteFileNoFollow(filename, data); err != nil {
 			return fmt.Errorf("寫入翻譯文件失敗 %s: %w", filename, err)
 		}
 	}

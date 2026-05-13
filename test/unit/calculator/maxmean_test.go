@@ -1,6 +1,7 @@
 package calculator_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,7 +19,7 @@ func TestMaxMeanCalculator_Calculate(t *testing.T) {
 			Headers: []string{"Time", "Ch1"},
 			Data:    []models.EMGData{},
 		}
-		results, err := calc.Calculate(dataset, 5)
+		results, err := calc.Calculate(context.Background(), dataset, 5)
 		require.Error(t, err)
 		require.Nil(t, results)
 	})
@@ -30,7 +31,7 @@ func TestMaxMeanCalculator_Calculate(t *testing.T) {
 				{Time: 1.0, Channels: []float64{100.0}},
 			},
 		}
-		results, err := calc.Calculate(dataset, 0)
+		results, err := calc.Calculate(context.Background(), dataset, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "窗口大小必須大於 0")
 		require.Nil(t, results)
@@ -43,7 +44,7 @@ func TestMaxMeanCalculator_Calculate(t *testing.T) {
 				{Time: 1.0, Channels: []float64{100.0}},
 			},
 		}
-		results, err := calc.Calculate(dataset, -1)
+		results, err := calc.Calculate(context.Background(), dataset, -1)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "窗口大小必須大於 0")
 		require.Nil(t, results)
@@ -57,7 +58,7 @@ func TestMaxMeanCalculator_Calculate(t *testing.T) {
 				{Time: 2.0, Channels: []float64{200.0}},
 			},
 		}
-		results, err := calc.Calculate(dataset, 5)
+		results, err := calc.Calculate(context.Background(), dataset, 5)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "數據集無效或窗口大小過大")
 		require.Nil(t, results)
@@ -73,7 +74,7 @@ func TestMaxMeanCalculator_Calculate(t *testing.T) {
 				{Time: 4.0, Channels: []float64{300.0}},
 			},
 		}
-		results, err := calc.Calculate(dataset, 2)
+		results, err := calc.Calculate(context.Background(), dataset, 2)
 		require.NoError(t, err)
 		require.Len(t, results, 1)
 		require.Equal(t, 1, results[0].ColumnIndex)
@@ -91,7 +92,7 @@ func TestMaxMeanCalculator_Calculate(t *testing.T) {
 				{Time: 3.0, Channels: []float64{150.0, 75.0}},
 			},
 		}
-		results, err := calc.Calculate(dataset, 2)
+		results, err := calc.Calculate(context.Background(), dataset, 2)
 		require.NoError(t, err)
 		require.Len(t, results, 2)
 
@@ -111,7 +112,7 @@ func TestMaxMeanCalculator_Calculate(t *testing.T) {
 				{Time: 1.0, Channels: []float64{100.0}},
 			},
 		}
-		results, err := calc.Calculate(dataset, 1)
+		results, err := calc.Calculate(context.Background(), dataset, 1)
 		require.NoError(t, err)
 		require.Len(t, results, 1)
 		require.Equal(t, 100.0, results[0].MaxMean)
@@ -128,14 +129,14 @@ func TestMaxMeanCalculator_Calculate(t *testing.T) {
 				{Time: 3.0, Channels: []float64{100.0}},
 			},
 		}
-		results, err := calc.Calculate(dataset, 2)
+		results, err := calc.Calculate(context.Background(), dataset, 2)
 		require.NoError(t, err)
 		require.Len(t, results, 1)
 		require.Equal(t, 100.0, results[0].MaxMean)
 	})
 
 	t.Run("NilDataset", func(t *testing.T) {
-		results, err := calc.Calculate(nil, 2)
+		results, err := calc.Calculate(context.Background(), nil, 2)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "數據集為空")
 		require.Nil(t, results)
@@ -152,7 +153,7 @@ func TestMaxMeanCalculator_CalculateFromRawData(t *testing.T) {
 			{"2.0", "200", "100"},
 			{"3.0", "150", "75"},
 		}
-		results, err := calc.CalculateFromRawData(records, 2)
+		results, err := calc.CalculateFromRawData(context.Background(), records, 2)
 		require.NoError(t, err)
 		require.Len(t, results, 2)
 	})
@@ -161,7 +162,7 @@ func TestMaxMeanCalculator_CalculateFromRawData(t *testing.T) {
 		records := [][]string{
 			{"1.0", "100"},
 		}
-		results, err := calc.CalculateFromRawData(records, 2)
+		results, err := calc.CalculateFromRawData(context.Background(), records, 2)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "數據至少需要包含標題行和一行數據")
 		require.Nil(t, results)
@@ -172,7 +173,7 @@ func TestMaxMeanCalculator_CalculateFromRawData(t *testing.T) {
 			{"Time", "Ch1"},
 			{"invalid", "100"},
 		}
-		results, err := calc.CalculateFromRawData(records, 1)
+		results, err := calc.CalculateFromRawData(context.Background(), records, 1)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "解析後數據集為空")
 		require.Nil(t, results)
@@ -185,7 +186,7 @@ func TestMaxMeanCalculator_CalculateFromRawData(t *testing.T) {
 			{"2.0"}, // 無效行，應被跳過
 			{"3.0", "150"},
 		}
-		results, err := calc.CalculateFromRawData(records, 2)
+		results, err := calc.CalculateFromRawData(context.Background(), records, 2)
 		require.NoError(t, err)
 		require.Len(t, results, 1)
 	})
@@ -201,7 +202,7 @@ func TestMaxMeanCalculator_parseRawData(t *testing.T) {
 		}
 		// 測試通過公共方法驗證數據解析和縮放因子應用
 		// 由於 parseRawData 是私有方法，我們通過計算結果來驗證縮放因子是否正確應用
-		results, err := calc.CalculateFromRawData(records, 1)
+		results, err := calc.CalculateFromRawData(context.Background(), records, 1)
 		require.NoError(t, err)
 		// 驗證結果確實考慮了縮放因子的應用
 		require.NotEmpty(t, results)
@@ -223,7 +224,7 @@ func TestMaxMeanCalculator_CalculateWithRange(t *testing.T) {
 		}
 
 		// Calculate max mean for range 1.5 to 3.5 seconds
-		results, err := calc.CalculateWithRange(dataset, 2, 1.5, 3.5)
+		results, err := calc.CalculateWithRange(context.Background(), dataset, 2, 1.5, 3.5)
 		require.NoError(t, err)
 		require.Len(t, results, 1)
 
@@ -241,7 +242,7 @@ func TestMaxMeanCalculator_CalculateWithRange(t *testing.T) {
 		}
 
 		// Try to calculate with range 2.0-3.0 seconds (no data in this range)
-		results, err := calc.CalculateWithRange(dataset, 2, 2.0, 3.0)
+		results, err := calc.CalculateWithRange(context.Background(), dataset, 2, 2.0, 3.0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "指定時間範圍內的數據不足")
 		require.Nil(t, results)
@@ -255,7 +256,7 @@ func TestMaxMeanCalculator_CalculateWithRange(t *testing.T) {
 			},
 		}
 
-		results, err := calc.CalculateWithRange(dataset, 5, 1.0, 3.0)
+		results, err := calc.CalculateWithRange(context.Background(), dataset, 5, 1.0, 3.0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "數據集無效或窗口大小過大")
 		require.Nil(t, results)
@@ -274,7 +275,7 @@ func TestMaxMeanCalculator_CalculateFromRawDataWithRange(t *testing.T) {
 			{"0.4", "200"},
 		}
 
-		results, err := calc.CalculateFromRawDataWithRange(records, 2, 0.15, 0.35)
+		results, err := calc.CalculateFromRawDataWithRange(context.Background(), records, 2, 0.15, 0.35)
 		require.NoError(t, err)
 		require.Len(t, results, 1)
 
@@ -289,7 +290,7 @@ func TestMaxMeanCalculator_CalculateFromRawDataWithRange(t *testing.T) {
 			{"invalid", "100"},
 		}
 
-		results, err := calc.CalculateFromRawDataWithRange(records, 1, 0.0, 1.0)
+		results, err := calc.CalculateFromRawDataWithRange(context.Background(), records, 1, 0.0, 1.0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "解析數據失敗")
 		require.Nil(t, results)
@@ -308,7 +309,7 @@ func TestMaxMeanCalculator_EdgeCases(t *testing.T) {
 			},
 		}
 
-		results, err := calc.Calculate(dataset, 1)
+		results, err := calc.Calculate(context.Background(), dataset, 1)
 		require.NoError(t, err)
 		require.Len(t, results, 0) // No channels to process
 	})
@@ -324,7 +325,7 @@ func TestMaxMeanCalculator_EdgeCases(t *testing.T) {
 			},
 		}
 
-		results, err := calc.Calculate(dataset, 2)
+		results, err := calc.Calculate(context.Background(), dataset, 2)
 		require.NoError(t, err)
 		require.Len(t, results, 2)
 

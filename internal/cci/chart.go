@@ -3,12 +3,19 @@ package cci
 import (
 	"fmt"
 	"io"
+	"math"
+	"sort"
 
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
 
+	"count_mean/internal/chart"
 	"count_mean/internal/logging"
 )
+
+// cciChartDownsampleThreshold CCI 圖表降採樣目標點數。
+// 30 萬點原始資料壓到 5000 點，視覺上 zoom-in 仍夠細，前端渲染壓力降一個量級。
+const cciChartDownsampleThreshold = 5000
 
 // GenerateCCIInteractiveChart renders an interactive CCI chart as HTML.
 func GenerateCCIInteractiveChart(result *CCIAnalysisResult, w io.Writer) error {
@@ -27,7 +34,12 @@ func GenerateCCIInteractiveChart(result *CCIAnalysisResult, w io.Writer) error {
 }
 
 // buildCCILine creates and fully configures the go-echarts Line chart.
+// LTTB 降採樣在 setCCIGlobalOptions 之後、X 軸建立之前套用：
+// 12 配對共享同一組索引，TimeValues / Values / PhaseTimes 同步壓縮，
+// 維持所有 series 對齊 shared category X-axis。
 func buildCCILine(result *CCIAnalysisResult) *charts.Line {
+	result = downsampleCCIResult(result, cciChartDownsampleThreshold)
+
 	line := charts.NewLine()
 
 	setCCIGlobalOptions(line, result)
@@ -37,10 +49,141 @@ func buildCCILine(result *CCIAnalysisResult) *charts.Line {
 	line.SetXAxis(toInterfaceSlice(timeLabels))
 
 	addCCIMeanSeries(line, result)
-	addCCISDBandSeries(line, result)
 	addCCICustomJS(line)
 
 	return line
+}
+
+// downsampleCCIResult 對每個 pair 獨立跑 LTTB，再 union 各組保留索引、排序後
+// apply 到 TimeValues 與所有 PairResults[i].Values，保證所有曲線共享同一個 X 軸。
+//
+// 為什麼不用「第一個 pair 當 representative」的單組 LTTB：
+//   - 若 representative 在某 bucket 平緩、其他 pair 在同 bucket 有窄峰，那個峰會被遺失。
+//   - per-pair LTTB + union 保留每個 series 自身的高 variance 點，
+//     代價是 union 後總點數可能稍超 threshold（受 pair 數 × threshold 上限約束，
+//     實務 12 對相關曲線 union ≈ 1.2-2x threshold）。
+//
+// MeanCurves / PhasePercents / PhaseTimes / GaitStartTime / GaitEndTime 不動：
+// 那些是 phase-domain 元資料（已 normalize 到 0-100% 或單純時間值），不是時序樣本。
+func downsampleCCIResult(result *CCIAnalysisResult, threshold int) *CCIAnalysisResult {
+	if result == nil || len(result.TimeValues) <= threshold || len(result.PairResults) == 0 {
+		return result
+	}
+
+	indices := unionLTTBIndices(result, threshold)
+	if len(indices) == 0 {
+		return result
+	}
+
+	downsampledTime := make([]float64, len(indices))
+	for i, idx := range indices {
+		downsampledTime[i] = result.TimeValues[idx]
+	}
+
+	downsampledPairs := make([]CCIResult, len(result.PairResults))
+
+	for i, pr := range result.PairResults {
+		if len(pr.Values) != len(result.TimeValues) {
+			downsampledPairs[i] = pr
+
+			continue
+		}
+
+		newVals := make([]float64, len(indices))
+		for j, idx := range indices {
+			newVals[j] = pr.Values[idx]
+		}
+
+		downsampledPairs[i] = CCIResult{PairName: pr.PairName, Values: newVals}
+	}
+
+	return &CCIAnalysisResult{
+		Subject:       result.Subject,
+		PairResults:   downsampledPairs,
+		TimeValues:    downsampledTime,
+		PhasePercents: result.PhasePercents,
+		PhaseTimes:    result.PhaseTimes,
+		MeanCurves:    result.MeanCurves,
+		GaitStartTime: result.GaitStartTime,
+		GaitEndTime:   result.GaitEndTime,
+	}
+}
+
+// cciChartMaxRenderPoints 是 union 後的 hard cap，避免 12 對 union 最壞情況灌出
+// pairCount × threshold ≈ 60k 點壓垮 ECharts 互動效能。2× threshold 保留 LTTB
+// 變異敏感點同時讓首尾 zoom-in 視覺仍夠細。
+const cciChartMaxRenderPoints = cciChartDownsampleThreshold * 2
+
+// unionLTTBIndices 對每個 PairResult 獨立跑 LTTB，回傳所有保留索引的 union（排序後）。
+// 各 pair 用相同 threshold；map 去重後排序，保證輸出單調遞增。
+//
+// cross-compare review:
+//   - codex P2 抓到「LTTB 非均勻索引在 category x-axis 上會視覺擠壓/拉伸」。category
+//     軸每個點等寬，但時間真實間隔不等。
+//   - Claude P2 抓到 union 可超 threshold 達 pairCount 倍，理論 worst 60k 點。
+//
+// 修法：union 排序後若超過 cciChartMaxRenderPoints，用 stride 平均抽樣再壓回，並保留
+// 首尾索引維持 zoom 範圍正確。stride decimation 雖然無法完全消除 category 軸 jitter，
+// 但限制最大點數 + 平均化間距能緩解視覺失真；徹底解需切到 value axis 的 [time, value]
+// 資料形式，列入 backlog（變更面比較大、含次要 percent 軸對齊）。
+func unionLTTBIndices(result *CCIAnalysisResult, threshold int) []int {
+	seen := make(map[int]struct{}, threshold)
+
+	for _, pr := range result.PairResults {
+		if len(pr.Values) != len(result.TimeValues) {
+			continue
+		}
+
+		idx := chart.LTTBDownsample(result.TimeValues, pr.Values, threshold)
+		for _, i := range idx {
+			seen[i] = struct{}{}
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+
+	indices := make([]int, 0, len(seen))
+	for i := range seen {
+		indices = append(indices, i)
+	}
+
+	sort.Ints(indices)
+
+	return capUnionIndices(indices, cciChartMaxRenderPoints)
+}
+
+// capUnionIndices 在 indices 超出 limit 時用 stride decimation 壓回 limit 上限，
+// 保留首尾索引以維持 zoom 範圍。indices 必須已遞增排序。
+// 參數命名為 limit 避免與內建 cap() 混淆（cross-compare review 補強）。
+//
+// 注意：stride 必須用 ceiling division — `len / limit` 的 floor 結果在
+// `len % limit != 0` 時會給出太小的 stride。例：len=29999, limit=10000 用 floor
+// 算出 stride=2，輸出 ≈ 15k 點仍超過 limit（codex re-review P2）。ceiling
+// `(len + limit - 1) / limit` 保證 `len / stride <= limit`，最後 append 末筆讓
+// 輸出至多 limit+1。
+func capUnionIndices(indices []int, limit int) []int {
+	if limit < 1 || len(indices) <= limit {
+		return indices
+	}
+
+	stride := (len(indices) + limit - 1) / limit
+	if stride < 2 {
+		stride = 2
+	}
+
+	capped := make([]int, 0, limit+1)
+	for i := 0; i < len(indices); i += stride {
+		capped = append(capped, indices[i])
+	}
+
+	// 確保最後一筆保留，否則 zoom 末端會被截掉
+	if last := indices[len(indices)-1]; len(capped) == 0 || capped[len(capped)-1] != last {
+		capped = append(capped, last)
+	}
+
+	return capped
 }
 
 // setCCIGlobalOptions configures all global chart options.
@@ -186,10 +329,19 @@ func createCCIToolboxOpts() opts.Toolbox {
 func addCCIMeanSeries(
 	line *charts.Line, result *CCIAnalysisResult,
 ) {
+	// NaN / ±Inf → echarts null (line gap), aligned with CSV exporter's
+	// NaN-row dropping. CalculateCCIRudolph returns math.NaN() for invalid
+	// inputs (negative / NaN / Inf EMG samples); without this filter
+	// go-echarts emits an empty option block on NaN-bearing series, producing
+	// a blank chart that silently looks "successful". Codex Wave 7 finding.
 	for _, pr := range result.PairResults {
 		lineData := make([]opts.LineData, len(pr.Values))
 		for j, v := range pr.Values {
-			lineData[j] = opts.LineData{Value: v}
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				lineData[j] = opts.LineData{Value: nil}
+			} else {
+				lineData[j] = opts.LineData{Value: v}
+			}
 		}
 
 		line.AddSeries(pr.PairName, lineData).
@@ -204,86 +356,6 @@ func addCCIMeanSeries(
 				}),
 			)
 	}
-}
-
-// addCCISDBandSeries adds SD band series for pairs with non-zero SD.
-func addCCISDBandSeries(
-	line *charts.Line, result *CCIAnalysisResult,
-) {
-	for _, pr := range result.PairResults {
-		sdData, ok := result.SDCurves[pr.PairName]
-		if !ok || !hasNonZeroSD(sdData) {
-			continue
-		}
-
-		meanData := result.MeanCurves[pr.PairName]
-		stackName := pr.PairName + "_sd"
-
-		addSDBandPair(line, pr.PairName, meanData, sdData, "#aaa", stackName)
-	}
-}
-
-// hasNonZeroSD checks if any SD value is non-zero.
-func hasNonZeroSD(sd []float64) bool {
-	for _, v := range sd {
-		if v > 0 {
-			return true
-		}
-	}
-
-	return false
-}
-
-// addSDBandPair adds lower boundary + band width series for one pair.
-func addSDBandPair(
-	line *charts.Line,
-	pairName string,
-	mean, sd []float64,
-	color, stackName string,
-) {
-	// Lower boundary (mean - SD): invisible base line
-	lowerData := make([]opts.LineData, len(mean))
-	for i := range mean {
-		lowerData[i] = opts.LineData{Value: mean[i] - sd[i]}
-	}
-
-	line.AddSeries(pairName+" -SD", lowerData).
-		SetSeriesOptions(
-			charts.WithLineChartOpts(opts.LineChart{
-				Smooth: opts.Bool(false), ShowSymbol: opts.Bool(false),
-				Stack: stackName, XAxisIndex: 0,
-			}),
-			charts.WithLineStyleOpts(opts.LineStyle{
-				Opacity: opts.Float(0), Width: 0,
-			}),
-			charts.WithItemStyleOpts(opts.ItemStyle{
-				Opacity: opts.Float(0),
-			}),
-		)
-
-	// Band width (2*SD): stacked on lower, with area fill
-	bandData := make([]opts.LineData, len(mean))
-	for i := range mean {
-		bandData[i] = opts.LineData{Value: 2 * sd[i]}
-	}
-
-	line.AddSeries(pairName+" +SD", bandData).
-		SetSeriesOptions(
-			charts.WithLineChartOpts(opts.LineChart{
-				Smooth: opts.Bool(false), ShowSymbol: opts.Bool(false),
-				Stack: stackName, XAxisIndex: 0,
-			}),
-			charts.WithLineStyleOpts(opts.LineStyle{
-				Opacity: opts.Float(0), Width: 0,
-			}),
-			charts.WithAreaStyleOpts(opts.AreaStyle{
-				Opacity: opts.Float(0.15),
-				Color:   color,
-			}),
-			charts.WithItemStyleOpts(opts.ItemStyle{
-				Opacity: opts.Float(0),
-			}),
-		)
 }
 
 // addCCICustomJS adds resize handler, keyboard shortcuts, and restore listener.

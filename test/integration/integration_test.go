@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"count_mean/internal/calculator"
 	"count_mean/internal/config"
 	"count_mean/internal/io"
+	"count_mean/internal/security/fsperm"
 )
 
 // TestFullWorkflow_MaxMeanCalculation 測試完整的最大平均值計算流程.
@@ -39,7 +41,7 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 
 	// 寫入測試CSV文件
 	testData := "Time,Ch1,Ch2\n0.1,100,50\n0.2,200,100\n0.3,150,75\n0.4,300,150\n"
-	err := os.WriteFile(inputFile, []byte(testData), 0o644)
+	err := os.WriteFile(inputFile, []byte(testData), fsperm.FilePerm)
 	require.NoError(t, err)
 
 	// 讀取CSV數據
@@ -48,7 +50,7 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 	require.Len(t, records, 5) // 標題 + 4行數據
 
 	// 執行最大平均值計算
-	results, err := maxMeanCalc.CalculateFromRawData(records, 2)
+	results, err := maxMeanCalc.CalculateFromRawData(context.Background(), records, 2)
 	require.NoError(t, err)
 	require.Len(t, results, 2) // 兩個通道
 
@@ -99,13 +101,13 @@ func TestFullWorkflow_DataNormalization(t *testing.T) {
 	// 主數據文件
 	mainFile := filepath.Join(tempDir, "main_data.csv")
 	mainData := "Time,Ch1,Ch2\n0.1,200,100\n0.2,400,200\n"
-	err := os.WriteFile(mainFile, []byte(mainData), 0o644)
+	err := os.WriteFile(mainFile, []byte(mainData), fsperm.FilePerm)
 	require.NoError(t, err)
 
 	// 參考數據文件
 	refFile := filepath.Join(tempDir, "ref_data.csv")
 	refData := "Time,Ch1,Ch2\n0.1,100,50\n0.2,100,50\n"
-	err = os.WriteFile(refFile, []byte(refData), 0o644)
+	err = os.WriteFile(refFile, []byte(refData), fsperm.FilePerm)
 	require.NoError(t, err)
 
 	// 讀取數據
@@ -165,7 +167,7 @@ func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 
 	// 數據跨越兩個階段（0.5秒在第一階段，1.5秒在第二階段，2.5秒在第三階段）
 	testData := "Time,Ch1,Ch2\n0.5,100,50\n1.5,200,100\n2.5,150,75\n"
-	err := os.WriteFile(dataFile, []byte(testData), 0o644)
+	err := os.WriteFile(dataFile, []byte(testData), fsperm.FilePerm)
 	require.NoError(t, err)
 
 	// 讀取數據
@@ -279,8 +281,9 @@ func TestFullWorkflow_ErrorHandling(t *testing.T) {
 	maxMeanCalc := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
 
 	t.Run("InvalidCSVFile", func(t *testing.T) {
-		// 測試讀取不存在的文件
-		_, err := csvHandler.ReadCSV("nonexistent.csv")
+		// 測試讀取不存在的文件：用 allowlist (InputDir) 內的路徑避免被 readCSVCore
+		// 路徑驗證先擋下，仍保留「file-not-found」原本測試意圖。
+		_, err := csvHandler.ReadCSV(filepath.Join(cfg.InputDir, "nonexistent.csv"))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "無法獲取文件信息")
 	})
@@ -291,7 +294,7 @@ func TestFullWorkflow_ErrorHandling(t *testing.T) {
 			{"Time", "Ch1"},
 			{"invalid_time", "100"},
 		}
-		_, err := maxMeanCalc.CalculateFromRawData(invalidRecords, 1)
+		_, err := maxMeanCalc.CalculateFromRawData(context.Background(), invalidRecords, 1)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "解析後數據集為空")
 	})
@@ -302,7 +305,7 @@ func TestFullWorkflow_ErrorHandling(t *testing.T) {
 			{"Time", "Ch1"},
 			{"1.0", "100"},
 		}
-		_, err := maxMeanCalc.CalculateFromRawData(validRecords, 0)
+		_, err := maxMeanCalc.CalculateFromRawData(context.Background(), validRecords, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "窗口大小必須大於 0")
 	})
@@ -335,7 +338,7 @@ func TestFullWorkflow_Performance(t *testing.T) {
 		_, _ = builder.WriteString(fmt.Sprintf("%d.0,%d,%d,%d\n", i, i*10, i*20, i*30))
 	}
 
-	err := os.WriteFile(largeFile, []byte(builder.String()), 0o644)
+	err := os.WriteFile(largeFile, []byte(builder.String()), fsperm.FilePerm)
 	require.NoError(t, err)
 
 	// 測試讀取大文件
@@ -344,7 +347,7 @@ func TestFullWorkflow_Performance(t *testing.T) {
 	require.Len(t, records, 1001) // 標題 + 1000行數據
 
 	// 測試大數據集的計算性能
-	results, err := maxMeanCalc.CalculateFromRawData(records, 10)
+	results, err := maxMeanCalc.CalculateFromRawData(context.Background(), records, 10)
 	require.NoError(t, err)
 	require.Len(t, results, 3) // 3個通道
 

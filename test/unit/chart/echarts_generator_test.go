@@ -22,17 +22,12 @@ func TestEChartsGenerator(t *testing.T) {
 		{"TestGenerateInteractiveChart", testGenerateInteractiveChart},
 		{"TestGetAvailableColumns", testGetAvailableColumns},
 		{"TestRenderChartToWriter", testRenderChartToWriter},
-		{"TestValidateDataset", testValidateDataset},
 		{"TestSampleData", testSampleData},
 		{"TestCalculateOptimalSampling", testCalculateOptimalSampling},
 		{"TestGenerateComparisonChart", testGenerateComparisonChart},
-		{"TestBatchExportCharts", testBatchExportCharts},
 		{"TestConvertToJSON", testConvertToJSON},
 		{"TestGetChartStatistics", testGetChartStatistics},
-		{"TestOptimizeForLargeDataset", testOptimizeForLargeDataset},
-		{"TestFormatValue", testFormatValue},
 		{"TestGenerateExportScript", testGenerateExportScript},
-		{"TestGenerateCustomTheme", testGenerateCustomTheme},
 	}
 
 	for _, tt := range tests {
@@ -48,12 +43,7 @@ func testNewEChartsGenerator(t *testing.T) {
 	}
 
 	// 測試基本功能是否正常
-	dataset := createTestDataset()
-
-	err := chart.ValidateDataset(dataset)
-	if err != nil {
-		t.Errorf("ValidateDataset() failed: %v", err)
-	}
+	_ = createTestDataset()
 }
 
 func testGenerateInteractiveChart(t *testing.T) {
@@ -97,6 +87,35 @@ func testGenerateInteractiveChart(t *testing.T) {
 
 	if !strings.Contains(htmlContent, "echarts") {
 		t.Error("Generated HTML does not contain ECharts references")
+	}
+}
+
+// TestGenerateInteractiveChart_NegativeColIndex_NoPanic 防止 panic regression：
+// 原本 colIndex 檢查 `colIndex >= len(...) || colIndex == 0` 漏接負值，
+// extractColumnLineData 走 Channels[colIdx-1] 在 colIdx=-1 時索引 -2 → panic。
+// 修正後 colIndex <= 0 一律 skip；extractColumnLineData 也有 defensive check。
+func TestGenerateInteractiveChart_NegativeColIndex_NoPanic(t *testing.T) {
+	generator := chart.NewEChartsGenerator()
+	dataset := createTestDataset()
+
+	tempDir := t.TempDir()
+	outputPath := filepath.Join(tempDir, "negative_colindex.html")
+
+	config := chart.InteractiveChartConfig{
+		Title:           "Negative colIndex regression",
+		XAxisLabel:      "Time (s)",
+		YAxisLabel:      "EMG Value",
+		SelectedColumns: []int{-1, -100, 1, 0, 2}, // 含負值、零、合法索引
+		ColumnNames:     []string{"NegOne", "NegHundred", "Channel1", "Zero", "Channel2"},
+		ShowAllColumns:  false,
+		Width:           "800px",
+		Height:          "600px",
+	}
+
+	// 不該 panic
+	err := generator.GenerateInteractiveChart(dataset, &config, outputPath)
+	if err != nil {
+		t.Errorf("GenerateInteractiveChart() with negative colIndex returned error: %v", err)
 	}
 }
 
@@ -164,60 +183,6 @@ func testRenderChartToWriter(t *testing.T) {
 	content := buf.String()
 	if !strings.Contains(content, "Writer Test Chart") {
 		t.Error("Rendered content does not contain expected title")
-	}
-}
-
-func testValidateDataset(t *testing.T) {
-	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
-
-	// 測試正常數據集
-	dataset := createTestDataset()
-
-	err := chart.ValidateDataset(dataset)
-	if err != nil {
-		t.Errorf("ValidateDataset() failed for valid dataset: %v", err)
-	}
-
-	// 測試 nil 數據集
-	err = chart.ValidateDataset(nil)
-	if err == nil {
-		t.Error("ValidateDataset() should fail for nil dataset")
-	}
-
-	// 測試空標題
-	emptyHeaders := &models.EMGDataset{
-		Headers: []string{},
-		Data:    []models.EMGData{},
-	}
-
-	err = chart.ValidateDataset(emptyHeaders)
-	if err == nil {
-		t.Error("ValidateDataset() should fail for empty headers")
-	}
-
-	// 測試空數據
-	emptyData := &models.EMGDataset{
-		Headers: []string{"Time", "Channel1"},
-		Data:    []models.EMGData{},
-	}
-
-	err = chart.ValidateDataset(emptyData)
-	if err == nil {
-		t.Error("ValidateDataset() should fail for empty data")
-	}
-
-	// 測試不一致的通道數
-	inconsistentData := &models.EMGDataset{
-		Headers: []string{"Time", "Channel1", "Channel2"},
-		Data: []models.EMGData{
-			{Time: 0.0, Channels: []float64{0.1}},      // 1 channel
-			{Time: 0.1, Channels: []float64{0.2, 0.3}}, // 2 channels
-		},
-	}
-
-	err = chart.ValidateDataset(inconsistentData)
-	if err == nil {
-		t.Error("ValidateDataset() should fail for inconsistent channel counts")
 	}
 }
 
@@ -330,40 +295,6 @@ func testGenerateComparisonChart(t *testing.T) {
 	}
 }
 
-func testBatchExportCharts(t *testing.T) {
-	generator := chart.NewEChartsGenerator()
-	dataset := createTestDataset()
-
-	tempDir := t.TempDir()
-
-	columnGroups := [][]int{
-		{1, 2},
-		{2, 3},
-		{1, 3},
-	}
-
-	baseConfig := chart.InteractiveChartConfig{
-		Title:      "Batch Export",
-		XAxisLabel: "Time (s)",
-		YAxisLabel: "EMG Value",
-		Width:      "800px",
-		Height:     "600px",
-	}
-
-	err := generator.BatchExportCharts(dataset, columnGroups, baseConfig, tempDir)
-	if err != nil {
-		t.Errorf("BatchExportCharts() failed: %v", err)
-	}
-
-	// 檢查是否創建了所有文件
-	for i := range columnGroups {
-		expectedPath := filepath.Join(tempDir, fmt.Sprintf("chart_group_%d.html", i+1))
-		if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
-			t.Errorf("BatchExportCharts() did not create file %s", expectedPath)
-		}
-	}
-}
-
 func testConvertToJSON(t *testing.T) {
 	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createTestDataset()
@@ -439,53 +370,6 @@ func testGetChartStatistics(t *testing.T) {
 	}
 }
 
-func testOptimizeForLargeDataset(t *testing.T) {
-	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
-	dataset := createLargeTestDataset()
-
-	maxPoints := 50
-	optimizedData := chart.OptimizeForLargeDataset(dataset, maxPoints)
-
-	if len(optimizedData.Data) > maxPoints {
-		t.Errorf("OptimizeForLargeDataset() returned %d points, expected max %d", len(optimizedData.Data), maxPoints)
-	}
-
-	// 檢查標題是否保持不變
-	if len(optimizedData.Headers) != len(dataset.Headers) {
-		t.Error("OptimizeForLargeDataset() changed headers")
-	}
-
-	// 測試小數據集不變
-	smallDataset := createTestDataset()
-	optimizedSmall := chart.OptimizeForLargeDataset(smallDataset, maxPoints)
-
-	if len(optimizedSmall.Data) != len(smallDataset.Data) {
-		t.Error("OptimizeForLargeDataset() changed small dataset")
-	}
-}
-
-func testFormatValue(t *testing.T) {
-	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
-
-	// 測試正常值
-	result := chart.FormatValue(123.456, 2)
-	if result != "123.46" {
-		t.Errorf("FormatValue(123.456, 2) = %s, expected '123.46'", result)
-	}
-
-	// 測試小值（科學記數法）
-	result = chart.FormatValue(0.0001, 2)
-	if !strings.Contains(result, "e") {
-		t.Errorf("FormatValue(0.0001, 2) = %s, expected scientific notation", result)
-	}
-
-	// 測試大值（科學記數法）
-	result = chart.FormatValue(1e7, 2)
-	if !strings.Contains(result, "e") {
-		t.Errorf("FormatValue(1e7, 2) = %s, expected scientific notation", result)
-	}
-}
-
 func testGenerateExportScript(t *testing.T) {
 	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
 
@@ -509,28 +393,6 @@ func testGenerateExportScript(t *testing.T) {
 
 	if !strings.Contains(script, "function exportChart") {
 		t.Error("GenerateExportScript() does not contain export function")
-	}
-}
-
-func testGenerateCustomTheme(t *testing.T) {
-	_ = chart.NewEChartsGenerator() // Keep generator creation for coverage
-
-	theme := chart.GenerateCustomTheme()
-
-	if theme == "" {
-		t.Error("GenerateCustomTheme() returned empty string")
-	}
-
-	if !strings.Contains(theme, "color") {
-		t.Error("GenerateCustomTheme() does not contain color configuration")
-	}
-
-	if !strings.Contains(theme, "backgroundColor") {
-		t.Error("GenerateCustomTheme() does not contain backgroundColor")
-	}
-
-	if !strings.Contains(theme, "line") {
-		t.Error("GenerateCustomTheme() does not contain line configuration")
 	}
 }
 
@@ -643,5 +505,51 @@ func TestColumnInfo(t *testing.T) {
 
 	if col.DataPoints == 0 {
 		t.Error("Column.DataPoints should not be 0")
+	}
+}
+
+// createTestDataset 為共用測試 fixture，原在 chart_test.go 內，
+// 該檔案在 Wave 4 chart.go 整刪後一起移除，helper 移到這裡。
+func createTestDataset() *models.EMGDataset {
+	return &models.EMGDataset{
+		Headers: []string{"Time", "Channel1", "Channel2", "Channel3"},
+		Data: []models.EMGData{
+			{Time: 0.0, Channels: []float64{0.1, 0.2, 0.3}},
+			{Time: 0.1, Channels: []float64{0.15, 0.25, 0.35}},
+			{Time: 0.2, Channels: []float64{0.12, 0.22, 0.32}},
+			{Time: 0.3, Channels: []float64{0.18, 0.28, 0.38}},
+			{Time: 0.4, Channels: []float64{0.14, 0.24, 0.34}},
+			{Time: 0.5, Channels: []float64{0.16, 0.26, 0.36}},
+			{Time: 0.6, Channels: []float64{0.13, 0.23, 0.33}},
+			{Time: 0.7, Channels: []float64{0.17, 0.27, 0.37}},
+			{Time: 0.8, Channels: []float64{0.11, 0.21, 0.31}},
+			{Time: 0.9, Channels: []float64{0.19, 0.29, 0.39}},
+		},
+	}
+}
+
+func createLargeTestDataset() *models.EMGDataset {
+	headers := []string{"Time"}
+	for i := 1; i <= 10; i++ {
+		headers = append(headers, fmt.Sprintf("Channel%d", i))
+	}
+
+	data := make([]models.EMGData, 100)
+
+	for i := 0; i < 100; i++ {
+		channels := make([]float64, 10)
+		for j := 0; j < 10; j++ {
+			channels[j] = float64(i) * 0.01 * float64(j+1)
+		}
+
+		data[i] = models.EMGData{
+			Time:     float64(i) * 0.01,
+			Channels: channels,
+		}
+	}
+
+	return &models.EMGDataset{
+		Headers: headers,
+		Data:    data,
 	}
 }

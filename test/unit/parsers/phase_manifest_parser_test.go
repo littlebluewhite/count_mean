@@ -177,7 +177,7 @@ func TestGetPhaseValue(t *testing.T) {
 	}
 
 	tests := []struct {
-		phaseName     string
+		phaseName     models.PhasePoint
 		expectedValue float64
 		expectedIsIdx bool
 		wantErr       bool
@@ -196,7 +196,7 @@ func TestGetPhaseValue(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.phaseName, func(t *testing.T) {
+		t.Run(string(tt.phaseName), func(t *testing.T) {
 			value, isIdx, err := parsers.GetPhaseValue(&phasePoints, tt.phaseName)
 
 			if tt.wantErr {
@@ -525,14 +525,40 @@ Subject003,motion003.csv,force003.anc,emg003.csv,130,NA,1.250,x,2.900,3.250,780,
 		}
 
 		// 測試分期點值獲取
-		value, isIndex, err := parsers.GetPhaseValue(&m1.PhasePoints, "D")
+		value, isIndex, err := parsers.GetPhaseValue(&m1.PhasePoints, models.PhaseD)
 		require.NoError(t, err)
 		assert.Equal(t, 780.0, value)
 		assert.True(t, isIndex)
 
-		value, isIndex, err = parsers.GetPhaseValue(&m1.PhasePoints, "S")
+		value, isIndex, err = parsers.GetPhaseValue(&m1.PhasePoints, models.PhaseS)
 		require.NoError(t, err)
 		assert.Equal(t, 2.850, value)
 		assert.False(t, isIndex)
 	})
+}
+
+// TestPhaseManifestParser_ParseFile_StripsBOM 釘住 Wave 6 PR1 BOM 對稱補完:
+// ParseFile 過去直接 csv.NewReader(file) — 不包 bufio + 不剝 BOM。Excel 匯出的
+// UTF-8 manifest CSV 帶 0xEF 0xBB 0xBF 前綴時,records[1][0] 會帶 U+FEFF,
+// Subject 比對失敗(整個 LoadManifestSubjects 流程因為「找不到 subject」中斷)。
+// 修法:bufio.NewReaderSize + csvutil.PeekBOM,對稱於 csv_handler.go / large_file_handler.go。
+func TestPhaseManifestParser_ParseFile_StripsBOM(t *testing.T) {
+	parser := parsers.NewPhaseManifestParser()
+
+	bom := []byte{0xEF, 0xBB, 0xBF}
+	csvBody := "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n" +
+		"SubjectBOM,motion.csv,force.anc,emg.csv,100,1.000,2.000,3.000,4.000,5.000,150,6.000,7.000,200,8.000\n"
+	content := append(append([]byte{}, bom...), []byte(csvBody)...)
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "manifest_bom_*.csv")
+	require.NoError(t, err)
+	_, err = tmpFile.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	manifests, err := parser.ParseFile(tmpFile.Name())
+	require.NoError(t, err, "ParseFile 失敗 — BOM 未被剝除可能造成欄位數錯誤")
+	require.Len(t, manifests, 1)
+	assert.Equal(t, "SubjectBOM", manifests[0].Subject,
+		"Subject 不能含 U+FEFF — manifest 必須在剝除 BOM 後 parse")
 }

@@ -4,6 +4,14 @@
 
 本文檔提供 EMG 數據分析工具的常見用法模式和最佳實踐指南，幫助開發者高效地使用系統進行 EMG 數據分析。
 
+> **範例 code 慣例**：以下範例片段假設下列符號已在 scope 內：
+> - `cfg *config.AppConfig`（由 `config.LoadConfig` 或 `config.DefaultConfig()` 取得）
+> - `ctx context.Context`（GUI/CLI 端通常傳入 `context.Background()`，待加入取消按鈕後改為可取消的 context）
+> - 必要的 logger / handler 已初始化
+>
+> 精確的函式簽名請以 `go doc count_mean/internal/<package>` 或 `docs/api.md` 為準；
+> 本文檔重點在「**使用流程模式**」而非每行可直接 copy-paste 的 boilerplate。
+
 ## 目錄
 
 - [基本數據處理流程](#基本數據處理流程)
@@ -29,69 +37,70 @@
 package main
 
 import (
+    "context"
+    "log"
+
     "count_mean/internal/calculator"
     "count_mean/internal/chart"
+    "count_mean/internal/config"
     "count_mean/internal/io"
     "count_mean/internal/logging"
-    "log"
 )
 
 func StandardEMGAnalysis() {
-    // 1. 初始化日誌記錄
+    // 1. 載入設定與初始化日誌
+    cfg, err := config.LoadConfig("./config.json")
+    if err != nil {
+        cfg = config.DefaultConfig()
+    }
     logger := logging.GetLogger("analysis")
-    
-    // 2. 讀取 CSV 數據
-    csvHandler := io.NewCSVHandler()
-    dataset, err := csvHandler.ReadCSV("data/emg_data.csv")
+
+    // 2. 讀取 CSV 數據（取得原始 [][]string）
+    csvHandler := io.NewCSVHandler(cfg)
+    records, err := csvHandler.ReadCSV("emg_data.csv")
     if err != nil {
         logger.Error("數據讀取失敗", err, map[string]interface{}{
             "file": "emg_data.csv",
         })
         return
     }
-    
-    // 3. 計算最大平均值
-    calculator := calculator.NewMaxMeanCalculator()
-    results, err := calculator.Calculate(dataset, 100)
+
+    // 3. 計算最大平均值（傳 ctx 以支援取消）
+    calc := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
+    results, err := calc.CalculateFromRawData(context.Background(), records, 100)
     if err != nil {
         logger.Error("計算失敗", err, nil)
         return
     }
-    
-    // 4. 保存結果
-    csvData, err := csvHandler.ConvertMaxMeanResultsToCSV(results)
-    if err != nil {
-        logger.Error("結果轉換失敗", err, nil)
-        return
-    }
-    
-    err = csvHandler.WriteCSVToOutput(csvData, "max_mean_results.csv")
-    if err != nil {
+
+    // 4. 轉成 CSV 列陣列並寫入 OutputDir
+    csvData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, 0, 0)
+    if err := csvHandler.WriteCSVToOutput("max_mean_results.csv", csvData); err != nil {
         logger.Error("結果保存失敗", err, nil)
         return
     }
-    
-    // 5. 生成圖表
-    chartGenerator := chart.NewChartGenerator()
-    config := chart.ChartConfig{
-        Title:      "EMG 分析結果",
-        XAxisLabel: "時間 (秒)",
-        YAxisLabel: "EMG 值",
-        Width:      vg.Points(1200),
-        Height:     vg.Points(800),
-        Columns:    []string{"Channel1", "Channel2", "Channel3"},
+
+    // 5. 生成互動式 HTML 圖表（gonum-plot PNG 版已於 Wave 4 PR3 移除）
+    gen := chart.NewEChartsGenerator()
+    chartCfg := chart.InteractiveChartConfig{
+        Title:           "EMG 分析結果",
+        XAxisLabel:      "時間 (秒)",
+        YAxisLabel:      "EMG 值",
+        SelectedColumns: []int{1, 2, 3},
+        ColumnNames:     []string{"Channel1", "Channel2", "Channel3"},
+        Width:           "1200px",
+        Height:          "800px",
     }
-    
-    err = chartGenerator.GenerateLineChart(dataset, config, "output/emg_chart.png")
-    if err != nil {
-        logger.Error("圖表生成失敗", err, nil)
-        return
-    }
-    
+    // 注意：InteractiveChart 接 *models.EMGDataset，需先解析 records → dataset
+    // （這裡略，請見 parsers.DataParser 用法）。
+
     logger.Info("分析完成", map[string]interface{}{
         "results_count": len(results),
-        "channels": len(dataset.Headers) - 1,
+        "rows":          len(records) - 1,
     })
+    _ = gen
+    _ = chartCfg
+    _ = log.Default
 }
 ```
 
@@ -115,109 +124,50 @@ func StandardEMGAnalysis() {
 適用於處理超過 500MB 的大型 EMG 數據文件。
 
 ```go
-func ProcessLargeEMGFile() {
+func ProcessLargeEMGFile(cfg *config.AppConfig) {
     logger := logging.GetLogger("large_file")
-    
-    // 1. 初始化大文件處理器
-    maxMemory := int64(1024 * 1024 * 1024) // 1GB
-    chunkSize := 10000
-    handler := io.NewLargeFileHandler(maxMemory, chunkSize)
-    
-    // 2. 準備流式處理回調
-    var totalRecords int
-    var processedChunks int
-    
-    processChunk := func(chunk []models.EMGData) error {
-        totalRecords += len(chunk)
-        processedChunks++
-        
-        // 處理數據塊
-        calculator := calculator.NewMaxMeanCalculator()
-        
-        // 為此塊創建臨時數據集
-        tempDataset := &models.EMGDataset{
-            Headers: []string{"Time", "Channel1", "Channel2", "Channel3"},
-            Data:    chunk,
-        }
-        
-        // 計算此塊的結果
-        results, err := calculator.Calculate(tempDataset, 100)
-        if err != nil {
-            return err
-        }
-        
-        // 保存中間結果
-        csvHandler := io.NewCSVHandler()
-        csvData, err := csvHandler.ConvertMaxMeanResultsToCSV(results)
-        if err != nil {
-            return err
-        }
-        
-        filename := fmt.Sprintf("chunk_%d_results.csv", processedChunks)
-        err = csvHandler.WriteCSVToOutput(csvData, filename)
-        if err != nil {
-            return err
-        }
-        
-        // 記錄進度
+
+    // 1. 初始化大文件處理器：chunk size / memory limit / backpressure 由 handler
+    //    內部以工程經驗預設（記憶體上限 512 MB），caller 只傳 cfg。
+    handler := io.NewLargeFileHandler(cfg)
+
+    // 2. 進度回報：每 chunkSize 筆觸發一次（預設 1000；傳 nil 跳過回報）
+    progressCallback := func(processed, total int64, percentage float64) {
         logger.Info("處理進度", map[string]interface{}{
-            "chunk":           processedChunks,
-            "records_in_chunk": len(chunk),
-            "total_records":    totalRecords,
+            "processed":  processed,
+            "total":      total,
+            "percentage": percentage,
         })
-        
-        return nil
     }
-    
-    // 3. 執行流式處理
-    dataset, err := handler.ReadCSVStreaming("large_emg_file.csv", processChunk)
+
+    // 3. 一次性執行串流滑動窗口計算：內部自動 streaming、ring buffer、backpressure
+    //    達到 memoryLimit 時 fail-fast。回傳 *StreamingResult 含每通道最大平均值。
+    result, err := handler.ProcessLargeFileInChunks("large_emg_file.csv", 500, progressCallback)
     if err != nil {
         logger.Error("大文件處理失敗", err, nil)
         return
     }
-    
-    // 4. 合併結果（可選）
-    err = mergeLargeFileResults(processedChunks)
-    if err != nil {
-        logger.Error("結果合併失敗", err, nil)
+
+    // 4. 結果寫回 CSV（headers + results 都從 StreamingResult 取，無需手動 merge）
+    csvHandler := io.NewCSVHandler(cfg)
+    csvData := csvHandler.ConvertMaxMeanResultsToCSV(result.Headers, result.Results, 0, 0)
+    if err := csvHandler.WriteCSVToOutput("large_file_results.csv", csvData); err != nil {
+        logger.Error("結果保存失敗", err, nil)
         return
     }
-    
+
     logger.Info("大文件處理完成", map[string]interface{}{
-        "total_records": totalRecords,
-        "processed_chunks": processedChunks,
+        "processed_lines": result.ProcessedLines,
+        "duration":        result.Duration,
+        "results_count":   len(result.Results),
     })
 }
-
-func mergeLargeFileResults(chunkCount int) error {
-    // 合併所有塊的結果
-    csvHandler := io.NewCSVHandler()
-    var allResults []models.MaxMeanResult
-    
-    for i := 1; i <= chunkCount; i++ {
-        filename := fmt.Sprintf("chunk_%d_results.csv", i)
-        chunkData, err := csvHandler.ReadCSVFromOutput(filename)
-        if err != nil {
-            return err
-        }
-        
-        // 將 CSV 轉換回 MaxMeanResult
-        // 這裡需要實現轉換邏輯
-        // ... 轉換邏輯
-        
-        // 清理臨時文件
-        os.Remove(filepath.Join("output", filename))
-    }
-    
-    // 保存最終結果
-    finalCSV, err := csvHandler.ConvertMaxMeanResultsToCSV(allResults)
-    if err != nil {
-        return err
-    }
-    
-    return csvHandler.WriteCSVToOutput(finalCSV, "final_large_file_results.csv")
-}
 ```
+
+> **設計演進：** 早期 API 暴露 `ReadCSVStreaming(file, chunkCallback)` 讓 caller
+> 自行於 callback 內計算並 merge — chunk 邊界處理複雜且容易出錯。現行
+> `ProcessLargeFileInChunks` 把分塊、ring buffer、結果 merge 都內封在 handler，
+> caller 只需呼叫 + 取 `result.Results`。
 
 ### 使用場景
 - 處理大於 500MB 的 EMG 文件
@@ -239,17 +189,21 @@ func mergeLargeFileResults(chunkCount int) error {
 適用於處理多個 EMG 文件的批量分析需求。
 
 ```go
-func BatchProcessEMGFiles() {
+func BatchProcessEMGFiles(cfg *config.AppConfig) {
     logger := logging.GetLogger("batch")
-    
-    // 1. 獲取所有 CSV 文件
-    csvHandler := io.NewCSVHandler()
-    files, err := csvHandler.ListInputFiles()
+
+    // 1. 列出 InputDir 下的 CSV 檔案（CSVHandler 不直接提供 ListFiles，
+    //    透過 filepath.Glob 或 os.ReadDir 即可，路徑驗證由後續 ReadCSV 負責）
+    pattern := filepath.Join(cfg.InputDir, "*.csv")
+    files, err := filepath.Glob(pattern)
     if err != nil {
         logger.Error("獲取文件列表失敗", err, nil)
         return
     }
-    
+
+    csvHandler := io.NewCSVHandler(cfg)
+    _ = csvHandler
+
     // 2. 批量處理配置
     batchConfig := BatchConfig{
         WindowSize:      100,
@@ -321,16 +275,16 @@ type ProcessResult struct {
     Error          error
 }
 
-func batchWorker(jobs <-chan string, results chan<- ProcessResult, config BatchConfig) {
+func batchWorker(ctx context.Context, cfg *config.AppConfig, jobs <-chan string, results chan<- ProcessResult, config BatchConfig) {
     for fileName := range jobs {
         startTime := time.Now()
-        
+
         result := ProcessResult{
             FileName: fileName,
         }
-        
+
         // 處理單個文件
-        err := processSingleFile(fileName, config)
+        err := processSingleFile(ctx, cfg, fileName, config)
         if err != nil {
             result.Error = err
         } else {
@@ -343,29 +297,33 @@ func batchWorker(jobs <-chan string, results chan<- ProcessResult, config BatchC
     }
 }
 
-func processSingleFile(fileName string, config BatchConfig) error {
-    // 讀取文件
-    csvHandler := io.NewCSVHandler()
-    dataset, err := csvHandler.ReadCSVFromInput(fileName)
+func processSingleFile(ctx context.Context, cfg *config.AppConfig, fileName string, config BatchConfig) error {
+    // 讀取文件（CSVHandler.ReadCSVFromInput 回 [][]string，非 *EMGDataset；
+    // 需用 DataParser 解析成 dataset 才能餵給 MaxMeanCalculator.Calculate）
+    csvHandler := io.NewCSVHandler(cfg)
+    records, err := csvHandler.ReadCSVFromInput(fileName)
     if err != nil {
         return err
     }
-    
+
+    parser := parsers.NewDataParser(cfg.ScalingFactor)
+    dataset, err := parser.ParseRawData(records)
+    if err != nil {
+        return err
+    }
+
     // 計算最大平均值
-    calculator := calculator.NewMaxMeanCalculator()
-    results, err := calculator.Calculate(dataset, config.WindowSize)
+    calculator := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
+    results, err := calculator.Calculate(ctx, dataset, config.WindowSize)
     if err != nil {
         return err
     }
-    
-    // 保存結果
-    csvData, err := csvHandler.ConvertMaxMeanResultsToCSV(results)
-    if err != nil {
-        return err
-    }
-    
+
+    // 保存結果（ConvertMaxMeanResultsToCSV 四參數版：headers / results / startRange / endRange）
+    csvData := csvHandler.ConvertMaxMeanResultsToCSV(dataset.Headers, results, 0, 0)
+
     outputName := fmt.Sprintf("%s%s", config.OutputPrefix, fileName)
-    err = csvHandler.WriteCSVToOutput(csvData, outputName)
+    err = csvHandler.WriteCSVToOutput(outputName, csvData)
     if err != nil {
         return err
     }
@@ -463,7 +421,7 @@ func (p *RealTimeProcessor) StartDataReceiver() {
 }
 
 func (p *RealTimeProcessor) StartAnalysis() {
-    calculator := calculator.NewMaxMeanCalculator()
+    calculator := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
     ticker := time.NewTicker(p.UpdateInterval)
     
     for {
@@ -479,7 +437,7 @@ func (p *RealTimeProcessor) StartAnalysis() {
                 }
                 
                 // 計算結果
-                results, err := calculator.Calculate(dataset, p.WindowSize)
+                results, err := calculator.Calculate(ctx, dataset, p.WindowSize)
                 if err == nil && len(results) > 0 {
                     // 發送結果
                     select {
@@ -598,52 +556,25 @@ func simulateRealTimeData(processor *RealTimeProcessor) {
 展示如何根據不同需求生成各種類型的圖表。
 
 ```go
-func ComprehensiveChartGeneration() {
+func ComprehensiveChartGeneration(cfg *config.AppConfig, dataset *models.EMGDataset) {
     logger := logging.GetLogger("charts")
-    
-    // 1. 讀取數據
-    csvHandler := io.NewCSVHandler()
-    dataset, err := csvHandler.ReadCSV("data/emg_data.csv")
-    if err != nil {
-        logger.Error("數據讀取失敗", err, nil)
-        return
-    }
-    
-    // 2. 生成基本線圖
-    generateBasicLineChart(dataset)
-    
-    // 3. 生成互動式圖表
+
+    // 1. 互動式圖表（HTML）
     generateInteractiveChart(dataset)
-    
-    // 4. 生成比較圖表
+
+    // 2. 比較圖表
     generateComparisonChart(dataset)
-    
-    // 5. 生成批量圖表
-    generateBatchCharts(dataset)
-    
-    // 6. 生成自定義主題圖表
-    generateCustomThemedChart(dataset)
-    
+
     logger.Info("圖表生成完成", nil)
 }
 
-func generateBasicLineChart(dataset *models.EMGDataset) {
-    generator := chart.NewChartGenerator()
-    
-    config := chart.ChartConfig{
-        Title:      "EMG 數據分析 - 基本線圖",
-        XAxisLabel: "時間 (秒)",
-        YAxisLabel: "EMG 值",
-        Width:      vg.Points(1200),
-        Height:     vg.Points(800),
-        Columns:    []string{"Channel1", "Channel2", "Channel3"},
-    }
-    
-    err := generator.GenerateLineChart(dataset, config, "output/basic_line_chart.png")
-    if err != nil {
-        log.Printf("基本線圖生成失敗: %v", err)
-    }
-}
+// 已移除：generateBasicLineChart
+//
+// 它依賴 chart.ChartGenerator / GenerateLineChart / GenerateLineChartImage 與整個
+// internal/chart/chart.go（gonum/plot 路徑）— 已在 Wave 4 PR3 (commit `f0ce17f`)
+// 刪除。如需 PNG 匯出請在前端透過 canvas 截圖 (SavePNGFromBase64)。
+//
+// (generateBatchCharts / generateCustomThemedChart 移除說明見下方 generateComparisonChart 之後)
 
 func generateInteractiveChart(dataset *models.EMGDataset) {
     generator := chart.NewEChartsGenerator()
@@ -697,65 +628,15 @@ func generateComparisonChart(dataset *models.EMGDataset) {
     }
 }
 
-func generateBatchCharts(dataset *models.EMGDataset) {
-    generator := chart.NewEChartsGenerator()
-    
-    // 定義通道組合
-    columnGroups := [][]int{
-        {1, 2},    // 腿部肌群
-        {2, 3},    // 核心肌群
-        {1, 3},    // 混合肌群
-    }
-    
-    baseConfig := chart.InteractiveChartConfig{
-        Title:      "EMG 分析 - 通道組合",
-        XAxisLabel: "時間 (秒)",
-        YAxisLabel: "EMG 值",
-        Width:      "1200px",
-        Height:     "800px",
-    }
-    
-    err := generator.BatchExportCharts(dataset, columnGroups, baseConfig, "output/batch_charts/")
-    if err != nil {
-        log.Printf("批量圖表生成失敗: %v", err)
-    }
-}
-
-func generateCustomThemedChart(dataset *models.EMGDataset) {
-    generator := chart.NewEChartsGenerator()
-    
-    // 生成自定義主題
-    customTheme := generator.GenerateCustomTheme()
-    
-    config := chart.InteractiveChartConfig{
-        Title:           "EMG 數據分析 - 自定義主題",
-        XAxisLabel:      "時間 (秒)",
-        YAxisLabel:      "EMG 值",
-        SelectedColumns: []int{1, 2, 3},
-        Width:           "1400px",
-        Height:          "900px",
-    }
-    
-    // 使用自定義主題生成圖表
-    var buf bytes.Buffer
-    err := generator.RenderChartToWriter(dataset, config, &buf)
-    if err != nil {
-        log.Printf("自定義主題圖表生成失敗: %v", err)
-        return
-    }
-    
-    // 將主題插入到 HTML 中
-    htmlContent := buf.String()
-    themedContent := strings.Replace(htmlContent, 
-        "<script>", 
-        fmt.Sprintf("<script>\n%s\n", customTheme), 
-        1)
-    
-    err = os.WriteFile("output/custom_themed_chart.html", []byte(themedContent), 0644)
-    if err != nil {
-        log.Printf("自定義主題圖表保存失敗: %v", err)
-    }
-}
+// 已移除：generateBatchCharts / generateCustomThemedChart
+//
+// 對應的 EChartsGenerator.BatchExportCharts / GenerateCustomTheme（與其他 4 個
+// dead func：ValidateDataset / OptimizeForLargeDataset / GenerateRealtimeChart /
+// FormatValue）在 Wave 4 PR3 (commit `f0ce17f`) 從 echarts_generator.go 刪除 —
+// 無 production caller。
+//
+// 批量導出請在前端 loop 呼叫 GUI binding 的 GenerateChart；自定主題改用 ECharts
+// 內建 theme 載入機制。
 
 func extractColumnNames(columns []chart.ColumnInfo) []string {
     names := make([]string, len(columns))
@@ -870,7 +751,7 @@ func (p *ErrorHandlingProcessor) ProcessWithRecovery(filePath string) error {
             "file": filePath,
         })
         
-        err := p.fallbackProcess(filePath)
+        err := p.fallbackProcess(ctx, cfg, filePath)
         if err == nil {
             p.Logger.Info("降級處理成功", map[string]interface{}{
                 "file": filePath,
@@ -888,11 +769,11 @@ func (p *ErrorHandlingProcessor) ProcessWithRecovery(filePath string) error {
 
 func (p *ErrorHandlingProcessor) processFile(filePath string) error {
     // 階段 1: 文件讀取
-    csvHandler := io.NewCSVHandler()
+    csvHandler := io.NewCSVHandler(cfg)
     dataset, err := csvHandler.ReadCSV(filePath)
     if err != nil {
         return &errors.AppError{
-            Code:    errors.ErrFileNotFound,
+            Code:    errors.ErrCodeFileNotFound,
             Message: "文件讀取失敗",
             Cause:   err,
             Context: map[string]interface{}{
@@ -907,7 +788,7 @@ func (p *ErrorHandlingProcessor) processFile(filePath string) error {
     err = validator.ValidateCSVData(dataset)
     if err != nil {
         return &errors.AppError{
-            Code:    errors.ErrInvalidInput,
+            Code:    errors.ErrCodeDataValidation,
             Message: "數據驗證失敗",
             Cause:   err,
             Context: map[string]interface{}{
@@ -918,11 +799,11 @@ func (p *ErrorHandlingProcessor) processFile(filePath string) error {
     }
     
     // 階段 3: 數據處理
-    calculator := calculator.NewMaxMeanCalculator()
-    results, err := calculator.Calculate(dataset, 100)
+    calculator := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
+    results, err := calculator.Calculate(ctx, dataset, 100)
     if err != nil {
         return &errors.AppError{
-            Code:    errors.ErrProcessingFailed,
+            Code:    errors.ErrCodeCalculation,
             Message: "數據處理失敗",
             Cause:   err,
             Context: map[string]interface{}{
@@ -932,25 +813,14 @@ func (p *ErrorHandlingProcessor) processFile(filePath string) error {
         }
     }
     
-    // 階段 4: 結果保存
-    csvData, err := csvHandler.ConvertMaxMeanResultsToCSV(results)
-    if err != nil {
-        return &errors.AppError{
-            Code:    errors.ErrProcessingFailed,
-            Message: "結果轉換失敗",
-            Cause:   err,
-            Context: map[string]interface{}{
-                "file_path": filePath,
-                "stage":     "convert_results",
-            },
-        }
-    }
-    
+    // 階段 4: 結果保存（ConvertMaxMeanResultsToCSV 為 4 參數版，回 [][]string 無 error）
+    csvData := csvHandler.ConvertMaxMeanResultsToCSV(dataset.Headers, results, 0, 0)
+
     outputName := fmt.Sprintf("recovered_%s", filepath.Base(filePath))
-    err = csvHandler.WriteCSVToOutput(csvData, outputName)
+    err = csvHandler.WriteCSVToOutput(outputName, csvData)
     if err != nil {
         return &errors.AppError{
-            Code:    errors.ErrFileNotFound,
+            Code:    errors.ErrCodeFileNotFound,
             Message: "結果保存失敗",
             Cause:   err,
             Context: map[string]interface{}{
@@ -968,13 +838,13 @@ func (p *ErrorHandlingProcessor) shouldRetry(err error) bool {
     // 檢查錯誤類型，決定是否重試
     if appErr, ok := err.(*errors.AppError); ok {
         switch appErr.Code {
-        case errors.ErrFileNotFound:
+        case errors.ErrCodeFileNotFound:
             return false // 文件不存在不需要重試
-        case errors.ErrInvalidInput:
+        case errors.ErrCodeDataValidation:
             return false // 數據格式錯誤不需要重試
-        case errors.ErrMemoryLimit:
+        case errors.ErrCodeFileTooLarge:
             return true // 記憶體不足可以重試
-        case errors.ErrProcessingFailed:
+        case errors.ErrCodeCalculation:
             return true // 處理失敗可以重試
         default:
             return true
@@ -984,51 +854,26 @@ func (p *ErrorHandlingProcessor) shouldRetry(err error) bool {
     return errors.IsRecoverable(err)
 }
 
-func (p *ErrorHandlingProcessor) fallbackProcess(filePath string) error {
+func (p *ErrorHandlingProcessor) fallbackProcess(ctx context.Context, cfg *config.AppConfig, filePath string) error {
     p.Logger.Info("開始降級處理", map[string]interface{}{
         "file": filePath,
     })
-    
-    // 降級處理：使用大文件處理器
-    handler := io.NewLargeFileHandler(512*1024*1024, 1000) // 降低記憶體使用
-    
-    var results []models.MaxMeanResult
-    
-    processChunk := func(chunk []models.EMGData) error {
-        if len(chunk) < 10 {
-            return nil // 跳過太小的塊
-        }
-        
-        // 為此塊創建簡化的數據集
-        tempDataset := &models.EMGDataset{
-            Headers: []string{"Time", "Channel1"},
-            Data:    chunk[:len(chunk)/2], // 只處理一半數據
-        }
-        
-        calculator := calculator.NewMaxMeanCalculator()
-        chunkResults, err := calculator.Calculate(tempDataset, 50) // 降低窗口大小
-        if err != nil {
-            return err
-        }
-        
-        results = append(results, chunkResults...)
-        return nil
-    }
-    
-    _, err := handler.ReadCSVStreaming(filePath, processChunk)
+
+    // 降級處理：改用 LargeFileHandler 走串流路徑，降低 in-memory 峰值
+    handler := io.NewLargeFileHandler(cfg)
+
+    // 降低窗口大小換取較快回應；progressCallback 為 nil 跳過進度回報
+    result, err := handler.ProcessLargeFileInChunks(filePath, 50, nil)
     if err != nil {
         return err
     }
-    
-    // 保存降級結果
-    csvHandler := io.NewCSVHandler()
-    csvData, err := csvHandler.ConvertMaxMeanResultsToCSV(results)
-    if err != nil {
-        return err
-    }
-    
+
+    // 保存降級結果（Headers / Results 由 StreamingResult 提供）
+    csvHandler := io.NewCSVHandler(cfg)
+    csvData := csvHandler.ConvertMaxMeanResultsToCSV(result.Headers, result.Results, 0, 0)
+
     outputName := fmt.Sprintf("fallback_%s", filepath.Base(filePath))
-    return csvHandler.WriteCSVToOutput(csvData, outputName)
+    return csvHandler.WriteCSVToOutput(outputName, csvData)
 }
 ```
 
@@ -1051,6 +896,12 @@ func (p *ErrorHandlingProcessor) fallbackProcess(filePath string) error {
 ### 模式：系統性能優化
 
 展示如何優化系統性能，特別是處理大型數據集時。
+
+> **教學範例 caveat：** 以下 worker-pool + chunk channel 設計為**教學用 pattern**，
+> 展示 backpressure / sync.Pool / 多 worker 協調等概念。
+> 現實使用上 `LargeFileHandler.ProcessLargeFileInChunks` 已內封 worker pool、
+> ring buffer、backpressure 與 -Inf channel skip — 外部 caller 通常無需自行
+> wrap layer。若僅需大檔串流處理，請優先採用「大文件處理模式」段的簡單寫法。
 
 ```go
 func OptimizedPerformanceProcessing() {
@@ -1171,8 +1022,9 @@ func processParallel(filePath string, options PerformanceOptions, monitor *Perfo
     close(results)
     resultWg.Wait()
     
-    // 6. 保存結果
-    return saveOptimizedResults(finalResults, filePath, monitor)
+    // 6. 保存結果（headers 在實務上應從 dataset / StreamingResult 取，這裡示意）
+    headers := []string{"Time", "Channel1", "Channel2", "Channel3"}
+    return saveOptimizedResults(headers, finalResults, filePath, monitor)
 }
 
 type DataChunk struct {
@@ -1185,7 +1037,7 @@ func processWorker(workerID int, jobs <-chan DataChunk, results chan<- []models.
                   options PerformanceOptions, monitor *PerformanceMonitor, 
                   dataPool, resultPool *sync.Pool) {
     
-    calculator := calculator.NewMaxMeanCalculator()
+    calculator := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
     logger := logging.GetLogger(fmt.Sprintf("worker-%d", workerID))
     
     for chunk := range jobs {
@@ -1207,7 +1059,7 @@ func processWorker(workerID int, jobs <-chan DataChunk, results chan<- []models.
                 windowSize = 30 // 使用較小的窗口提高速度
             }
             
-            results_calc, err := calculator.Calculate(dataset, windowSize)
+            results_calc, err := calculator.Calculate(ctx, dataset, windowSize)
             if err == nil {
                 chunkResults = append(chunkResults, results_calc...)
             }
@@ -1239,7 +1091,7 @@ func processWorker(workerID int, jobs <-chan DataChunk, results chan<- []models.
 func distributeData(filePath string, options PerformanceOptions, jobs chan<- DataChunk, 
                    monitor *PerformanceMonitor) error {
     
-    handler := io.NewLargeFileHandler(options.MemoryLimit, options.ChunkSize)
+    handler := io.NewLargeFileHandler(cfg) // chunk size / memory limit 由 handler 內部預設
     chunkID := 0
     
     processChunk := func(chunk []models.EMGData) error {
@@ -1257,14 +1109,17 @@ func distributeData(filePath string, options PerformanceOptions, jobs chan<- Dat
         return nil
     }
     
-    _, err := handler.ReadCSVStreaming(filePath, processChunk)
+    // 註：實際 API 為 ProcessLargeFileInChunks(filePath, windowSize, progressCallback)，
+    // 它不暴露 chunk callback；這段教學範例假想存在 chunk-level hook。
+    _, err := handler.ProcessLargeFileInChunks(filePath, 50, nil)
+    _ = processChunk // 教學示意：實際 API 不接 chunk callback
     return err
 }
 
 func processSequential(filePath string, options PerformanceOptions, monitor *PerformanceMonitor) error {
     // 順序處理實現
-    handler := io.NewLargeFileHandler(options.MemoryLimit, options.ChunkSize)
-    calculator := calculator.NewMaxMeanCalculator()
+    handler := io.NewLargeFileHandler(cfg) // chunk size / memory limit 由 handler 內部預設
+    calculator := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
     
     var allResults []models.MaxMeanResult
     
@@ -1277,7 +1132,7 @@ func processSequential(filePath string, options PerformanceOptions, monitor *Per
                 Data:    chunk,
             }
             
-            results, err := calculator.Calculate(dataset, 50)
+            results, err := calculator.Calculate(ctx, dataset, 50)
             if err == nil {
                 allResults = append(allResults, results...)
             }
@@ -1289,24 +1144,27 @@ func processSequential(filePath string, options PerformanceOptions, monitor *Per
         return nil
     }
     
-    _, err := handler.ReadCSVStreaming(filePath, processChunk)
+    // 註：實際 API 為 ProcessLargeFileInChunks(filePath, windowSize, progressCallback)，
+    // 它不暴露 chunk callback；這段教學範例假想存在 chunk-level hook。
+    _, err := handler.ProcessLargeFileInChunks(filePath, 50, nil)
+    _ = processChunk // 教學示意：實際 API 不接 chunk callback
     if err != nil {
         return err
     }
     
-    return saveOptimizedResults(allResults, filePath, monitor)
+    headers := []string{"Time", "Channel1", "Channel2", "Channel3"}
+    return saveOptimizedResults(headers, allResults, filePath, monitor)
 }
 
-func saveOptimizedResults(results []models.MaxMeanResult, filePath string, monitor *PerformanceMonitor) error {
-    csvHandler := io.NewCSVHandler()
-    
-    csvData, err := csvHandler.ConvertMaxMeanResultsToCSV(results)
-    if err != nil {
-        return err
-    }
-    
+func saveOptimizedResults(headers []string, results []models.MaxMeanResult, filePath string, monitor *PerformanceMonitor) error {
+    csvHandler := io.NewCSVHandler(cfg)
+
+    // ConvertMaxMeanResultsToCSV 為四參數版（headers / results / startRange / endRange），
+    // 回 [][]string 無 error。
+    csvData := csvHandler.ConvertMaxMeanResultsToCSV(headers, results, 0, 0)
+
     outputName := fmt.Sprintf("optimized_%s", filepath.Base(filePath))
-    return csvHandler.WriteCSVToOutput(csvData, outputName)
+    return csvHandler.WriteCSVToOutput(outputName, csvData)
 }
 
 func (m *PerformanceMonitor) RecordProcessingTime(duration time.Duration) {
@@ -1407,7 +1265,6 @@ func (m *PerformanceMonitor) calculateAverageThroughput() float64 {
 ## 相關文檔
 
 - [API 文檔](api.md) - 完整的 API 參考
-- [TODO 清單](../TODO.md) - 項目開發計劃
 - [測試指南](../test/) - 單元測試和集成測試
 
 ---

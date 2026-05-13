@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -35,18 +36,28 @@ var (
 	ErrNoManifestFile     = errors.New("請選擇分期總檔案")
 	ErrNoDataFolder       = errors.New("請選擇數據資料夾")
 	ErrNoPhaseSelection   = errors.New("請選擇開始和結束分期點")
+	ErrInvalidPhasePoint  = errors.New("無效的分期點代碼")
 	ErrNoCSVFilesInFolder = errors.New("資料夾中沒有找到CSV文件")
 )
 
+// appState 把受 config 影響的 5 個 dependency + config 打包成 atomic snapshot。
+// applyConfig 用 atomic.Pointer.Store 一次性 swap,讓 Wails 並行 RPC 場景下
+// in-flight 分析 method 看到的永遠是一致的 snapshot,不會出現「半新半舊」
+// mixed state。前一輪 Wave 2 (d45ee1f) 解了「不一致」但引入了非原子重建 race,
+// 本次 atomic 化補上 (cross-compare review fresh bug hunt P2)。
+type appState struct {
+	config        *config.AppConfig
+	csvHandler    *io.CSVHandler
+	maxMeanCalc   *calculator.MaxMeanCalculator
+	normalizer    *calculator.Normalizer
+	phaseAnalyzer *calculator.PhaseAnalyzer
+}
+
 // App struct.
 type App struct {
-	ctx               context.Context //nolint:containedctx // Required by Wails framework
-	config            *config.AppConfig
+	ctx               context.Context          //nolint:containedctx // Required by Wails framework
+	state             atomic.Pointer[appState] // 取代原 5 個 mutable 欄位,保證 swap 原子性
 	logger            *logging.Logger
-	csvHandler        *io.CSVHandler
-	maxMeanCalc       *calculator.MaxMeanCalculator
-	normalizer        *calculator.Normalizer
-	phaseAnalyzer     *calculator.PhaseAnalyzer
 	chartGen          *chart.EChartsGenerator
 	validator         *validation.InputValidator
 	phaseSyncAnalyzer *phase_sync.PhaseSyncAnalyzer
@@ -55,37 +66,37 @@ type App struct {
 	version           string
 }
 
+// buildAppState 把 cfg 與 5 個受 config 影響的 dependency 打包成 immutable snapshot。
+// progressCallback 不在這裡 wire,由 caller (NewApp / applyConfig) 在 Store 之前
+// 套到 newState.maxMeanCalc — 因為 callback 來源於 a.progressManager。
+func buildAppState(cfg *config.AppConfig) *appState {
+	return &appState{
+		config:        cfg,
+		csvHandler:    io.NewCSVHandler(cfg),
+		maxMeanCalc:   calculator.NewMaxMeanCalculator(cfg.ScalingFactor),
+		normalizer:    calculator.NewNormalizer(cfg.ScalingFactor),
+		phaseAnalyzer: calculator.NewPhaseAnalyzer(cfg.ScalingFactor, cfg.PhaseLabels),
+	}
+}
+
 // NewApp creates a new App application struct.
 func NewApp(cfg *config.AppConfig, version string) *App {
-	// 創建模組實例
-	csvHandler := io.NewCSVHandler(cfg)
-	maxMeanCalc := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
-	normalizer := calculator.NewNormalizer(cfg.ScalingFactor)
-	phaseAnalyzer := calculator.NewPhaseAnalyzer(cfg.ScalingFactor, cfg.PhaseLabels)
-	chartGen := chart.NewEChartsGenerator()
-	validator := validation.NewInputValidator()
-	logger := logging.GetLogger("app")
-	phaseSyncAnalyzer := phase_sync.NewPhaseSyncAnalyzer()
-	cciAnalyzer := cci.NewCCIAnalyzer()
 	progressManager := NewProgressManager()
 
-	// 設置計算器的進度回調
-	maxMeanCalc.SetProgressCallback(progressManager.CreateProgressCallback())
+	initialState := buildAppState(cfg)
+	initialState.maxMeanCalc.SetProgressCallback(progressManager.CreateProgressCallback())
 
-	return &App{
-		config:            cfg,
-		logger:            logger,
-		csvHandler:        csvHandler,
-		maxMeanCalc:       maxMeanCalc,
-		normalizer:        normalizer,
-		phaseAnalyzer:     phaseAnalyzer,
-		chartGen:          chartGen,
-		validator:         validator,
-		phaseSyncAnalyzer: phaseSyncAnalyzer,
-		cciAnalyzer:       cciAnalyzer,
+	a := &App{
+		logger:            logging.GetLogger("app"),
+		chartGen:          chart.NewEChartsGenerator(),
+		validator:         validation.NewInputValidator(),
+		phaseSyncAnalyzer: phase_sync.NewPhaseSyncAnalyzer(),
+		cciAnalyzer:       cci.NewCCIAnalyzer(),
 		progressManager:   progressManager,
 		version:           version,
 	}
+	a.state.Store(initialState)
+	return a
 }
 
 // Startup is called when the app starts. The context is saved.
@@ -94,7 +105,8 @@ func (a *App) Startup(ctx context.Context) {
 	a.logger.Info("Wails 應用程序啟動")
 
 	// 確保必要的目錄存在
-	if err := a.config.EnsureDirectories(); err != nil {
+	s := a.state.Load()
+	if err := s.config.EnsureDirectories(); err != nil {
 		a.logger.Error("無法創建必要目錄", err)
 	}
 
@@ -102,26 +114,61 @@ func (a *App) Startup(ctx context.Context) {
 	a.progressManager.Start()
 }
 
+// context returns the Wails-supplied lifecycle context (set in Startup).
+// Falls back to context.Background() when Startup hasn't been called yet —
+// typically in unit tests that instantiate App directly without driving the
+// Wails framework. Production callers always have a.ctx non-nil because Wails
+// invokes Startup before any user-facing method.
+//
+// 取代各 entry method 散落的 context.Background()：先前 calculateWithTimeRange
+// 接 ctx 的設計目標是讓 Wails Shutdown 能取消 long-running 計算，但 caller
+// 永遠傳 Background()，整套 cancellation chain 變成「實作了沒接線」
+// （Wave 6 review P1 — senior-software-engineer / refactor-specialist 收斂）。
+func (a *App) context() context.Context {
+	if a.ctx != nil {
+		return a.ctx
+	}
+
+	return context.Background()
+}
+
 // GetConfig returns the current configuration.
 func (a *App) GetConfig() *config.AppConfig {
-	return a.config
+	s := a.state.Load()
+	return s.config
 }
 
 // SaveConfig saves the configuration.
+// 必須一併重建 csvHandler / maxMeanCalc / normalizer / phaseAnalyzer，
+// 否則它們仍持有舊 cfg（ScalingFactor、Precision、OutputDir、PhaseLabels），
+// 使用者改設定後計算與輸出仍走舊值 — 是 user-visible silent bug。
 func (a *App) SaveConfig(cfg *config.AppConfig) error {
-	a.config = cfg
-
 	if err := cfg.SaveConfig("./config.json"); err != nil {
 		return fmt.Errorf("儲存設定檔失敗: %w", err)
 	}
+
+	a.applyConfig(cfg)
 
 	return nil
 }
 
 // ResetConfig resets to default configuration.
+// 重建相依元件以確保新 config 生效（同 SaveConfig 的理由）。
 func (a *App) ResetConfig() *config.AppConfig {
-	a.config = config.DefaultConfig()
-	return a.config
+	cfg := config.DefaultConfig()
+	a.applyConfig(cfg)
+
+	return cfg
+}
+
+// applyConfig 用 atomic.Pointer.Store 一次性 swap 整個 appState snapshot,
+// 取代原本連續寫 5 個 pointer 欄位的非原子模式 (Wave 2 遺留 race)。
+// Wails 並行 RPC 場景下 in-flight 分析 method 看到的 snapshot 永遠一致 —
+// SaveConfig 期間正在跑的分析仍用舊 snapshot,新分析才看到新 snapshot。
+func (a *App) applyConfig(cfg *config.AppConfig) {
+	newState := buildAppState(cfg)
+	newState.maxMeanCalc.SetProgressCallback(a.progressManager.CreateProgressCallback())
+	a.state.Store(newState)
 }
 
 // GetVersion returns the application version string.
@@ -131,17 +178,19 @@ func (a *App) GetVersion() string {
 
 // SelectFile opens a file dialog for file selection.
 func (a *App) SelectFile(title string, filters []runtime.FileFilter, buttonType string) (string, error) {
+	cfg := a.state.Load().config
+
 	var defaultDir string
 
 	a.logger.Debug("選擇文件對話框", map[string]interface{}{"buttonType": buttonType})
 
 	switch buttonType {
 	case FileTypeInput:
-		defaultDir = a.config.InputDir
+		defaultDir = cfg.InputDir
 	case FileTypeOutput:
-		defaultDir = a.config.OutputDir
+		defaultDir = cfg.OutputDir
 	case FileTypeOperate:
-		defaultDir = a.config.OperateDir
+		defaultDir = cfg.OperateDir
 	}
 
 	a.logger.Debug("預設目錄", map[string]interface{}{"defaultDir": defaultDir})
@@ -162,9 +211,10 @@ func (a *App) SelectFile(title string, filters []runtime.FileFilter, buttonType 
 
 // SelectDirectory opens a directory dialog.
 func (a *App) SelectDirectory(title string) (string, error) {
+	s := a.state.Load()
 	options := runtime.OpenDialogOptions{
 		Title:            title,
-		DefaultDirectory: a.config.InputDir,
+		DefaultDirectory: s.config.InputDir,
 	}
 
 	dir, err := runtime.OpenDirectoryDialog(a.ctx, options)
@@ -195,9 +245,14 @@ func (a *App) CalculateMaxMean(params MaxMeanParams) (*MaxMeanResult, error) {
 }
 
 // calculateMaxMeanSingle 處理單個檔案.
+//
+// snapshot pattern: entry 在 line 開頭一次性取得 *appState,後續所有 helper 透過
+// 顯式參數共享同一份 snapshot,杜絕 SaveConfig 在分析過程中換 cfg 造成的撕裂。
 func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, error) {
+	s := a.state.Load()
+
 	// 使用統一的 CSV 讀取方法（包含路徑驗證）
-	records, err := a.ReadCSVWithPathValidation(params.InputPath, a.config.InputDir)
+	records, err := a.readCSVWithPathValidation(s, params.InputPath, s.config.InputDir)
 	if err != nil {
 		return nil, fmt.Errorf("讀取檔案失敗: %w", err)
 	}
@@ -208,22 +263,22 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	// 解析時間範圍並計算
 	startRange, endRange := ResolveTimeRange(records, params.StartTime, params.EndTime)
 
-	results, err := a.calculateWithTimeRange(records, params.WindowSize, startRange, endRange)
+	results, err := a.calculateWithTimeRange(a.context(), s, records, params.WindowSize, startRange, endRange)
 	if err != nil {
 		return nil, fmt.Errorf("計算失敗: %w", err)
 	}
 
 	// 輸出結果
-	outputData := a.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, startRange, endRange)
+	outputData := s.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, startRange, endRange)
 	outputFile := buildOutputFilename(originalFileName, SuffixMaxMean)
 
-	if err := a.csvHandler.WriteCSVToOutput(outputFile, outputData); err != nil {
+	if err := s.csvHandler.WriteCSVToOutput(outputFile, outputData); err != nil {
 		return nil, fmt.Errorf("寫入輸出檔案失敗: %w", err)
 	}
 
 	// 準備回傳結果
 	return &MaxMeanResult{
-		OutputPath: filepath.Join(a.config.OutputDir, outputFile),
+		OutputPath: filepath.Join(s.config.OutputDir, outputFile),
 		Headers:    records[0],
 		Results:    convertMaxMeanResultsToArray(results),
 	}, nil
@@ -236,13 +291,18 @@ type batchFileDiscoveryResult struct {
 	fullPaths []string
 }
 
-// discoverBatchFiles 解析輸入路徑並找到所有CSV檔案.
-func (a *App) discoverBatchFiles(inputPath string) (*batchFileDiscoveryResult, error) {
+// discoverBatchFiles 解析輸入路徑並找到所有CSV檔案。
+//
+// `s` 由 caller (calculateMaxMeanBatch) 顯式傳入，與 helper 內部曾經做的第二次
+// a.state.Load() 相比能避免 cross-snapshot 撕裂：若批次 entry 抓 snapshot 後、
+// helper 重新 Load 之前觸發 SaveConfig (改 InputDir)，原本會用新 InputDir 解析
+// inputPath 但用舊 csvHandler 列檔，將輸入導向錯誤目錄（codex Wave 7 finding）。
+func (a *App) discoverBatchFiles(s *appState, inputPath string) (*batchFileDiscoveryResult, error) {
 	if !filepath.IsAbs(inputPath) {
 		return &batchFileDiscoveryResult{dirName: inputPath}, nil
 	}
 
-	relPath, err := filepath.Rel(a.config.InputDir, inputPath)
+	relPath, err := filepath.Rel(s.config.InputDir, inputPath)
 	if err != nil || strings.HasPrefix(relPath, "..") {
 		return discoverExternalBatchFiles(inputPath)
 	}
@@ -289,7 +349,12 @@ type batchFileEntry struct {
 }
 
 // executeBatchLoop processes batch file entries and accumulates results.
+//
+// `s` 必須由 caller (calculateMaxMeanBatch / executeBatchCalculationDirect) 取得
+// 並一路傳到 processSingleBatchFile,確保整個批次內所有檔案使用同一份 snapshot
+// (csvHandler / maxMeanCalc 配對一致),避免中途 SaveConfig 造成撕裂。
 func (a *App) executeBatchLoop(
+	s *appState,
 	entries []batchFileEntry,
 	ctx *batchProcessContext,
 	outputPath string,
@@ -311,7 +376,7 @@ func (a *App) executeBatchLoop(
 			continue
 		}
 
-		result, err := a.processSingleBatchFile(records, entry.displayName, ctx)
+		result, err := a.processSingleBatchFile(s, records, entry.displayName, ctx)
 		if err != nil {
 			failCount++
 
@@ -345,22 +410,24 @@ func (a *App) executeBatchLoop(
 }
 
 // processSingleBatchFile 處理批次中的單一檔案.
+// 使用 caller 傳入的 *appState snapshot,csvHandler 與 maxMeanCalc 必為同源(同一次 cfg)。
 func (a *App) processSingleBatchFile(
+	s *appState,
 	records [][]string,
 	fileBaseName string,
 	ctx *batchProcessContext,
 ) (*batchProcessResult, error) {
 	startRange, endRange := ResolveTimeRange(records, ctx.startTime, ctx.endTime)
 
-	results, err := a.calculateWithTimeRange(records, ctx.windowSize, startRange, endRange)
+	results, err := a.calculateWithTimeRange(a.context(), s, records, ctx.windowSize, startRange, endRange)
 	if err != nil {
 		return nil, err
 	}
 
-	outputData := a.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, startRange, endRange)
+	outputData := s.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, startRange, endRange)
 	outputFile := buildOutputFilename(fileBaseName, SuffixMaxMean)
 
-	if writeErr := a.csvHandler.WriteCSVToOutputDirectory(ctx.outputDirName, outputFile, outputData); writeErr != nil {
+	if writeErr := s.csvHandler.WriteCSVToOutputDirectory(ctx.outputDirName, outputFile, outputData); writeErr != nil {
 		return nil, fmt.Errorf("寫入CSV輸出失敗: %w", writeErr)
 	}
 
@@ -372,17 +439,20 @@ func (a *App) processSingleBatchFile(
 
 // calculateMaxMeanBatch 批次處理資料夾中的所有CSV檔案.
 func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error) {
+	s := a.state.Load()
+
 	if err := a.validator.ValidateDirectoryPath(params.InputPath); err != nil {
 		return nil, fmt.Errorf("目錄路徑驗證失敗: %w", err)
 	}
 
-	discovery, err := a.discoverBatchFiles(params.InputPath)
+	discovery, err := a.discoverBatchFiles(s, params.InputPath)
 	if err != nil {
 		return nil, err
 	}
 
 	if discovery.isDirect {
 		return a.executeBatchCalculationDirect(
+			s,
 			discovery.fullPaths,
 			discovery.dirName,
 			params.WindowSize,
@@ -391,7 +461,7 @@ func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error
 		)
 	}
 
-	csvFiles, err := a.csvHandler.ListCSVFilesInDirectory(discovery.dirName)
+	csvFiles, err := s.csvHandler.ListCSVFilesInDirectory(discovery.dirName)
 	if err != nil {
 		return nil, fmt.Errorf("列出CSV文件失敗: %w", err)
 	}
@@ -414,16 +484,17 @@ func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error
 		entries[i] = batchFileEntry{
 			displayName: TrimCSVExtension(fn),
 			readFunc: func() ([][]string, error) {
-				return a.csvHandler.ReadCSVFromDirectory(discovery.dirName, fn)
+				return s.csvHandler.ReadCSVFromDirectory(discovery.dirName, fn)
 			},
 		}
 	}
 
-	return a.executeBatchLoop(entries, ctx, filepath.Join(a.config.OutputDir, discovery.dirName))
+	return a.executeBatchLoop(s, entries, ctx, filepath.Join(s.config.OutputDir, discovery.dirName))
 }
 
 // executeBatchCalculationDirect 直接處理外部目錄的批次計算.
 func (a *App) executeBatchCalculationDirect(
+	s *appState,
 	files []string,
 	outputDirName string,
 	windowSize int,
@@ -443,16 +514,18 @@ func (a *App) executeBatchCalculationDirect(
 		entries[i] = batchFileEntry{
 			displayName: TrimCSVExtension(filepath.Base(fp)),
 			readFunc: func() ([][]string, error) {
-				return a.csvHandler.ReadCSVExternal(fp)
+				return s.csvHandler.ReadCSVExternal(fp)
 			},
 		}
 	}
 
-	return a.executeBatchLoop(entries, ctx, outputDirName)
+	return a.executeBatchLoop(s, entries, ctx, outputDirName)
 }
 
 // NormalizeData performs data normalization.
 func (a *App) NormalizeData(params NormalizeParams) (*NormalizeResult, error) {
+	s := a.state.Load()
+
 	a.logger.Info("開始資料標準化", map[string]interface{}{
 		"main_file":      params.MainFile,
 		"reference_file": params.ReferenceFile,
@@ -469,19 +542,19 @@ func (a *App) NormalizeData(params NormalizeParams) (*NormalizeResult, error) {
 	}
 
 	// 讀取主要資料檔案（包含路徑驗證）
-	mainRecords, err := a.ReadCSVWithPathValidation(params.MainFile, a.config.InputDir)
+	mainRecords, err := a.readCSVWithPathValidation(s, params.MainFile, s.config.InputDir)
 	if err != nil {
 		return nil, fmt.Errorf("讀取主要資料檔案失敗: %w", err)
 	}
 
 	// 讀取參考資料檔案（包含路徑驗證）
-	refRecords, err := a.ReadCSVWithPathValidation(params.ReferenceFile, a.config.OperateDir)
+	refRecords, err := a.readCSVWithPathValidation(s, params.ReferenceFile, s.config.OperateDir)
 	if err != nil {
 		return nil, fmt.Errorf("讀取參考資料檔案失敗: %w", err)
 	}
 
 	// 執行標準化
-	normalizedData, err := a.normalizer.NormalizeFromRawData(mainRecords, refRecords)
+	normalizedData, err := s.normalizer.NormalizeFromRawData(mainRecords, refRecords)
 	if err != nil {
 		return nil, fmt.Errorf("標準化計算失敗: %w", err)
 	}
@@ -489,14 +562,14 @@ func (a *App) NormalizeData(params NormalizeParams) (*NormalizeResult, error) {
 	// 生成輸出檔名並保存結果
 	mainBaseName := TrimCSVExtension(filepath.Base(params.MainFile))
 	outputName := resolveOutputName(params.OutputPath, mainBaseName, SuffixNormalized)
-	outputData := a.csvHandler.ConvertNormalizedDataToCSV(normalizedData)
+	outputData := s.csvHandler.ConvertNormalizedDataToCSV(normalizedData)
 
-	if err = a.csvHandler.WriteCSVToOutput(outputName, outputData); err != nil {
+	if err = s.csvHandler.WriteCSVToOutput(outputName, outputData); err != nil {
 		return nil, fmt.Errorf("保存結果失敗: %w", err)
 	}
 
 	// 準備回傳結果
-	outputPath := filepath.Join(a.config.OutputDir, outputName)
+	outputPath := filepath.Join(s.config.OutputDir, outputName)
 	data := convertNormalizedDataToArray(normalizedData)
 
 	a.logger.Info("資料標準化完成", map[string]interface{}{
@@ -576,6 +649,8 @@ func convertPhaseResultToAnalysis(phaseResult *models.PhaseAnalysisResult, chann
 
 // AnalyzePhases performs phase analysis.
 func (a *App) AnalyzePhases(params PhaseParams) (*PhaseResult, error) {
+	s := a.state.Load()
+
 	a.logger.Info("開始階段分析", map[string]interface{}{
 		"input_file":   params.InputFile,
 		"phase_labels": params.PhaseLabels,
@@ -589,29 +664,63 @@ func (a *App) AnalyzePhases(params PhaseParams) (*PhaseResult, error) {
 	}
 
 	// 讀取資料檔案（包含路徑驗證）
-	records, err := a.ReadCSVWithPathValidation(params.InputFile, a.config.InputDir)
+	records, err := a.readCSVWithPathValidation(s, params.InputFile, s.config.InputDir)
 	if err != nil {
 		return nil, fmt.Errorf("讀取資料檔案失敗: %w", err)
 	}
 
 	// 執行階段分析
-	analysisResult, err := a.phaseAnalyzer.AnalyzeFromRawData(records, cleanLabels)
+	analysisResult, err := s.phaseAnalyzer.AnalyzeFromRawData(records, cleanLabels)
 	if err != nil {
 		return nil, fmt.Errorf("階段分析失敗: %w", err)
 	}
 
-	// 生成輸出檔名並保存結果
+	// 生成輸出檔名並保存結果。
+	// 此前只用 PhaseResults[0] → 其餘 phase 資料完全丟失。
+	// 改為迴圈合併所有 phase 的 rows 進同一個 CSV，結構：
+	//   row 0:       header
+	//   row 1-2N:    每個 phase 的「最大值 / 平均值」（共 2 行 × len(PhaseResults)）
+	//   row last:    「整個階段最大值出現在_秒」（whole-phase 全域資料，只放一次）
+	//
+	// 注意：ConvertPhaseAnalysisToCSV 的 maxTimeIndex 參數會讓它在尾端加 time row。
+	// 對每個 phase 都附這一行會造成重複（codex review 指出的問題）。
+	// 處理方式：先把 phase rows 全部不帶 maxTimeIndex 收集，最後再單獨加一次。
 	outputName := generatePhaseOutputName(params.InputFile, params.OutputPath)
-	outputData := a.csvHandler.ConvertPhaseAnalysisToCSV(
-		records[0], &analysisResult.PhaseResults[0], analysisResult.MaxTimeIndex,
-	)
 
-	if err = a.csvHandler.WriteCSVToOutput(outputName, outputData); err != nil {
+	var outputData [][]string
+
+	for i := range analysisResult.PhaseResults {
+		phaseRows := s.csvHandler.ConvertPhaseAnalysisToCSV(
+			records[0], &analysisResult.PhaseResults[i], nil, // nil → 不在每 phase 後附 time row
+		)
+
+		if i == 0 {
+			outputData = phaseRows // 含 header
+			continue
+		}
+
+		// 後續 phase 跳過 header row（phaseRows[0]），只附加 max/mean 兩行
+		if len(phaseRows) > 1 {
+			outputData = append(outputData, phaseRows[1:]...)
+		}
+	}
+
+	// 全域 time-index row：所有 phase 都加完後，只附加一次
+	if len(analysisResult.MaxTimeIndex) > 0 && len(analysisResult.PhaseResults) > 0 {
+		fullRows := s.csvHandler.ConvertPhaseAnalysisToCSV(
+			records[0], &analysisResult.PhaseResults[0], analysisResult.MaxTimeIndex,
+		)
+		if len(fullRows) > 3 {
+			outputData = append(outputData, fullRows[3:]...)
+		}
+	}
+
+	if err = s.csvHandler.WriteCSVToOutput(outputName, outputData); err != nil {
 		return nil, fmt.Errorf("保存結果失敗: %w", err)
 	}
 
 	// 轉換分析結果
-	outputPath := filepath.Join(a.config.OutputDir, outputName)
+	outputPath := filepath.Join(s.config.OutputDir, outputName)
 	channelCount := len(records[0]) - 1
 	results := make([]PhaseAnalysis, 0, len(analysisResult.PhaseResults))
 
@@ -664,9 +773,12 @@ type CSVHeadersParams struct {
 }
 
 // GetCSVHeaders returns the first row (headers) of a CSV file.
+//
+// 走 readCSVWithPathValidation 路由（內部走嚴格 allowlist、外部走 lenient
+// performBasicSecurityChecks），避免之前 raw ReadCSV bypass 驗證導致任意檔讀取。
 func (a *App) GetCSVHeaders(params CSVHeadersParams) ([]string, error) {
-	// 讀取 CSV 檔案
-	records, err := a.csvHandler.ReadCSV(params.FilePath)
+	s := a.state.Load()
+	records, err := a.readCSVWithPathValidation(s, params.FilePath, s.config.InputDir)
 	if err != nil {
 		return nil, fmt.Errorf("讀取 CSV 標題失敗: %w", err)
 	}
@@ -768,20 +880,20 @@ type PhaseAnalysis struct {
 
 // PhaseSyncParams 分期同步分析參數.
 type PhaseSyncParams struct {
-	ManifestFile string `json:"manifestFile"`
-	DataFolder   string `json:"dataFolder"`
-	StartPhase   string `json:"startPhase"`
-	EndPhase     string `json:"endPhase"`
-	SubjectIndex int    `json:"subjectIndex"`
+	ManifestFile string            `json:"manifestFile"`
+	DataFolder   string            `json:"dataFolder"`
+	StartPhase   models.PhasePoint `json:"startPhase"`
+	EndPhase     models.PhasePoint `json:"endPhase"`
+	SubjectIndex int               `json:"subjectIndex"`
 }
 
 // PhaseSyncResult 分期同步分析結果.
 type PhaseSyncResult struct {
 	OutputPath   string             `json:"outputPath"`
 	Subject      string             `json:"subject"`
-	StartPhase   string             `json:"startPhase"`
+	StartPhase   models.PhasePoint  `json:"startPhase"`
 	StartTime    float64            `json:"startTime"`
-	EndPhase     string             `json:"endPhase"`
+	EndPhase     models.PhasePoint  `json:"endPhase"`
 	EndTime      float64            `json:"endTime"`
 	ChannelNames []string           `json:"channelNames"`
 	ChannelMeans map[string]float64 `json:"channelMeans"`
@@ -807,15 +919,31 @@ func (a *App) LoadPhaseManifest(manifestPath string) ([]string, error) {
 }
 
 // GetAvailablePhases 獲取可用的分期點列表.
+// 回傳 []string 而非 []models.PhasePoint —— Wails v2 TypeScript binding
+// generator 不會為 named string type emit type alias，若直接回 PhasePoint，
+// 生成的 App.d.ts 會引用未定義的 models.PhasePoint 型別，破壞前端 build
+// （codex Wave 4 PR-F1 P2 指出）。內部以 PhasePoint 計算後在邊界 cast 為
+// string，前端 wire 結構零變動。
 func (*App) GetAvailablePhases() map[string][]string {
 	return map[string][]string{
-		"start": synchronizer.GetAvailableStartPhases(),
-		"end":   synchronizer.GetAvailableEndPhases(),
+		"start": phasePointSliceToString(synchronizer.GetAvailableStartPhases()),
+		"end":   phasePointSliceToString(synchronizer.GetAvailableEndPhases()),
 	}
+}
+
+// phasePointSliceToString 在 Wails 邊界把 PhasePoint slice cast 為 string slice。
+func phasePointSliceToString(phases []models.PhasePoint) []string {
+	out := make([]string, len(phases))
+	for i, p := range phases {
+		out[i] = string(p)
+	}
+
+	return out
 }
 
 // AnalyzePhaseSync 執行分期同步分析.
 func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (*PhaseSyncResult, error) {
+	s := a.state.Load()
 	a.logger.Info("開始分期同步分析", map[string]interface{}{"params": params})
 
 	// 參數驗證
@@ -831,6 +959,11 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (*PhaseSyncResult, error)
 		return nil, ErrNoPhaseSelection
 	}
 
+	if !params.StartPhase.IsValid() || !params.EndPhase.IsValid() {
+		return nil, fmt.Errorf("StartPhase=%q EndPhase=%q: %w",
+			params.StartPhase, params.EndPhase, ErrInvalidPhasePoint)
+	}
+
 	// 創建分析參數
 	analysisParams := &models.AnalysisParams{
 		ManifestFile: params.ManifestFile,
@@ -841,7 +974,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (*PhaseSyncResult, error)
 	}
 
 	// 執行分析
-	stats, err := a.phaseSyncAnalyzer.AnalyzePhaseSync(analysisParams)
+	stats, err := a.phaseSyncAnalyzer.AnalyzePhaseSync(a.context(), analysisParams)
 	if err != nil {
 		a.logger.Error("分期同步分析失敗", err, map[string]interface{}{})
 
@@ -852,7 +985,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (*PhaseSyncResult, error)
 	}
 
 	// 導出結果
-	outputPath, err := a.phaseSyncAnalyzer.ExportResults(stats, a.config.OutputDir)
+	outputPath, err := a.phaseSyncAnalyzer.ExportResults(stats, s.config.OutputDir)
 	if err != nil {
 		a.logger.Error("導出結果失敗", err, map[string]interface{}{})
 
@@ -891,16 +1024,6 @@ func (a *App) GetCurrentProgress() *models.ProgressInfo {
 	return a.progressManager.GetCurrentProgress()
 }
 
-// SubscribeToProgress 訂閱進度更新.
-func (a *App) SubscribeToProgress() <-chan models.ProgressInfo {
-	return a.progressManager.Subscribe()
-}
-
-// UnsubscribeFromProgress 取消訂閱進度更新.
-func (a *App) UnsubscribeFromProgress(ch <-chan models.ProgressInfo) {
-	a.progressManager.Unsubscribe(ch)
-}
-
 // IsProgressActive 檢查進度管理器是否活躍.
 func (a *App) IsProgressActive() bool {
 	return a.progressManager.IsActive()
@@ -908,5 +1031,6 @@ func (a *App) IsProgressActive() bool {
 
 // GetBackpressureStats 獲取背壓控制統計信息.
 func (a *App) GetBackpressureStats() models.BackpressureStats {
-	return a.maxMeanCalc.GetBackpressureStats()
+	s := a.state.Load()
+	return s.maxMeanCalc.GetBackpressureStats()
 }

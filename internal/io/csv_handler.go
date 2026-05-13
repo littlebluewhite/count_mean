@@ -18,16 +18,17 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/security"
 	"count_mean/internal/validation"
-)
-
-// File permission constants.
-const (
-	dirPermission     = 0o750 // Directory permission mode.
-	csvFilePermission = 0o600 // File permission mode.
+	"count_mean/internal/csvutil"
+	"count_mean/internal/security/fsperm"
 )
 
 // Static errors for err113 compliance.
 var errInvalidCSVFile = stderrors.New("不是有效的 CSV 檔案")
+
+// csvReaderBufSize 是 bufio.Reader 的初始 buffer 大小（64 KiB）。
+// 與 internal/parsers 套件的同名常數對齊；保留 unexported 在各套件各自定義，
+// 避免讓 io 套件直接 reach into parsers 內部。
+const csvReaderBufSize = 64 * 1024
 
 // CSVHandler 處理 CSV 檔案讀寫.
 type CSVHandler struct {
@@ -62,11 +63,6 @@ func NewCSVHandler(cfg *config.AppConfig) *CSVHandler {
 		converter:        NewCSVConverter(scalingMultiplier, cfg.Precision),
 	}
 }
-
-// BOMBytes UTF-8 BOM.
-//
-//nolint:gochecknoglobals // BOMBytes is a constant-like byte slice for UTF-8 BOM
-var BOMBytes = []byte{0xEF, 0xBB, 0xBF}
 
 // listOptions specifies options for listing directory entries.
 type listOptions struct {
@@ -119,25 +115,6 @@ func appendFileIfMatches(result []string, file os.DirEntry, opts listOptions) []
 	return result
 }
 
-// ListInputFiles 列出輸入目錄中的CSV文件.
-func (h *CSVHandler) ListInputFiles() ([]string, error) {
-	return h.listEntries(listOptions{
-		dirPath:       h.config.InputDir,
-		filesOnly:     true,
-		csvFilesOnly:  true,
-		errorMsgParam: "輸入目錄",
-	})
-}
-
-// ListInputDirectories 列出輸入目錄中的子目錄.
-func (h *CSVHandler) ListInputDirectories() ([]string, error) {
-	return h.listEntries(listOptions{
-		dirPath:       h.config.InputDir,
-		dirsOnly:      true,
-		errorMsgParam: "輸入目錄",
-	})
-}
-
 // ListCSVFilesInDirectory 列出指定目錄中的CSV文件.
 func (h *CSVHandler) ListCSVFilesInDirectory(dirName string) ([]string, error) {
 	dirPath := filepath.Join(h.config.InputDir, dirName)
@@ -161,57 +138,13 @@ func (h *CSVHandler) ReadCSVFromDirectory(dirName, fileName string) ([][]string,
 // WriteCSVToOutputDirectory 寫入CSV文件到輸出目錄的子目錄.
 func (h *CSVHandler) WriteCSVToOutputDirectory(dirName, filename string, data [][]string) error {
 	outputDir := filepath.Join(h.config.OutputDir, dirName)
-	if err := os.MkdirAll(outputDir, dirPermission); err != nil {
+	if err := os.MkdirAll(outputDir, fsperm.DirPerm); err != nil {
 		return fmt.Errorf("無法創建輸出目錄: %w", err)
 	}
 
 	fullPath := filepath.Join(outputDir, filename)
 
 	return h.WriteCSV(fullPath, data)
-}
-
-// ReadCSVFromPrompt 從使用者輸入讀取 CSV 檔案.
-func (h *CSVHandler) ReadCSVFromPrompt(prompt string) ([][]string, error) {
-	if _, err := fmt.Fprint(os.Stdout, prompt); err != nil {
-		return nil, fmt.Errorf("無法輸出提示: %w", err)
-	}
-
-	reader := bufio.NewReader(os.Stdin)
-
-	fileName, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("無法讀取使用者輸入: %w", err)
-	}
-
-	fileName = strings.TrimSpace(fileName)
-	fileName = h.pathBuilder.EnsureCSVExtension(fileName)
-	fullPath := filepath.Join(h.config.InputDir, fileName)
-
-	return h.ReadCSV(fullPath)
-}
-
-// ReadCSVFromPromptWithName 從使用者輸入讀取 CSV 檔案並返回檔名.
-func (h *CSVHandler) ReadCSVFromPromptWithName(prompt string) ([][]string, string, error) {
-	if _, err := fmt.Fprint(os.Stdout, prompt); err != nil {
-		return nil, "", fmt.Errorf("無法輸出提示: %w", err)
-	}
-
-	reader := bufio.NewReader(os.Stdin)
-
-	fileName, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, "", fmt.Errorf("無法讀取使用者輸入: %w", err)
-	}
-
-	fileName = strings.TrimSpace(fileName)
-
-	originalName := h.pathBuilder.StripCSVExtension(fileName)
-	fileName = h.pathBuilder.EnsureCSVExtension(fileName)
-	fullPath := filepath.Join(h.config.InputDir, fileName)
-
-	records, err := h.ReadCSV(fullPath)
-
-	return records, originalName, err
 }
 
 // ReadCSVFromInput 從輸入目錄讀取CSV檔案.
@@ -225,8 +158,13 @@ func (h *CSVHandler) ReadCSVFromInput(filename string) ([][]string, error) {
 }
 
 // readOptions specifies options for reading CSV files.
+//
+// external 區分兩種來源：false 走嚴格 allowedBasePaths 白名單（內部設定路徑），
+// true 走 lenient performBasicSecurityChecks（使用者透過 file-dialog 選的任意檔
+// — 仍會擋 /etc、/root、C:\Windows 等系統敏感路徑與 path traversal）。
 type readOptions struct {
 	logPrefix string
+	external  bool
 }
 
 // checkFileSizeAndFormat validates file size and format before reading.
@@ -271,7 +209,7 @@ func (h *CSVHandler) isCSVFile(path string) bool {
 
 // readAndParseCSV opens and parses a CSV file.
 func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
-	file, err := os.Open(cleanPath) //nolint:gosec // cleanPath is sanitized and validated
+	file, err := os.OpenFile(cleanPath, fsperm.ReadFlags, 0) //nolint:gosec // cleanPath sanitized and validated; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with WriteFlags)
 	if err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟檔案")
 		h.logger.Error("檔案開啟失敗", appErr, map[string]interface{}{"path": cleanPath})
@@ -287,7 +225,22 @@ func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
 		}
 	}()
 
-	records, err := csv.NewReader(file).ReadAll()
+	// 用 bufio 包 *os.File 避免 csv.Reader 每次 Read 都觸發 syscall（大檔差異明顯）。
+	// BOM 處理：Excel 匯出的 UTF-8 CSV 常帶 0xEF 0xBB 0xBF 前綴。若不剝除，
+	// records[0][0] 會帶 U+FEFF，會在 GetCSVHeaders 直接回前端時造成 user-visible
+	// 怪字元，並污染後續以 header 字串比對 channel 名稱的路徑。
+	// 與 internal/parsers/csv_reader.go 對稱：先 bufio.NewReaderSize 再 PeekBOM
+	// 再 csv.NewReader（PeekBOM 在 < 3 bytes 輸入時視為「無 BOM」回 nil，
+	// 不會把空檔的 EOF 提前丟出）。
+	bufReader := bufio.NewReaderSize(file, csvReaderBufSize)
+	if _, err := csvutil.PeekBOM(bufReader); err != nil {
+		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "BOM 偵測失敗")
+		h.logger.Error("BOM 偵測失敗", appErr, map[string]interface{}{"path": cleanPath})
+
+		return nil, appErr
+	}
+
+	records, err := csv.NewReader(bufReader).ReadAll()
 	if err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "無法讀取 CSV 資料")
 		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]interface{}{"path": cleanPath})
@@ -324,6 +277,23 @@ func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) er
 func (h *CSVHandler) readCSVCore(filename string, opts readOptions) ([][]string, error) {
 	h.logger.Debug("開始讀取"+opts.logPrefix+" CSV 檔案", map[string]interface{}{"filename": filename})
 
+	// 路徑驗證：external 走 lenient，預設走嚴格白名單。
+	// 之前 readCSVCore 完全不驗證路徑，導致 GetCSVHeaders 可透過 raw absolute
+	// path 讀任意檔（multi-agent code review 確認的漏洞）。
+	if opts.external {
+		if err := h.pathValidator.ValidateExternalPath(filename); err != nil {
+			h.logger.Error(opts.logPrefix+"外部路徑驗證失敗", err, map[string]interface{}{"filename": filename})
+
+			return nil, fmt.Errorf("路徑驗證失敗: %w", err)
+		}
+	} else {
+		if err := h.pathValidator.ValidateFilePath(filename); err != nil {
+			h.logger.Error(opts.logPrefix+"路徑驗證失敗", err, map[string]interface{}{"filename": filename})
+
+			return nil, fmt.Errorf("路徑驗證失敗: %w", err)
+		}
+	}
+
 	cleanPath, err := h.checkFileSizeAndFormat(filename, opts)
 	if err != nil {
 		return nil, err
@@ -345,10 +315,12 @@ func (h *CSVHandler) readCSVCore(filename string, opts readOptions) ([][]string,
 	return records, nil
 }
 
-// ReadCSVExternal 讀取外部 CSV 檔案（添加基本路徑驗證以提升安全性）.
+// ReadCSVExternal 讀取外部 CSV 檔案（使用 lenient 路徑驗證以容納使用者選檔，
+// 仍會擋 path traversal 與系統敏感目錄）.
 func (h *CSVHandler) ReadCSVExternal(filename string) ([][]string, error) {
 	return h.readCSVCore(filename, readOptions{
 		logPrefix: "外部 ",
+		external:  true,
 	})
 }
 
@@ -361,7 +333,7 @@ func (h *CSVHandler) ReadCSV(filename string) ([][]string, error) {
 
 // WriteCSVToOutput 寫入CSV文件到輸出目錄.
 func (h *CSVHandler) WriteCSVToOutput(filename string, data [][]string) error {
-	if err := os.MkdirAll(h.config.OutputDir, dirPermission); err != nil {
+	if err := os.MkdirAll(h.config.OutputDir, fsperm.DirPerm); err != nil {
 		return fmt.Errorf("無法創建輸出目錄: %w", err)
 	}
 
@@ -374,7 +346,10 @@ func (h *CSVHandler) WriteCSVToOutput(filename string, data [][]string) error {
 }
 
 // WriteCSV 寫入 CSV 檔案.
-func (h *CSVHandler) WriteCSV(filename string, data [][]string) error {
+// 採用 named return 以便在 defer 中捕獲 file.Close() 錯誤：NFS 等遠端檔案
+// 系統的延遲寫入失敗只會在 Close 時浮現，先前僅 log 不傳播會讓 caller 誤以為
+// 寫入成功。
+func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 	h.logger.Debug("開始寫入 CSV 檔案", map[string]interface{}{
 		"filename":    filename,
 		"row_count":   len(data),
@@ -400,14 +375,11 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) error {
 		return err
 	}
 
-	if _, err := os.Stat(sanitizedPath); err == nil {
-		h.logger.Warn("檔案已存在，將被覆蓋", map[string]interface{}{
-			"path": sanitizedPath,
-		})
-	}
-
+	// 直接打開而不先 Stat：先前的 Stat→OpenFile 是 TOCTOU 結構，攻擊者可在兩
+	// 個 syscall 之間以 symlink swap 把輸出導向任意檔案。改用 fsperm.WriteFlags
+	// (含 O_NOFOLLOW on unix) 由 OS 在 open 階段直接拒絕 symlink。
 	//nolint:gosec // sanitizedPath is sanitized and validated
-	file, err := os.OpenFile(sanitizedPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, csvFilePermission)
+	file, err := os.OpenFile(sanitizedPath, fsperm.WriteFlags, fsperm.FilePerm)
 	if err != nil {
 		h.logger.Error("無法建立輸出檔案", err, map[string]interface{}{
 			"path": sanitizedPath,
@@ -422,17 +394,25 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) error {
 				"file":  file.Name(),
 				"error": closeErr.Error(),
 			})
+			if err == nil {
+				err = fmt.Errorf("關閉輸出檔案 %s 失敗: %w", filename, closeErr)
+			}
 		}
 	}()
 
 	if h.config.BOMEnabled {
-		if _, err := file.Write(BOMBytes); err != nil {
+		if err := csvutil.WriteBOM(file); err != nil {
 			return fmt.Errorf("無法寫入 BOM 到 %s: %w", filename, err)
 		}
 	}
 
+	// Single chokepoint sanitize: csv_converter sanitizes headers; this catches
+	// body-row labels (e.g. result.PhaseName from config.json) that bypass the
+	// converter-level guard. SanitizeCellForWrite is idempotent so doubling up
+	// is harmless. Closes the formula-injection vector noted by review wave 7
+	// security/QA agents (PhaseName="=cmd|/c calc!A1" landing in row[0]).
 	w := csv.NewWriter(file)
-	if err := w.WriteAll(data); err != nil {
+	if err := w.WriteAll(csvutil.SanitizeAllRows(data)); err != nil {
 		h.logger.Error("CSV 資料寫入失敗", err, map[string]interface{}{
 			"path":     sanitizedPath,
 			"filename": filename,
@@ -490,23 +470,4 @@ func (h *CSVHandler) ProcessLargeFile(
 	})
 
 	return h.largeFileHandler.ProcessLargeFileInChunks(filename, windowSize, callback)
-}
-
-// ReadLargeCSVStreaming 流式讀取大 CSV 文件.
-func (h *CSVHandler) ReadLargeCSVStreaming(filename string, callback ProgressCallback) (*StreamingResult, error) {
-	h.logger.Info("開始流式讀取大 CSV 文件", map[string]interface{}{
-		"filename": filename,
-	})
-
-	return h.largeFileHandler.ReadCSVStreaming(filename, callback)
-}
-
-// WriteLargeCSVStreaming 流式寫入大 CSV 文件.
-func (h *CSVHandler) WriteLargeCSVStreaming(filename string, data [][]string, callback ProgressCallback) error {
-	h.logger.Info("開始流式寫入大 CSV 文件", map[string]interface{}{
-		"filename":  filename,
-		"row_count": len(data),
-	})
-
-	return h.largeFileHandler.WriteCSVStreaming(filename, data, callback)
 }

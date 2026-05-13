@@ -15,7 +15,6 @@
 | 前端 | Vite 7 + Vanilla JS |
 | 圖表 | go-echarts v2（ECharts） |
 | Excel | excelize v2 |
-| 科學繪圖 | gonum/plot |
 | 測試 | testify + Go benchmark |
 | Lint | golangci-lint（45+ linters） |
 | CI/CD | GitHub Actions |
@@ -193,7 +192,7 @@ count_mean/
 ├── gui/                       # Wails GUI 應用
 ├── internal/                  # 內部套件
 │   ├── calculator/           # MaxMean / Normalizer / PhaseAnalyzer
-│   ├── parser/               # CSV / EMG / Motion / ANC 統一解析器
+│   ├── parsers/              # CSV / EMG / Motion / ANC 統一解析器
 │   ├── io/                   # CSVHandler（BOM）/ LargeFileHandler（串流）
 │   ├── models/               # EMGData / EMGDataset / MaxMeanResult
 │   ├── chart/                # go-echarts 圖表生成與降採樣
@@ -202,6 +201,9 @@ count_mean/
 │   ├── logging/              # 結構化日誌
 │   ├── phase_sync/           # 階段同步分析
 │   └── validation/           # 輸入驗證與消毒
+├── util/                      # 共用工具子套件
+│   ├── csvutil/              # BOM 處理、CSV cell 防 formula-injection sanitize
+│   └── fsperm/               # FilePerm/DirPerm 與 OpenFile flags（含 O_NOFOLLOW）
 ├── frontend/                  # Vite + Vanilla JS 前端
 ├── test/                      # 測試目錄
 │   ├── unit/                 # 單元測試

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"count_mean/internal/errors"
+	"count_mean/internal/security/fsperm"
 )
 
 // LogLevel represents the severity level of a log entry.
@@ -27,12 +28,6 @@ const (
 	LevelWarn                  // LevelWarn represents warning-level logging
 	LevelError                 // LevelError represents error-level logging
 	LevelFatal                 // LevelFatal represents fatal-level logging
-)
-
-// File permission constants.
-const (
-	logDirPermission  = 0o750 // Directory permission for log directory
-	logFilePermission = 0o600 // File permission for log files
 )
 
 // Masking thresholds.
@@ -95,14 +90,16 @@ func NewLogger(level LogLevel, output io.Writer, jsonFormat bool) *Logger {
 
 // NewFileLogger creates a logger that writes to a file.
 func NewFileLogger(level LogLevel, logDir, filename string, jsonFormat bool) (*Logger, error) {
-	if err := os.MkdirAll(logDir, logDirPermission); err != nil {
+	if err := os.MkdirAll(logDir, fsperm.DirPerm); err != nil {
 		return nil, fmt.Errorf("cannot create log directory: %w", err)
 	}
 
 	logPath := filepath.Join(logDir, filename)
 
+	// fsperm.AppendFlags 在 unix 加 O_NOFOLLOW：若 attacker 將 logDir/app.log 換為
+	// symlink 指向 cron 配置 / SSH authorized_keys，open 會以 ELOOP fail 而非靜默寫入。
 	//nolint:gosec // G304: logPath is constructed from logDir parameter
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, logFilePermission)
+	file, err := os.OpenFile(logPath, fsperm.AppendFlags, fsperm.FilePerm)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create log file: %w", err)
 	}

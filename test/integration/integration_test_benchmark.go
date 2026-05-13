@@ -11,6 +11,7 @@ import (
 	"count_mean/internal/benchmark"
 	"count_mean/internal/config"
 	"count_mean/internal/logging"
+	"count_mean/internal/security/fsperm"
 )
 
 // errSimulated is a static error for test simulation.
@@ -31,7 +32,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 
 	// 確保測試目錄存在
 	testDir := "./benchmark_test_reports"
-	if err := os.MkdirAll(testDir, 0o755); err != nil {
+	if err := os.MkdirAll(testDir, fsperm.DirPerm); err != nil {
 		t.Fatalf("無法創建測試目錄: %v", err)
 	}
 
