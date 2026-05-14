@@ -16,11 +16,16 @@ import (
 )
 
 // TestMain 初始化 i18n global singleton，使本 package 所有 test 都能透過 i18n.T()
-// 拿到 catalog 翻譯（內建 zh-TW）— 否則 globalI18n==nil 時 T() 走 fallback 回 key
-// 本身（如 "error.muscle_ratio.output_dir_invalid"），破壞既有 test 對中文字面
-// 與英文 marker（如 "OutputDir"）的子字串比對。
+// 拿到 catalog 翻譯 — 否則 globalI18n==nil 時 T() 走 fallback 回 key 本身
+// （如 "error.muscle_ratio.output_dir_invalid"），破壞既有 test 對中文字面與英文
+// marker（如 "OutputDir"）的子字串比對。
+//
+// 注意：InitI18n 內部會 DetectSystemLocale 後 SetLocale，會被 CI runner 的
+// LANG=en_US.UTF-8 蓋成 LocaleEnUS — 所以這裡必須再顯式 SetLocale(LocaleZhTW)
+// 把 locale 釘死成繁中，使 catalog 解析到中文字串、test substring 比對才會通過。
 func TestMain(m *testing.M) {
 	_ = i18n.InitI18n("./nonexistent") // 不存在路徑 → fallback 走內建 translationData
+	i18n.SetLocale(i18n.LocaleZhTW)    // 覆寫 InitI18n 內部的 system-locale detection
 	os.Exit(m.Run())
 }
 
