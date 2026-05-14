@@ -1,12 +1,16 @@
 package calculator
 
 import (
+	"errors"
 	"fmt"
 
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 	"count_mean/util"
 )
+
+// ErrEmptyEMGData 表示 NormalizeByRangeMax 收到 nil PhaseSyncEMGData。
+var ErrEmptyEMGData = errors.New("EMG 數據為空")
 
 // ErrZeroChannelMax 表示某條肌肉在指定分期區間內最大值為零，
 // 無法用於標準化（會導致除以零）。
@@ -28,15 +32,11 @@ func (e *ErrZeroChannelMax) Error() string {
 // RangeNormalizer 在指定時間區間內以每條肌肉的最大值作為除數，
 // 對整段 EMG 資料做標準化（區間內最大值會變成 1.0）。
 // 這是一種類似 MVC peak normalization 的縮放方式。
-type RangeNormalizer struct {
-	emgParser *parsers.EMGParser
-}
+type RangeNormalizer struct{}
 
 // NewRangeNormalizer 建立 RangeNormalizer。
 func NewRangeNormalizer() *RangeNormalizer {
-	return &RangeNormalizer{
-		emgParser: parsers.NewEMGParser(),
-	}
+	return &RangeNormalizer{}
 }
 
 // NormalizeByRangeMax 對輸入 EMG 資料的每條肌肉，在 [startTime, endTime]
@@ -51,10 +51,10 @@ func (n *RangeNormalizer) NormalizeByRangeMax(
 	startTime, endTime float64,
 ) (*models.PhaseSyncEMGData, map[string]float64, error) {
 	if data == nil {
-		return nil, nil, fmt.Errorf("EMG 數據為空")
+		return nil, nil, ErrEmptyEMGData
 	}
 
-	rangeResult, err := n.emgParser.GetDataInTimeRange(data, startTime, endTime)
+	rangeResult, err := parsers.GetEMGDataInTimeRange(data, startTime, endTime)
 	if err != nil {
 		return nil, nil, fmt.Errorf("提取分期區間 EMG 數據失敗: %w", err)
 	}

@@ -2,8 +2,12 @@ package models
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
+
+// ErrInvalidPhasePoint 表示 ParsePhasePoint 收到不在 10 個合法值內的字串。
+var ErrInvalidPhasePoint = errors.New("invalid phase point")
 
 // PhasePoint identifies one of the 10 canonical phase points in jump-biomechanics
 // analysis. The string value is the stable wire identifier shared with the
@@ -86,7 +90,7 @@ func (p PhasePoint) Order() int {
 func ParsePhasePoint(s string) (PhasePoint, error) {
 	p := PhasePoint(s)
 	if !p.IsValid() {
-		return "", fmt.Errorf("invalid phase point %q: must be one of P0/P1/P2/S/C/D/T0/T/O/L", s)
+		return "", fmt.Errorf("%w %q: must be one of P0/P1/P2/S/C/D/T0/T/O/L", ErrInvalidPhasePoint, s)
 	}
 	return p, nil
 }

@@ -11,7 +11,18 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/i18n"
 )
+
+// TestMain 初始化 i18n global singleton，使本 package 所有 test 都能透過 i18n.T()
+// 拿到 catalog 翻譯（內建 zh-TW）— 否則 globalI18n==nil 時 T() 走 fallback 回 key
+// 本身（如 "error.muscle_ratio.output_dir_invalid"），破壞既有 test 對中文字面
+// 與英文 marker（如 "OutputDir"）的子字串比對。
+func TestMain(m *testing.M) {
+	_ = i18n.InitI18n("./nonexistent") // 不存在路徑 → fallback 走內建 translationData
+	os.Exit(m.Run())
+}
 
 // emgHeaderLine 是 8 通道 R.* EMG CSV 的標準標題列（與 input/NSF_*_RMS*.csv 對齊）。
 const emgHeaderLine = `X [],R.RA: EMG 1 ->Filter->RMS [],R.ES: EMG 2 ->Filter->RMS [],` +
@@ -119,9 +130,9 @@ func TestAnalyze_MissingChannelFailFast(t *testing.T) {
 		OutputDir:    outDir,
 	})
 	require.NoError(t, err)
-	require.Len(t, result.Subjects, 1)
+	require.Len(t, result, 1)
 
-	sr := result.Subjects[0]
+	sr := result[0]
 	assert.False(t, sr.Success, "缺通道時 Subject 應失敗")
 	assert.Contains(t, sr.Error, "缺少必要的肌肉通道")
 }
@@ -156,9 +167,9 @@ func TestAnalyze_PhasePoints_2NMinus1Rows(t *testing.T) {
 		OutputDir:    outDir,
 	})
 	require.NoError(t, err)
-	require.Len(t, result.Subjects, 1)
+	require.Len(t, result, 1)
 
-	sr := result.Subjects[0]
+	sr := result[0]
 	assert.True(t, sr.Success, "Error=%s", sr.Error)
 	assert.Empty(t, sr.Error)
 	assert.NotEmpty(t, sr.OutputPhasePath)
@@ -204,7 +215,7 @@ func TestAnalyze_PhasePoints_5PhaseN2NMinus1(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sr := result.Subjects[0]
+	sr := result[0]
 	require.True(t, sr.Success, "Error=%s", sr.Error)
 	rows := readCSV(t, sr.OutputPhasePath)
 	assert.Equal(t, 1+9, len(rows), "5 phases → 9 data rows expected (2N-1)")
@@ -235,7 +246,7 @@ func TestAnalyze_PhaseTimeOutOfRange(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sr := result.Subjects[0]
+	sr := result[0]
 	assert.True(t, sr.Success, "Output 1 should still succeed even if Output 2 is skipped")
 	assert.NotEmpty(t, sr.OutputAllPath, "Output 1 應該已產生")
 	assert.Empty(t, sr.OutputPhasePath, "Output 2 應該被跳過")
@@ -243,13 +254,15 @@ func TestAnalyze_PhaseTimeOutOfRange(t *testing.T) {
 	assert.Contains(t, sr.Error, "外")
 }
 
-// TestAnalyze_ConcurrentCallsNoRace 釘住 codex review post-impl P2：
-// `Analyzer.emgParser` 是 shared mutable instance；Wails 並行 RPC 場景下多個 goroutine
-// 同時呼叫 `Analyze` → 都共用同個 `*EMGParser`，`ParseFile` 寫 `p.frequency` 觸發 write/write race。
-// 修法：analyzeSubject 內 new per-call EMGParser。
+// TestAnalyze_ConcurrentCallsNoRace 釘住「並行 Analyze 不應觸發 race」這個 invariant。
+// P2-C 之後 EMGParser 改 stateless，但 Wails 並行 RPC 仍可能在未來 refactor 引入新的 shared
+// mutable state — 此 test 用 race detector 守門。
 //
 // 注意：此 test 必須在 `go test -race` 下跑才會觸發 race detector；普通 `go test` 看不到。
 // CI 跑 `make test-race` 是專案標準流程。
+//
+// 穩定性：外層 for k 迴圈把整個 concurrent batch 跑 10 次，提升 race detector 在 CI 上的觸發機率
+// （單次跑可能因為 goroutine 排程剛好不重疊而 false-pass）。
 func TestAnalyze_ConcurrentCallsNoRace(t *testing.T) {
 	tempDir := t.TempDir()
 	dataDir := filepath.Join(tempDir, "data")
@@ -268,23 +281,25 @@ func TestAnalyze_ConcurrentCallsNoRace(t *testing.T) {
 
 	a := NewAnalyzer()
 
-	// 並行 8 個 Analyze 呼叫共用同個 Analyzer instance — 模擬 Wails 並行 RPC
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, err := a.Analyze(&Params{
-				ManifestFile: manifestPath,
-				DataFolder:   dataDir,
-				OutputDir:    outDir,
-			})
-			// 不 assert err — concurrent writes 到同個 outDir 可能有檔案 race（O_TRUNC），
-			// 但本 test 是 race detector 守門：只要 -race 不報 EMGParser 等 internal struct 的 race 就行
-			_ = err
-		}()
+	for k := 0; k < 10; k++ {
+		// 並行 8 個 Analyze 呼叫共用同個 Analyzer instance — 模擬 Wails 並行 RPC
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := a.Analyze(&Params{
+					ManifestFile: manifestPath,
+					DataFolder:   dataDir,
+					OutputDir:    outDir,
+				})
+				// 不 assert err — concurrent writes 到同個 outDir 可能有檔案 race（O_TRUNC），
+				// 但本 test 是 race detector 守門：只要 -race 不報 race 就行
+				_ = err
+			}()
+		}
+		wg.Wait()
 	}
-	wg.Wait()
 }
 
 // TestAnalyze_EMGFileWithLiteralPercent 釘住 codex review P1 (post-impl)：
@@ -317,9 +332,9 @@ func TestAnalyze_EMGFileWithLiteralPercent(t *testing.T) {
 		OutputDir:    outDir,
 	})
 	require.NoError(t, err)
-	require.Len(t, result.Subjects, 1)
+	require.Len(t, result, 1)
 
-	sr := result.Subjects[0]
+	sr := result[0]
 	assert.True(t, sr.Success, "含 '%%' 的 EMG 檔名應該被接受；Error=%s", sr.Error)
 	assert.FileExists(t, sr.OutputAllPath)
 	assert.FileExists(t, sr.OutputPhasePath)
@@ -345,9 +360,9 @@ func TestAnalyze_EMGFileTraversalRejected(t *testing.T) {
 		OutputDir:    outDir,
 	})
 	require.NoError(t, err)
-	require.Len(t, result.Subjects, 1)
+	require.Len(t, result, 1)
 
-	sr := result.Subjects[0]
+	sr := result[0]
 	assert.False(t, sr.Success, "含 '../' 的 EMG 路徑應被拒")
 	assert.NotEmpty(t, sr.Error)
 }
@@ -378,6 +393,117 @@ func TestAnalyze_CaseOnlySubjectCollision_FailFast(t *testing.T) {
 	})
 	require.Error(t, err, "case-only 不同的 subject 在 case-insensitive FS 上會互覆蓋，應 fail-fast")
 	assert.Contains(t, err.Error(), "輸出檔名衝突")
+
+	// fail-fast 必須在寫任何輸出檔之前發生 — outDir 應該為空。
+	// 若 fail-fast 時機延後到「跑完第一個 subject 才發現衝突」，第一個 subject 的 CSV
+	// 會已寫入磁碟、覆寫了使用者既有檔案。outDir empty 是這個契約的關鍵 assertion。
+	if entries, statErr := os.ReadDir(outDir); statErr == nil {
+		assert.Empty(t, entries, "fail-fast 應在寫檔前發生，outDir 不該有任何檔")
+	}
+}
+
+// TestAnalyze_NFCvsNFDSubjectCollision_FailFast 釘住 P2-L：
+// macOS APFS/HFS+ 對 "café" (NFC, U+00E9) 與 "café" (NFD, e+U+0301) hash 同 on-disk name，
+// 但 strings.ToLower 視為相異。若不 NFC normalize，會放行兩筆 manifest 然後第二筆覆寫前者。
+// 修法：collision key 用 norm.NFC.String 包裹 strings.ToLower。
+func TestAnalyze_NFCvsNFDSubjectCollision_FailFast(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+	writeEMG8(t, filepath.Join(dataDir, "s2.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	writeManifest(t, manifestPath, [][]string{
+		// NFC: "café" = "caf" + U+00E9（precomposed）— 5 bytes
+		makeRow15("café", "s1.csv", "1", [10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}),
+		// NFD: "café" = "cafe" + U+0301（combining acute）
+		makeRow15("café", "s2.csv", "1", [10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}),
+	})
+
+	_, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.Error(t, err, "NFC 與 NFD 的 \"café\" 在 macOS HFS+/APFS 上為同檔，應 fail-fast")
+	assert.Contains(t, err.Error(), "輸出檔名衝突")
+}
+
+// TestAnalyze_FormulaInjectionSubject_Sanitized 釘住測試補洞：
+// Subject 含 "=SUM(A1:B2)" 之類試算表公式 — SanitizeFileName 應移除路徑分隔字元（`:`、`/` 等），
+// 使最終 output 檔名不含這類字元；pipeline 不應 panic 或 fail。
+// 註：CSV injection 字元（=、( 等）由 csvutil.SanitizeHeaderRow 在寫檔層保護，非本 helper 職責。
+func TestAnalyze_FormulaInjectionSubject_Sanitized(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "s.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("=SUM(A1:B2)", "s.csv", "1", [10]string{
+			"0.01", "0.02", "0.03", "0.04", "0.05",
+			"20", "0.07", "0.08", "30", "0.09",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.True(t, result[0].Success, "Subject 含公式不該讓 pipeline fail：%s", result[0].Error)
+
+	outName := filepath.Base(result[0].OutputAllPath)
+	assert.NotContains(t, outName, ":", "output 檔名不該含 `:` (路徑分隔字元)")
+	assert.NotContains(t, outName, "/", "output 檔名不該含 `/`")
+	assert.NotContains(t, outName, "\\", "output 檔名不該含 `\\`")
+}
+
+// TestAnalyze_NegativeTime_Handled 釘住測試補洞：EMG Time 欄為負值（如校準前的時間軸偏移）
+// 仍應通過 parse 與 Analyze，不該因為 negative time 觸發 panic 或誤判為 invalid。
+func TestAnalyze_NegativeTime_Handled(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	emgPath := filepath.Join(dataDir, "neg.csv")
+	var b strings.Builder
+	b.WriteString(emgHeaderLine)
+	b.WriteByte('\n')
+	for i := 0; i < 200; i++ {
+		negTime := -0.5 + float64(i)*0.001
+		fmt.Fprintf(&b, "%.4f,2.0,1.0,3.0,1.5,1.0,2.0,4.0,2.0\n", negTime)
+	}
+	require.NoError(t, os.WriteFile(emgPath, []byte(b.String()), 0o600))
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	writeManifest(t, manifestPath, [][]string{
+		// phase points 落在 [-0.5, -0.301] 內（負時間範圍），對應 motion index 也用負數模擬上下文
+		makeRow15("NegT", "neg.csv", "1", [10]string{
+			"-0.49", "-0.48", "-0.47", "-0.46", "-0.45",
+			"20", "-0.43", "-0.42", "30", "-0.41",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.NoError(t, err, "負時間 EMG 不應讓批次 Analyze 整體失敗")
+	require.Len(t, result, 1)
+	// Output 1 應產出（時間序列 dump 不依賴 phase 範圍）
+	assert.True(t, result[0].Success || result[0].OutputAllPath != "",
+		"負時間 EMG 至少應有 Output 1 產出，實際：success=%v err=%q", result[0].Success, result[0].Error)
 }
 
 func TestAnalyze_DuplicateSanitizedSubjects_FailFast(t *testing.T) {
@@ -428,9 +554,9 @@ func TestAnalyze_TwoSubjects_BothExported(t *testing.T) {
 		OutputDir:    outDir,
 	})
 	require.NoError(t, err)
-	require.Len(t, result.Subjects, 2)
+	require.Len(t, result, 2)
 
-	for _, sr := range result.Subjects {
+	for _, sr := range result {
 		assert.True(t, sr.Success, "subject %s failed: %s", sr.Subject, sr.Error)
 		assert.FileExists(t, sr.OutputAllPath)
 		assert.FileExists(t, sr.OutputPhasePath)
@@ -448,6 +574,19 @@ func TestAnalyze_TwoSubjects_BothExported(t *testing.T) {
 	}
 
 	assert.Equal(t, 4, csvCount, "expected 4 CSV files (2 subjects × 2 outputs)")
+
+	// 不只 FileExists — 實際讀檔內容確認 4 個 CSV 都有合理 header + 至少一筆 data row。
+	// FileExists 對「寫到一半失敗」的截斷檔也會回 true（雖然 P1-A atomic write 後不該發生）。
+	for _, sr := range result {
+		for _, p := range []string{sr.OutputAllPath, sr.OutputPhasePath} {
+			content, readErr := os.ReadFile(p)
+			require.NoError(t, readErr, "read %s", p)
+			require.NotEmpty(t, content, "%s 不該為空", p)
+			// 至少包含 BOM 後的 header（"Time"）與一筆 data row（換行）
+			assert.Contains(t, string(content), "Time", "%s 應含 Time header", p)
+			assert.Contains(t, string(content), "\n", "%s 應有換行（至少一筆資料）", p)
+		}
+	}
 }
 
 func TestAnalyze_NaNCellWrittenAsEmpty(t *testing.T) {
@@ -471,7 +610,7 @@ func TestAnalyze_NaNCellWrittenAsEmpty(t *testing.T) {
 		OutputDir:    outDir,
 	})
 	require.NoError(t, err)
-	sr := result.Subjects[0]
+	sr := result[0]
 	require.True(t, sr.Success, "Error=%s", sr.Error)
 
 	rows := readCSV(t, sr.OutputAllPath)
@@ -480,6 +619,51 @@ func TestAnalyze_NaNCellWrittenAsEmpty(t *testing.T) {
 	// 第一筆資料列：RA/ES 應為空
 	assert.Equal(t, "", rows[1][1], "RA/ES should be empty when R.ES=0 (NaN)")
 	assert.NotEqual(t, "", rows[1][2], "IL/GMax 應有正常數值")
+}
+
+// TestAnalyze_EMGUpstreamNaN_OutputCellEmpty 釘住 EMG 原始 cell 字面 "NaN" 時，經 parser →
+// calculator → writer 整條 path 後 ratio cell 寫成空字串。與 TestAnalyze_NaNCellWrittenAsEmpty
+// 互補：那邊在 calculator 層 (Ratio(x,0)) 觸發 NaN；此處在 parser 層 (字面 NaN) 觸發。
+func TestAnalyze_EMGUpstreamNaN_OutputCellEmpty(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	// EMG: 第一筆 R.RA 字面 "NaN"，其餘 R.RA=2.0；50 sample dt=1ms
+	var b strings.Builder
+	b.WriteString(emgHeaderLine + "\n")
+	b.WriteString("0.0000,NaN,1.0,3.0,1.5,1.0,2.0,4.0,2.0\n")
+	for i := 1; i < 50; i++ {
+		fmt.Fprintf(&b, "%.4f,2.000000,1.000000,3.000000,1.500000,1.000000,2.000000,4.000000,2.000000\n",
+			float64(i)*0.001)
+	}
+	emgPath := filepath.Join(dataDir, "s1.csv")
+	require.NoError(t, os.WriteFile(emgPath, []byte(b.String()), 0o600))
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S1", "s1.csv", "1", [10]string{
+			"0.01", "0.02", "0.03", "0.04", "0.005", "20", "0.025", "0.03", "30", "0.04",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.NoError(t, err)
+	sr := result[0]
+	require.True(t, sr.Success, "Error=%s", sr.Error)
+
+	rows := readCSV(t, sr.OutputAllPath)
+	require.Greater(t, len(rows), 2, "expected header + at least 2 data rows")
+
+	// row 結構：Time, RA/ES, IL/GMax, RF/BF, TAIO/MF
+	assert.Equal(t, "", rows[1][1], "RA/ES 應為空 cell when EMG R.RA cell 字面為 NaN")
+	assert.NotEqual(t, "", rows[1][2], "IL/GMax 同 row 應有正常數值（NaN 不污染相鄰欄）")
+	assert.Equal(t, "2.000000", rows[2][1], "下一 sample R.RA 恢復正常 → RA/ES = 2.000000")
 }
 
 // readCSV reads a CSV file and returns all rows. Drops UTF-8 BOM if present.
@@ -539,9 +723,9 @@ func TestAnalyze_EmptySubject_Rejected(t *testing.T) {
 		OutputDir:    outDir,
 	})
 	require.NoError(t, err)
-	require.Len(t, result.Subjects, 1)
+	require.Len(t, result, 1)
 
-	sr := result.Subjects[0]
+	sr := result[0]
 	assert.False(t, sr.Success, "Subject 為空時應失敗")
 	assert.Contains(t, sr.Error, "Subject 名稱為空")
 
@@ -573,9 +757,9 @@ func TestAnalyze_EMGFileNotFound(t *testing.T) {
 		OutputDir:    outDir,
 	})
 	require.NoError(t, err)
-	require.Len(t, result.Subjects, 1)
+	require.Len(t, result, 1)
 
-	sr := result.Subjects[0]
+	sr := result[0]
 	assert.False(t, sr.Success)
 	assert.Contains(t, sr.Error, "EMG 檔案不存在")
 }
@@ -608,7 +792,7 @@ func TestAnalyze_PhaseTimeAtBoundary(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sr := result.Subjects[0]
+	sr := result[0]
 	assert.True(t, sr.Success, "邊界 phase 不該被拒絕，Error=%s", sr.Error)
 	assert.NotEmpty(t, sr.OutputPhasePath, "Output 2 應該產出")
 }
@@ -643,9 +827,9 @@ func TestAnalyze_Output2WriteFailure_StickyOutput1Success(t *testing.T) {
 		OutputDir:    outDir,
 	})
 	require.NoError(t, err)
-	require.Len(t, result.Subjects, 1)
+	require.Len(t, result, 1)
 
-	sr := result.Subjects[0]
+	sr := result[0]
 	assert.True(t, sr.Success, "Output 1 成功後 Output 2 失敗時 Success 應為 sticky-true")
 	assert.NotEmpty(t, sr.OutputAllPath, "Output 1 路徑應已設定")
 	assert.FileExists(t, sr.OutputAllPath, "Output 1 檔案應存在")

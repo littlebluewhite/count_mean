@@ -14,7 +14,7 @@ import (
 func Str2Number[T Number, U ~int](input string, move U) (T, error) {
 	parts := strings.Split(input, "E")
 	// 去除空白
-	mantissaStr := strings.Replace(parts[0], " ", "", -1)
+	mantissaStr := strings.ReplaceAll(parts[0], " ", "")
 
 	mantissa, err := strconv.ParseFloat(mantissaStr, 64)
 	if err != nil {

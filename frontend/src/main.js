@@ -25,11 +25,26 @@ import {
     GetVersion
 } from '../wailsjs/go/gui/App.js';
 import { OnFileDrop } from '../wailsjs/runtime/runtime.js';
+import { initI18n, t, tHtml, changeLanguage, onLocaleChange, getCurrentLocale } from './i18n.js';
 
 // 應用程序主類
 class EMGAnalysisApp {
     constructor() {
+        // currentPanel 紀錄目前在哪一頁(由 handleMenuAction 設定)。
+        // i18n locale 變更時,onLocaleChange listener 透過此屬性查表
+        // 重新呼叫當前 panel 的 show() 函式以觸發 re-render。
         this.currentPanel = null;
+        this.panelDispatch = {
+            maxMean: () => this.showMaxMeanPanel(),
+            normalize: () => this.showNormalizePanel(),
+            chart: () => this.showChartPanel(),
+            phase: () => this.showPhasePanel(),
+            phaseSync: () => this.showPhaseSyncPanel(),
+            cci: () => this.showCCIPanel(),
+            normalizedPhaseSync: () => this.showNormalizedPhaseSyncPanel(),
+            muscleRatio: () => this.showMuscleRatioPanel(),
+            config: () => this.showConfigPanel(),
+        };
         this.config = null;
         this.init();
     }
@@ -37,6 +52,39 @@ class EMGAnalysisApp {
     async init() {
         // 載入配置
         this.config = await GetConfig();
+
+        // 載入 i18n 字典(以 config.language 為起點)+ 註冊 re-render listener。
+        // Phase 2 (C):locale 變更時 snapshot 當前 panel 的 form values,
+        // re-render 完成後寫回 — 避免使用者改了 input 但沒按「儲存設定」就切
+        // 語言會丟失輸入。language 下拉本身不 snapshot(避免覆蓋使用者剛切換的選項)。
+        await initI18n(this.config.language || 'zh-TW');
+        onLocaleChange(async () => {
+            // 更新主選單 + header 等靜態 HTML 文字(index.html 寫死的字串)
+            this.updateStaticTexts();
+
+            // re-render 當前 panel(如果有)
+            if (!this.currentPanel || !this.panelDispatch[this.currentPanel]) {
+                return;
+            }
+            // 區分「使用者切換語言」與「resetConfig / importConfig 觸發的程式化 reload」:
+            // 後者已經把新 config 載入後端,如果在這裡 snapshot+restore 舊 form 值,
+            // 會把舊值蓋回剛載入的新值(codex review P2 fix)。flag 為 true 時略過
+            // restore(但仍需 re-render 以套用新 locale),用完即重置避免狀態漏出。
+            const shouldRestore = !this._suppressFormRestore;
+            this._suppressFormRestore = false;
+            const snapshot = shouldRestore ? this.snapshotFormValues() : null;
+            try {
+                await this.panelDispatch[this.currentPanel]();
+                if (shouldRestore) {
+                    this.restoreFormValues(snapshot);
+                }
+            } catch (e) {
+                console.error('[i18n] re-render failed:', e);
+            }
+        });
+
+        // 首次載入時把 index.html 內寫死的中文字串套用當前 locale。
+        this.updateStaticTexts();
 
         // 顯示版本號
         try {
@@ -53,7 +101,7 @@ class EMGAnalysisApp {
         this.bindEvents();
 
         // 更新狀態
-        this.updateStatus('應用程序已就緒');
+        this.updateStatus(t('status.app_ready'));
     }
 
     // 初始化拖曳功能
@@ -71,7 +119,7 @@ class EMGAnalysisApp {
                 if (filePath.toLowerCase().endsWith('.csv')) {
                     this.handleFileDrop(dropTarget, filePath);
                 } else {
-                    ShowError('錯誤', '只支援 CSV 檔案');
+                    ShowError(t('dialog.error'), t('error.msg.only_csv'));
                 }
             }
         }, true);
@@ -128,6 +176,8 @@ class EMGAnalysisApp {
     }
 
     handleMenuAction(action) {
+        // 紀錄 currentPanel,讓 i18n locale 變更時知道要重 render 哪個 panel。
+        this.currentPanel = action;
         switch (action) {
             case 'maxMean':
                 this.showMaxMeanPanel();
@@ -164,60 +214,60 @@ class EMGAnalysisApp {
         const panel = document.getElementById('functionPanel');
         panel.innerHTML = `
             <div class="panel-header">
-                <h2>最大平均值計算</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+                <h2>${tHtml('panel.maxmean.title')}</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
             </div>
-            
+
             <div class="form-group">
-                <label>處理模式</label>
+                <label>${tHtml('form.label.process_mode')}</label>
                 <select id="processMode" class="form-control" onchange="app.toggleProcessMode()">
-                    <option value="single">單檔案處理</option>
-                    <option value="batch">批次處理資料夾</option>
+                    <option value="single">${tHtml('form.option.single_file')}</option>
+                    <option value="batch">${tHtml('form.option.batch_folder')}</option>
                 </select>
             </div>
-            
+
             <div id="singleFileSection">
                 <div class="form-group">
-                    <label>選擇資料檔案</label>
+                    <label>${tHtml('form.label.input_file')}</label>
                     <div class="input-group drop-zone" data-drop-target="inputFile" style="--wails-drop-target: drop;">
                         <input type="text" id="inputFile" class="form-control" readonly>
-                        <button class="btn btn-secondary" onclick="app.selectInputFile()">瀏覽</button>
+                        <button class="btn btn-secondary" onclick="app.selectInputFile()">${tHtml('button.browse')}</button>
                     </div>
                 </div>
             </div>
-            
+
             <div id="batchFolderSection" class="hidden">
                 <div class="form-group">
-                    <label>選擇資料夾</label>
+                    <label>${tHtml('form.label.input_folder')}</label>
                     <div class="input-group">
                         <input type="text" id="inputFolder" class="form-control" readonly>
-                        <button class="btn btn-secondary" onclick="app.selectInputFolder()">瀏覽</button>
+                        <button class="btn btn-secondary" onclick="app.selectInputFolder()">${tHtml('button.browse')}</button>
                     </div>
                 </div>
             </div>
-            
+
             <div class="form-group">
-                <label>視窗大小（資料點數）</label>
+                <label>${tHtml('form.label.window_size')}</label>
                 <input type="number" id="windowSize" class="form-control" value="1000" min="1">
-                <p class="help-text">用於計算移動平均值的視窗大小</p>
+                <p class="help-text">${tHtml('form.help.window_size')}</p>
             </div>
-            
+
             <div class="form-group">
-                <label>時間範圍（選填）</label>
+                <label>${tHtml('form.label.time_range')}</label>
                 <div class="flex gap-2">
                     <div style="flex: 1;">
-                        <input type="number" id="startTime" class="form-control" placeholder="開始時間（秒）" step="0.1">
+                        <input type="number" id="startTime" class="form-control" placeholder="${tHtml('form.placeholder.start_time')}" step="0.1">
                     </div>
                     <div style="flex: 1;">
-                        <input type="number" id="endTime" class="form-control" placeholder="結束時間（秒）" step="0.1">
+                        <input type="number" id="endTime" class="form-control" placeholder="${tHtml('form.placeholder.end_time')}" step="0.1">
                     </div>
                 </div>
-                <p class="help-text">留空表示處理整個檔案</p>
+                <p class="help-text">${tHtml('form.help.time_range')}</p>
             </div>
-            
+
             <div class="mt-4">
                 <button class="btn btn-primary" onclick="app.calculateMaxMean()">
-                    開始計算
+                    ${tHtml('button.start_calculate')}
                 </button>
             </div>
         `;
@@ -230,34 +280,34 @@ class EMGAnalysisApp {
         const panel = document.getElementById('functionPanel');
         panel.innerHTML = `
             <div class="panel-header">
-                <h2>資料標準化</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+                <h2>${tHtml('panel.normalize.title')}</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
             </div>
-            
+
             <div class="form-group">
-                <label>主要資料檔案</label>
+                <label>${tHtml('form.label.main_file')}</label>
                 <div class="input-group drop-zone" data-drop-target="mainFile" style="--wails-drop-target: drop;">
                     <input type="text" id="mainFile" class="form-control" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectMainFile()">瀏覽</button>
+                    <button class="btn btn-secondary" onclick="app.selectMainFile()">${tHtml('button.browse')}</button>
                 </div>
             </div>
-            
+
             <div class="form-group">
-                <label>參考資料檔案</label>
+                <label>${tHtml('form.label.reference_file')}</label>
                 <div class="input-group drop-zone" data-drop-target="referenceFile" style="--wails-drop-target: drop;">
                     <input type="text" id="referenceFile" class="form-control" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectReferenceFile()">瀏覽</button>
+                    <button class="btn btn-secondary" onclick="app.selectReferenceFile()">${tHtml('button.browse')}</button>
                 </div>
             </div>
-            
+
             <div class="form-group">
-                <label>輸出檔名（選填）</label>
-                <input type="text" id="outputName" class="form-control" placeholder="留空使用預設名稱">
+                <label>${tHtml('form.label.output_name')}</label>
+                <input type="text" id="outputName" class="form-control" placeholder="${tHtml('form.placeholder.output_name')}">
             </div>
-            
+
             <div class="mt-4">
                 <button class="btn btn-primary" onclick="app.normalizeData()">
-                    開始標準化
+                    ${tHtml('button.start_normalize')}
                 </button>
             </div>
         `;
@@ -270,37 +320,37 @@ class EMGAnalysisApp {
         const panel = document.getElementById('functionPanel');
         panel.innerHTML = `
             <div class="panel-header">
-                <h2>資料做圖</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+                <h2>${tHtml('panel.chart.title')}</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
             </div>
-            
+
             <div class="form-group">
-                <label>選擇資料檔案</label>
+                <label>${tHtml('form.label.chart_file')}</label>
                 <div class="input-group drop-zone" data-drop-target="chartFile" style="--wails-drop-target: drop;">
                     <input type="text" id="chartFile" class="form-control" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectChartFile()">瀏覽</button>
+                    <button class="btn btn-secondary" onclick="app.selectChartFile()">${tHtml('button.browse')}</button>
                 </div>
             </div>
-            
+
             <div class="form-group">
-                <label>圖表標題</label>
-                <input type="text" id="chartTitle" class="form-control" value="EMG 資料分析圖表">
+                <label>${tHtml('form.label.chart_title')}</label>
+                <input type="text" id="chartTitle" class="form-control" value="${tHtml('form.default.chart_title')}">
             </div>
-            
+
             <div class="form-group">
-                <label>選擇要顯示的欄位</label>
+                <label>${tHtml('form.label.select_columns')}</label>
                 <div id="columnSelector" class="checkbox-group">
-                    <p class="help-text">請先選擇檔案</p>
+                    <p class="help-text">${tHtml('form.help.select_file_first')}</p>
                 </div>
             </div>
             <div id="previewChartContainer" class="chart-preview hidden">
-                <h3>即時圖表預覽</h3>
+                <h3>${tHtml('chart.preview.title')}</h3>
                 <div id="previewChartContent"></div>
             </div>
             <div class="mt-4">
                 <button id="downloadChartBtn" class="btn btn-primary"
                     onclick="app.downloadChart()" disabled style="display:none">
-                  下載圖表
+                  ${tHtml('button.download_chart')}
                 </button>
             </div>
         `;
@@ -313,35 +363,35 @@ class EMGAnalysisApp {
         const panel = document.getElementById('functionPanel');
         panel.innerHTML = `
             <div class="panel-header">
-                <h2>階段分析</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+                <h2>${tHtml('panel.phase.title')}</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
             </div>
-            
+
             <div class="form-group">
-                <label>選擇資料檔案</label>
+                <label>${tHtml('form.label.phase_file')}</label>
                 <div class="input-group drop-zone" data-drop-target="phaseFile" style="--wails-drop-target: drop;">
                     <input type="text" id="phaseFile" class="form-control" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectPhaseFile()">瀏覽</button>
+                    <button class="btn btn-secondary" onclick="app.selectPhaseFile()">${tHtml('button.browse')}</button>
                 </div>
             </div>
-            
+
             <div class="form-group">
-                <label>階段時間點</label>
-                <input type="text" id="phasePoints" class="form-control" placeholder="例如: 0.5, 1.0, 1.5, 2.0">
-                <p class="help-text">輸入各階段的時間點（秒），用逗號分隔</p>
+                <label>${tHtml('form.label.phase_points')}</label>
+                <input type="text" id="phasePoints" class="form-control" placeholder="${tHtml('form.placeholder.phase_points')}">
+                <p class="help-text">${tHtml('form.help.phase_points')}</p>
             </div>
-            
+
             <div class="form-group">
-                <label>階段標籤</label>
-                <textarea id="phaseLabels" class="form-control" rows="4" placeholder="每行一個標籤">啟跳下蹲階段
+                <label>${tHtml('form.label.phase_labels')}</label>
+                <textarea id="phaseLabels" class="form-control" rows="4" placeholder="${tHtml('form.placeholder.phase_labels')}">啟跳下蹲階段
 啟跳上升階段
 團身階段
 下降階段</textarea>
             </div>
-            
+
             <div class="mt-4">
                 <button class="btn btn-primary" onclick="app.analyzePhases()">
-                    開始分析
+                    ${tHtml('button.start_analyze')}
                 </button>
             </div>
         `;
@@ -349,134 +399,250 @@ class EMGAnalysisApp {
         this.showPanel();
     }
 
-    // 系統配置面板
+    // 系統配置面板 — Phase 1 frontend i18n MVP catalog 化版本。
+    // 字串透過 t('config.xxx') 從 i18n.js in-memory 字典查;切換語言時
+    // onLocaleChange listener 會重呼此函式重 render。語言下拉的 selected 採
+    // getCurrentLocale() 而非 config.language —— 使用者切完語言但尚未按
+    // 「儲存設定」前,以 i18n 當前 locale 為視覺基準才一致。
     async showConfigPanel() {
         const config = await GetConfig();
+        const uiLocale = getCurrentLocale();
 
         const panel = document.getElementById('functionPanel');
         panel.innerHTML = `
             <div class="panel-header">
-                <h2>系統配置</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+                <h2>${tHtml('config.panel.title')}</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('config.button.back')}</button>
             </div>
-            
+
             <div class="config-sections">
                 <div class="config-section">
-                    <h3 class="section-title">📊 數據處理設定</h3>
-                    
+                    <h3 class="section-title">${tHtml('config.section.data_processing')}</h3>
+
                     <div class="form-group">
-                        <label>縮放因子</label>
+                        <label>${tHtml('config.label.scaling_factor')}</label>
                         <input type="number" id="scalingFactor" class="form-control" value="${config.scalingFactor || 10}" min="1">
-                        <p class="help-text">數據縮放倍數，用於放大微小信號</p>
+                        <p class="help-text">${tHtml('config.help.scaling_factor')}</p>
                     </div>
-                    
+
                     <div class="form-group">
-                        <label>精度（小數位數）</label>
+                        <label>${tHtml('config.label.precision')}</label>
                         <input type="number" id="precision" class="form-control" value="${config.precision || 10}" min="0" max="15">
-                        <p class="help-text">輸出數據的小數位數</p>
+                        <p class="help-text">${tHtml('config.help.precision')}</p>
                     </div>
-                    
+
                     <div class="form-group">
-                        <label>輸出格式</label>
+                        <label>${tHtml('config.label.output_format')}</label>
                         <select id="outputFormat" class="form-control">
-                            <option value="csv" ${config.outputFormat === 'csv' ? 'selected' : ''}>CSV（逗號分隔值）</option>
-                            <option value="json" ${config.outputFormat === 'json' ? 'selected' : ''}>JSON（JavaScript 對象表示法）</option>
-                            <option value="xlsx" ${config.outputFormat === 'xlsx' ? 'selected' : ''}>XLSX（Excel 檔案）</option>
+                            <option value="csv" ${config.outputFormat === 'csv' ? 'selected' : ''}>${tHtml('config.option.output_csv')}</option>
+                            <option value="json" ${config.outputFormat === 'json' ? 'selected' : ''}>${tHtml('config.option.output_json')}</option>
+                            <option value="xlsx" ${config.outputFormat === 'xlsx' ? 'selected' : ''}>${tHtml('config.option.output_xlsx')}</option>
                         </select>
-                        <p class="help-text">輸出檔案的格式</p>
+                        <p class="help-text">${tHtml('config.help.output_format')}</p>
                     </div>
-                    
+
                     <div class="form-group">
                         <label>
                             <input type="checkbox" id="bomEnabled" ${config.bomEnabled ? 'checked' : ''}>
-                            啟用 BOM（字節順序標記）
+                            ${tHtml('config.label.bom_enabled')}
                         </label>
-                        <p class="help-text">在 CSV 檔案開頭添加 BOM，改善 Excel 相容性</p>
+                        <p class="help-text">${tHtml('config.help.bom_enabled')}</p>
                     </div>
                 </div>
 
                 <div class="config-section">
-                    <h3 class="section-title">📁 目錄設定</h3>
-                    
+                    <h3 class="section-title">${tHtml('config.section.directories')}</h3>
+
                     <div class="form-group">
-                        <label>預設輸入目錄</label>
+                        <label>${tHtml('config.label.input_dir')}</label>
                         <div class="input-group">
                             <input type="text" id="inputDir" class="form-control" value="${config.inputDir || './input'}" readonly>
-                            <button class="btn btn-secondary" onclick="app.selectInputDir()">瀏覽</button>
+                            <button class="btn btn-secondary" onclick="app.selectInputDir()">${tHtml('config.button.browse')}</button>
                         </div>
-                        <p class="help-text">預設的資料檔案來源目錄</p>
+                        <p class="help-text">${tHtml('config.help.input_dir')}</p>
                     </div>
-                    
+
                     <div class="form-group">
-                        <label>預設輸出目錄</label>
+                        <label>${tHtml('config.label.output_dir')}</label>
                         <div class="input-group">
                             <input type="text" id="outputDir" class="form-control" value="${config.outputDir || './output'}" readonly>
-                            <button class="btn btn-secondary" onclick="app.selectOutputDir()">瀏覽</button>
+                            <button class="btn btn-secondary" onclick="app.selectOutputDir()">${tHtml('config.button.browse')}</button>
                         </div>
-                        <p class="help-text">處理結果的儲存目錄</p>
+                        <p class="help-text">${tHtml('config.help.output_dir')}</p>
                     </div>
-                    
+
                     <div class="form-group">
-                        <label>參考資料目錄</label>
+                        <label>${tHtml('config.label.operate_dir')}</label>
                         <div class="input-group">
                             <input type="text" id="operateDir" class="form-control" value="${config.operateDir || './value_operate'}" readonly>
-                            <button class="btn btn-secondary" onclick="app.selectOperateDir()">瀏覽</button>
+                            <button class="btn btn-secondary" onclick="app.selectOperateDir()">${tHtml('config.button.browse')}</button>
                         </div>
-                        <p class="help-text">存放參考檔案的目錄</p>
+                        <p class="help-text">${tHtml('config.help.operate_dir')}</p>
                     </div>
                 </div>
 
                 <div class="config-section">
-                    <h3 class="section-title">🏷️ 階段標籤設定</h3>
-                    
+                    <h3 class="section-title">${tHtml('config.section.phase_labels')}</h3>
+
                     <div class="form-group">
-                        <label>階段標籤（每行一個）</label>
+                        <label>${tHtml('config.label.phase_labels')}</label>
                         <textarea id="phaseLabels" class="form-control" rows="4">${(config.phaseLabels || []).join('\n')}</textarea>
-                        <p class="help-text">定義階段分析時使用的標籤名稱</p>
+                        <p class="help-text">${tHtml('config.help.phase_labels')}</p>
                     </div>
                 </div>
 
                 <div class="config-section">
-                    <h3 class="section-title">🔧 進階設定</h3>
-                    
+                    <h3 class="section-title">${tHtml('config.section.advanced')}</h3>
+
                     <div class="form-group">
-                        <label>日誌級別</label>
+                        <label>${tHtml('config.label.log_level')}</label>
                         <select id="logLevel" class="form-control">
-                            <option value="debug" ${config.logLevel === 'debug' ? 'selected' : ''}>Debug（除錯）</option>
-                            <option value="info" ${config.logLevel === 'info' ? 'selected' : ''}>Info（資訊）</option>
-                            <option value="warn" ${config.logLevel === 'warn' ? 'selected' : ''}>Warn（警告）</option>
-                            <option value="error" ${config.logLevel === 'error' ? 'selected' : ''}>Error（錯誤）</option>
+                            <option value="debug" ${config.logLevel === 'debug' ? 'selected' : ''}>${tHtml('config.option.log_level_debug')}</option>
+                            <option value="info" ${config.logLevel === 'info' ? 'selected' : ''}>${tHtml('config.option.log_level_info')}</option>
+                            <option value="warn" ${config.logLevel === 'warn' ? 'selected' : ''}>${tHtml('config.option.log_level_warn')}</option>
+                            <option value="error" ${config.logLevel === 'error' ? 'selected' : ''}>${tHtml('config.option.log_level_error')}</option>
                         </select>
-                        <p class="help-text">控制日誌輸出的詳細程度</p>
+                        <p class="help-text">${tHtml('config.help.log_level')}</p>
                     </div>
-                    
+
                     <div class="form-group">
-                        <label>介面語言</label>
-                        <select id="language" class="form-control">
-                            <option value="zh-TW" ${config.language === 'zh-TW' ? 'selected' : ''}>繁體中文</option>
-                            <option value="zh-CN" ${config.language === 'zh-CN' ? 'selected' : ''}>简体中文</option>
-                            <option value="en-US" ${config.language === 'en-US' ? 'selected' : ''}>English</option>
-                            <option value="ja-JP" ${config.language === 'ja-JP' ? 'selected' : ''}>日本語</option>
+                        <label>${tHtml('config.label.ui_language')}</label>
+                        <select id="language" class="form-control" onchange="app.handleLanguageChange(this.value)">
+                            <option value="zh-TW" ${uiLocale === 'zh-TW' ? 'selected' : ''}>繁體中文</option>
+                            <option value="zh-CN" ${uiLocale === 'zh-CN' ? 'selected' : ''}>简体中文</option>
+                            <option value="en-US" ${uiLocale === 'en-US' ? 'selected' : ''}>English</option>
+                            <option value="ja-JP" ${uiLocale === 'ja-JP' ? 'selected' : ''}>日本語</option>
                         </select>
-                        <p class="help-text">應用程序的顯示語言</p>
+                        <p class="help-text">${tHtml('config.help.ui_language')}</p>
                     </div>
                 </div>
             </div>
-            
+
             <div class="mt-4 flex gap-2">
                 <button class="btn btn-primary" onclick="app.saveConfig()">
-                    <span class="icon">💾</span> 儲存設定
+                    <span class="icon">💾</span> ${tHtml('config.button.save')}
                 </button>
                 <button class="btn btn-secondary" onclick="app.resetConfig()">
-                    <span class="icon">🔄</span> 重設為預設值
+                    <span class="icon">🔄</span> ${tHtml('config.button.reset')}
                 </button>
                 <button class="btn btn-info" onclick="app.importConfig()">
-                    <span class="icon">📥</span> 匯入設定
+                    <span class="icon">📥</span> ${tHtml('config.button.import')}
                 </button>
             </div>
         `;
 
         this.showPanel();
+    }
+
+    // 語言下拉 onchange handler。立刻切換 backend i18n locale + 重抓字典,
+    // onLocaleChange listener 會自動重 render 當前 panel(typically ConfigPanel)。
+    // 不寫入 config.json — 使用者按「儲存設定」才持久化。
+    async handleLanguageChange(locale) {
+        try {
+            await changeLanguage(locale);
+        } catch (err) {
+            console.error('[i18n] changeLanguage failed:', err);
+            ShowError(t('dialog.error'), t('error.msg.language_switch_failed', String(err)));
+        }
+    }
+
+    // 用 i18n 字典更新 index.html 內寫死的中文字串:document.title、header
+    // h1/subtitle、9 個 menu button 的 title + description、chartTitle placeholder。
+    // 在 init() 與 onLocaleChange 內呼叫。statusText 不在此處理 — 它由
+    // updateStatus() 動態寫入,locale 變更後保留當前狀態(Task 15 將進一步處理)。
+    updateStaticTexts() {
+        document.title = t('header.app_title');
+
+        // header h1 包含 versionBadge <span>,要保留 — 重設 textContent 後 re-append。
+        const h1 = document.querySelector('header h1');
+        if (h1) {
+            const versionBadge = h1.querySelector('#versionBadge');
+            h1.textContent = t('header.app_title') + ' ';
+            if (versionBadge) {
+                h1.appendChild(versionBadge);
+            }
+        }
+
+        const subtitle = document.querySelector('header .subtitle');
+        if (subtitle) {
+            subtitle.textContent = t('header.subtitle');
+        }
+
+        // chartTitle 是 placeholder;chart panel 開啟後會被 user value 覆寫。
+        const chartTitle = document.getElementById('chartTitle');
+        if (chartTitle) {
+            chartTitle.textContent = t('chart.title.placeholder');
+        }
+
+        // 9 個 menu button.
+        const menuMappings = [
+            { action: 'maxMean', titleKey: 'menu.button.maxmean.title', descKey: 'menu.button.maxmean.description' },
+            { action: 'normalize', titleKey: 'menu.button.normalize.title', descKey: 'menu.button.normalize.description' },
+            { action: 'chart', titleKey: 'menu.button.chart.title', descKey: 'menu.button.chart.description' },
+            { action: 'phase', titleKey: 'menu.button.phase.title', descKey: 'menu.button.phase.description' },
+            { action: 'phaseSync', titleKey: 'menu.button.phasesync.title', descKey: 'menu.button.phasesync.description' },
+            { action: 'cci', titleKey: 'menu.button.cci.title', descKey: 'menu.button.cci.description' },
+            { action: 'normalizedPhaseSync', titleKey: 'menu.button.normalizedphasesync.title', descKey: 'menu.button.normalizedphasesync.description' },
+            { action: 'muscleRatio', titleKey: 'menu.button.muscleratio.title', descKey: 'menu.button.muscleratio.description' },
+            { action: 'config', titleKey: 'menu.button.config.title', descKey: 'menu.button.config.description' },
+        ];
+        menuMappings.forEach(({ action, titleKey, descKey }) => {
+            const btn = document.querySelector(`[data-action="${action}"]`);
+            if (!btn) {
+                return;
+            }
+            const titleSpan = btn.querySelector('.title');
+            const descSpan = btn.querySelector('.description');
+            if (titleSpan) {
+                titleSpan.textContent = t(titleKey);
+            }
+            if (descSpan) {
+                descSpan.textContent = t(descKey);
+            }
+        });
+    }
+
+    // 抓 functionPanel 內所有有 id 的 input/select/textarea 當前值,給
+    // onLocaleChange re-render 後 restoreFormValues 使用,避免使用者輸入
+    // 被 panel.innerHTML 重設清掉。skip 'language' 下拉以免蓋掉剛切換的 locale。
+    snapshotFormValues() {
+        const panel = document.getElementById('functionPanel');
+        if (!panel) {
+            return new Map();
+        }
+        const snapshot = new Map();
+        panel.querySelectorAll('input, select, textarea').forEach((el) => {
+            if (!el.id || el.id === 'language') {
+                return;
+            }
+            if (el.type === 'checkbox' || el.type === 'radio') {
+                snapshot.set(el.id, { kind: 'checked', value: el.checked });
+            } else if (el.type === 'file') {
+                // file input 無法以 JS 設值,略過
+            } else {
+                snapshot.set(el.id, { kind: 'value', value: el.value });
+            }
+        });
+        return snapshot;
+    }
+
+    // 把 snapshot 寫回對應 id 的元素。re-render 後元素可能 id 不存在(panel
+    // 結構變更等)時 safely 略過。配對 snapshotFormValues 使用。
+    restoreFormValues(snapshot) {
+        if (!snapshot || snapshot.size === 0) {
+            return;
+        }
+        snapshot.forEach((entry, id) => {
+            const el = document.getElementById(id);
+            if (!el) {
+                return;
+            }
+            if (entry.kind === 'checked') {
+                el.checked = entry.value;
+            } else {
+                el.value = entry.value;
+            }
+        });
     }
 
     // 檔案選擇功能
@@ -571,19 +737,19 @@ class EMGAnalysisApp {
         if (mode === 'single') {
             inputPath = document.getElementById('inputFile').value;
             if (!inputPath) {
-                await ShowError('錯誤', '請選擇資料檔案');
+                await ShowError(t('dialog.error'), t('error.msg.select_input_file'));
                 return;
             }
         } else {
             inputPath = document.getElementById('inputFolder').value;
             if (!inputPath) {
-                await ShowError('錯誤', '請選擇資料夾');
+                await ShowError(t('dialog.error'), t('error.msg.select_input_folder'));
                 return;
             }
         }
 
         try {
-            this.updateStatus('正在計算最大平均值...');
+            this.updateStatus(t('status.calculation_running'));
             const result = await CalculateMaxMean({
                 inputPath: inputPath,
                 windowSize: windowSize,
@@ -592,11 +758,11 @@ class EMGAnalysisApp {
                 isBatch: mode === 'batch'
             });
 
-            this.updateStatus('計算完成');
-            await ShowMessage('成功', `計算完成！結果已儲存至：\n${result.outputPath}`);
+            this.updateStatus(t('status.calculation_done'));
+            await ShowMessage(t('dialog.success'), t('success.msg.calculation_done', result.outputPath));
         } catch (err) {
-            this.updateStatus('計算失敗');
-            await ShowError('錯誤', `計算失敗：${err}`);
+            this.updateStatus(t('status.calculation_failed'));
+            await ShowError(t('dialog.error'), t('error.msg.calculation_failed', err));
         }
     }
 
@@ -606,44 +772,44 @@ class EMGAnalysisApp {
         const outputName = document.getElementById('outputName').value;
 
         if (!mainFile || !referenceFile) {
-            await ShowError('錯誤', '請選擇主要資料檔案和參考資料檔案');
+            await ShowError(t('dialog.error'), t('error.msg.select_both_files'));
             return;
         }
 
         try {
-            this.updateStatus('正在進行資料標準化...');
+            this.updateStatus(t('status.normalization_running'));
             const result = await NormalizeData({
                 mainFile: mainFile,
                 referenceFile: referenceFile,
                 outputPath: outputName
             });
 
-            this.updateStatus('標準化完成');
-            await ShowMessage('成功', `標準化完成！結果已儲存至：\n${result.outputPath}`);
+            this.updateStatus(t('status.normalization_done'));
+            await ShowMessage(t('dialog.success'), t('success.msg.normalization_done', result.outputPath));
         } catch (err) {
-            this.updateStatus('標準化失敗');
-            await ShowError('錯誤', `標準化失敗：${err}`);
+            this.updateStatus(t('status.normalization_failed'));
+            await ShowError(t('dialog.error'), t('error.msg.normalization_failed', err));
         }
     }
 
     async generateChart() {
         const file = document.getElementById('chartFile').value;
         if (!file) {
-            await ShowError('錯誤', '請選擇資料檔案');
+            await ShowError(t('dialog.error'), t('error.msg.select_input_file'));
             return;
         }
 
         const checked = document.querySelectorAll('#columnSelector input[type="checkbox"]:checked');
         const columns = Array.from(checked).map(cb => parseInt(cb.value));
         if (columns.length === 0) {
-            await ShowError('錯誤', '請選擇至少一個欄位');
+            await ShowError(t('dialog.error'), t('error.msg.chart_select_columns'));
             return;
         }
 
         const title = document.getElementById('chartTitle').value || 'EMG 資料分析圖表';
 
         try {
-            this.updateStatus('正在生成圖表...');
+            this.updateStatus(t('status.chart_generating'));
 
             const result = await GenerateChart({
                 filePath: file,
@@ -651,29 +817,29 @@ class EMGAnalysisApp {
                 title: title
             });
 
-            this.updateStatus('圖表生成完成');
-            await ShowMessage('成功', `圖表已生成並保存至：\n${result.outputPath}`);
+            this.updateStatus(t('status.chart_generated'));
+            await ShowMessage(t('dialog.success'), t('success.msg.chart_generated', result.outputPath));
         } catch (err) {
-            this.updateStatus('圖表生成失敗');
-            await ShowError('錯誤', `圖表生成失敗：${err}`);
+            this.updateStatus(t('status.chart_generation_failed'));
+            await ShowError(t('dialog.error'), t('error.msg.chart_generation_failed', err));
         }
     }
 
     async downloadChart() {
         const iframe = document.querySelector('#previewChartContent iframe');
         if (!iframe) {
-            await ShowError('錯誤', '請先預覽圖表');
+            await ShowError(t('dialog.error'), t('error.msg.chart_not_found'));
             return;
         }
 
         const file = document.getElementById('chartFile').value;
         if (!file) {
-            await ShowError('錯誤', '請選擇資料檔案');
+            await ShowError(t('dialog.error'), t('error.msg.select_input_file'));
             return;
         }
 
         try {
-            this.updateStatus('正在下載圖表...');
+            this.updateStatus(t('status.chart_downloading'));
 
             // 等待 iframe 完全加載
             await new Promise(resolve => {
@@ -689,18 +855,18 @@ class EMGAnalysisApp {
             const iframeDocument = iframe.contentDocument;
 
             if (!iframeWindow.echarts) {
-                throw new Error('ECharts 未找到');
+                throw new Error(t('error.msg.echarts_not_found'));
             }
 
             // 尋找 ECharts 實例
             const chartElement = iframeDocument.querySelector('[_echarts_instance_]');
             if (!chartElement) {
-                throw new Error('找不到圖表元素');
+                throw new Error(t('error.msg.chart_element_not_found'));
             }
 
             const chartInstance = iframeWindow.echarts.getInstanceByDom(chartElement);
             if (!chartInstance) {
-                throw new Error('找不到圖表實例');
+                throw new Error(t('error.msg.chart_instance_not_found'));
             }
 
             // 獲取當前圖表的 PNG 數據
@@ -717,11 +883,11 @@ class EMGAnalysisApp {
                 imageData: dataURL
             });
 
-            this.updateStatus('圖表下載完成');
-            await ShowMessage('成功', `圖表已下載至：${result.outputPath}`);
+            this.updateStatus(t('status.chart_download_done'));
+            await ShowMessage(t('dialog.success'), t('success.msg.chart_downloaded', result.outputPath));
         } catch (err) {
-            this.updateStatus('圖表下載失敗');
-            await ShowError('錯誤', `下載失敗：${err.message || err}`);
+            this.updateStatus(t('status.chart_download_failed'));
+            await ShowError(t('dialog.error'), t('error.msg.chart_download_failed', err.message || err));
         }
     }
 
@@ -731,7 +897,7 @@ class EMGAnalysisApp {
         const phaseLabels = document.getElementById('phaseLabels').value;
 
         if (!inputFile || !phasePoints) {
-            await ShowError('錯誤', '請選擇資料檔案並輸入階段時間點');
+            await ShowError(t('dialog.error'), t('error.msg.phase_inputs'));
             return;
         }
 
@@ -740,7 +906,7 @@ class EMGAnalysisApp {
         const labels = phaseLabels.split('\n').filter(l => l.trim());
 
         if (points.length !== labels.length + 1) {
-            await ShowError('錯誤', '時間點數量應該比標籤數量多1');
+            await ShowError(t('dialog.error'), t('error.msg.phase_points_count'));
             return;
         }
 
@@ -755,17 +921,17 @@ class EMGAnalysisApp {
         }
 
         try {
-            this.updateStatus('正在進行階段分析...');
+            this.updateStatus(t('status.phase_analysis_running'));
             const result = await AnalyzePhases({
                 inputFile: inputFile,
                 phases: phases
             });
 
-            this.updateStatus('階段分析完成');
-            await ShowMessage('成功', `階段分析完成！結果已儲存至：\n${result.outputPath}`);
+            this.updateStatus(t('status.phase_analysis_done'));
+            await ShowMessage(t('dialog.success'), t('success.msg.phase_analysis_done', result.outputPath));
         } catch (err) {
-            this.updateStatus('階段分析失敗');
-            await ShowError('錯誤', `階段分析失敗：${err}`);
+            this.updateStatus(t('status.phase_analysis_failed'));
+            await ShowError(t('dialog.error'), t('error.msg.phase_analysis_failed', err));
         }
     }
 
@@ -824,9 +990,9 @@ class EMGAnalysisApp {
         try {
             await SaveConfig(config);
             this.config = config;
-            await ShowMessage('成功', '配置已儲存');
+            await ShowMessage(t('dialog.success'), t('success.msg.config_saved'));
         } catch (err) {
-            await ShowError('錯誤', `儲存配置失敗：${err}`);
+            await ShowError(t('dialog.error'), t('error.msg.config_save_failed', err));
         }
     }
 
@@ -834,10 +1000,21 @@ class EMGAnalysisApp {
         try {
             const config = await ResetConfig();
             this.config = config;
-            await this.showConfigPanel();
-            await ShowMessage('成功', '配置已重設為預設值');
+            // 同步前端 i18n locale 到新 cfg.language — 否則 dropdown 仍會顯示
+            // 預覽態的舊 locale,使用者下次按「儲存設定」會把 reset 的 language
+            // 改回舊值(codex review P2 fix)。changeLanguage 會 trigger
+            // onLocaleChange listener 自動重 render panel,所以不必額外呼 showConfigPanel。
+            // 設 _suppressFormRestore 讓 listener 略過 snapshot+restore — 否則 reset 後
+            // 舊 form 值會蓋回剛載入的 default config(codex review P2 fix #2)。
+            if (config.language && config.language !== getCurrentLocale()) {
+                this._suppressFormRestore = true;
+                await changeLanguage(config.language);
+            } else {
+                await this.showConfigPanel();
+            }
+            await ShowMessage(t('dialog.success'), t('success.msg.config_reset'));
         } catch (err) {
-            await ShowError('錯誤', `重設配置失敗：${err}`);
+            await ShowError(t('dialog.error'), t('error.msg.config_reset_failed', err));
         }
     }
 
@@ -858,21 +1035,30 @@ class EMGAnalysisApp {
 
                     // 驗證配置結構
                     if (!config.scalingFactor || !config.inputDir || !config.outputDir) {
-                        throw new Error('無效的配置檔案格式');
+                        throw new Error(t('error.msg.invalid_config_format'));
                     }
 
                     await SaveConfig(config);
                     this.config = config;
-                    await this.showConfigPanel();
-                    await ShowMessage('成功', '配置已匯入並儲存');
+                    // 同步前端 i18n locale 到 imported cfg.language(同 resetConfig 邏輯 —
+                    // codex review P2 fix)。changeLanguage 自動 re-render panel。
+                    // 同樣設 _suppressFormRestore 避免舊 form 值蓋回 imported config
+                    // (codex review P2 fix #2)。
+                    if (config.language && config.language !== getCurrentLocale()) {
+                        this._suppressFormRestore = true;
+                        await changeLanguage(config.language);
+                    } else {
+                        await this.showConfigPanel();
+                    }
+                    await ShowMessage(t('dialog.success'), t('success.msg.config_imported'));
                 } catch (err) {
-                    await ShowError('錯誤', `匯入配置失敗：${err.message}`);
+                    await ShowError(t('dialog.error'), t('error.msg.config_import_failed', err.message));
                 }
             };
 
             input.click();
         } catch (err) {
-            await ShowError('錯誤', `開啟檔案選擇器失敗：${err}`);
+            await ShowError(t('dialog.error'), t('error.msg.file_picker_failed', err));
         }
     }
 
@@ -885,7 +1071,10 @@ class EMGAnalysisApp {
     showMainMenu() {
         document.getElementById('functionPanel').classList.add('hidden');
         document.getElementById('mainMenu').classList.remove('hidden');
-        this.updateStatus('就緒');
+        // 回主選單後沒有任何 panel 在 view,清掉 currentPanel 避免 locale 變更時
+        // 誤觸 re-render(主選單本身的字串切換留待 Phase 2 catalog 化處理)。
+        this.currentPanel = null;
+        this.updateStatus(t('status.ready'));
     }
 
     toggleProcessMode() {
@@ -918,7 +1107,7 @@ class EMGAnalysisApp {
 
     async loadChartColumns(file) {
         const selector = document.getElementById('columnSelector');
-        selector.innerHTML = '<p class="help-text">載入欄位中...</p>';
+        selector.innerHTML = `<p class="help-text">${tHtml('status.loading_columns')}</p>`;
         try {
             const headers = await GetCSVHeaders({filePath: file});
             // 第一個欄位為時間，必選且禁止取消
@@ -939,8 +1128,8 @@ class EMGAnalysisApp {
             this.previewInteractiveChart();
         } catch (err) {
             console.error('載入欄位失敗:', err);
-            selector.innerHTML = '<p class="help-text text-danger">載入欄位失敗</p>';
-            await ShowError('錯誤', `讀取欄位失敗：${err}`);
+            selector.innerHTML = `<p class="help-text text-danger">${tHtml('status.load_columns_failed')}</p>`;
+            await ShowError(t('dialog.error'), t('error.msg.load_columns_failed', err));
         }
     }
 
@@ -981,7 +1170,7 @@ class EMGAnalysisApp {
             document.getElementById('previewChartContainer').classList.remove('hidden');
         } catch (err) {
             console.error('預覽生成失敗:', err);
-            await ShowError('錯誤', `即時預覽失敗：${err}`);
+            await ShowError(t('dialog.error'), t('error.msg.chart_preview_failed', err));
         }
     }
     // 分期同步分析面板
@@ -989,55 +1178,55 @@ class EMGAnalysisApp {
         const panel = document.getElementById('functionPanel');
         panel.innerHTML = `
             <div class="panel-header">
-                <h2>分期同步分析</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+                <h2>${tHtml('panel.phasesync.title')}</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
             </div>
-            
+
             <div class="form-group">
-                <label>1. 選擇分期總檔案</label>
+                <label>1. ${tHtml('form.label.manifest')}</label>
                 <div class="input-group drop-zone" data-drop-target="phaseSyncManifest" style="--wails-drop-target: drop;">
-                    <input type="text" id="phaseSyncManifest" class="form-control" placeholder="選擇或拖放分期總檔案 (.csv)" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectPhaseSyncManifest()">瀏覽</button>
+                    <input type="text" id="phaseSyncManifest" class="form-control" placeholder="${tHtml('form.placeholder.manifest')}" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectPhaseSyncManifest()">${tHtml('button.browse')}</button>
                 </div>
             </div>
-            
+
             <div class="form-group">
-                <label>2. 選擇數據資料夾</label>
+                <label>2. ${tHtml('form.label.data_folder')}</label>
                 <div class="input-group">
-                    <input type="text" id="phaseSyncDataFolder" class="form-control" placeholder="選擇包含所有數據檔案的資料夾" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectPhaseSyncDataFolder()">瀏覽</button>
+                    <input type="text" id="phaseSyncDataFolder" class="form-control" placeholder="${tHtml('form.placeholder.data_folder')}" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectPhaseSyncDataFolder()">${tHtml('button.browse')}</button>
                 </div>
             </div>
-            
+
             <div class="form-group">
-                <label>3. 選擇分析主題</label>
+                <label>3. ${tHtml('form.label.subject')}</label>
                 <select id="phaseSyncSubject" class="form-control" disabled>
-                    <option value="">請先載入分期總檔案</option>
+                    <option value="">${tHtml('form.placeholder.load_manifest_first')}</option>
                 </select>
             </div>
-            
+
             <div class="form-row">
                 <div class="form-group col-md-6">
-                    <label>4. 開始分期點</label>
+                    <label>4. ${tHtml('form.label.start_phase')}</label>
                     <select id="phaseSyncStartPhase" class="form-control">
-                        <option value="">請選擇</option>
+                        <option value="">${tHtml('form.option.select')}</option>
                     </select>
                 </div>
                 <div class="form-group col-md-6">
-                    <label>結束分期點</label>
+                    <label>${tHtml('form.label.end_phase')}</label>
                     <select id="phaseSyncEndPhase" class="form-control">
-                        <option value="">請選擇</option>
+                        <option value="">${tHtml('form.option.select')}</option>
                     </select>
                 </div>
             </div>
-            
+
             <div class="button-group">
-                <button class="btn btn-primary" onclick="app.executePhaseSyncAnalysis()">開始分析</button>
-                <button class="btn btn-secondary" onclick="app.showMainMenu()">返回</button>
+                <button class="btn btn-primary" onclick="app.executePhaseSyncAnalysis()">${tHtml('button.start_analyze')}</button>
+                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
             </div>
-            
+
             <div id="phaseSyncResult" class="result-section" style="display: none;">
-                <h3>分析結果</h3>
+                <h3>${tHtml('result.section.title')}</h3>
                 <div id="phaseSyncResultContent"></div>
             </div>
         `;
@@ -1061,7 +1250,7 @@ class EMGAnalysisApp {
             }
         } catch (err) {
             console.error('選擇檔案失敗:', err);
-            await ShowError('錯誤', err.toString());
+            await ShowError(t('dialog.error'), err.toString());
         }
     }
     
@@ -1071,7 +1260,7 @@ class EMGAnalysisApp {
             const subjects = await LoadPhaseManifest(manifestPath);
             const select = document.getElementById('phaseSyncSubject');
             
-            select.innerHTML = '<option value="">請選擇主題</option>';
+            select.innerHTML = `<option value="">${tHtml('form.option.select_subject')}</option>`;
             subjects.forEach((subject, index) => {
                 const option = document.createElement('option');
                 option.value = index;
@@ -1080,10 +1269,10 @@ class EMGAnalysisApp {
             });
             
             select.disabled = false;
-            this.updateStatus(`已載入 ${subjects.length} 個主題`);
+            this.updateStatus(t('status.subjects_loaded', subjects.length));
         } catch (err) {
             console.error('載入主題失敗:', err);
-            await ShowError('錯誤', `載入主題失敗: ${err}`);
+            await ShowError(t('dialog.error'), t('error.msg.load_subjects_failed', err));
         }
     }
     
@@ -1096,7 +1285,7 @@ class EMGAnalysisApp {
             }
         } catch (err) {
             console.error('選擇資料夾失敗:', err);
-            await ShowError('錯誤', err.toString());
+            await ShowError(t('dialog.error'), err.toString());
         }
     }
     
@@ -1107,7 +1296,7 @@ class EMGAnalysisApp {
             
             // 填充開始分期點
             const startSelect = document.getElementById('phaseSyncStartPhase');
-            startSelect.innerHTML = '<option value="">請選擇</option>';
+            startSelect.innerHTML = `<option value="">${tHtml('form.option.select')}</option>`;
             phases.start.forEach(phase => {
                 const option = document.createElement('option');
                 option.value = phase;
@@ -1117,7 +1306,7 @@ class EMGAnalysisApp {
             
             // 填充結束分期點
             const endSelect = document.getElementById('phaseSyncEndPhase');
-            endSelect.innerHTML = '<option value="">請選擇</option>';
+            endSelect.innerHTML = `<option value="">${tHtml('form.option.select')}</option>`;
             phases.end.forEach(phase => {
                 const option = document.createElement('option');
                 option.value = phase;
@@ -1140,11 +1329,11 @@ class EMGAnalysisApp {
             
             // 驗證輸入
             if (!manifestFile || !dataFolder || isNaN(subjectIndex) || !startPhase || !endPhase) {
-                await ShowError('錯誤', '請填寫所有必要欄位');
+                await ShowError(t('dialog.error'), t('error.msg.fill_required_fields'));
                 return;
             }
             
-            this.updateStatus('正在進行分期同步分析...');
+            this.updateStatus(t('status.phasesync_running'));
             
             const result = await AnalyzePhaseSync({
                 manifestFile,
@@ -1156,16 +1345,16 @@ class EMGAnalysisApp {
             
             if (result.success) {
                 await this.showPhaseSyncResult(result);
-                await ShowMessage('成功', `分析完成！結果已保存至：${result.outputPath}`);
+                await ShowMessage(t('dialog.success'), t('success.msg.analysis_done', result.outputPath));
             } else {
-                await ShowError('錯誤', result.message);
+                await ShowError(t('dialog.error'), result.message);
             }
             
-            this.updateStatus('分析完成');
+            this.updateStatus(t('status.analysis_done'));
         } catch (err) {
             console.error('分期同步分析失敗:', err);
-            await ShowError('錯誤', `分析失敗: ${err}`);
-            this.updateStatus('分析失敗');
+            await ShowError(t('dialog.error'), t('error.msg.analysis_failed_dynamic', err));
+            this.updateStatus(t('status.analysis_failed'));
         }
     }
     
@@ -1202,40 +1391,40 @@ class EMGAnalysisApp {
         const panel = document.getElementById('functionPanel');
         panel.innerHTML = `
             <div class="panel-header">
-                <h2>共同收縮分析 (CCI Rudolph)</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+                <h2>${tHtml('panel.cci.title')}</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
             </div>
 
             <div class="form-group">
-                <label>1. 選擇分期總檔案</label>
+                <label>1. ${tHtml('form.label.manifest')}</label>
                 <div class="input-group drop-zone" data-drop-target="cciManifest" style="--wails-drop-target: drop;">
-                    <input type="text" id="cciManifest" class="form-control" placeholder="選擇或拖放分期總檔案 (.csv)" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectCCIManifest()">瀏覽</button>
+                    <input type="text" id="cciManifest" class="form-control" placeholder="${tHtml('form.placeholder.manifest')}" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectCCIManifest()">${tHtml('button.browse')}</button>
                 </div>
             </div>
 
             <div class="form-group">
-                <label>2. 選擇數據資料夾</label>
+                <label>2. ${tHtml('form.label.data_folder')}</label>
                 <div class="input-group">
-                    <input type="text" id="cciDataFolder" class="form-control" placeholder="選擇包含 EMG 數據檔案的資料夾" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectCCIDataFolder()">瀏覽</button>
+                    <input type="text" id="cciDataFolder" class="form-control" placeholder="${tHtml('form.placeholder.data_folder_emg')}" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectCCIDataFolder()">${tHtml('button.browse')}</button>
                 </div>
             </div>
 
             <div class="form-group">
-                <label>3. 選擇分析主題</label>
+                <label>3. ${tHtml('form.label.subject')}</label>
                 <select id="cciSubject" class="form-control" disabled>
-                    <option value="">請先載入分期總檔案</option>
+                    <option value="">${tHtml('form.placeholder.load_manifest_first')}</option>
                 </select>
             </div>
 
             <div class="button-group">
-                <button class="btn btn-primary" onclick="app.executeCCIAnalysis()">開始分析</button>
-                <button class="btn btn-secondary" onclick="app.showMainMenu()">返回</button>
+                <button class="btn btn-primary" onclick="app.executeCCIAnalysis()">${tHtml('button.start_analyze')}</button>
+                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
             </div>
 
             <div id="cciResult" class="result-section" style="display: none;">
-                <h3>分析結果</h3>
+                <h3>${tHtml('result.section.title')}</h3>
                 <div id="cciResultContent"></div>
             </div>
         `;
@@ -1258,7 +1447,7 @@ class EMGAnalysisApp {
             }
         } catch (err) {
             console.error('選擇檔案失敗:', err);
-            await ShowError('錯誤', err.toString());
+            await ShowError(t('dialog.error'), err.toString());
         }
     }
 
@@ -1268,7 +1457,7 @@ class EMGAnalysisApp {
             const subjects = await LoadPhaseManifest(manifestPath);
             const select = document.getElementById('cciSubject');
 
-            select.innerHTML = '<option value="">請選擇主題</option>';
+            select.innerHTML = `<option value="">${tHtml('form.option.select_subject')}</option>`;
             subjects.forEach((subject, index) => {
                 const option = document.createElement('option');
                 option.value = index;
@@ -1277,10 +1466,10 @@ class EMGAnalysisApp {
             });
 
             select.disabled = false;
-            this.updateStatus(`已載入 ${subjects.length} 個主題`);
+            this.updateStatus(t('status.subjects_loaded', subjects.length));
         } catch (err) {
             console.error('載入主題失敗:', err);
-            await ShowError('錯誤', `載入主題失敗: ${err}`);
+            await ShowError(t('dialog.error'), t('error.msg.load_subjects_failed', err));
         }
     }
 
@@ -1293,7 +1482,7 @@ class EMGAnalysisApp {
             }
         } catch (err) {
             console.error('選擇資料夾失敗:', err);
-            await ShowError('錯誤', err.toString());
+            await ShowError(t('dialog.error'), err.toString());
         }
     }
 
@@ -1305,11 +1494,11 @@ class EMGAnalysisApp {
             const subjectIndex = parseInt(document.getElementById('cciSubject').value);
 
             if (!manifestFile || !dataFolder || isNaN(subjectIndex)) {
-                await ShowError('錯誤', '請填寫所有必要欄位');
+                await ShowError(t('dialog.error'), t('error.msg.fill_required_fields'));
                 return;
             }
 
-            this.updateStatus('正在進行 CCI Rudolph 分析...');
+            this.updateStatus(t('status.cci_running'));
 
             const result = await AnalyzeCCI({
                 manifestFile,
@@ -1319,16 +1508,16 @@ class EMGAnalysisApp {
 
             if (result.success) {
                 this.showCCIResult(result);
-                await ShowMessage('成功', `分析完成！\nCSV: ${result.outputCSVPath}`);
+                await ShowMessage(t('dialog.success'), t('success.msg.cci_analysis_done', result.outputCSVPath));
             } else {
-                await ShowError('錯誤', result.message);
+                await ShowError(t('dialog.error'), result.message);
             }
 
-            this.updateStatus('分析完成');
+            this.updateStatus(t('status.analysis_done'));
         } catch (err) {
             console.error('CCI 分析失敗:', err);
-            await ShowError('錯誤', `分析失敗: ${err}`);
-            this.updateStatus('分析失敗');
+            await ShowError(t('dialog.error'), t('error.msg.analysis_failed_dynamic', err));
+            this.updateStatus(t('status.analysis_failed'));
         }
     }
 
@@ -1557,7 +1746,7 @@ class EMGAnalysisApp {
         wrapper.style.marginTop = '0.5rem';
         const label = document.createElement('p');
         const strong = document.createElement('strong');
-        strong.textContent = '分期點位置 (步態週期 %)：';
+        strong.textContent = t('result.label.phase_positions');
         label.appendChild(strong);
         wrapper.appendChild(label);
         wrapper.appendChild(pre);
@@ -1583,12 +1772,12 @@ class EMGAnalysisApp {
     async downloadCCIChart() {
         const iframe = document.querySelector('#cciChartContent iframe');
         if (!iframe) {
-            await ShowError('錯誤', '找不到圖表');
+            await ShowError(t('dialog.error'), t('error.msg.cci_chart_not_found'));
             return;
         }
 
         try {
-            this.updateStatus('正在下載 CCI 圖表...');
+            this.updateStatus(t('status.cci_chart_downloading'));
 
             await new Promise(resolve => {
                 if (iframe.contentDocument.readyState === 'complete') {
@@ -1602,17 +1791,17 @@ class EMGAnalysisApp {
             const iframeDocument = iframe.contentDocument;
 
             if (!iframeWindow.echarts) {
-                throw new Error('ECharts 未找到');
+                throw new Error(t('error.msg.echarts_not_found'));
             }
 
             const chartElement = iframeDocument.querySelector('[_echarts_instance_]');
             if (!chartElement) {
-                throw new Error('找不到圖表元素');
+                throw new Error(t('error.msg.chart_element_not_found'));
             }
 
             const chartInstance = iframeWindow.echarts.getInstanceByDom(chartElement);
             if (!chartInstance) {
-                throw new Error('找不到圖表實例');
+                throw new Error(t('error.msg.chart_instance_not_found'));
             }
 
             const dataURL = chartInstance.getDataURL({
@@ -1626,11 +1815,11 @@ class EMGAnalysisApp {
                 subject: this._cciResult.subject
             });
 
-            this.updateStatus('圖表下載完成');
-            await ShowMessage('成功', `圖表已下載至：${result.outputPath}`);
+            this.updateStatus(t('status.chart_download_done'));
+            await ShowMessage(t('dialog.success'), t('success.msg.chart_downloaded', result.outputPath));
         } catch (err) {
-            this.updateStatus('圖表下載失敗');
-            await ShowError('錯誤', `下載失敗：${err.message || err}`);
+            this.updateStatus(t('status.chart_download_failed'));
+            await ShowError(t('dialog.error'), t('error.msg.chart_download_failed', err.message || err));
         }
     }
 
@@ -1638,62 +1827,68 @@ class EMGAnalysisApp {
 
     showNormalizedPhaseSyncPanel() {
         const panel = document.getElementById('functionPanel');
-        const html = [
-            '<div class="panel-header">',
-            '<h2>標準化分期同步分析</h2>',
-            '<button class="btn-back" onclick="app.showMainMenu()">返回</button>',
-            '</div>',
-            '<p class="help-text" style="margin-bottom: 1rem;">',
-            '先以每條肌肉在「標準化區間」內的最大值做標準化（除數），',
-            '再對標準化後的資料於「統計區間」內計算分期同步統計。一次產生兩個檔案。',
-            '標準化區間與統計區間可獨立選擇（預設兩者相同，可分別調整）。',
-            '</p>',
-            '<div class="form-group">',
-            '<label>1. 選擇分期總檔案</label>',
-            '<div class="input-group drop-zone" data-drop-target="normalizedPhaseSyncManifest" style="--wails-drop-target: drop;">',
-            '<input type="text" id="normalizedPhaseSyncManifest" class="form-control" placeholder="選擇或拖放分期總檔案 (.csv)" readonly>',
-            '<button class="btn btn-secondary" onclick="app.selectNormalizedPhaseSyncManifest()">瀏覽</button>',
-            '</div></div>',
-            '<div class="form-group">',
-            '<label>2. 選擇數據資料夾</label>',
-            '<div class="input-group">',
-            '<input type="text" id="normalizedPhaseSyncDataFolder" class="form-control" placeholder="選擇包含 EMG 數據檔案的資料夾" readonly>',
-            '<button class="btn btn-secondary" onclick="app.selectNormalizedPhaseSyncDataFolder()">瀏覽</button>',
-            '</div></div>',
-            '<div class="form-group">',
-            '<label>3. 選擇分析主題</label>',
-            '<select id="normalizedPhaseSyncSubject" class="form-control" disabled>',
-            '<option value="">請先載入分期總檔案</option>',
-            '</select></div>',
-            '<div class="form-row">',
-            '<div class="form-group col-md-6">',
-            '<label>4. 標準化開始分期點</label>',
-            '<select id="normalizedPhaseSyncNormStartPhase" class="form-control" data-touched="false">',
-            '<option value="">請選擇</option></select></div>',
-            '<div class="form-group col-md-6">',
-            '<label>標準化結束分期點</label>',
-            '<select id="normalizedPhaseSyncNormEndPhase" class="form-control" data-touched="false">',
-            '<option value="">請選擇</option></select></div>',
-            '</div>',
-            '<div class="form-row">',
-            '<div class="form-group col-md-6">',
-            '<label>5. 統計開始分期點</label>',
-            '<select id="normalizedPhaseSyncStatsStartPhase" class="form-control" data-touched="false">',
-            '<option value="">請選擇</option></select></div>',
-            '<div class="form-group col-md-6">',
-            '<label>統計結束分期點</label>',
-            '<select id="normalizedPhaseSyncStatsEndPhase" class="form-control" data-touched="false">',
-            '<option value="">請選擇</option></select></div>',
-            '</div>',
-            '<div class="button-group">',
-            '<button class="btn btn-primary" onclick="app.executeNormalizedPhaseSyncAnalysis()">開始分析</button>',
-            '<button class="btn btn-secondary" onclick="app.showMainMenu()">返回</button>',
-            '</div>',
-            '<div id="normalizedPhaseSyncResult" class="result-section" style="display: none;">',
-            '<h3>分析結果</h3>',
-            '<div id="normalizedPhaseSyncResultContent"></div>',
-            '</div>'
-        ].join('');
+        const html = `
+            <div class="panel-header">
+                <h2>${tHtml('panel.normalizedphasesync.title')}</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
+            </div>
+            <p class="help-text" style="margin-bottom: 1rem;">${tHtml('panel.normalizedphasesync.description')}</p>
+            <div class="form-group">
+                <label>1. ${tHtml('form.label.manifest')}</label>
+                <div class="input-group drop-zone" data-drop-target="normalizedPhaseSyncManifest" style="--wails-drop-target: drop;">
+                    <input type="text" id="normalizedPhaseSyncManifest" class="form-control" placeholder="${tHtml('form.placeholder.manifest')}" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectNormalizedPhaseSyncManifest()">${tHtml('button.browse')}</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>2. ${tHtml('form.label.data_folder')}</label>
+                <div class="input-group">
+                    <input type="text" id="normalizedPhaseSyncDataFolder" class="form-control" placeholder="${tHtml('form.placeholder.data_folder_emg')}" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectNormalizedPhaseSyncDataFolder()">${tHtml('button.browse')}</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>3. ${tHtml('form.label.subject')}</label>
+                <select id="normalizedPhaseSyncSubject" class="form-control" disabled>
+                    <option value="">${tHtml('form.placeholder.load_manifest_first')}</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <div class="form-group col-md-6">
+                    <label>4. ${tHtml('form.label.norm_start_phase')}</label>
+                    <select id="normalizedPhaseSyncNormStartPhase" class="form-control" data-touched="false">
+                        <option value="">${tHtml('form.option.select')}</option>
+                    </select>
+                </div>
+                <div class="form-group col-md-6">
+                    <label>${tHtml('form.label.norm_end_phase')}</label>
+                    <select id="normalizedPhaseSyncNormEndPhase" class="form-control" data-touched="false">
+                        <option value="">${tHtml('form.option.select')}</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group col-md-6">
+                    <label>5. ${tHtml('form.label.stats_start_phase')}</label>
+                    <select id="normalizedPhaseSyncStatsStartPhase" class="form-control" data-touched="false">
+                        <option value="">${tHtml('form.option.select')}</option>
+                    </select>
+                </div>
+                <div class="form-group col-md-6">
+                    <label>${tHtml('form.label.stats_end_phase')}</label>
+                    <select id="normalizedPhaseSyncStatsEndPhase" class="form-control" data-touched="false">
+                        <option value="">${tHtml('form.option.select')}</option>
+                    </select>
+                </div>
+            </div>
+            <div class="button-group">
+                <button class="btn btn-primary" onclick="app.executeNormalizedPhaseSyncAnalysis()">${tHtml('button.start_analyze')}</button>
+                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
+            </div>
+            <div id="normalizedPhaseSyncResult" class="result-section" style="display: none;">
+                <h3>${tHtml('result.section.title')}</h3>
+                <div id="normalizedPhaseSyncResultContent"></div>
+            </div>`;
         panel.innerHTML = html;
         this.showPanel(panel);
         this.loadNormalizedPhaseSyncPhases();
@@ -1709,7 +1904,7 @@ class EMGAnalysisApp {
             }
         } catch (err) {
             console.error('選擇檔案失敗:', err);
-            await ShowError('錯誤', err.toString());
+            await ShowError(t('dialog.error'), err.toString());
         }
     }
 
@@ -1720,7 +1915,7 @@ class EMGAnalysisApp {
             select.innerHTML = '';
             const placeholder = document.createElement('option');
             placeholder.value = '';
-            placeholder.textContent = '請選擇主題';
+            placeholder.textContent = t('form.option.select_subject');
             select.appendChild(placeholder);
             subjects.forEach((subject, index) => {
                 const option = document.createElement('option');
@@ -1729,10 +1924,10 @@ class EMGAnalysisApp {
                 select.appendChild(option);
             });
             select.disabled = false;
-            this.updateStatus(`已載入 ${subjects.length} 個主題`);
+            this.updateStatus(t('status.subjects_loaded', subjects.length));
         } catch (err) {
             console.error('載入主題失敗:', err);
-            await ShowError('錯誤', `載入主題失敗: ${err}`);
+            await ShowError(t('dialog.error'), t('error.msg.load_subjects_failed', err));
         }
     }
 
@@ -1744,7 +1939,7 @@ class EMGAnalysisApp {
             }
         } catch (err) {
             console.error('選擇資料夾失敗:', err);
-            await ShowError('錯誤', err.toString());
+            await ShowError(t('dialog.error'), err.toString());
         }
     }
 
@@ -1755,7 +1950,7 @@ class EMGAnalysisApp {
                 selectEl.replaceChildren();
                 const placeholder = document.createElement('option');
                 placeholder.value = '';
-                placeholder.textContent = '請選擇';
+                placeholder.textContent = t('form.option.select');
                 selectEl.appendChild(placeholder);
                 list.forEach(phase => {
                     const option = document.createElement('option');
@@ -1815,11 +2010,11 @@ class EMGAnalysisApp {
             if (!manifestFile || !dataFolder || isNaN(subjectIndex)
                 || !normStartPhase || !normEndPhase
                 || !statsStartPhase || !statsEndPhase) {
-                await ShowError('錯誤', '請填寫所有必要欄位');
+                await ShowError(t('dialog.error'), t('error.msg.fill_required_fields'));
                 return;
             }
 
-            this.updateStatus('正在進行標準化分期同步分析...');
+            this.updateStatus(t('status.normalized_running'));
             const result = await AnalyzeNormalizedPhaseSync({
                 manifestFile, dataFolder, subjectIndex,
                 normStartPhase, normEndPhase,
@@ -1829,17 +2024,17 @@ class EMGAnalysisApp {
             if (result.success) {
                 this.showNormalizedPhaseSyncResult(result);
                 await ShowMessage(
-                    '成功',
-                    `分析完成！\n標準化 EMG: ${result.normalizedEMGPath}\n分期統計: ${result.phaseSyncCSVPath}`
+                    t('dialog.success'),
+                    t('success.msg.normalized_analysis_done', result.normalizedEMGPath, result.phaseSyncCSVPath)
                 );
             } else {
-                await ShowError('錯誤', result.message);
+                await ShowError(t('dialog.error'), result.message);
             }
-            this.updateStatus('分析完成');
+            this.updateStatus(t('status.analysis_done'));
         } catch (err) {
             console.error('標準化分期同步分析失敗:', err);
-            await ShowError('錯誤', `分析失敗: ${err}`);
-            this.updateStatus('分析失敗');
+            await ShowError(t('dialog.error'), t('error.msg.analysis_failed_dynamic', err));
+            this.updateStatus(t('status.analysis_failed'));
         }
     }
 
@@ -1852,13 +2047,13 @@ class EMGAnalysisApp {
         info.className = 'result-info';
         const fmtTime = t => (typeof t === 'number' ? t.toFixed(3) : '—');
         const lines = [
-            ['主題：', result.subject],
-            ['標準化區間：',
+            [t('result.label.subject'), result.subject],
+            [t('result.label.norm_range'),
                 `${result.normStartPhase} (${fmtTime(result.normStartTime)}s) → ${result.normEndPhase} (${fmtTime(result.normEndTime)}s)`],
-            ['統計區間：',
+            [t('result.label.stats_range'),
                 `${result.statsStartPhase} (${fmtTime(result.statsStartTime)}s) → ${result.statsEndPhase} (${fmtTime(result.statsEndTime)}s)`],
-            ['Output 1（標準化 EMG）：', result.normalizedEMGPath],
-            ['Output 2（分期統計）：', result.phaseSyncCSVPath]
+            [t('result.label.output_normalized'), result.normalizedEMGPath],
+            [t('result.label.output_stats'), result.phaseSyncCSVPath]
         ];
         lines.forEach(([label, value]) => {
             const p = document.createElement('p');
@@ -1874,12 +2069,12 @@ class EMGAnalysisApp {
             const wrap = document.createElement('div');
             wrap.style.marginTop = '1rem';
             const h4 = document.createElement('h4');
-            h4.textContent = '各肌肉數值';
+            h4.textContent = t('result.label.muscles');
             wrap.appendChild(h4);
             const note = document.createElement('p');
             note.className = 'help-text';
             note.style.marginBottom = '0.5rem';
-            note.textContent = '「標準化區間最大值」為標準化前在標準化區間內的原始最大值（用作除數）；「標準化後區間平均」為標準化後在統計區間內的平均值。Output 2 中各肌肉最大值在「標準化區間與統計區間相同時」會列為 1.000000（區間內 max 除以自己 = 1）；當兩區間不同時，該數值為 max(統計區間) / max(標準化區間)，可能小於或大於 1。';
+            note.textContent = t('result.normalized.help_text');
             wrap.appendChild(note);
 
             const table = document.createElement('table');
@@ -1888,7 +2083,7 @@ class EMGAnalysisApp {
             table.style.borderCollapse = 'collapse';
             const thead = document.createElement('thead');
             const headRow = document.createElement('tr');
-            ['肌肉', '標準化區間最大值', '標準化後區間平均'].forEach((h, i) => {
+            [t('table.header.muscle'), t('table.header.norm_max'), t('table.header.norm_mean')].forEach((h, i) => {
                 const th = document.createElement('th');
                 th.textContent = h;
                 th.style.padding = '0.25rem 0.5rem';
@@ -1931,7 +2126,7 @@ class EMGAnalysisApp {
             reportWrap.className = 'result-report';
             reportWrap.style.marginTop = '1rem';
             const h4 = document.createElement('h4');
-            h4.textContent = '分析報告';
+            h4.textContent = t('result.label.analysis_report');
             reportWrap.appendChild(h4);
             const pre = document.createElement('pre');
             pre.className = 'result-pre';
@@ -1944,7 +2139,7 @@ class EMGAnalysisApp {
         btnGroup.className = 'button-group';
         const btn = document.createElement('button');
         btn.className = 'btn btn-primary';
-        btn.textContent = '開啟輸出資料夾';
+        btn.textContent = t('button.open_output_folder');
         btn.onclick = () => this.openOutputFolder();
         btnGroup.appendChild(btn);
         contentDiv.appendChild(btnGroup);
@@ -1960,39 +2155,35 @@ class EMGAnalysisApp {
         // 純靜態模板（無 dynamic user input），與既有 showCCIPanel / showPhaseSyncPanel 對稱
         panel.innerHTML = `
             <div class="panel-header">
-                <h2>肌肉比值分析</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">返回</button>
+                <h2>${tHtml('panel.muscleratio.title')}</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
             </div>
 
-            <p class="help-text">
-                批次計算 manifest 中所有 subject 的 4 對右側肌肉比值：
-                <strong>R.RA/R.ES</strong>、<strong>R.IL/R.GMax</strong>、<strong>R.RF/R.BF</strong>、<strong>R.TA&amp;IO/R.MF</strong>。
-                每個 subject 產出兩個 CSV：完整時間序列 + 分期點切片（10 個分期 + 9 個中間時間點 = 19 列）。
-            </p>
+            <p class="help-text">${tHtml('panel.muscleratio.description')}</p>
 
             <div class="form-group">
-                <label>1. 選擇分期總檔案</label>
+                <label>1. ${tHtml('form.label.manifest')}</label>
                 <div class="input-group drop-zone" data-drop-target="muscleRatioManifest" style="--wails-drop-target: drop;">
-                    <input type="text" id="muscleRatioManifest" class="form-control" placeholder="選擇或拖放分期總檔案 (.csv)" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectMuscleRatioManifest()">瀏覽</button>
+                    <input type="text" id="muscleRatioManifest" class="form-control" placeholder="${tHtml('form.placeholder.manifest')}" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectMuscleRatioManifest()">${tHtml('button.browse')}</button>
                 </div>
             </div>
 
             <div class="form-group">
-                <label>2. 選擇數據資料夾</label>
+                <label>2. ${tHtml('form.label.data_folder')}</label>
                 <div class="input-group">
-                    <input type="text" id="muscleRatioDataFolder" class="form-control" placeholder="選擇包含 EMG 數據檔案的資料夾" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectMuscleRatioDataFolder()">瀏覽</button>
+                    <input type="text" id="muscleRatioDataFolder" class="form-control" placeholder="${tHtml('form.placeholder.data_folder_emg')}" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectMuscleRatioDataFolder()">${tHtml('button.browse')}</button>
                 </div>
             </div>
 
             <div class="button-group">
-                <button class="btn btn-primary" onclick="app.executeMuscleRatioAnalysis()">開始批次分析</button>
-                <button class="btn btn-secondary" onclick="app.showMainMenu()">返回</button>
+                <button class="btn btn-primary" onclick="app.executeMuscleRatioAnalysis()">${tHtml('button.start_batch_analyze')}</button>
+                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
             </div>
 
             <div id="muscleRatioResult" class="result-section" style="display: none;">
-                <h3>分析結果</h3>
+                <h3>${tHtml('result.section.title')}</h3>
                 <div id="muscleRatioResultContent"></div>
             </div>
         `;
@@ -2014,7 +2205,7 @@ class EMGAnalysisApp {
             }
         } catch (err) {
             console.error('選擇檔案失敗:', err);
-            await ShowError('錯誤', err.toString());
+            await ShowError(t('dialog.error'), err.toString());
         }
     }
 
@@ -2027,7 +2218,7 @@ class EMGAnalysisApp {
             }
         } catch (err) {
             console.error('選擇資料夾失敗:', err);
-            await ShowError('錯誤', err.toString());
+            await ShowError(t('dialog.error'), err.toString());
         }
     }
 
@@ -2042,11 +2233,11 @@ class EMGAnalysisApp {
             const dataFolder = document.getElementById('muscleRatioDataFolder').value;
 
             if (!manifestFile || !dataFolder) {
-                await ShowError('錯誤', '請選擇分期總檔案與數據資料夾');
+                await ShowError(t('dialog.error'), t('error.msg.muscle_fill_fields'));
                 return;
             }
 
-            this.updateStatus('正在批次計算肌肉比值...');
+            this.updateStatus(t('status.muscle_running'));
 
             const result = await AnalyzeMuscleRatio({ manifestFile, dataFolder });
 
@@ -2054,16 +2245,16 @@ class EMGAnalysisApp {
 
             // status 必須與 success 一致；部分失敗時顯示「分析完成」會誤導
             if (result.success) {
-                this.updateStatus('分析完成');
-                await ShowMessage('完成', result.message);
+                this.updateStatus(t('status.analysis_done'));
+                await ShowMessage(t('dialog.title.complete'), result.message);
             } else {
-                this.updateStatus('部分失敗');
-                await ShowError('部分失敗', result.message);
+                this.updateStatus(t('dialog.title.partial_failed'));
+                await ShowError(t('dialog.title.partial_failed'), result.message);
             }
         } catch (err) {
             console.error('肌肉比值分析失敗:', err);
-            await ShowError('錯誤', `分析失敗: ${err}`);
-            this.updateStatus('分析失敗');
+            await ShowError(t('dialog.error'), t('error.msg.analysis_failed_dynamic', err));
+            this.updateStatus(t('status.analysis_failed'));
         } finally {
             if (btn) btn.disabled = false;
         }
@@ -2078,7 +2269,7 @@ class EMGAnalysisApp {
         const summary = document.createElement('p');
         const strong = document.createElement('strong');
         const count = result.subjects ? result.subjects.length : 0;
-        strong.textContent = `共 ${count} 個主題`;
+        strong.textContent = t('result.muscle.subject_count', count);
         summary.appendChild(strong);
         summary.appendChild(document.createTextNode(`：${result.message || ''}`));
         contentDiv.appendChild(summary);
@@ -2096,7 +2287,7 @@ class EMGAnalysisApp {
 
         const thead = document.createElement('thead');
         const headRow = document.createElement('tr');
-        ['主題', '狀態', 'Output 1 (時間序列)', 'Output 2 (分期切片)', '訊息'].forEach(h => {
+        [t('table.header.subject'), t('table.header.status'), t('table.header.output_all'), t('table.header.output_phase'), t('table.header.duration'), t('table.header.message')].forEach(h => {
             const th = document.createElement('th');
             th.textContent = h;
             th.style.padding = '0.25rem 0.5rem';
@@ -2137,6 +2328,14 @@ class EMGAnalysisApp {
             tdPhase.style.fontSize = '0.85em';
             tr.appendChild(tdPhase);
 
+            const tdDuration = document.createElement('td');
+            tdDuration.textContent = sr.durationMs > 0 ? sr.durationMs.toString() : '—';
+            tdDuration.style.padding = '0.25rem 0.5rem';
+            tdDuration.style.fontFamily = 'monospace';
+            tdDuration.style.fontSize = '0.85em';
+            tdDuration.style.textAlign = 'right';
+            tr.appendChild(tdDuration);
+
             const tdErr = document.createElement('td');
             tdErr.textContent = sr.error || '';
             tdErr.style.padding = '0.25rem 0.5rem';
@@ -2159,11 +2358,11 @@ class EMGAnalysisApp {
             if (config && config.outputDir) {
                 // 使用系統預設程式開啟資料夾
                 // 注意：這裡需要通過後端 API 來執行
-                await ShowMessage('提示', `輸出檔案已保存至：${config.outputDir}`);
+                await ShowMessage(t('dialog.title.hint'), t('info.msg.output_folder', config.outputDir));
             }
         } catch (err) {
             console.error('無法開啟輸出資料夾:', err);
-            await ShowError('錯誤', '無法開啟輸出資料夾');
+            await ShowError(t('dialog.error'), t('error.msg.open_output_folder'));
         } 
     }
 }

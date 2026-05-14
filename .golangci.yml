@@ -1,440 +1,79 @@
+version: "2"
+
+# 精簡 lint config — 只啟用「可能藏 bug 的」linter，
+# 純風格 linter (wsl/lll/goconst/revive 等) 全 disable 直到後續另開排程清理。
+# 設計理由：v1→v2 schema 遷移後 baseline 有 657 個 issue，多數是 stylistic noise；
+# 此 config 聚焦 ~67 個有 bug 嫌疑的 finding，先解掉再考慮全套 enforcement。
+
 run:
-  timeout: 5m
   go: "1.26"
   tests: true
 
 linters:
+  default: none
   enable:
-    - asciicheck
-    - bidichk
-    - bodyclose
-    - containedctx
-    - contextcheck
-    - copyloopvar
-    - cyclop
-    - decorder
-    - depguard
-    - dogsled
-    - dupl
-    - durationcheck
-    - err113
-    - errcheck
-    - errchkjson
-    - errname
-    - errorlint
-    - exhaustive
-    - forcetypeassert
-    - funlen
-    - gci
-    - ginkgolinter
-    - gocheckcompilerdirectives
-    - gochecknoglobals
-    - gochecknoinits
-    - gocognit
-    - goconst
-    - gocritic
-    - gocyclo
-    - godot
-    - godox
-    - gofmt
-    # - gofumpt  # Disabled due to version mismatch with standalone gofumpt tool
-    - goheader
-    - goimports
-    - gomoddirectives
-    - gomodguard
-    - goprintffuncname
-    - gosec
-    - gosimple
-    - govet
-    - grouper
-    - importas
-    - ineffassign
-    - interfacebloat
-    - ireturn
-    - lll
-    - loggercheck
-    - maintidx
-    - makezero
-    - misspell
-    - mnd
-    - nakedret
-    - nestif
-    - nilerr
-    - nilnil
-    - noctx
-    - nolintlint
-    - nonamedreturns
-    - nosprintfhostport
-    - paralleltest
-    - prealloc
-    - predeclared
-    - promlinter
-    - reassign
-    - revive
-    - rowserrcheck
-    - sqlclosecheck
-    - staticcheck
-    - stylecheck
-    - testableexamples
-    - testpackage
-    - thelper
-    - tparallel
-    - typecheck
-    - unconvert
-    - unparam
-    - unused
-    - usestdlibvars
-    - usetesting
-    - varnamelen
-    - wastedassign
-    - whitespace
-    - wrapcheck
-    - wsl
+    - copyloopvar    # Go 1.22+ loop variable scoping
+    - err113         # sentinel error pattern
+    - errcheck       # unchecked errors
+    - gosec          # security
+    - govet          # Go vet checks
+    - ineffassign    # ineffective assignments
+    - staticcheck    # general best-practices (整合 v1 的 stylecheck + gosimple)
+    - wrapcheck      # error wrapping
 
-  disable:
-    - exhaustruct
-    - gochecksumtype
-    - nlreturn
-    - tagliatelle
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    staticcheck:
+      # ST1005: error strings should not be capitalized
+      #   codebase 以中文為主要 error 訊息（無大小寫概念），且 Excel/Motion/Force Plate
+      #   等專有名詞大寫是 deliberate。對此 codebase 全面 disable。
+      # ST1000: package comments
+      #   專案不採取每個 package 都有 doc.go 的慣例（多數 package 只有少數檔），
+      #   且 test-only package (test/integration) 不該被要求 package doc。
+      # ST1003: package names should not contain underscores
+      #   phase_sync / muscle_ratio 用底線是刻意的（與 directory name 一致），
+      #   既有檔已用 //nolint:revive 標註過，這裡一併在 staticcheck disable。
+      checks:
+        - all
+        - -ST1005
+        - -ST1000
+        - -ST1003
+    wrapcheck:
+      # ctx.Err() 已是 sentinel (context.Canceled / DeadlineExceeded)，
+      # caller 用 errors.Is 仍可比對；wrap 反而模糊語義。
+      ignore-sigs:
+        - .Err()
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+      # 同 monorepo 內 package 互呼叫不強制 wrap (避免多層 noise wrap)。
+      # 只對真正 external (stdlib / 第三方) 強制 wrap。
+      ignore-package-globs:
+        - count_mean/internal/*
+        - count_mean/util
 
-linters-settings:
-  cyclop:
-    max-complexity: 15
-    package-average: 10.0
-    skip-tests: true
-
-  depguard:
+  exclusions:
     rules:
-      main:
-        deny: []
-        allow:
-          - $gostd
-          - count_mean
-          - github.com/stretchr/testify
-          - github.com/wailsapp/wails
-          - github.com/xuri/excelize
-          - github.com/go-echarts/go-echarts
-          - gonum.org/v1/plot
-          - github.com/mohae/deepcopy
-
-  dupl:
-    threshold: 100
-
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-
-  exhaustive:
-    check-generated: false
-    default-signifies-exhaustive: false
-
-  funlen:
-    lines: 100
-    statements: 50
-
-  gci:
-    sections:
-      - standard
-      - default
-      - prefix(count_mean)
-    skip-generated: true
-
-  gocognit:
-    min-complexity: 15
-
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - dupImport
-      - ifElseChain
-      - octalLiteral
-      - whyNoLint
-      - wrapperFunc
-      - importShadow
-      - unnamedResult
-      - unnecessaryBlock
-
-  gocyclo:
-    min-complexity: 15
-
-  godot:
-    scope: declarations
-    capital: false
-
-  gofmt:
-    simplify: true
-
-  gofumpt:
-    extra-rules: false
-
-  goimports:
-    local-prefixes: count_mean
-
-  mnd:
-    checks:
-      - argument
-      - case
-      - condition
-      - operation
-      - return
-      - assign
-    ignored-numbers:
-      - '0'
-      - '1'
-      - '2'
-      - '3'
-      - '10'
-      - '100'
-      - '1000'
-      - '1024'
-
-  govet:
-    settings:
-      printf:
-        funcs:
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
-
-  lll:
-    line-length: 120
-
-  maintidx:
-    under: 10
-
-  misspell:
-    locale: US
-
-  nakedret:
-    max-func-lines: 30
-
-  nestif:
-    min-complexity: 4
-
-  nolintlint:
-    allow-leading-space: false
-    allow-unused: false
-    require-explanation: true
-    require-specific: true
-
-  prealloc:
-    simple: true
-    range-loops: true
-    for-loops: true
-
-  predeclared:
-    ignore: ""
-    q: false
-
-  revive:
-    min-confidence: 0.8
-    rules:
-      - name: atomic
-      - name: blank-imports
-      - name: bool-literal-in-expr
-      - name: confusing-naming
-      - name: constant-logical-expr
-      - name: context-as-argument
-      - name: context-keys-type
-      - name: deep-exit
-      - name: defer
-      - name: dot-imports
-      - name: duplicated-imports
-      - name: early-return
-      - name: empty-block
-      - name: empty-lines
-      - name: error-naming
-      - name: error-return
-      - name: error-strings
-      - name: errorf
-      - name: exported
-      - name: flag-parameter
-      - name: get-return
-      - name: identical-branches
-      - name: if-return
-      - name: increment-decrement
-      - name: indent-error-flow
-      - name: package-comments
-      - name: range
-      - name: receiver-naming
-      - name: redefines-builtin-id
-      - name: string-of-int
-      - name: superfluous-else
-      - name: time-naming
-      - name: unexported-naming
-      - name: unexported-return
-      - name: unhandled-error
-      - name: unnecessary-stmt
-      - name: unreachable-code
-      - name: unused-parameter
-      - name: unused-receiver
-      - name: var-declaration
-      - name: var-naming
-
-  staticcheck:
-    checks: ["all"]
-
-  stylecheck:
-    checks: ["all", "-ST1000", "-ST1003", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
-
-  usetesting:
-    os-temp-dir: true
-
-  unparam:
-    check-exported: false
-
-  unused:
-    check-exported: false
-
-  varnamelen:
-    min-name-length: 2
-    ignore-names:
-      - err
-      - wg
-      - mu
-      - ok
-      - id
-      - db
-      - tx
-      - ch
-      - fn
-      - fd
-      - i
-      - j
-      - k
-      - n
-      - t
-      - b
-      - c
-      - v
-      - w
-      - r
-      - s
-      - p
-      - q
-      - x
-      - y
-      - z
-    ignore-decls:
-      - c echo.Context
-      - t testing.T
-      - f *os.File
-      - i int
-      - j int
-      - k int
-      - n int
-      - wg sync.WaitGroup
-      - mu sync.Mutex
-      - rw sync.RWMutex
-
-  whitespace:
-    multi-if: false
-    multi-func: false
-
-  wrapcheck:
-    ignoreSigs:
-      - .Errorf(
-      - errors.New(
-      - errors.Unwrap(
-      - .Wrap(
-      - .Wrapf(
+      # 測試檔放寬
+      - path: _test\.go
+        linters:
+          - err113
+          - wrapcheck
+          - errcheck
+          - gosec
+      # 測試目錄整體放寬
+      - path: test/
+        linters:
+          - err113
+          - wrapcheck
+          - errcheck
+          - gosec
 
 issues:
-  exclude-dirs:
-    - vendor
-    - bin
-    - build
-    - dist
-    - frontend/node_modules
-    - frontend/dist
-  exclude-files:
-    - ".*\\.pb\\.go$"
-    - ".*\\.gen\\.go$"
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - errcheck
-        - dupl
-        - gosec
-        - goconst
-        - funlen
-        - gocognit
-        - maintidx
-        - cyclop
-        - nestif
-        - wrapcheck
-        - varnamelen
-        - mnd
-        - noctx
-        - paralleltest
-        - thelper
-        - tparallel
-        - testableexamples
-        - testpackage
-
-    - path: test/
-      linters:
-        - gocyclo
-        - errcheck
-        - dupl
-        - gosec
-        - goconst
-        - funlen
-        - gocognit
-        - maintidx
-        - cyclop
-        - nestif
-        - wrapcheck
-        - varnamelen
-        - mnd
-        - noctx
-        - paralleltest
-        - thelper
-        - tparallel
-        - testableexamples
-        - testpackage
-
-    - path: main\.go
-      linters:
-        - gochecknoinits
-
-    - path: gui/
-      linters:
-        - gochecknoglobals
-
-    - text: "Use of weak random number generator"
-      linters:
-        - gosec
-
-    - text: "Subprocess launch(ed|ing) with variable"
-      linters:
-        - gosec
-
-    - text: "G204: Subprocess launched with a potential tainted input or cmd arguments"
-      linters:
-        - gosec
-
-    - text: "shadow: declaration of \"err\" shadows declaration at"
-      linters:
-        - govet
-
-    - text: "should have a package comment, unless it's in another file for this package"
-      linters:
-        - revive
-
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
-  new-from-rev: ""
-  fix: false

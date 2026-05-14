@@ -2,6 +2,7 @@ package cci
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -113,6 +114,94 @@ func TestBuildChannelMap_MissingChannel(t *testing.T) {
 
 	_, err := BuildChannelMap(headers)
 	assert.Error(t, err)
+}
+
+// TestMapHeaderToShortName_LeftSideRejected 釘住 P2-I：CCI 對齊 muscle_ratio 後，
+// "L." 前綴的 header 一律回空字串、被 BuildChannelMap 跳過 — 不再像舊版會把 L.RA
+// 也 strip 成 "RA" 與 R.RA 互覆蓋（last-wins by header order）。
+func TestMapHeaderToShortName_LeftSideRejected(t *testing.T) {
+	leftHeaders := []string{
+		"L.RA: EMG 1 (left)",
+		"L.ES: EMG 2 (left)",
+		"L.GMax: EMG 4 (left)",
+		"L.TA&IO: EMG 7 (left)",
+	}
+	for _, h := range leftHeaders {
+		t.Run(h, func(t *testing.T) {
+			assert.Empty(t, MapHeaderToShortName(h),
+				"left-side header 應回空字串，實際=%q", MapHeaderToShortName(h))
+		})
+	}
+}
+
+// TestMapHeaderToShortName_NonRPrefixRejected 釘住非 "R." 前綴格式（缺冒號、無點前綴、
+// 全名描述等）一律回空，避免 fallback 回 raw prefix 造成 silent miss-mapping。
+func TestMapHeaderToShortName_NonRPrefixRejected(t *testing.T) {
+	cases := []string{
+		"EMG without colon",             // 無 ":"
+		"R RECTUS ABDOMINIS: full name", // 無 "R." 點前綴
+		"X.RA: unknown side prefix",     // 第二字母是 . 但非 R
+		"R.UNKNOWN: not in shortNameMap",
+	}
+	for _, h := range cases {
+		t.Run(h, func(t *testing.T) {
+			assert.Empty(t, MapHeaderToShortName(h),
+				"非 R.* 標準短名 header 應回空字串，實際=%q", MapHeaderToShortName(h))
+		})
+	}
+}
+
+// TestBuildChannelMap_LeftAndRightPriority 釘住 P2-I 的核心契約：
+// 同份 EMG 同時含左右 16 通道時，CCI 確定取右側、跳過左側，與 muscle_ratio 完全對稱。
+// 修法前 last-wins by header order，channelMap["RA"] 可能指向 L.RA 或 R.RA 取決於排序。
+func TestBuildChannelMap_LeftAndRightPriority(t *testing.T) {
+	// 故意把 L.* 排在 R.* 之前 — 舊版 last-wins 邏輯下 L 會覆蓋 R
+	headers := []string{
+		"L.RA: EMG 1 (left)",
+		"R.RA: EMG 1 (from SF8_...) ->Filter->RMS []",
+		"L.ES: EMG 2 (left)",
+		"R.ES: EMG 2 (from SF8_...) ->Filter->RMS []",
+		"L.IL: EMG 3 (left)",
+		"R.IL: EMG 3 (from SF8_...) ->Filter->RMS []",
+		"L.GMax: EMG 4 (left)",
+		"R.GMax: EMG 4 (from SF8_...) ->Filter->RMS []",
+		"L.RF: EMG 5 (left)",
+		"R.RF: EMG 5 (from SF8_...) ->Filter->RMS []",
+		"L.BF: EMG 6 (left)",
+		"R.BF: EMG 6 (from SF8_...) ->Filter->RMS []",
+		"L.TA&IO: EMG 7 (left)",
+		"R.TA&IO: EMG 7 (from SF8_...) ->Filter->RMS []",
+		"L.MF: EMG 8 (left)",
+		"R.MF: EMG 8 (from SF8_...) ->Filter->RMS []",
+	}
+
+	channelMap, err := BuildChannelMap(headers)
+	require.NoError(t, err)
+
+	// 每個短名必須對應 R.* header，絕不可指向 L.*
+	for short, fullHeader := range channelMap {
+		assert.True(t, strings.HasPrefix(fullHeader, "R."),
+			"短名 %q 應對應 R.* header，實際=%q", short, fullHeader)
+	}
+}
+
+// TestBuildChannelMap_LeftOnlyFailFast 釘住「實驗只貼左側 → CCI 應 fail-fast 不 silent
+// 用 L.* 算結果」。配合 muscle_ratio 行為對稱，避免使用者誤以為跑出的是右側結果。
+func TestBuildChannelMap_LeftOnlyFailFast(t *testing.T) {
+	headers := []string{
+		"L.RA: EMG 1",
+		"L.ES: EMG 2",
+		"L.IL: EMG 3",
+		"L.GMax: EMG 4",
+		"L.RF: EMG 5",
+		"L.BF: EMG 6",
+		"L.TA&IO: EMG 7",
+		"L.MF: EMG 8",
+	}
+
+	_, err := BuildChannelMap(headers)
+	require.Error(t, err, "只有左側通道 → 缺右側必要肌肉，應 fail-fast")
+	assert.Contains(t, err.Error(), "缺少必要的肌肉通道")
 }
 
 func TestDefaultMusclePairs(t *testing.T) {

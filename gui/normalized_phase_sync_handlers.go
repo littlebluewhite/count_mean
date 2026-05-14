@@ -132,9 +132,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (*Nor
 	}
 
 	// 5. 用 statsRange 擷取標準化後的資料 + 計算統計
-	emgParser := parsers.NewEMGParser()
-
-	rangeResult, err := emgParser.GetDataInTimeRange(
+	rangeResult, err := parsers.GetEMGDataInTimeRange(
 		normalizedData,
 		statsRange.StartTime,
 		statsRange.EndTime,

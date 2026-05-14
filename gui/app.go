@@ -17,6 +17,7 @@ import (
 	"count_mean/internal/cci"
 	"count_mean/internal/chart"
 	"count_mean/internal/config"
+	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
@@ -37,6 +38,8 @@ var (
 	ErrNoManifestFile     = errors.New("請選擇分期總檔案")
 	ErrNoDataFolder       = errors.New("請選擇數據資料夾")
 	ErrNoPhaseSelection   = errors.New("請選擇開始和結束分期點")
+	ErrLocaleEmpty        = errors.New("locale 不可為空字串")
+	ErrLocaleUnsupported  = errors.New("不支援的 locale")
 	ErrInvalidPhasePoint  = errors.New("無效的分期點代碼")
 	ErrNoCSVFilesInFolder = errors.New("資料夾中沒有找到CSV文件")
 )
@@ -152,6 +155,13 @@ func (a *App) SaveConfig(cfg *config.AppConfig) error {
 
 	a.applyConfig(cfg)
 
+	// 同步 backend i18n locale — 之前漏了,造成 ConfigPanel 改語言後
+	// 後端 logging / error message 仍走啟動時的 locale (P3-E follow-up,
+	// Phase 1 frontend i18n MVP 一併修)。前端 i18n 由 SetLanguage 獨立驅動。
+	if cfg.Language != "" {
+		i18n.SetLocale(i18n.Locale(cfg.Language))
+	}
+
 	return nil
 }
 
@@ -161,7 +171,42 @@ func (a *App) ResetConfig() *config.AppConfig {
 	cfg := config.DefaultConfig()
 	a.applyConfig(cfg)
 
+	// 與 SaveConfig 對稱:重設配置時同步 backend i18n locale。
+	if cfg.Language != "" {
+		i18n.SetLocale(i18n.Locale(cfg.Language))
+	}
+
 	return cfg
+}
+
+// GetTranslations returns a snapshot of all translations for the given locale.
+// Used by the frontend (frontend/src/i18n.js) at startup and on language change
+// to load the full dictionary into an in-memory cache, avoiding per-string RPC.
+// Empty or unrecognised locales fall back to zh-TW via i18n.GetTranslationMap.
+func (*App) GetTranslations(locale string) map[string]string {
+	return i18n.GetTranslationMap(i18n.Locale(locale))
+}
+
+// SetLanguage switches the backend i18n locale without persisting to config.json.
+// Called by the frontend when the user changes the language dropdown so subsequent
+// backend error / log / dialog messages use the new locale immediately.
+// Persistence is handled separately by SaveConfig — caller decides whether the
+// change is "preview" (SetLanguage only) or "permanent" (also SaveConfig).
+func (*App) SetLanguage(locale string) error {
+	if locale == "" {
+		return ErrLocaleEmpty
+	}
+
+	supported := i18n.GetSupportedLocales()
+	for _, l := range supported {
+		if string(l) == locale {
+			i18n.SetLocale(l)
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("%w: %q (支援:%v)", ErrLocaleUnsupported, locale, supported)
 }
 
 // applyConfig 用 atomic.Pointer.Store 一次性 swap 整個 appState snapshot,

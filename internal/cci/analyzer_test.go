@@ -244,12 +244,14 @@ func TestCCIAnalyzer_AnalyzeCCI_AcceptsLiteralPercentInEMGFilename(t *testing.T)
 	}
 }
 
-// TestCCIAnalyzer_ConcurrentCallsNoRace 釘住與 muscle_ratio 對稱的並發守門：
-// CCIAnalyzer 也持有 shared `*EMGParser`，並行 Wails RPC 呼叫 AnalyzeCCI 會在
-// `parsers.EMGParser.ParseFile` 寫 `frequency` 欄位時觸發 write/write race。
-// 修法：loadEMGData 內 per-call new。
+// TestCCIAnalyzer_ConcurrentCallsNoRace 釘住與 muscle_ratio 對稱的並發守門。
+// P2-C 後 EMGParser 改 stateless，但 Wails 並行 RPC 仍可能在未來 refactor 引入新 shared
+// mutable state — 此 test 用 race detector 守門。
 //
 // 本 test 必須在 `go test -race` 下跑才會觸發 race detector。
+//
+// 穩定性：外層 for k 迴圈把整個 concurrent batch 跑 10 次，提升 race detector 在 CI 上的觸發機率
+// （單次跑可能因為 goroutine 排程剛好不重疊而 false-pass）。
 func TestCCIAnalyzer_ConcurrentCallsNoRace(t *testing.T) {
 	tempDir := t.TempDir()
 	dataDir := filepath.Join(tempDir, "data")
@@ -273,20 +275,22 @@ func TestCCIAnalyzer_ConcurrentCallsNoRace(t *testing.T) {
 
 	a := NewCCIAnalyzer()
 
-	// 並行 8 個 AnalyzeCCI 呼叫共用同個 Analyzer instance — 模擬 Wails 並行 RPC
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, err := a.AnalyzeCCI(&CCIParams{
-				ManifestFile: manifestPath,
-				DataFolder:   dataDir,
-				SubjectIndex: 0,
-			})
-			// 不 assert err — race detector 才是這個 test 的守門
-			_ = err
-		}()
+	for k := 0; k < 10; k++ {
+		// 並行 8 個 AnalyzeCCI 呼叫共用同個 Analyzer instance — 模擬 Wails 並行 RPC
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := a.AnalyzeCCI(&CCIParams{
+					ManifestFile: manifestPath,
+					DataFolder:   dataDir,
+					SubjectIndex: 0,
+				})
+				// 不 assert err — race detector 才是這個 test 的守門
+				_ = err
+			}()
+		}
+		wg.Wait()
 	}
-	wg.Wait()
 }

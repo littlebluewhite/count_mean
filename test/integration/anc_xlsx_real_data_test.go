@@ -83,7 +83,7 @@ func TestANCParser_RealXLSXFile_TimeRange(t *testing.T) {
 		endTime := startTime + 1.0 // 取前 1 秒
 
 		if endTime <= forceData.Time[len(forceData.Time)-1] {
-			rangeData, err := parser.GetDataInTimeRange(forceData, startTime, endTime)
+			rangeData, err := parsers.GetANCDataInTimeRange(forceData, startTime, endTime)
 			require.NoError(t, err)
 
 			assert.Greater(t, len(rangeData.Time), 0)

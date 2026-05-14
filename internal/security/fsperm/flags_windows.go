@@ -15,3 +15,6 @@ const AppendFlags = os.O_WRONLY | os.O_CREATE | os.O_APPEND
 
 // ReadFlags 是 Windows 上讀檔的 OpenFile flag。無 O_NOFOLLOW，理由同上。
 const ReadFlags = os.O_RDONLY
+
+// TmpCreateFlags 用於 atomic write 流程；Windows 不含 O_NOFOLLOW（同 WriteFlags 設計理由）。
+const TmpCreateFlags = os.O_WRONLY | os.O_CREATE | os.O_EXCL

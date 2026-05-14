@@ -92,7 +92,6 @@ func TestCapUnionIndices_BoundsAndPreservesEnds(t *testing.T) {
 			{"29999_cap_5000", 29999, 5000},
 		}
 		for _, tc := range cases {
-			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
 				in := make([]int, tc.n)
 				for i := range in {

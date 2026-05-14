@@ -5,11 +5,7 @@
 ### 📁 test/
 測試相關文件的統一管理目錄
 
-#### 📂 unit/
-**單元測試** - 針對個別功能模組的測試
-- 按模組組織的單元測試
-- 使用 Go 標準測試框架
-- 測試文件命名: `*_test.go`
+> **單元測試已搬回 `internal/<pkg>/` 同目錄（Go idiomatic same-package placement）**。本目錄下只保留跨 package 的測試（integration / benchmark / phase_sync_test / property / race）與輔助資源。
 
 #### 📂 integration/
 **整合測試** - 測試多個模組之間的協作
@@ -44,7 +40,7 @@ go test ./...
 
 ### 運行單元測試
 ```bash
-go test ./test/unit/...
+go test ./internal/... ./gui/... ./util/...
 ```
 
 ### 運行整合測試

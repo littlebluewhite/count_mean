@@ -17,6 +17,7 @@ func TestRatio_NaNOnZeroDenominator(t *testing.T) {
 	}{
 		{"normal division", 1.5, 0.5, 3.0, false},
 		{"zero denominator", 1.5, 0, 0, true},
+		{"zero over zero", 0, 0, 0, true},
 		{"zero numerator over positive", 0, 1.5, 0, false},
 		{"NaN numerator", math.NaN(), 1.0, 0, true},
 		{"NaN denominator", 1.0, math.NaN(), 0, true},
@@ -56,13 +57,15 @@ func TestDefaultRatios_OrderLocked(t *testing.T) {
 		{Name: "TAIO/MF", Numerator: "TAIO", Denominator: "MF"},
 	}
 
-	if len(DefaultRatios) != len(expected) {
-		t.Fatalf("DefaultRatios length = %d, want %d", len(DefaultRatios), len(expected))
+	got := DefaultRatios()
+
+	if len(got) != len(expected) {
+		t.Fatalf("DefaultRatios() length = %d, want %d", len(got), len(expected))
 	}
 
 	for i, want := range expected {
-		if DefaultRatios[i] != want {
-			t.Errorf("DefaultRatios[%d] = %+v, want %+v", i, DefaultRatios[i], want)
+		if got[i] != want {
+			t.Errorf("DefaultRatios()[%d] = %+v, want %+v", i, got[i], want)
 		}
 	}
 }

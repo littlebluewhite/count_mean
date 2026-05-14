@@ -114,6 +114,12 @@ lint-fix:
 	@echo "Running golangci-lint with auto-fix..."
 	golangci-lint run --fix --timeout=5m
 
+# i18n-check: 守 catalog 一致性 — verb sequence 4 locale 一致、無 %w、所有 muscle_ratio key 在 4 locale 都 covered。
+# P3-E Phase 5 tooling，可獨立執行 (i18n-only diff PR 不需跑全 lint)。
+i18n-check:
+	@echo "Checking i18n catalog (verb consistency / %w guard / coverage)..."
+	go test -v -run "TestI18n_NoCatalogPercentWVerb|TestI18n_VerbConsistencyAcrossLocales|TestI18n_AllMuscleRatioKeysCovered|TestT_MuscleRatioKeysVerbCompat|TestI18n_CallerWrapPatternPreservesErrorsIs" ./internal/i18n/...
+
 # CI targets (Task 13.2)
 ci: test bench coverage lint security
 	@echo "✅ Complete CI pipeline executed successfully!"

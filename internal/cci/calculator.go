@@ -107,40 +107,40 @@ var shortNameMap = map[string]string{
 	"MF":    "MF",
 }
 
-// MapHeaderToShortName extracts the short muscle name from an EMG header.
-// e.g., "R.RA: EMG 1 (from ...)" -> "RA"
-// e.g., "R.TA&IO: EMG 7 (...)" -> "TAIO"
-// e.g., "R.GMax: EMG 4 (...)" -> "GMax"
+// MapHeaderToShortName extracts the canonical short muscle name from a right-side EMG header.
+// 行為與 muscle_ratio.mapHeaderToRightShortName 對齊 — 跨 analyzer 對同份 EMG 取同一組通道。
+// 非 "R." 前綴的 header（含 "L." 與其他）一律回空字串，由 BuildChannelMap 跳過。
+//
+// Examples:
+//
+//	"R.RA: EMG 1 (from ...) ->Filter->RMS []" → "RA"
+//	"R.TA&IO: EMG 7 (...)"                    → "TAIO"
+//	"R.GMax: EMG 4 (...)"                     → "GMax"
+//	"L.RA: EMG 1 ..."                         → ""  (左側 skipped)
+//	"R RECTUS ABDOMINIS: ..."                 → ""  (無 "R." 點前綴)
+//	"EMG without colon"                       → ""  (格式不符)
 func MapHeaderToShortName(header string) string {
-	// Extract part before ":"
 	colonIdx := strings.Index(header, ":")
 	if colonIdx < 0 {
-		return header
+		return ""
 	}
 
 	prefix := strings.TrimSpace(header[:colonIdx])
-
-	// Strip "R." or "L." prefix
-	if len(prefix) > 2 && prefix[1] == '.' {
-		prefix = prefix[2:]
+	if !strings.HasPrefix(prefix, "R.") {
+		return ""
 	}
 
-	// Normalize and look up
-	upper := strings.ToUpper(prefix)
+	upper := strings.ToUpper(prefix[2:])
 	if short, ok := shortNameMap[upper]; ok {
 		return short
 	}
 
-	// Also try the original case for partial matches
-	if short, ok := shortNameMap[prefix]; ok {
-		return short
-	}
-
-	return prefix
+	return ""
 }
 
 // BuildChannelMap maps short muscle names to their actual header strings
-// as stored in PhaseSyncEMGData.Channels.
+// as stored in PhaseSyncEMGData.Channels. 與 muscle_ratio.BuildRightSideChannelMap 對稱：
+// 僅取右側通道，缺任一必要肌肉即 fail-fast。
 //
 //nolint:err113 // dynamic error for user-facing output
 func BuildChannelMap(headers []string) (map[string]string, error) {
@@ -148,6 +148,10 @@ func BuildChannelMap(headers []string) (map[string]string, error) {
 
 	for _, header := range headers {
 		shortName := MapHeaderToShortName(header)
+		if shortName == "" {
+			continue
+		}
+
 		channelMap[shortName] = header
 	}
 

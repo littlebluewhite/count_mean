@@ -2,7 +2,32 @@ package models
 
 import "time"
 
-// PhaseManifest 分期總檔案記錄.
+// PhaseManifest 分期總檔案記錄。一筆 PhaseManifest 代表一個受試者試次（subject trial）。
+//
+// 欄位語意：
+//   - Subject：受試者 ID，作為 output 檔名前綴；經 calculator.SanitizeFileName 處理路徑分隔符與特殊字元
+//   - MotionFile / ForceFile / EMGFile：相對於 DataFolder 的檔名，路徑解析走 manifest.ResolveEMGFile（lenient）
+//   - EMGMotionOffset：EMG 第一筆樣本對應的 Motion index；用於 motion-time ↔ EMG-time 轉換
+//     （見 synchronizer.TimeSynchronizer.MotionIndexToEMGTime）
+//   - PhasePoints：10 個分期點，混合 force-time（float64 秒）與 motion-index（int），由 PhasePoint.IsMotionIndex 區分
+//
+// 0 即空契約：
+//   - PhasePoints 內任何欄位為 0（int=0 或 float64=0.0）視為「該分期點未標定，應跳過」
+//   - 0 是合法的「空值」標記，不應誤判為「時間/index 為 0」的有效值
+//   - parsers.GetPhaseValue 與 cci.getPhasePointDefs 都依此契約跳過 0 值
+//
+// EMGMotionOffset 定義：
+//   - 正值：EMG 起點晚於 Motion 起點 N 個 motion frame
+//   - 負值：EMG 起點早於 Motion 起點
+//   - 0：EMG 與 Motion 對齊（罕見，多為 manifest 未填）
+//
+// 目前 consumer：
+//   - internal/cci：CCI Rudolph 分析（fail-fast，per-subject）
+//   - internal/muscle_ratio：肌肉比值批次分析（per-subject batch，partial-success）
+//   - internal/phase_sync：分期同步分析
+//   - internal/calculator (normalized phase sync)：標準化分期同步分析
+//
+// 改動本 struct 欄位或契約時，必須同步檢視 4 個 consumer。
 type PhaseManifest struct {
 	Subject         string      // 主題名稱
 	MotionFile      string      // Motion檔案名

@@ -55,11 +55,11 @@ func WriteBOM(w io.Writer) error {
 func PeekBOM(r *bufio.Reader) (bool, error) {
 	head, err := r.Peek(len(bomArray))
 	if err != nil && !errors.Is(err, io.EOF) {
-		return false, err
+		return false, fmt.Errorf("PeekBOM: %w", err)
 	}
 
 	if len(head) >= len(bomArray) && bytes.Equal(head, bomArray[:]) {
-		_, _ = r.Discard(len(bomArray))
+		_, _ = r.Discard(len(bomArray)) //nolint:errcheck // Peek 已驗證 buffer，Discard 不會 fail
 
 		return true, nil
 	}

@@ -33,7 +33,7 @@ func setupNormalizedPhaseSyncTestApp(t *testing.T) *App {
 }
 
 // writeMinimalMotionFile 建立最小 Motion CSV（4 行 metadata + 指定行數資料）。
-// 採用既有 test/unit/phase_sync 內 createTestMotionFileN 的格式。
+// 採用既有 internal/phase_sync 內 createTestMotionFileN 的格式。
 func writeMinimalMotionFile(t *testing.T, dir string, numRows int) {
 	t.Helper()
 	content := "Line 1: Metadata\nLine 2: More metadata\nLine 3: Additional info\nIndex,X,Y,Z\n"

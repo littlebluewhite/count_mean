@@ -6,8 +6,8 @@ import (
 	"os"
 	"strconv"
 
-	"count_mean/internal/models"
 	"count_mean/internal/csvutil"
+	"count_mean/internal/models"
 	"count_mean/internal/security/fsperm"
 )
 
@@ -34,7 +34,7 @@ func ExportPhaseSyncDataToCSV(
 	precision int,
 ) (err error) {
 	if data == nil {
-		return fmt.Errorf("EMG 數據為空")
+		return fmt.Errorf("EMG 數據為空: %w", ErrNilData)
 	}
 
 	if precision <= 0 {

@@ -20,7 +20,7 @@ import (
 // 對寫入端造成 silent overwrite、對讀取端造成資料外洩。加上 O_NOFOLLOW 後
 // kernel 直接拒絕。
 //
-// 此測試與 test/unit/csv/csv_handler_symlink_test.go 對 WriteCSV 高階 API 的
+// 此測試與 internal/io/csv_handler_symlink_test.go 對 WriteCSV 高階 API 的
 // 對稱驗證 — 這裡保證底層 flag 本身正確；後者保證 wrapper 沒漏接 flag。
 func TestFsperm_FlagsRejectSymlink(t *testing.T) {
 	t.Parallel()
@@ -35,7 +35,6 @@ func TestFsperm_FlagsRejectSymlink(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

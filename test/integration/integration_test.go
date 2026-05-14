@@ -240,6 +240,7 @@ func TestFullWorkflow_ConfigurationManagement(t *testing.T) {
 		InputDir:      "./input",
 		OutputDir:     "./output",
 		OperateDir:    "./value_operate",
+		Language:      "zh-TW",
 	}
 
 	err := originalConfig.SaveConfig(configFile)
@@ -335,7 +336,7 @@ func TestFullWorkflow_Performance(t *testing.T) {
 	_, _ = builder.WriteString("Time,Ch1,Ch2,Ch3\n")
 
 	for i := 0; i < 1000; i++ {
-		_, _ = builder.WriteString(fmt.Sprintf("%d.0,%d,%d,%d\n", i, i*10, i*20, i*30))
+		fmt.Fprintf(&builder, "%d.0,%d,%d,%d\n", i, i*10, i*20, i*30)
 	}
 
 	err := os.WriteFile(largeFile, []byte(builder.String()), fsperm.FilePerm)

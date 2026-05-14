@@ -1,7 +1,7 @@
 package cci
 
 import (
-	"encoding/csv"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -11,15 +11,19 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/csvutil"
 	"count_mean/internal/logging"
+	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security"
+	"count_mean/internal/security/fsperm"
 	"count_mean/internal/synchronizer"
 	"count_mean/util"
-	"count_mean/internal/csvutil"
-	"count_mean/internal/security/fsperm"
 )
+
+// ErrInvalidGaitCycle 表示步態週期區間 start/end 不合法（duration <= 0）。
+var ErrInvalidGaitCycle = errors.New("無效的步態週期區間")
 
 // CCIParams holds parameters for CCI analysis.
 type CCIParams struct {
@@ -32,11 +36,9 @@ type CCIParams struct {
 //
 // Concurrency model:
 //   - PathValidator 不掛在 struct 上（request-scoped）— commit 1287572 修過的 race。
-//   - EMGParser 也不掛在 struct 上：`ParseFile` 寫 `frequency` field，並行 RPC 呼叫共用 instance
-//     會觸發 write/write race（與 muscle_ratio.Analyzer 對稱修正）。
-//   - manifestParser 與 timeSynchronizer 是 stateless（無 mutable field write），可安全共用。
+//   - timeSynchronizer 是 stateless（無 mutable field write），可安全共用。
+//   - manifest loading 與 EMG file resolution 走 internal/manifest 套件（stateless package functions）。
 type CCIAnalyzer struct {
-	manifestParser   *parsers.PhaseManifestParser
 	timeSynchronizer *synchronizer.TimeSynchronizer
 	logger           *logging.Logger
 }
@@ -44,7 +46,6 @@ type CCIAnalyzer struct {
 // NewCCIAnalyzer creates a new CCI analyzer instance.
 func NewCCIAnalyzer() *CCIAnalyzer {
 	return &CCIAnalyzer{
-		manifestParser:   parsers.NewPhaseManifestParser(),
 		timeSynchronizer: synchronizer.NewTimeSynchronizer(),
 		logger:           logging.GetLogger("cci_analyzer"),
 	}
@@ -79,9 +80,7 @@ func (a *CCIAnalyzer) AnalyzeCCI(params *CCIParams) (*CCIAnalysisResult, error) 
 		return nil, err
 	}
 
-	// GetDataInTimeRange 標 unused-receiver（pure function 形式），per-call new 維持與 ParseFile
-	// 相同的 ownership 模式而非把 parser 掛上 struct。
-	rangeResult, err := parsers.NewEMGParser().GetDataInTimeRange(emgData, gaitStart, gaitEnd)
+	rangeResult, err := parsers.GetEMGDataInTimeRange(emgData, gaitStart, gaitEnd)
 	if err != nil {
 		return nil, fmt.Errorf("提取步態週期 EMG 數據失敗: %w", err)
 	}
@@ -100,7 +99,7 @@ func (a *CCIAnalyzer) AnalyzeCCI(params *CCIParams) (*CCIAnalysisResult, error) 
 //
 //nolint:err113 // dynamic errors for user-facing output
 func (a *CCIAnalyzer) loadAndValidate(params *CCIParams) (*models.PhaseManifest, error) {
-	manifests, err := a.manifestParser.ParseFile(params.ManifestFile)
+	manifests, err := manifest.LoadManifests(params.ManifestFile)
 	if err != nil {
 		return nil, fmt.Errorf("解析分期總檔案失敗: %w", err)
 	}
@@ -114,32 +113,17 @@ func (a *CCIAnalyzer) loadAndValidate(params *CCIParams) (*models.PhaseManifest,
 }
 
 // loadEMGData resolves EMG file path and parses EMG data.
-//
-// 路徑解析走 security.ResolveLenientPath（與 muscle_ratio 共用）。原本用
-// PathValidator.GetSafePath 會誤拒含字面 "%" 的 BTS 匯出檔名（例 "SF_8_BTS%_*.csv"），
-// 對標準 project data 整批不可用；lenient 版本保留 ".." / 絕對路徑 / 結果落在 baseFolder 外
-// 的防護，但允許 literal "%"。
+// 路徑解析委派給 manifest.ResolveEMGFile（內部走 security.ResolveLenientPath，
+// 允許含字面 "%" 的 BTS 匯出檔名 — 見該套件 doc）。
 func (a *CCIAnalyzer) loadEMGData(
-	dataFolder string, manifest *models.PhaseManifest,
+	dataFolder string, m *models.PhaseManifest,
 ) (*models.PhaseSyncEMGData, error) {
-	baseFolder := dataFolder
-	if resolved, err := filepath.EvalSymlinks(baseFolder); err == nil {
-		baseFolder = resolved
-	}
-
-	emgPath, err := security.ResolveLenientPath(baseFolder, manifest.EMGFile)
+	emgPath, err := manifest.ResolveEMGFile(dataFolder, m.EMGFile)
 	if err != nil {
-		return nil, fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
+		return nil, err
 	}
 
-	if _, err := os.Stat(emgPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("EMG 檔案不存在: %s", emgPath)
-	}
-
-	// Per-request EMGParser — see struct doc comment for race rationale.
-	emgParser := parsers.NewEMGParser()
-
-	emgData, err := emgParser.ParseFile(emgPath)
+	emgData, _, err := parsers.NewEMGParser().ParseFile(emgPath)
 	if err != nil {
 		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
 	}
@@ -162,7 +146,10 @@ func getPhasePointDefs(manifest *models.PhaseManifest) []phasePointDef {
 	defs := make([]phasePointDef, 0, len(allPhases))
 
 	for _, phase := range allPhases {
-		value, _, _ := parsers.GetPhaseValue(&manifest.PhasePoints, phase)
+		// GetPhaseValue 只在 default case return error；allPhases 已涵蓋全部 10 個合法
+		// case，error path 不可達，故 swallow。isMotionIndex 不用 GetPhaseValue 回的 bool，
+		// 改用 phase.IsMotionIndex() 才能跟 models 的 domain invariant 對齊。
+		value, _, _ := parsers.GetPhaseValue(&manifest.PhasePoints, phase) //nolint:errcheck // unreachable error path
 		defs = append(defs, phasePointDef{
 			name:          string(phase),
 			value:         value,
@@ -358,6 +345,13 @@ func (a *CCIAnalyzer) computeSinglePair(
 func (a *CCIAnalyzer) ExportToCSV(
 	result *CCIAnalysisResult, outputDir string,
 ) (string, error) {
+	// Defense-in-depth：附 dummy child 後 ValidateExternalPath 擋 traversal /
+	// system-dir prefix（與 muscle_ratio.Analyze 對稱）。
+	checkPath := filepath.Join(outputDir, "_validation_marker")
+	if err := security.NewPathValidator(nil).ValidateExternalPath(checkPath); err != nil {
+		return "", fmt.Errorf("OutputDir 驗證失敗: %w", err)
+	}
+
 	if err := os.MkdirAll(outputDir, fsperm.DirPerm); err != nil {
 		return "", fmt.Errorf("建立輸出目錄失敗: %w", err)
 	}
@@ -369,95 +363,69 @@ func (a *CCIAnalyzer) ExportToCSV(
 	return outputPath, writeCSVFile(outputPath, result, a.logger)
 }
 
-// writeCSVFile writes the CCI result data to a CSV file.
-//
-// Flush 與 Close 的錯誤都顯式回傳：csv.Writer 把寫入錯誤延後到 Flush 才顯露，
-// 若僅靠 defer 忽略，caller 看到 nil 但檔案內容可能不完整（磁碟滿、網路磁碟掉線等）。
-//
-// NaN/Inf 處理：CalculateCCIRudolph 對 invalid input（NaN/Inf input 或負值除以零）
-// 回傳 math.NaN()。若 cell 直接 fmt.Sprintf("%.6f", NaN) 會寫入字面 "NaN"，下游
-// Excel / pandas / R 都會誤讀為字串非數值。修法（codex C-4 Wave 6）：
+// writeCSVFile writes the CCI result data to a CSV via csvutil.WriteCSVAtomic
+// (tmp+rename atomic). NaN/Inf 處理保留 row-level 邏輯：
 //   - cell 為 NaN/Inf → 輸出空字串（CSV 慣例代表 missing data）
 //   - 若整 row 所有 pair 都 NaN/Inf → skip 整 row 並計入 droppedRowCount
 //   - 結束時 log warning，與 large_file_handler 的 -Inf channel skip 邏輯一致
-func writeCSVFile(outputPath string, result *CCIAnalysisResult, logger *logging.Logger) (err error) {
-	// fsperm.WriteFlags 在 unix 加入 O_NOFOLLOW 拒絕 symlink 攻擊；Windows 行為不變。
-	file, err := os.OpenFile(filepath.Clean(outputPath), fsperm.WriteFlags, fsperm.FilePerm)
-	if err != nil {
-		return fmt.Errorf("建立 CSV 檔案失敗: %w", err)
-	}
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("關閉檔案失敗: %w", closeErr)
-		}
-	}()
-
-	// Write UTF-8 BOM
-	if err := csvutil.WriteBOM(file); err != nil {
-		return fmt.Errorf("寫入 BOM 失敗: %w", err)
+func writeCSVFile(outputPath string, result *CCIAnalysisResult, logger *logging.Logger) error {
+	duration := result.GaitEndTime - result.GaitStartTime
+	if duration <= 0 {
+		return fmt.Errorf("%w: start=%v end=%v", ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
 	}
 
-	writer := csv.NewWriter(file)
-
-	// Header row: Time (s), Gait Cycle (%), then each pair
 	header := []string{"Time (s)", "Gait Cycle (%)"}
 	for _, pr := range result.PairResults {
 		header = append(header, pr.PairName)
 	}
 
-	if err := writer.Write(csvutil.SanitizeHeaderRow(header)); err != nil {
-		return fmt.Errorf("寫入標題行失敗: %w", err)
-	}
-
-	// Data rows using actual time points
-	duration := result.GaitEndTime - result.GaitStartTime
-	if duration <= 0 {
-		return fmt.Errorf("無效的步態週期區間: start=%v end=%v", result.GaitStartTime, result.GaitEndTime)
-	}
+	var droppedRowCount int
 	numPoints := len(result.TimeValues)
 
-	var droppedRowCount int
+	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: header,
+		Emit: func(emit func([]string) error) error {
+			for i := 0; i < numPoints; i++ {
+				t := result.TimeValues[i]
+				pct := (t - result.GaitStartTime) / duration * 100
 
-	for i := 0; i < numPoints; i++ {
-		t := result.TimeValues[i]
-		pct := (t - result.GaitStartTime) / duration * 100
+				pairCells := make([]string, 0, len(result.PairResults))
+				allNonFinite := true
 
-		// 先收集所有 pair cells；判斷 row 是否全 non-finite。
-		pairCells := make([]string, 0, len(result.PairResults))
-		allNonFinite := true
+				for _, pr := range result.PairResults {
+					if i >= len(pr.Values) {
+						pairCells = append(pairCells, "")
+						continue
+					}
+					v := pr.Values[i]
+					if math.IsNaN(v) || math.IsInf(v, 0) {
+						pairCells = append(pairCells, "")
+						continue
+					}
+					pairCells = append(pairCells, fmt.Sprintf("%.6f", v))
+					allNonFinite = false
+				}
 
-		for _, pr := range result.PairResults {
-			if i >= len(pr.Values) {
-				pairCells = append(pairCells, "")
-				continue
+				if len(result.PairResults) > 0 && allNonFinite {
+					droppedRowCount++
+					continue
+				}
+
+				row := []string{
+					fmt.Sprintf("%.4f", t),
+					fmt.Sprintf("%.2f", pct),
+				}
+				row = append(row, pairCells...)
+
+				if err := emit(row); err != nil {
+					return err
+				}
 			}
-
-			v := pr.Values[i]
-			if math.IsNaN(v) || math.IsInf(v, 0) {
-				pairCells = append(pairCells, "") // missing-data 慣例
-				continue
-			}
-
-			pairCells = append(pairCells, fmt.Sprintf("%.6f", v))
-			allNonFinite = false
-		}
-
-		// 若整 row 所有 pair 都是 NaN/Inf（或 row 沒有 pair 但有 time），skip。
-		// 沒 pair 的特殊 case 不視為「全 NaN」 — 仍寫入 time/gait 兩欄。
-		if len(result.PairResults) > 0 && allNonFinite {
-			droppedRowCount++
-			continue
-		}
-
-		row := []string{
-			fmt.Sprintf("%.4f", t),
-			fmt.Sprintf("%.2f", pct),
-		}
-		row = append(row, pairCells...)
-
-		if err := writer.Write(row); err != nil {
-			return fmt.Errorf("寫入數據行失敗: %w", err)
-		}
+			return nil
+		},
+	})
+	if err != nil {
+		return err
 	}
 
 	if droppedRowCount > 0 && logger != nil {
@@ -468,11 +436,6 @@ func writeCSVFile(outputPath string, result *CCIAnalysisResult, logger *logging.
 		})
 	}
 
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("CSV flush 失敗: %w", err)
-	}
-
 	return nil
 }
 
@@ -481,8 +444,8 @@ func GenerateReport(result *CCIAnalysisResult) string {
 	var sb strings.Builder
 
 	sb.WriteString("=== CCI Rudolph 分析報告 ===\n")
-	sb.WriteString(fmt.Sprintf("主題: %s\n", result.Subject))
-	sb.WriteString(fmt.Sprintf("肌肉配對數: %d\n\n", len(result.PairResults)))
+	fmt.Fprintf(&sb, "主題: %s\n", result.Subject)
+	fmt.Fprintf(&sb, "肌肉配對數: %d\n\n", len(result.PairResults))
 
 	for _, pr := range result.PairResults {
 		if len(pr.Values) == 0 {
@@ -490,8 +453,8 @@ func GenerateReport(result *CCIAnalysisResult) string {
 		}
 
 		mean, max := computePairStats(pr.Values)
-		sb.WriteString(fmt.Sprintf("  %s: 平均 CCI = %.4f, 最大 CCI = %.4f\n",
-			pr.PairName, mean, max))
+		fmt.Fprintf(&sb, "  %s: 平均 CCI = %.4f, 最大 CCI = %.4f\n",
+			pr.PairName, mean, max)
 	}
 
 	return sb.String()

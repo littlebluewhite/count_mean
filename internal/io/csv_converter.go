@@ -3,8 +3,8 @@ package io
 import (
 	"fmt"
 
-	"count_mean/internal/models"
 	"count_mean/internal/csvutil"
+	"count_mean/internal/models"
 )
 
 // CSV result row count constants.

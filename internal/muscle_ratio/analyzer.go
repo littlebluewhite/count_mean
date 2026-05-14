@@ -1,17 +1,22 @@
 package muscle_ratio
 
 import (
-	"encoding/csv"
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
+
+	"golang.org/x/text/unicode/norm"
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/csvutil"
+	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
+	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security"
@@ -32,28 +37,24 @@ type Params struct {
 //   - Success=true + Error="" → 兩個 CSV 都產出
 //   - Success=true + Error 非空 → Output 1 產出、Output 2 跳過（warning），Error 解釋原因
 //   - Success=false → Output 1 也沒產出（檔案不存在、解析失敗、缺通道等），Error 必填
+//
+// DurationMs：per-subject 從 analyzeSubject 入口到結束的耗時（millisecond），用於
+// partial-success batch 的 diagnostic（哪個 subject 拖慢整批、哪個 subject 提早 fail）。
 type SubjectResult struct {
 	Subject         string
 	OutputAllPath   string
 	OutputPhasePath string
 	Success         bool
 	Error           string
-}
-
-// AnalysisResult aggregates all subjects' results from a single Analyze call.
-type AnalysisResult struct {
-	Subjects []SubjectResult
+	DurationMs      int64
 }
 
 // Analyzer orchestrates the batch pipeline. Concurrency model:
-//   - PathValidator 與 EMGParser 都不掛在 struct 上（per-Analyze / per-subject 建立 instance），
-//     避免 Wails 並行 RPC 場景下兩個 goroutine 共用 mutable instance → race condition。
-//   - manifestParser 與 timeSynchronizer 是 stateless（無 mutable field write），可安全共用。
-//
-// EMGParser 的 race：`ParseFile` 寫 `p.frequency` 欄位，兩個並行 Analyze 呼叫共用 instance 會觸發
-// write/write race（`-race` 偵測得到，CI 跑 `make test-race`）。
+//   - PathValidator 不掛在 struct 上（per-Analyze 建立 instance），避免 Wails 並行 RPC 場景下
+//     兩個 goroutine 共用 mutable instance → race condition。
+//   - timeSynchronizer 是 stateless（無 mutable field write），可安全共用。
+//   - manifest loading 與 EMG file resolution 走 internal/manifest 套件（stateless package functions）。
 type Analyzer struct {
-	manifestParser   *parsers.PhaseManifestParser
 	timeSynchronizer *synchronizer.TimeSynchronizer
 	logger           *logging.Logger
 }
@@ -61,7 +62,6 @@ type Analyzer struct {
 // NewAnalyzer creates a new muscle-ratio analyzer.
 func NewAnalyzer() *Analyzer {
 	return &Analyzer{
-		manifestParser:   parsers.NewPhaseManifestParser(),
 		timeSynchronizer: synchronizer.NewTimeSynchronizer(),
 		logger:           logging.GetLogger("muscle_ratio_analyzer"),
 	}
@@ -75,39 +75,42 @@ func NewAnalyzer() *Analyzer {
 //  5. For each subject: load EMG → channel map → compute ratios → write 2 CSVs
 //
 //nolint:err113 // dynamic errors for user-facing output
-func (a *Analyzer) Analyze(params *Params) (*AnalysisResult, error) {
+func (a *Analyzer) Analyze(params *Params) ([]SubjectResult, error) {
 	if params == nil {
 		return nil, fmt.Errorf("params 不能為 nil")
 	}
 
-	manifests, err := a.manifestParser.ParseFile(params.ManifestFile)
+	// Defense-in-depth：config 載入時已驗證 OutputDir，但 GUI file dialog 等繞過
+	// config 的 caller 仍可能傳壞值。附 dummy child 後 ValidateExternalPath 擋
+	// traversal / system-dir prefix，避免後續 os.MkdirAll 走到 /etc 等敏感目錄。
+	checkPath := filepath.Join(params.OutputDir, "_validation_marker")
+	if err := security.NewPathValidator(nil).ValidateExternalPath(checkPath); err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorMuscleRatioOutputDirInvalid), err)
+	}
+
+	manifests, err := manifest.LoadManifests(params.ManifestFile)
 	if err != nil {
-		return nil, fmt.Errorf("解析分期總檔案失敗: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorMuscleRatioParseManifestFailed), err)
 	}
 
 	if len(manifests) == 0 {
-		return nil, fmt.Errorf("分期總檔案沒有任何主題記錄")
+		return nil, errors.New(i18n.T(i18n.KeyErrorMuscleRatioEmptyManifest))
 	}
 
 	if err := assertUniqueSanitizedSubjects(manifests); err != nil {
 		return nil, err
 	}
 
-	baseFolder := params.DataFolder
-	if resolved, evalErr := filepath.EvalSymlinks(baseFolder); evalErr == nil {
-		baseFolder = resolved
-	}
-
 	if err := os.MkdirAll(params.OutputDir, fsperm.DirPerm); err != nil {
-		return nil, fmt.Errorf("建立輸出目錄失敗: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorMuscleRatioMkdirFailed), err)
 	}
 
-	// 路徑解析走 security.ResolveLenientPath（不再用 PathValidator.GetSafePath，後者誤拒
-	// 含 literal "%" 的標準 BTS EMG 匯出檔名 — 見該 helper 的 doc comment）。
+	// EMG 路徑解析走 manifest.ResolveEMGFile（內部走 security.ResolveLenientPath，
+	// 允許含 literal "%" 的 BTS 匯出檔名 — 見 internal/manifest 套件 doc）。
 	results := make([]SubjectResult, 0, len(manifests))
 	for i := range manifests {
 		m := &manifests[i]
-		results = append(results, a.analyzeSubject(m, baseFolder, params.OutputDir))
+		results = append(results, a.analyzeSubject(m, params.DataFolder, params.OutputDir))
 	}
 
 	a.logger.Info("肌肉比值批次分析完成", map[string]interface{}{
@@ -115,45 +118,43 @@ func (a *Analyzer) Analyze(params *Params) (*AnalysisResult, error) {
 		"subjects": len(results),
 	})
 
-	return &AnalysisResult{Subjects: results}, nil
+	return results, nil
 }
 
 // analyzeSubject processes one subject. Errors are captured in SubjectResult.Error and never abort the batch.
+//
+// 計時：用 named return + defer 在所有 return 路徑（含 error fast-path）統一寫入 DurationMs，
+// 避免 11 個 return point 各自重複呼叫 time.Since。
 func (a *Analyzer) analyzeSubject(
 	m *models.PhaseManifest,
 	dataFolder, outputDir string,
-) SubjectResult {
-	result := SubjectResult{Subject: m.Subject}
+) (result SubjectResult) {
+	start := time.Now()
+	defer func() { result.DurationMs = time.Since(start).Milliseconds() }()
+
+	result.Subject = m.Subject
 
 	// Subject 為空時擋下，否則 SanitizeFileName("") 會產生 "_muscle_ratio.csv"，
 	// 多筆空 Subject 在 assertUniqueSanitizedSubjects 之後仍可能單筆通過寫到同一檔。
 	if strings.TrimSpace(m.Subject) == "" {
-		result.Error = "Subject 名稱為空"
+		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectEmptyName)
 		return result
 	}
 
-	emgPath, err := security.ResolveLenientPath(dataFolder, m.EMGFile)
+	emgPath, err := manifest.ResolveEMGFile(dataFolder, m.EMGFile)
 	if err != nil {
-		result.Error = fmt.Sprintf("EMG 檔案路徑驗證失敗: %v", err)
+		result.Error = err.Error()
 		return result
 	}
 
-	if _, statErr := os.Stat(emgPath); os.IsNotExist(statErr) {
-		result.Error = fmt.Sprintf("EMG 檔案不存在: %s", emgPath)
-		return result
-	}
-
-	// Per-subject EMGParser — see struct doc comment for race rationale.
-	emgParser := parsers.NewEMGParser()
-
-	emg, err := emgParser.ParseFile(emgPath)
+	emg, _, err := parsers.NewEMGParser().ParseFile(emgPath)
 	if err != nil {
-		result.Error = fmt.Sprintf("解析 EMG 檔案失敗: %v", err)
+		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectParseEMGFailed, err)
 		return result
 	}
 
 	if len(emg.Time) == 0 {
-		result.Error = "EMG 資料為空"
+		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectEmptyEMG)
 		return result
 	}
 
@@ -169,7 +170,7 @@ func (a *Analyzer) analyzeSubject(
 
 	outAllPath := filepath.Join(outputDir, fmt.Sprintf("%s_muscle_ratio.csv", safeSubject))
 	if err := writeOutputAll(outAllPath, emg.Time, ratiosAll); err != nil {
-		result.Error = fmt.Sprintf("寫入 Output 1 失敗: %v", err)
+		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectWriteOutput1Failed, err)
 		return result
 	}
 
@@ -188,7 +189,7 @@ func (a *Analyzer) analyzeSubject(
 		// Output 1 已寫入磁碟，依 SubjectResult 文件契約 Output 1 success 為 sticky：
 		// 與 collectPhasePoints warn-path 對稱（Success=true + Error 解釋為何 Output 2 跳過）。
 		result.Success = true
-		result.Error = fmt.Sprintf("寫入 Output 2 失敗（Output 1 已產出）: %v", err)
+		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectWriteOutput2Failed, err)
 		return result
 	}
 
@@ -240,7 +241,7 @@ func (a *Analyzer) collectPhasePoints(
 	}
 
 	if len(phases) < 2 {
-		return nil, "有效分期點不足 2 個，跳過 Output 2"
+		return nil, i18n.T(i18n.KeyErrorMuscleRatioSubjectInsufficientPhases)
 	}
 
 	// FindNearestTimeIndex 對 out-of-range target 會靜默 clamp 到首/末 sample
@@ -249,8 +250,8 @@ func (a *Analyzer) collectPhasePoints(
 	emgStart, emgEnd := emg.Time[0], emg.Time[len(emg.Time)-1]
 	for _, p := range phases {
 		if p.time < emgStart || p.time > emgEnd {
-			return nil, fmt.Sprintf(
-				"phase %s 時間 %.4f 落在 EMG 範圍 [%.4f, %.4f] 外，跳過 Output 2",
+			return nil, i18n.T(
+				i18n.KeyErrorMuscleRatioSubjectPhaseOutOfEMGRange,
 				p.name, p.time, emgStart, emgEnd,
 			)
 		}
@@ -277,8 +278,12 @@ func (a *Analyzer) collectPhasePoints(
 // after SanitizeFileName. Without this check, "A/B" + "A:B" both write to "A_B_muscle_ratio.csv" and
 // the latter silently overwrites the former.
 //
-// 衝突 key 用 strings.ToLower：macOS 與 Windows 預設使用 case-insensitive filesystem，
-// "SF8" 與 "sf8" 雖然 case-sensitive 不同，但寫入磁碟時實為同檔，後者 O_TRUNC 會覆寫前者。
+// 衝突 key 用 NFC + strings.ToLower：
+//   - case-insensitive：macOS 與 Windows 預設使用 case-insensitive filesystem，
+//     "SF8" 與 "sf8" 雖然 case-sensitive 不同，但寫入磁碟時實為同檔，後者 O_TRUNC 會覆寫前者。
+//   - NFC normalization：macOS APFS/HFS+ 對 "café" (NFC, U+00E9) 與 "café" (NFD, e+U+0301)
+//     hash 同 on-disk name，但 strings.ToLower 視為相異 — 若不 NFC normalize，會放行兩筆
+//     manifest 然後第二筆覆寫第一筆。
 //
 //nolint:err113 // dynamic errors for user-facing output
 func assertUniqueSanitizedSubjects(manifests []models.PhaseManifest) error {
@@ -286,13 +291,13 @@ func assertUniqueSanitizedSubjects(manifests []models.PhaseManifest) error {
 
 	for _, m := range manifests {
 		safe := calculator.SanitizeFileName(m.Subject)
-		key := strings.ToLower(safe)
+		key := norm.NFC.String(strings.ToLower(safe))
 
 		if prev, exists := seen[key]; exists {
-			return fmt.Errorf(
-				"輸出檔名衝突: subject %q 與 %q 經 SanitizeFileName 後同為 %q (case-insensitive)",
+			return errors.New(i18n.T(
+				i18n.KeyErrorMuscleRatioSubjectCollision,
 				prev, m.Subject, safe,
-			)
+			))
 		}
 
 		seen[key] = m.Subject
@@ -302,116 +307,67 @@ func assertUniqueSanitizedSubjects(manifests []models.PhaseManifest) error {
 }
 
 // writeOutputAll writes the full time-series ratio CSV (Output 1).
-//
-// 寫入流程與 cci/analyzer.go writeCSVFile 對稱：fsperm.WriteFlags 含 O_NOFOLLOW、UTF-8 BOM、
-// SanitizeHeaderRow 避免 CSV injection、NaN/Inf cell → 空字串。
+// 透過 csvutil.WriteCSVAtomic 保證 tmp+rename atomic write：BOM/header/row
+// 任一階段失敗，final path 不會留下截斷檔。NaN/Inf cell → 空字串保留 in formatRatioCell。
 //
 //nolint:err113 // dynamic errors for user-facing output
-func writeOutputAll(outputPath string, times []float64, ratiosAll [][]float64) (err error) {
-	file, err := os.OpenFile(filepath.Clean(outputPath), fsperm.WriteFlags, fsperm.FilePerm)
-	if err != nil {
-		return fmt.Errorf("建立 CSV 檔案失敗: %w", err)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("關閉檔案失敗: %w", closeErr)
-		}
-	}()
-
-	if err := csvutil.WriteBOM(file); err != nil {
-		return fmt.Errorf("寫入 BOM 失敗: %w", err)
-	}
-
-	writer := csv.NewWriter(file)
-
-	header := make([]string, 0, 1+len(DefaultRatios))
+func writeOutputAll(outputPath string, times []float64, ratiosAll [][]float64) error {
+	pairs := DefaultRatios()
+	header := make([]string, 0, 1+len(pairs))
 	header = append(header, "Time (s)")
-	for _, r := range DefaultRatios {
+	for _, r := range pairs {
 		header = append(header, r.Name)
 	}
 
-	if err := writer.Write(csvutil.SanitizeHeaderRow(header)); err != nil {
-		return fmt.Errorf("寫入標題列失敗: %w", err)
-	}
-
-	for i, t := range times {
-		row := make([]string, 0, 1+len(ratiosAll))
-		row = append(row, fmt.Sprintf("%.4f", t))
-
-		for k := range ratiosAll {
-			row = append(row, formatRatioCell(ratiosAll[k], i))
-		}
-
-		if err := writer.Write(row); err != nil {
-			return fmt.Errorf("寫入資料列失敗: %w", err)
-		}
-	}
-
-	writer.Flush()
-
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("CSV flush 失敗: %w", err)
-	}
-
-	return nil
+	return csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: header,
+		Emit: func(emit func([]string) error) error {
+			for i, t := range times {
+				row := make([]string, 0, 1+len(ratiosAll))
+				row = append(row, fmt.Sprintf("%.4f", t))
+				for k := range ratiosAll {
+					row = append(row, formatRatioCell(ratiosAll[k], i))
+				}
+				if err := emit(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
 }
 
 // writeOutputPhases writes the 2N-1 phase+midpoint slice CSV (Output 2).
+// 同樣透過 csvutil.WriteCSVAtomic atomic 寫入。
 //
 //nolint:err113 // dynamic errors for user-facing output
 func writeOutputPhases(
 	outputPath string, times []float64, ratiosAll [][]float64, points []phasePoint,
-) (err error) {
-	file, err := os.OpenFile(filepath.Clean(outputPath), fsperm.WriteFlags, fsperm.FilePerm)
-	if err != nil {
-		return fmt.Errorf("建立 CSV 檔案失敗: %w", err)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("關閉檔案失敗: %w", closeErr)
-		}
-	}()
-
-	if err := csvutil.WriteBOM(file); err != nil {
-		return fmt.Errorf("寫入 BOM 失敗: %w", err)
-	}
-
-	writer := csv.NewWriter(file)
-
-	header := make([]string, 0, 2+len(DefaultRatios))
+) error {
+	pairs := DefaultRatios()
+	header := make([]string, 0, 2+len(pairs))
 	header = append(header, "Phase", "Time (s)")
-	for _, r := range DefaultRatios {
+	for _, r := range pairs {
 		header = append(header, r.Name)
 	}
 
-	if err := writer.Write(csvutil.SanitizeHeaderRow(header)); err != nil {
-		return fmt.Errorf("寫入標題列失敗: %w", err)
-	}
-
-	for _, p := range points {
-		idx := synchronizer.FindNearestTimeIndex(times, p.time)
-
-		row := make([]string, 0, 2+len(ratiosAll))
-		row = append(row, p.name, fmt.Sprintf("%.4f", times[idx]))
-
-		for k := range ratiosAll {
-			row = append(row, formatRatioCell(ratiosAll[k], idx))
-		}
-
-		if err := writer.Write(row); err != nil {
-			return fmt.Errorf("寫入資料列失敗: %w", err)
-		}
-	}
-
-	writer.Flush()
-
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("CSV flush 失敗: %w", err)
-	}
-
-	return nil
+	return csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: header,
+		Emit: func(emit func([]string) error) error {
+			for _, p := range points {
+				idx := synchronizer.FindNearestTimeIndex(times, p.time)
+				row := make([]string, 0, 2+len(ratiosAll))
+				row = append(row, p.name, fmt.Sprintf("%.4f", times[idx]))
+				for k := range ratiosAll {
+					row = append(row, formatRatioCell(ratiosAll[k], idx))
+				}
+				if err := emit(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
 }
 
 // formatRatioCell formats one ratio value as a CSV cell. NaN/Inf → empty string

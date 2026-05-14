@@ -39,7 +39,6 @@ func TestParseFloatCell(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			gotV, gotOk := ParseFloatCell(tc.in)
@@ -116,7 +115,6 @@ func TestParseTimeAndChannels(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			gotTime, gotChannels, gotOk := ParseTimeAndChannels(tc.record, tc.channelStartIdx)
@@ -347,7 +345,6 @@ func TestJoinDataName(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := joinDataName(tc.dataName, tc.rest)

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -168,4 +169,66 @@ func TestResolveLenientPath_AcceptsInternalSymlink(t *testing.T) {
 	if got == "" {
 		t.Errorf("got empty path")
 	}
+}
+
+// TestResolveLenientPath_RejectsNullByte 釘住 P2-G：null byte 在 normalize 之後立即被擋，
+// 避免落入 os.OpenFile error path 把未清理的 byte 寫進 log。
+func TestResolveLenientPath_RejectsNullByte(t *testing.T) {
+	base := t.TempDir()
+	_, err := ResolveLenientPath(base, "a\x00b.csv")
+	require.Error(t, err, "含 null byte 的檔名應被拒")
+	assert.Contains(t, err.Error(), "null byte",
+		"err 應來自 null byte 守門，實際 err=%v", err)
+}
+
+// TestResolveLenientPath_RejectsDotOnly 釘住 P2-G：bare "." 會被 Clean 成 "."、Join 成
+// baseFolder 本身；caller 後續 OpenFile 在 Unix 對目錄成功，行為未定。明確拒絕。
+func TestResolveLenientPath_RejectsDotOnly(t *testing.T) {
+	base := t.TempDir()
+	_, err := ResolveLenientPath(base, ".")
+	require.Error(t, err, "bare \".\" 應被拒")
+	assert.Contains(t, err.Error(), "無效",
+		"err 應來自 dot-only 守門，實際 err=%v", err)
+}
+
+// TestResolveLenientPath_RejectsBareTraversal 釘住測試補洞：bare ".." 必須被擋於
+// HasTraversalElement 階段，避免 Join 後解析到 baseFolder 的 parent dir。
+func TestResolveLenientPath_RejectsBareTraversal(t *testing.T) {
+	base := t.TempDir()
+	_, err := ResolveLenientPath(base, "..")
+	require.Error(t, err, "bare \"..\" 應被拒")
+}
+
+// TestResolveLenientPath_RejectsWhitespace 釘住 P2-G：純 whitespace 通過 normalize 後
+// TrimSpace + Clean 得到 ""，與 dot-only 同類拒絕。
+func TestResolveLenientPath_RejectsWhitespace(t *testing.T) {
+	base := t.TempDir()
+	_, err := ResolveLenientPath(base, "  ")
+	require.Error(t, err, "純 whitespace 檔名應被拒")
+	assert.Contains(t, err.Error(), "無效",
+		"err 應來自 whitespace 守門，實際 err=%v", err)
+}
+
+// TestResolveLenientPath_RejectsLongFilename 釘住 P2-F：filename base > 255 字元被拒。
+// 與 PathValidator.GetSafePath:408 對齊 maxFilenameLength=255。
+func TestResolveLenientPath_RejectsLongFilename(t *testing.T) {
+	base := t.TempDir()
+	longName := strings.Repeat("a", 256) + ".csv"
+	_, err := ResolveLenientPath(base, longName)
+	require.Error(t, err, "filename > 255 chars 應被拒")
+	assert.Contains(t, err.Error(), "檔名過長",
+		"err 應來自 filename length 守門，實際 err=%v", err)
+}
+
+// TestResolveLenientPath_RejectsLongPath 釘住 P2-F：joined path > 4096 字元被拒。
+// 與 PathValidator.GetSafePath:401 對齊 maxPathLength=4096。
+// 構造：base (~50 on macOS) + "a/" * 2048 + "a.csv" (~4101 chars) 使 joined > 4096，
+// 但每個 component 個別 < 255 不會觸發 filename cap、無 ".." 不會觸發 HasTraversalElement。
+func TestResolveLenientPath_RejectsLongPath(t *testing.T) {
+	base := t.TempDir()
+	longPath := strings.Repeat("a/", 2048) + "a.csv"
+	_, err := ResolveLenientPath(base, longPath)
+	require.Error(t, err, "joined > 4096 chars 應被拒")
+	assert.Contains(t, err.Error(), "路徑過長",
+		"err 應來自 path length 守門，實際 err=%v", err)
 }

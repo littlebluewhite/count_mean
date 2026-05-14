@@ -195,7 +195,7 @@ func (p *ANCParser) parseANCTextFile(filePath string) (*models.ForceData, error)
 
 // 2. ANC 格式的 xlsx（有 11 行頭部資訊，第 9 行是通道名稱，第 12 行開始是數據）.
 //
-//nolint:err113,stylecheck // dynamic errors with Chinese messages; Excel is proper noun
+//nolint:err113 // dynamic errors with Chinese messages; Excel is proper noun
 func (p *ANCParser) parseXLSXFile(filePath string) (*models.ForceData, error) {
 	// 開啟 Excel 檔案
 	excelFile, err := excelize.OpenFile(filePath)
@@ -310,7 +310,7 @@ func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*model
 
 // parseSimpleXLSX 解析純數據表格式的 xlsx 檔案.
 //
-//nolint:err113,stylecheck // dynamic errors with Chinese messages; Excel is proper noun
+//nolint:err113 // dynamic errors with Chinese messages; Excel is proper noun
 func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.ForceData, error) {
 	// 解析標題行（第一行應該包含 Time 和各通道名稱）
 	headerRow := rows[0]
@@ -573,11 +573,11 @@ func (p *ANCParser) extractValue(content, label string) string {
 	return ""
 }
 
-// GetDataInTimeRange returns force data within the specified time range.
+// GetANCDataInTimeRange returns force data within the specified time range.
 // Uses integer milliseconds for comparison to avoid floating point precision issues.
 //
-//nolint:revive,err113 // unused-receiver: keep consistent API; dynamic errors with Chinese messages
-func (p *ANCParser) GetDataInTimeRange(data *models.ForceData, startTime, endTime float64) (*models.ForceData, error) {
+//nolint:err113 // dynamic errors with Chinese messages for user-facing output
+func GetANCDataInTimeRange(data *models.ForceData, startTime, endTime float64) (*models.ForceData, error) {
 	if startTime > endTime {
 		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", startTime, endTime)
 	}

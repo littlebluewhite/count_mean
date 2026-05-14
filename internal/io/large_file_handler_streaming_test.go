@@ -129,7 +129,6 @@ func TestSlidingWindow_StreamingMatchesLegacy(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			data := synthesizeEMGData(tc.records, tc.channels, int64(tc.records)+int64(tc.windowSize))

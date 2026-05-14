@@ -21,15 +21,18 @@ type MuscleRatio struct {
 	Denominator string // short muscle name, e.g. "ES"
 }
 
-// DefaultRatios is the canonical 4-pair list, mapping to EMG channels (1/2, 3/4, 5/6, 7/8).
+// DefaultRatios returns the canonical 4-pair list, mapping to EMG channels (1/2, 3/4, 5/6, 7/8).
 // Order is part of the CSV column contract — TestDefaultRatios_OrderLocked guards it.
 //
-//nolint:gochecknoglobals // canonical column ordering, treated as immutable
-var DefaultRatios = []MuscleRatio{
-	{Name: "RA/ES", Numerator: "RA", Denominator: "ES"},
-	{Name: "IL/GMax", Numerator: "IL", Denominator: "GMax"},
-	{Name: "RF/BF", Numerator: "RF", Denominator: "BF"},
-	{Name: "TAIO/MF", Numerator: "TAIO", Denominator: "MF"},
+// 每次回 fresh slice：避免 caller 改動共享 state（過去是 mutable package var，無語言層強制
+// immutability；//nolint:gochecknoglobals 只是文件而非強制）。
+func DefaultRatios() []MuscleRatio {
+	return []MuscleRatio{
+		{Name: "RA/ES", Numerator: "RA", Denominator: "ES"},
+		{Name: "IL/GMax", Numerator: "IL", Denominator: "GMax"},
+		{Name: "RF/BF", Numerator: "RF", Denominator: "BF"},
+		{Name: "TAIO/MF", Numerator: "TAIO", Denominator: "MF"},
+	}
 }
 
 // requiredMuscles lists the 8 short names that must all be present in the channel map.
@@ -38,6 +41,8 @@ var DefaultRatios = []MuscleRatio{
 var requiredMuscles = []string{"RA", "ES", "IL", "GMax", "RF", "BF", "TAIO", "MF"}
 
 // shortNameMap normalizes prefix variants → canonical short name (case-insensitive lookup via upper).
+// 保留 package-private map（lookup 不需 copy）；外部僅透過 lookupShortName accessor 取值，
+// 避免任何 importer 直接 mutate。
 //
 //nolint:gochecknoglobals // domain constants
 var shortNameMap = map[string]string{
@@ -50,6 +55,13 @@ var shortNameMap = map[string]string{
 	"TAIO":  "TAIO",
 	"TA&IO": "TAIO",
 	"MF":    "MF",
+}
+
+// lookupShortName returns the canonical short muscle name for a normalized prefix.
+// 唯一 caller 是同 package 的 mapHeaderToRightShortName；外部呼叫者請走 BuildRightSideChannelMap。
+func lookupShortName(key string) (string, bool) {
+	s, ok := shortNameMap[key]
+	return s, ok
 }
 
 // Ratio computes num/den with EMG-specific guard rails:
@@ -119,7 +131,7 @@ func mapHeaderToRightShortName(header string) string {
 	}
 
 	name := strings.ToUpper(prefix[2:])
-	if short, ok := shortNameMap[name]; ok {
+	if short, ok := lookupShortName(name); ok {
 		return short
 	}
 
@@ -131,9 +143,10 @@ func mapHeaderToRightShortName(header string) string {
 // (built via BuildRightSideChannelMap).
 func ComputeAllRatios(emg *models.PhaseSyncEMGData, channelMap map[string]string) [][]float64 {
 	n := len(emg.Time)
-	ratios := make([][]float64, len(DefaultRatios))
+	pairs := DefaultRatios()
+	ratios := make([][]float64, len(pairs))
 
-	for k, r := range DefaultRatios {
+	for k, r := range pairs {
 		numHeader := channelMap[r.Numerator]
 		denHeader := channelMap[r.Denominator]
 		numData := emg.Channels[numHeader]

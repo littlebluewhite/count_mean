@@ -73,7 +73,7 @@ func (cb *CSVBenchmarks) generateTestCSV(filename string, rows, cols int) (strin
 		row := make([]string, cols)
 
 		for j := 0; j < cols; j++ {
-			value := rand.Float64()*randomValueScale - randomValueRange
+			value := rand.Float64()*randomValueScale - randomValueRange //nolint:gosec // G404: benchmark synthetic data, not cryptographic
 			row[j] = fmt.Sprintf("%.6f", value)
 		}
 

@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"count_mean/internal/models"
 	"count_mean/internal/csvutil"
+	"count_mean/internal/models"
 	"count_mean/internal/security/fsperm"
 )
 
@@ -72,7 +72,7 @@ func (p *MotionParser) readCSVRecords(filepath string) ([][]string, error) {
 
 // validateRecordStructure 驗證記錄結構.
 //
-//nolint:err113,stylecheck // dynamic errors with Chinese messages; Motion is proper noun
+//nolint:err113 // dynamic errors with Chinese messages; Motion is proper noun
 func (p *MotionParser) validateRecordStructure(records [][]string) error {
 	if len(records) <= p.dataRow {
 		return fmt.Errorf("Motion 檔案格式錯誤：數據行不足")
@@ -142,7 +142,7 @@ func (p *MotionParser) parseDataRecord(record, headers []string, motionData *mod
 
 // validateDataIntegrity 驗證數據完整性.
 //
-//nolint:revive,err113,stylecheck // unused-receiver; dynamic errors with Chinese messages; Motion is proper noun
+//nolint:revive,err113 // unused-receiver; dynamic errors with Chinese messages; Motion is proper noun
 func (p *MotionParser) validateDataIntegrity(motionData *models.MotionData) error {
 	dataLen := len(motionData.Indices)
 	if dataLen == 0 {
@@ -160,7 +160,7 @@ func (p *MotionParser) validateDataIntegrity(motionData *models.MotionData) erro
 
 // ParseFile 解析 Motion CSV 檔案.
 //
-//nolint:err113,stylecheck // dynamic errors with Chinese messages; Motion is proper noun
+//nolint:err113 // dynamic errors with Chinese messages; Motion is proper noun
 func (p *MotionParser) ParseFile(filepath string) (*models.MotionData, error) {
 	records, err := p.readCSVRecords(filepath)
 	if err != nil {
@@ -287,10 +287,10 @@ func (p *MotionParser) TimeToIndex(time float64) int {
 	return index
 }
 
-// GetDataAtIndex 獲取指定 index 的數據.
+// GetMotionDataAtIndex 獲取指定 index 的數據.
 //
-//nolint:revive,err113 // unused-receiver: keep consistent API; dynamic errors with Chinese messages
-func (p *MotionParser) GetDataAtIndex(data *models.MotionData, targetIndex int) (map[string]float64, error) {
+//nolint:err113 // dynamic errors with Chinese messages for user-facing output
+func GetMotionDataAtIndex(data *models.MotionData, targetIndex int) (map[string]float64, error) {
 	// 查找 index
 	idx := -1
 
@@ -314,10 +314,10 @@ func (p *MotionParser) GetDataAtIndex(data *models.MotionData, targetIndex int) 
 	return result, nil
 }
 
-// GetDataInIndexRange 獲取指定 index 範圍內的數據.
+// GetMotionDataInIndexRange 獲取指定 index 範圍內的數據.
 //
-//nolint:revive,err113 // unused-receiver: keep consistent API; dynamic errors with Chinese messages
-func (p *MotionParser) GetDataInIndexRange(
+//nolint:err113 // dynamic errors with Chinese messages for user-facing output
+func GetMotionDataInIndexRange(
 	data *models.MotionData, startIndex, endIndex int,
 ) (*models.MotionData, error) {
 	if startIndex > endIndex {
@@ -344,7 +344,7 @@ func (p *MotionParser) GetDataInIndexRange(
 
 // ValidateMotionData 驗證 Motion 數據.
 //
-//nolint:err113,stylecheck // dynamic Chinese error message; Motion is proper noun
+//nolint:err113 // dynamic Chinese error message; Motion is proper noun
 func ValidateMotionData(data *models.MotionData) error {
 	if data == nil {
 		return fmt.Errorf("Motion 數據為空: %w", ErrNilData)

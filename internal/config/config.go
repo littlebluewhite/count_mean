@@ -7,9 +7,13 @@ import (
 	stderrors "errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"count_mean/internal/i18n"
 	"count_mean/internal/models"
+	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
 )
 
@@ -22,6 +26,7 @@ var (
 	errInputDirEmpty        = stderrors.New("輸入目錄路徑不能為空")
 	errOutputDirEmpty       = stderrors.New("輸出目錄路徑不能為空")
 	errOperateDirEmpty      = stderrors.New("操作目錄路徑不能為空")
+	errUnsupportedLanguage  = stderrors.New("不支援的語言")
 )
 
 // AppConfig 應用程式配置.
@@ -98,6 +103,14 @@ func LoadConfig(filename string) (*AppConfig, error) {
 		return nil, fmt.Errorf("解析配置檔案失敗: %w", err)
 	}
 
+	// 舊版或 partial config.json 可能省略 language 欄位,留空字串會被下方 Validate
+	// 拒絕,進而讓 main 退回 DefaultConfig 並丟棄使用者儲存的 directories / 設定。
+	// 前端對空 language 預設視為 zh-TW,後端在此對齊,避免使用者升級後設定被吃掉
+	// (codex review P2 fix)。
+	if config.Language == "" {
+		config.Language = string(i18n.LocaleZhTW)
+	}
+
 	// 驗證配置
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("配置檔案無效: %w", err)
@@ -155,6 +168,17 @@ func (c *AppConfig) Validate() error {
 		return fmt.Errorf("%w: %s", errUnsupportedFormat, c.OutputFormat)
 	}
 
+	validLanguages := map[string]bool{
+		string(i18n.LocaleZhTW): true,
+		string(i18n.LocaleZhCN): true,
+		string(i18n.LocaleEnUS): true,
+		string(i18n.LocaleJaJP): true,
+	}
+
+	if !validLanguages[c.Language] {
+		return fmt.Errorf("%w: %s", errUnsupportedLanguage, c.Language)
+	}
+
 	// 驗證目錄路徑
 	if c.InputDir == "" {
 		return errInputDirEmpty
@@ -166,6 +190,43 @@ func (c *AppConfig) Validate() error {
 
 	if c.OperateDir == "" {
 		return errOperateDirEmpty
+	}
+
+	// Traversal / system-dir / null-byte 驗證 — 拒絕 "../../etc"、"/etc"、含 \x00 等。
+	// security.PathValidator.ValidateExternalPath 自動把相對路徑（如 "./output"）以 cwd
+	// 展開為絕對路徑後再檢，因此預設 config 不會誤拒。InputDir / OutputDir / OperateDir /
+	// LogDirectory / TranslationsDir 五個 user-controllable directory 都一併保護。
+	validator := security.NewPathValidator(nil)
+
+	dirFields := []struct {
+		name string
+		path string
+	}{
+		{"InputDir", c.InputDir},
+		{"OutputDir", c.OutputDir},
+		{"OperateDir", c.OperateDir},
+		{"LogDirectory", c.LogDirectory},
+		{"TranslationsDir", c.TranslationsDir},
+	}
+
+	for _, f := range dirFields {
+		if f.path == "" {
+			continue // LogDirectory / TranslationsDir 容許空字串（非必填）
+		}
+
+		if strings.ContainsRune(f.path, 0) {
+			//nolint:err113 // dynamic error for user-facing output
+			return fmt.Errorf("%s 含 null byte", f.name)
+		}
+
+		// Directory 語意：OutputDir 等是「未來寫入路徑的 prefix」，附 dummy child 後再驗
+		// 確保 OutputDir 本身就是 system root（"/etc"）也被擋 — performBasicSecurityChecks
+		// 的 sensitive pattern "/etc/" 等需要結尾 slash 才命中。"/etc-backup" 不會誤擋
+		// 因為 join 後是 "/etc-backup/_marker" 不含 "/etc/"。
+		checkPath := filepath.Join(f.path, "_validation_marker")
+		if err := validator.ValidateExternalPath(checkPath); err != nil {
+			return fmt.Errorf("%s 驗證失敗: %w", f.name, err)
+		}
 	}
 
 	return nil

@@ -18,20 +18,21 @@ This document describes the testing automation implementation for the EMG Data A
 
 ### Structure
 
+Unit tests live next to the source they test (idiomatic Go same-package placement),
+e.g. `internal/parsers/emg_parser_test.go`, `internal/cci/analyzer_test.go`,
+`gui/wails_binding_test.go`, `util/precision_test.go`.
+
+Only **cross-package** tests live under `test/`:
+
 ```
 test/
 ├── benchmark/
 │   ├── benchmark_test.go           # Custom benchmark tests
 │   ├── standard_benchmark_test.go  # Standard Go benchmarks
 │   └── benchmark_demo.go           # Demo and examples
-├── unit/
-│   ├── calculator/                 # Calculator module tests
-│   ├── chart/                      # Chart module tests
-│   ├── config/                     # Configuration tests
-│   └── [other modules]/            # Other unit tests
-└── integration/
-    ├── integration_test.go         # Integration tests
-    └── [other integration tests]/  # Additional integration tests
+├── integration/                    # End-to-end / multi-package integration
+├── phase_sync_test/                # Phase-sync specific E2E
+└── testdata/                       # Shared test fixtures
 ```
 
 ### Test Categories

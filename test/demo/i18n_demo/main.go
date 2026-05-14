@@ -38,8 +38,8 @@ func main() {
 		return
 	}
 
-	// 使用內部 API 保存翻譯文件
-	globalI18n := &i18n.I18n{}
+	// 使用內部 API 保存翻譯文件（必須走 NewI18n() 確保 messages map 已初始化，否則 LoadTranslations 對 nil map 寫入會 panic）
+	globalI18n := i18n.NewI18n()
 	if err := globalI18n.LoadTranslations("./nonexistent"); err != nil {
 		logger.Error("載入內建翻譯失敗", err)
 		return

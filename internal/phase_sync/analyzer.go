@@ -157,11 +157,11 @@ func validateMotionFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 
 	motionFilePath, err := ctx.pathValidator.GetSafePath(ctx.baseFolder, ctx.manifest.MotionFile)
 	if err != nil {
-		return fmt.Errorf("Motion 檔案路徑驗證失敗: %w", err) //nolint:stylecheck // Chinese error message
+		return fmt.Errorf("Motion 檔案路徑驗證失敗: %w", err) //nolint:staticcheck // Chinese error message
 	}
 
 	if _, err := os.Stat(motionFilePath); os.IsNotExist(err) {
-		//nolint:stylecheck // Chinese error message for user display
+		//nolint:staticcheck // Chinese error message for user display
 		return fmt.Errorf("Motion 檔案不存在 (%s): %w", motionFilePath, ErrFileNotFound)
 	}
 
@@ -181,13 +181,13 @@ func validateMotionFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 // validateMotionPhasePoints 驗證 Motion 相關分期點.
 func validateMotionPhasePoints(manifest *models.PhaseManifest, maxMotionIndex int) error {
 	if manifest.PhasePoints.D > 0 && manifest.PhasePoints.D > maxMotionIndex {
-		//nolint:stylecheck // Chinese error message for user display
+		//nolint:staticcheck // Chinese error message for user display
 		return fmt.Errorf("D 分期點 index %d 超出 Motion 數據範圍 (最大: %d): %w",
 			manifest.PhasePoints.D, maxMotionIndex, ErrPhasePointOutOfRange)
 	}
 
 	if manifest.PhasePoints.O > 0 && manifest.PhasePoints.O > maxMotionIndex {
-		//nolint:stylecheck // Chinese error message for user display
+		//nolint:staticcheck // Chinese error message for user display
 		return fmt.Errorf("O 分期點 index %d 超出 Motion 數據範圍 (最大: %d): %w",
 			manifest.PhasePoints.O, maxMotionIndex, ErrPhasePointOutOfRange)
 	}
@@ -210,11 +210,11 @@ func validateForceFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) erro
 
 	forceFilePath, err := ctx.pathValidator.GetSafePath(ctx.baseFolder, ctx.manifest.ForceFile)
 	if err != nil {
-		return fmt.Errorf("Force Plate 檔案路徑驗證失敗: %w", err) //nolint:stylecheck // Chinese error message
+		return fmt.Errorf("Force Plate 檔案路徑驗證失敗: %w", err) //nolint:staticcheck // Chinese error message
 	}
 
 	if _, err := os.Stat(forceFilePath); os.IsNotExist(err) {
-		//nolint:stylecheck // Chinese error message for user display
+		//nolint:staticcheck // Chinese error message for user display
 		return fmt.Errorf("Force Plate 檔案不存在 (%s): %w", forceFilePath, ErrFileNotFound)
 	}
 
@@ -241,7 +241,9 @@ func validateForcePhasePoints(manifest *models.PhaseManifest, maxForceTime float
 			continue
 		}
 
-		value, _, _ := parsers.GetPhaseValue(&manifest.PhasePoints, phase)
+		// GetPhaseValue 對 10 個合法 PhasePoint 都 return nil error；allPhases 已涵蓋
+		// 全部，error path 不可達。
+		value, _, _ := parsers.GetPhaseValue(&manifest.PhasePoints, phase) //nolint:errcheck // unreachable error path
 		if value > 0 && value > maxForceTime {
 			return fmt.Errorf("%s 分期點時間 %.3f 超出 Force Plate 數據範圍 (最大: %.3f): %w",
 				phase, value, maxForceTime, ErrPhasePointOutOfRange)
@@ -297,7 +299,7 @@ func (analyzer *PhaseSyncAnalyzer) Load(
 		return nil, err
 	}
 
-	emgData, err := analyzer.emgParser.ParseFile(ctx.emgFilePath)
+	emgData, _, err := analyzer.emgParser.ParseFile(ctx.emgFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
 	}
@@ -379,7 +381,6 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(
 		return nil, err
 	}
 
-
 	loaded, err := analyzer.LoadAndExtractRange(params)
 	if err != nil {
 		return nil, err
@@ -390,7 +391,7 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(
 	}
 
 	// 6. 提取指定時間範圍的 EMG 數據
-	rangeResult, err := analyzer.emgParser.GetDataInTimeRange(
+	rangeResult, err := parsers.GetEMGDataInTimeRange(
 		loaded.EMGData,
 		loaded.PhaseTimeRange.StartTime,
 		loaded.PhaseTimeRange.EndTime,

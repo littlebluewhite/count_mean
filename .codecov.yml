@@ -45,7 +45,9 @@ github_checks:
 flags:
   unittests:
     paths:
-      - test/unit/
+      - internal/
+      - gui/
+      - util/
     carryforward: true
   integration:
     paths:

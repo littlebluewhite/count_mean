@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/config"
+	"count_mean/internal/i18n"
 )
 
 // TestGetAvailablePhases_ReturnsStringMapForWailsCompatibility 守護 Wails v2
@@ -23,7 +24,7 @@ func TestGetAvailablePhases_ReturnsStringMapForWailsCompatibility(t *testing.T) 
 
 	// 編譯期 type 守護：若 GetAvailablePhases 改回 map[string][]models.PhasePoint，
 	// 下一行賦值會編譯失敗，提醒開發者必須在 Wails 邊界保持 []string。
-	var phases map[string][]string = app.GetAvailablePhases()
+	var phases map[string][]string = app.GetAvailablePhases() //nolint:staticcheck // ST1023: type 宣告刻意保留作為編譯期型別守護
 
 	assert.Len(t, phases["start"], 10, "start phases 應有 10 個")
 	assert.Len(t, phases["end"], 9, "end phases 應有 9 個（P0 不能當結束）")
@@ -224,5 +225,55 @@ func TestApp_SnapshotConsistency_UnderConcurrentApply(t *testing.T) {
 
 	if c := teardownCount.Load(); c > 0 {
 		t.Fatalf("snapshot 撕裂:%d 次 cfg.ScalingFactor 與 maxMeanCalc.ScalingFactor() 不一致 — buildAppState 可能未原子建構", c)
+	}
+}
+
+// TestGetTranslations_ReturnsLocaleDictionary 守護 Phase 1 frontend i18n MVP 契約 —
+// GetTranslations 必須 return map[string]string (Wails binding ↔ frontend i18n.js 對齊),
+// 且 4 個 supported locale 必須回對應字典。未知 locale 由 i18n.GetTranslationMap
+// fallback 到 zh-TW;若該行為改變(例如改回 nil)會讓前端啟動時 t() 全失效。
+func TestGetTranslations_ReturnsLocaleDictionary(t *testing.T) {
+	var app *App // GetTranslations 不解 receiver,nil 安全
+
+	cases := []struct {
+		locale string
+		want   string
+	}{
+		{"zh-TW", "系統配置"},
+		{"zh-CN", "系统配置"},
+		{"en-US", "System Configuration"},
+		{"ja-JP", "システム設定"},
+	}
+	for _, tc := range cases {
+		dict := app.GetTranslations(tc.locale)
+		require.NotNil(t, dict, "locale=%s 字典不應為 nil", tc.locale)
+		assert.Equal(t, tc.want, dict[i18n.KeyConfigPanelTitle],
+			"locale=%s KeyConfigPanelTitle = %q, want %q", tc.locale, dict[i18n.KeyConfigPanelTitle], tc.want)
+	}
+
+	fallbackDict := app.GetTranslations("xx-YY")
+	assert.Equal(t, "系統配置", fallbackDict[i18n.KeyConfigPanelTitle],
+		"unknown locale 應 fallback 到 zh-TW")
+}
+
+// TestSetLanguage_ValidLocale_NoError 守護 4 個 supported locale 都被 SetLanguage 接受。
+func TestSetLanguage_ValidLocale_NoError(t *testing.T) {
+	var app *App // SetLanguage 不解 receiver,nil 安全
+
+	for _, loc := range []string{"zh-TW", "zh-CN", "en-US", "ja-JP"} {
+		err := app.SetLanguage(loc)
+		require.NoError(t, err, "locale=%s 必須被接受", loc)
+	}
+}
+
+// TestSetLanguage_InvalidLocale_Errors 守護未知 locale 一定 return error,
+// 避免前端誤傳髒字串污染 backend i18n state(case-sensitive 比對)。
+func TestSetLanguage_InvalidLocale_Errors(t *testing.T) {
+	var app *App
+
+	cases := []string{"", "xx-YY", "english", "ZH-TW", "fr-FR", "zh"}
+	for _, loc := range cases {
+		err := app.SetLanguage(loc)
+		require.Error(t, err, "locale=%q 必須被拒絕", loc)
 	}
 }

@@ -8,18 +8,15 @@ import (
 	"count_mean/util"
 )
 
-// EMGParser EMG檔案解析器.
+// EMGParser EMG 檔案解析器。Stateless — ParseFile 不寫 instance state，
+// 同一 instance 可在多 goroutine 中安全共用（亦可 per-call 新建）。
 type EMGParser struct {
 	skipHeader bool
-	frequency  float64 // 採樣頻率 Hz
 }
 
-// NewEMGParser 創建新的 EMG 解析器.
+// NewEMGParser 創建新的 EMG 解析器。回傳值為 stateless parser，可長期持有或 per-call 新建。
 func NewEMGParser() *EMGParser {
-	return &EMGParser{
-		skipHeader: true,
-		frequency:  0,
-	}
+	return &EMGParser{skipHeader: true}
 }
 
 // validateEMGRecords validates basic requirements for EMG records.
@@ -93,16 +90,17 @@ func validateEMGDataIntegrity(emgData *models.PhaseSyncEMGData) error {
 	return nil
 }
 
-// ParseFile 解析 EMG CSV 檔案.
-func (p *EMGParser) ParseFile(filepath string) (*models.PhaseSyncEMGData, error) {
+// ParseFile 解析 EMG CSV 檔案。回傳 (data, frequency, error)：frequency 由前兩個時間點差值
+// 推算（Hz）；當資料不足或計算失敗時，frequency 為 0。
+func (p *EMGParser) ParseFile(filepath string) (*models.PhaseSyncEMGData, float64, error) {
 	records, err := ReadCSVDirect(filepath)
 	if err != nil {
-		return nil, fmt.Errorf("無法開啟 EMG 檔案 %s: %w", filepath, err)
+		return nil, 0, fmt.Errorf("無法開啟 EMG 檔案 %s: %w", filepath, err)
 	}
 
 	headers, err := p.validateEMGRecords(records)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	emgData := initEMGData(headers, len(records)-1)
@@ -112,14 +110,15 @@ func (p *EMGParser) ParseFile(filepath string) (*models.PhaseSyncEMGData, error)
 	}
 
 	if err := validateEMGDataIntegrity(emgData); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	if freq, freqErr := computeFrequencyFromTime(emgData.Time); freqErr == nil {
-		p.frequency = freq
+	frequency, freqErr := computeFrequencyFromTime(emgData.Time)
+	if freqErr != nil {
+		frequency = 0
 	}
 
-	return emgData, nil
+	return emgData, frequency, nil
 }
 
 // parseHeaders 解析標題行.
@@ -143,11 +142,11 @@ type EMGTimeRangeResult struct {
 	ActualEndTime   float64 // 實際選取的最後一個數據點時間
 }
 
-// GetDataInTimeRange returns EMG data within the specified time range.
+// GetEMGDataInTimeRange returns EMG data within the specified time range.
 // Uses integer milliseconds for comparison to avoid floating point precision issues.
 //
-//nolint:revive,err113 // unused-receiver: keep consistent API; dynamic errors with Chinese messages
-func (p *EMGParser) GetDataInTimeRange(
+//nolint:err113 // dynamic errors with Chinese messages for user-facing output
+func GetEMGDataInTimeRange(
 	data *models.PhaseSyncEMGData, startTime, endTime float64,
 ) (*EMGTimeRangeResult, error) {
 	if startTime > endTime {
@@ -197,15 +196,6 @@ func CalculateEMGStatistics(data *models.PhaseSyncEMGData) (means, maxes map[str
 	}
 
 	return means, maxes
-}
-
-// GetSampleInterval 獲取採樣間隔（秒）.
-func (p *EMGParser) GetSampleInterval() float64 {
-	if p.frequency == 0 {
-		return 0
-	}
-
-	return 1.0 / p.frequency
 }
 
 // ValidateEMGData 驗證 EMG 數據.
