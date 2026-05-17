@@ -142,7 +142,7 @@ func TestAnalyze_MissingChannelFailFast(t *testing.T) {
 	assert.Contains(t, sr.Error, "缺少必要的肌肉通道")
 }
 
-func TestAnalyze_PhasePoints_2NMinus1Rows(t *testing.T) {
+func TestAnalyze_PhasePoints_FullPhasesYieldRows(t *testing.T) {
 	tempDir := t.TempDir()
 	dataDir := filepath.Join(tempDir, "data")
 	outDir := filepath.Join(tempDir, "output")
@@ -180,8 +180,9 @@ func TestAnalyze_PhasePoints_2NMinus1Rows(t *testing.T) {
 	assert.NotEmpty(t, sr.OutputPhasePath)
 
 	rows := readCSV(t, sr.OutputPhasePath)
-	// 1 header + 19 data rows = 20 rows total
-	assert.Equal(t, 1+19, len(rows), "10 phases → 19 data rows expected")
+	// 1 header + 10 phases + 9 adjacent-pair midpoints + 2 biomechanical-interval midpoints
+	// (mid_S_D, mid_D_T) = 22 rows total (1 header + 21 data rows)
+	assert.Equal(t, 1+21, len(rows), "10 phases → 19 adjacent + 2 interval = 21 data rows expected")
 	assert.Equal(t, []string{"Phase", "Time (s)", "RA/ES", "IL/GMax", "RF/BF", "TAIO/MF"}, rows[0])
 
 	// 抽查一個 data row 的 ratio：RA/ES = 2/1 = 2.000000
@@ -193,10 +194,36 @@ func TestAnalyze_PhasePoints_2NMinus1Rows(t *testing.T) {
 		assert.Equal(t, "0.500000", row[4], "RF/BF at row %v", row)
 		assert.Equal(t, "2.000000", row[5], "TAIO/MF at row %v", row)
 	}
+
+	// 驗證兩個 biomechanical-interval midpoints 都被生成,且時間欄正確
+	var midSD, midDT []string
+	for _, row := range rows[1:] {
+		switch row[0] {
+		case "mid_S_D":
+			midSD = row
+		case "mid_D_T":
+			midDT = row
+		}
+	}
+	require.NotNil(t, midSD, "biomechanical-interval midpoint mid_S_D missing")
+	require.NotNil(t, midDT, "biomechanical-interval midpoint mid_D_T missing")
+	assert.Equal(t, "0.0580", midSD[1], "mid_S_D time should be (S=0.04 + D=0.076)/2 = 0.058")
+	assert.Equal(t, "0.0880", midDT[1], "mid_D_T time should be (D=0.076 + T=0.10)/2 = 0.088")
+
+	// rows 依時間嚴格遞增 — 穿插式排序契約（time-sorted interleave）。
+	// 由於 time 欄統一用 "%.4f" 4 位小數格式,且所有時間正值且 < 1,字典序比較與
+	// 數值序等價,無需 parse 回 float。
+	for i := 2; i < len(rows); i++ {
+		prev := rows[i-1][1]
+		curr := rows[i][1]
+		assert.Less(t, prev, curr, "row %d time=%s must be < row %d time=%s", i-1, prev, i, curr)
+	}
 }
 
-func TestAnalyze_PhasePoints_5PhaseN2NMinus1(t *testing.T) {
-	// 5 個有效分期 → 9 列（4 個中間點）
+func TestAnalyze_PhasePoints_NoIntervalMidpointsWhenSDTAbsent(t *testing.T) {
+	// 5 個有效分期 P0–C(無 S/D/T)→ 5 + 4 adjacent-pair midpoints = 9 列。
+	// 因 D 缺失,mid_S_D 與 mid_D_T 都無法生成;biomechanical-interval midpoints 為 0。
+	// 釘住「S/D/T 任一缺失 → 對應 skip-midpoint 完全不生成」契約。
 	tempDir := t.TempDir()
 	dataDir := filepath.Join(tempDir, "data")
 	outDir := filepath.Join(tempDir, "output")
@@ -223,7 +250,300 @@ func TestAnalyze_PhasePoints_5PhaseN2NMinus1(t *testing.T) {
 	sr := result[0]
 	require.True(t, sr.Success, "Error=%s", sr.Error)
 	rows := readCSV(t, sr.OutputPhasePath)
-	assert.Equal(t, 1+9, len(rows), "5 phases → 9 data rows expected (2N-1)")
+	assert.Equal(t, 1+9, len(rows), "5 phases without S/D/T → 9 data rows (2N-1, no interval midpoints)")
+
+	// 進一步釘住:rows 中沒有任何 mid_S_D / mid_D_T
+	for _, row := range rows[1:] {
+		assert.NotEqual(t, "mid_S_D", row[0], "mid_S_D should not exist when D is absent")
+		assert.NotEqual(t, "mid_D_T", row[0], "mid_D_T should not exist when D/T are absent")
+	}
+}
+
+// hasPhaseRow scans rows[1:] (skipping header) for a row whose Phase column equals name.
+// 共用於 edge case 測試。
+func hasPhaseRow(rows [][]string, name string) bool {
+	for _, row := range rows[1:] {
+		if row[0] == name {
+			return true
+		}
+	}
+	return false
+}
+
+// countPhaseRow returns how many rows[1:] have the given Phase column value.
+// 用於釘住「不重複」契約 — 若某 midpoint 被誤生兩次,計數會抓到。
+func countPhaseRow(rows [][]string, name string) int {
+	count := 0
+	for _, row := range rows[1:] {
+		if row[0] == name {
+			count++
+		}
+	}
+	return count
+}
+
+func TestAnalyze_PhasePoints_MissingS_OnlyMidDT(t *testing.T) {
+	// 9 phases without S → 9 phase rows + 8 adjacent midpoints + 1 interval (mid_D_T) = 18 rows。
+	// mid_S_D 無法生成（S 缺失）;mid_D_T 仍可生成（D 與 T 都在）。
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S1", "s1.csv", "1", [10]string{
+			"0.01", "0.02", "0.03", "", "0.05",
+			"20", "0.09", "0.10", "30", "0.15",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.NoError(t, err)
+
+	sr := result[0]
+	require.True(t, sr.Success, "Error=%s", sr.Error)
+	rows := readCSV(t, sr.OutputPhasePath)
+	assert.Equal(t, 1+18, len(rows), "9 phases (no S) → 17 adjacent + 1 interval (mid_D_T) = 18 data rows")
+
+	assert.False(t, hasPhaseRow(rows, "mid_S_D"), "mid_S_D should not exist when S is absent")
+	assert.True(t, hasPhaseRow(rows, "mid_D_T"), "mid_D_T should still be generated when D and T are present")
+}
+
+func TestAnalyze_PhasePoints_MissingD_NoIntervalMidpoints(t *testing.T) {
+	// 9 phases without D → 9 phase rows + 8 adjacent midpoints + 0 interval = 17 rows。
+	// 兩個 interval midpoints 都無法生成,因為 D 同時是 mid_S_D 與 mid_D_T 的端點。
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S1", "s1.csv", "1", [10]string{
+			"0.01", "0.02", "0.03", "0.04", "0.05",
+			"", "0.09", "0.10", "30", "0.15",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.NoError(t, err)
+
+	sr := result[0]
+	require.True(t, sr.Success, "Error=%s", sr.Error)
+	rows := readCSV(t, sr.OutputPhasePath)
+	assert.Equal(t, 1+17, len(rows), "9 phases (no D) → 17 adjacent + 0 interval = 17 data rows")
+
+	assert.False(t, hasPhaseRow(rows, "mid_S_D"), "mid_S_D should not exist when D is absent")
+	assert.False(t, hasPhaseRow(rows, "mid_D_T"), "mid_D_T should not exist when D is absent")
+}
+
+func TestAnalyze_PhasePoints_MissingT_OnlyMidSD(t *testing.T) {
+	// 9 phases without T → 9 phase rows + 8 adjacent midpoints + 1 interval (mid_S_D) = 18 rows。
+	// mid_S_D 仍可生成（S 與 D 都在）;mid_D_T 無法生成（T 缺失）。
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S1", "s1.csv", "1", [10]string{
+			"0.01", "0.02", "0.03", "0.04", "0.05",
+			"20", "0.09", "", "30", "0.15",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.NoError(t, err)
+
+	sr := result[0]
+	require.True(t, sr.Success, "Error=%s", sr.Error)
+	rows := readCSV(t, sr.OutputPhasePath)
+	assert.Equal(t, 1+18, len(rows), "9 phases (no T) → 17 adjacent + 1 interval (mid_S_D) = 18 data rows")
+
+	assert.True(t, hasPhaseRow(rows, "mid_S_D"), "mid_S_D should still be generated when S and D are present")
+	assert.False(t, hasPhaseRow(rows, "mid_D_T"), "mid_D_T should not exist when T is absent")
+}
+
+// TestAnalyze_PhasePoints_MissingC_NoDuplicateMidSD 釘住 codex review (P2) 發現的
+// duplicate-row bug:當 C 缺失但 S 與 D 都在,sort 後 S 與 D 變成相鄰,adjacent-pair
+// loop 自己會生出 mid_S_D — 此時 biomechanical-interval append 不能再加一次。
+//
+// Bug 復現前:Output 2 含兩列 mid_S_D,總列數 19;修復後:mid_S_D 只一列,總列數 18。
+func TestAnalyze_PhasePoints_MissingC_NoDuplicateMidSD(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	// 9 phases without C: P0, P1, P2, S(0.04), D(0.076), T0, T(0.10), O, L
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S1", "s1.csv", "1", [10]string{
+			"0.01", "0.02", "0.03", "0.04", "",
+			"20", "0.09", "0.10", "30", "0.15",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.NoError(t, err)
+
+	sr := result[0]
+	require.True(t, sr.Success, "Error=%s", sr.Error)
+	rows := readCSV(t, sr.OutputPhasePath)
+	// 9 phases + 8 adjacent midpoints (含 mid_S_D 由 adjacent loop 產生) + 1 interval (mid_D_T)
+	// = 18 rows;若 mid_S_D 重複生成則會是 19。
+	assert.Equal(t, 1+18, len(rows), "missing C with S+D adjacent should not duplicate mid_S_D")
+	assert.Equal(t, 1, countPhaseRow(rows, "mid_S_D"), "mid_S_D must appear exactly once")
+	assert.Equal(t, 1, countPhaseRow(rows, "mid_D_T"), "mid_D_T must appear exactly once")
+}
+
+// TestAnalyze_PhasePoints_MissingT0_NoDuplicateMidDT 釘住 codex review (P2) 的對稱情境:
+// T0 缺失但 D 與 T 都在,adjacent-pair loop 自己會生出 mid_D_T — 此時 biomechanical-interval
+// append 不能再加一次。
+func TestAnalyze_PhasePoints_MissingT0_NoDuplicateMidDT(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	// 9 phases without T0: P0, P1, P2, S, C, D(0.076), T(0.10), O, L
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S1", "s1.csv", "1", [10]string{
+			"0.01", "0.02", "0.03", "0.04", "0.05",
+			"20", "", "0.10", "30", "0.15",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.NoError(t, err)
+
+	sr := result[0]
+	require.True(t, sr.Success, "Error=%s", sr.Error)
+	rows := readCSV(t, sr.OutputPhasePath)
+	// 9 phases + 8 adjacent midpoints (含 mid_D_T 由 adjacent loop 產生) + 1 interval (mid_S_D)
+	// = 18 rows;若 mid_D_T 重複生成則會是 19。
+	assert.Equal(t, 1+18, len(rows), "missing T0 with D+T adjacent should not duplicate mid_D_T")
+	assert.Equal(t, 1, countPhaseRow(rows, "mid_D_T"), "mid_D_T must appear exactly once")
+	assert.Equal(t, 1, countPhaseRow(rows, "mid_S_D"), "mid_S_D must appear exactly once")
+}
+
+// TestAnalyze_PhasePoints_MissingC_ReversedSDOrder_NoDuplicate 釘住 codex 第二輪 (P2)
+// 發現的「反向命名 dedup 失效」bug:當 C 缺失且 D 的 motion-index → EMG time 換算後
+// 比 S 還早,sort 後相鄰兩點是 D, S(反向),adjacent-pair loop 產生 `mid_D_S`(非
+// canonical 的 `mid_S_D`)。dedup 必須同時比對反向名稱,否則 biomechanical-interval
+// 會再加 `mid_S_D`,兩列 label 不同但 time 與 ratios 完全相同 — 重複資料的偽裝。
+//
+// 端點對(endpoint pair){S, D} 在輸出中應只出現一次,**不論 label 方向**。
+func TestAnalyze_PhasePoints_MissingC_ReversedSDOrder_NoDuplicate(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	// offset=1: ForceTimeToEMGTime(t,1)=t, MotionIndexToEMGTime(idx,1)=(idx-1)/250
+	// D=10 motion → 0.036 EMG; S=0.04 force → 0.04 EMG → D < S → 反序。C 缺失讓
+	// D 與 S 在 sort 後相鄰,adjacent-pair 產 mid_D_S。
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S1", "s1.csv", "1", [10]string{
+			"0.001", "0.002", "0.003", "0.04", "",
+			"10", "0.09", "0.10", "30", "0.15",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.NoError(t, err)
+
+	sr := result[0]
+	require.True(t, sr.Success, "Error=%s", sr.Error)
+	rows := readCSV(t, sr.OutputPhasePath)
+	// 9 phases + 8 adjacent midpoints (含 mid_D_S 反序產生) + 1 interval (mid_D_T)
+	// = 18 rows。若反向 dedup 失效,mid_S_D 也會被加 → 19 rows。
+	assert.Equal(t, 1+18, len(rows), "endpoint pair {S,D} must appear once regardless of label direction")
+	// 端點對 {S,D} 在輸出中無論 label 方向只能合計出現一次
+	totalSDPair := countPhaseRow(rows, "mid_S_D") + countPhaseRow(rows, "mid_D_S")
+	assert.Equal(t, 1, totalSDPair, "endpoint pair {S,D} must appear exactly once total (mid_S_D + mid_D_S)")
+	// mid_D_T 此情境下不涉及反序,正常生成一次
+	assert.Equal(t, 1, countPhaseRow(rows, "mid_D_T"), "mid_D_T must appear exactly once")
+}
+
+// TestAnalyze_PhasePoints_MissingT0_ReversedDTOrder_NoDuplicate 是 P2 修復的對稱
+// 情境:T0 缺失且 T 的 force-time 比 D 的 motion-index 換算時間還早(T.emg < D.emg),
+// sort 後 T 在 D 之前,adjacent-pair 產 `mid_T_D`(反向)。biomechanical-interval
+// 想加 `mid_D_T` 必須被反向 dedup 攔住。
+func TestAnalyze_PhasePoints_MissingT0_ReversedDTOrder_NoDuplicate(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	// D=20 motion → 0.076 EMG; T=0.01 force → 0.01 EMG → T < D → 反序。T0 缺失讓
+	// T 與 D 在 sort 後相鄰,adjacent-pair 產 mid_T_D。
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S1", "s1.csv", "1", [10]string{
+			"0.001", "0.002", "0.003", "0.005", "0.006",
+			"20", "", "0.01", "30", "0.15",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(&Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+	require.NoError(t, err)
+
+	sr := result[0]
+	require.True(t, sr.Success, "Error=%s", sr.Error)
+	rows := readCSV(t, sr.OutputPhasePath)
+	// 9 phases + 8 adjacent midpoints (含 mid_T_D 反序產生) + 1 interval (mid_S_D)
+	// = 18 rows。若反向 dedup 失效,mid_D_T 也會被加 → 19 rows。
+	assert.Equal(t, 1+18, len(rows), "endpoint pair {D,T} must appear once regardless of label direction")
+	totalDTPair := countPhaseRow(rows, "mid_D_T") + countPhaseRow(rows, "mid_T_D")
+	assert.Equal(t, 1, totalDTPair, "endpoint pair {D,T} must appear exactly once total (mid_D_T + mid_T_D)")
+	assert.Equal(t, 1, countPhaseRow(rows, "mid_S_D"), "mid_S_D must appear exactly once")
 }
 
 func TestAnalyze_PhaseTimeOutOfRange(t *testing.T) {

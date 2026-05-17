@@ -205,8 +205,33 @@ type phasePoint struct {
 	time float64 // EMG-time-aligned
 }
 
+// biomechanicalIntervalMidpoints defines extra "interval" midpoints whose endpoints
+// span across the canonical phase chain — i.e. they skip over one intermediate phase
+// to represent a biomechanical movement stage rather than an adjacent-pair sample.
+//
+//   - (S, D): squat phase, skips C (the squat-to-extension transition)
+//   - (D, T): push-off phase, skips T0 (end of force decay before take-off)
+//
+// (T, O) and (O, L) are intentionally omitted: T→O and O→L are already adjacent
+// pairs in the canonical phase order, so their midpoints are produced by the
+// adjacent-pair loop in collectPhasePoints — duplicating them here would emit the
+// same row twice.
+//
+//nolint:gochecknoglobals // canonical domain constants
+var biomechanicalIntervalMidpoints = []struct {
+	From, To models.PhasePoint
+}{
+	{models.PhaseS, models.PhaseD},
+	{models.PhaseD, models.PhaseT},
+}
+
 // collectPhasePoints converts the manifest's 10 raw phase values to EMG time, drops empties,
-// validates bounds, sorts, generates N-1 midpoints, and returns 2N-1 rows sorted by time.
+// validates bounds, sorts, and emits two kinds of rows interleaved by time:
+//   - actual phase points (up to 10)
+//   - adjacent-pair midpoints between consecutive phases (up to N-1)
+//   - biomechanical-interval midpoints from biomechanicalIntervalMidpoints (up to K, skipped if endpoints absent)
+//
+// Output length is up to 2N-1+K rows where K = len(biomechanicalIntervalMidpoints).
 //
 // 第二個回傳值是 warning message — 非空表示 Output 2 該跳過（Output 1 已成功）。
 //
@@ -259,7 +284,12 @@ func (a *Analyzer) collectPhasePoints(
 
 	sort.Slice(phases, func(i, j int) bool { return phases[i].time < phases[j].time })
 
-	points := make([]phasePoint, 0, 2*len(phases)-1)
+	phaseTime := make(map[models.PhasePoint]float64, len(phases))
+	for _, p := range phases {
+		phaseTime[models.PhasePoint(p.name)] = p.time
+	}
+
+	points := make([]phasePoint, 0, 2*len(phases)-1+len(biomechanicalIntervalMidpoints))
 	for i, p := range phases {
 		points = append(points, p)
 
@@ -271,7 +301,66 @@ func (a *Analyzer) collectPhasePoints(
 		}
 	}
 
+	points = appendIntervalMidpoints(points, phaseTime)
+
+	// 重新排序整個輸出 — biomechanical-interval midpoints 的時間位置不一定在末尾。
+	// 用 SliceStable 而非 Slice 防止 D == T0 等罕見等時邊界讓 test snapshot 不穩。
+	sort.SliceStable(points, func(i, j int) bool { return points[i].time < points[j].time })
+
 	return points, ""
+}
+
+// appendIntervalMidpoints adds biomechanical-interval midpoints (defined in
+// biomechanicalIntervalMidpoints) to points. Each interval's midpoint is emitted
+// only when:
+//
+//  1. Both endpoints are present in phaseTime — endpoints may be absent because
+//     the corresponding phase was empty in the manifest, parsing failed, or bounds
+//     validation upstream removed it. Silently skipping in that case keeps behavior
+//     aligned with the existing missing-phase tolerance in collectPhasePoints.
+//
+//  2. Neither the canonical name `mid_From_To` nor its reverse `mid_To_From` was
+//     already produced by the adjacent-pair loop. If the intermediate phase is
+//     absent (e.g. C absent makes S and D adjacent in the sorted phase list), the
+//     adjacent-pair loop emits the row itself — appending again here would emit a
+//     visually-distinct but semantically-duplicate row.
+//
+//     The reverse-name check matters because the adjacent-pair loop names rows by
+//     time-sort order (phases[i].name → phases[i+1].name), not canonical phase
+//     order. When motion/force time conversions make D.emg < S.emg (or T.emg <
+//     D.emg), the adjacent label flips to `mid_D_S` / `mid_T_D`. Dedup by endpoint
+//     pair, not just canonical label.
+func appendIntervalMidpoints(
+	points []phasePoint, phaseTime map[models.PhasePoint]float64,
+) []phasePoint {
+	existingNames := make(map[string]struct{}, len(points))
+	for _, p := range points {
+		existingNames[p.name] = struct{}{}
+	}
+
+	for _, iv := range biomechanicalIntervalMidpoints {
+		from, fromOK := phaseTime[iv.From]
+		to, toOK := phaseTime[iv.To]
+		if !fromOK || !toOK {
+			continue
+		}
+
+		canonicalName := fmt.Sprintf("mid_%s_%s", iv.From, iv.To)
+		reversedName := fmt.Sprintf("mid_%s_%s", iv.To, iv.From)
+		if _, exists := existingNames[canonicalName]; exists {
+			continue
+		}
+		if _, exists := existingNames[reversedName]; exists {
+			continue
+		}
+
+		points = append(points, phasePoint{
+			name: canonicalName,
+			time: (from + to) / 2,
+		})
+	}
+
+	return points
 }
 
 // assertUniqueSanitizedSubjects rejects batches whose subjects collapse to the same output filename
@@ -337,7 +426,9 @@ func writeOutputAll(outputPath string, times []float64, ratiosAll [][]float64) e
 	})
 }
 
-// writeOutputPhases writes the 2N-1 phase+midpoint slice CSV (Output 2).
+// writeOutputPhases writes the phase+midpoint slice CSV (Output 2). Row count is
+// determined by collectPhasePoints (up to 2N-1+K rows, where K is the count of
+// biomechanical-interval midpoints with surviving endpoints).
 // 同樣透過 csvutil.WriteCSVAtomic atomic 寫入。
 //
 //nolint:err113 // dynamic errors for user-facing output

@@ -730,10 +730,10 @@ var translationData = map[string]translationEntry{
 	},
 	KeyPanelMuscleRatioTitle: {"肌肉比值分析", "肌肉比值分析", "Muscle Ratio Analysis", "筋肉比解析"},
 	KeyPanelMuscleRatioDesc: {
-		"批次計算 manifest 中所有 subject 的 4 對右側肌肉比值:R.RA/R.ES、R.IL/R.GMax、R.RF/R.BF、R.TA&IO/R.MF。每個 subject 產出兩個 CSV:完整時間序列 + 分期點切片(10 個分期 + 9 個中間時間點 = 19 列)。",
-		"批量计算 manifest 中所有 subject 的 4 对右侧肌肉比值:R.RA/R.ES、R.IL/R.GMax、R.RF/R.BF、R.TA&IO/R.MF。每个 subject 产出两个 CSV:完整时间序列 + 分期点切片(10 个分期 + 9 个中间时间点 = 19 行)。",
-		"Batch-compute four right-side muscle-pair ratios for every subject in the manifest: R.RA/R.ES, R.IL/R.GMax, R.RF/R.BF, R.TA&IO/R.MF. Each subject produces two CSVs: the full time series and a phase-point slice (10 phases + 9 intermediate points = 19 rows).",
-		"manifest 内の全 subject に対し、右側4対の筋肉比 (R.RA/R.ES、R.IL/R.GMax、R.RF/R.BF、R.TA&IO/R.MF) をバッチ計算します。各 subject につき2つの CSV を生成:完全な時系列 + フェーズ点スライス (10 フェーズ + 9 中間点 = 19 行)。",
+		"批次計算 manifest 中所有 subject 的 4 對右側肌肉比值:R.RA/R.ES、R.IL/R.GMax、R.RF/R.BF、R.TA&IO/R.MF。每個 subject 產出兩個 CSV:完整時間序列 + 分期點切片(10 個分期 + 9 個相鄰中間點 + 最多 2 個跨段中間點 = 最多 21 列)。",
+		"批量计算 manifest 中所有 subject 的 4 对右侧肌肉比值:R.RA/R.ES、R.IL/R.GMax、R.RF/R.BF、R.TA&IO/R.MF。每个 subject 产出两个 CSV:完整时间序列 + 分期点切片(10 个分期 + 9 个相邻中间点 + 最多 2 个跨段中间点 = 最多 21 行)。",
+		"Batch-compute four right-side muscle-pair ratios for every subject in the manifest: R.RA/R.ES, R.IL/R.GMax, R.RF/R.BF, R.TA&IO/R.MF. Each subject produces two CSVs: the full time series and a phase-point slice (10 phases + 9 adjacent midpoints + up to 2 biomechanical-interval midpoints = up to 21 rows).",
+		"manifest 内の全 subject に対し、右側4対の筋肉比 (R.RA/R.ES、R.IL/R.GMax、R.RF/R.BF、R.TA&IO/R.MF) をバッチ計算します。各 subject につき2つの CSV を生成:完全な時系列 + フェーズ点スライス (10 フェーズ + 9 隣接中間点 + 最大 2 ステージ間中間点 = 最大 21 行)。",
 	},
 
 	// Phase 2 common buttons. (KeyButtonBrowse 用 legacy entry — 字串一致)
