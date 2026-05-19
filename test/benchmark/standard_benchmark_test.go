@@ -191,17 +191,12 @@ func BenchmarkDataNormalization(b *testing.B) {
 		}
 	}
 
-	// 創建參考數據集
+	// 創建參考數據集（H21：MVC/MAX 參考一律單行）
 	reference := &models.EMGDataset{
 		Headers: []string{"time", "channel1", "channel2", "channel3"},
-		Data:    make([]models.EMGData, 100),
-	}
-
-	for i := range reference.Data {
-		reference.Data[i] = models.EMGData{
-			Time:     float64(i) * 0.01,
-			Channels: []float64{100.0, 100.0, 100.0},
-		}
+		Data: []models.EMGData{
+			{Time: 0, Channels: []float64{100.0, 100.0, 100.0}},
+		},
 	}
 
 	normalizer := calculator.NewNormalizer(100)
@@ -500,16 +495,12 @@ func BenchmarkCalculatorSuite(b *testing.B) {
 			}
 		}
 
+		// MVC/MAX 參考一律單行
 		reference := &models.EMGDataset{
 			Headers: []string{"time", "channel1", "channel2", "channel3"},
-			Data:    make([]models.EMGData, 100),
-		}
-
-		for i := range reference.Data {
-			reference.Data[i] = models.EMGData{
-				Time:     float64(i) * 0.01,
-				Channels: []float64{100.0, 100.0, 100.0},
-			}
+			Data: []models.EMGData{
+				{Time: 0, Channels: []float64{100.0, 100.0, 100.0}},
+			},
 		}
 
 		normalizer := calculator.NewNormalizer(100)

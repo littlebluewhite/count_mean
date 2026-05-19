@@ -7,12 +7,240 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# P0-2: principle of least privilege — top-level granted read-only.
+# Only the `release` job overrides to `contents: write` (publishing GH Release).
+# `security` job overrides to add `security-events: write` for SARIF upload.
+# 過去整個 workflow 都吃 `contents: write`,只要 quality job 內任何 action 被
+# supply-chain 攻擊就能拿 GITHUB_TOKEN push 到 main。改成 least-privilege 後,
+# 受信任的權限縮到 release job 一個。
 permissions:
-  contents: write
+  contents: read
   packages: read
 
+# P0-3(a): 過去 `quality` job 把 lint + security + coverage + integration 串成
+# 11 個 sequential step,沒一個帶 `if:` → 任一 step fail 後續全部 skip,reviewer
+# 看不到 cross-cutting 訊號(例如「lint 紅但 coverage 仍綠」)。改拆成 4 個獨立
+# parallel job (`lint` / `security` / `coverage` / `integration`),所有 4 個都被
+# `build` job 透過 `needs:` 等待,任一 fail 才擋 PR 但 PR check UI 同時顯示。
+#
+# P0-1: 所有 `uses:` 全部 pin 40-char commit SHA + `# vX.Y.Z` 註解,Dependabot
+# 透過 .github/dependabot.yml(`github-actions` ecosystem)會同步 bump SHA + 註解,
+# 維持 supply-chain pin 不變式。最高權限的 `softprops/action-gh-release` 也已 pin。
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Set up Go
+      uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+      with:
+        go-version: '1.26'
+        # P0-14: actions/setup-go@v5 內建 module + build cache (key from go.sum)
+        cache: true
+
+    - name: Stub frontend/dist
+      run: |
+        mkdir -p frontend/dist
+        touch frontend/dist/.gitkeep
+
+    - name: Install Linux GUI dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1-mesa-dev xorg-dev libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc
+
+    # P1-H17:原本用 `curl ... golangci-lint/master/install.sh | sh` 從 master
+    # branch 拉 install script,屬於 supply-chain attack vector
+    # (任何 push 到 master 都會被 CI 立即執行)。改成:
+    #   1. golangci-lint 用官方 action 並 pin commit SHA(v9.2.0 的 tag commit)
+    #   2. gosec 走 `go install ...@v2.26.1`(走 module proxy + GOSUMDB
+    #      checksum 驗證,等同 pinned release)
+    # SHA 來源:`gh api repos/golangci/golangci-lint-action/git/refs/tags/v9.2.0`
+    #          `gh api repos/securego/gosec/tags`
+    - name: Run lint (pinned golangci-lint-action v9.2.0)
+      uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+      with:
+        version: v2.12.0
+        args: --timeout=5m
+
+    # L1(P2):cross-platform build tag lint 矩陣 — lint 預設只跑 ubuntu/linux
+    # GOOS,Windows/macOS build tag 的程式碼(如 fsperm/flags_windows.go、
+    # gui/race_*.go)從未被 lint 檢查過。若 Windows-only file 內含 typo /
+    # unused import / 文法錯誤,要等到 build 矩陣 wails build windows/amd64
+    # 才會在 release stage 才爆。
+    #
+    # 這條 step 用 GOOS=windows 額外跑一次 lint,目的不是 build(沒有 Windows
+    # runner)而是讓 golangci-lint 的 typecheck 看到 `//go:build windows` 後
+    # 面的程式碼。Failures: nonblocking (continue-on-error: true) — 因為
+    # cross-compile linting 偶有 false positive(linker tag 等),不擋 PR;
+    # 但仍會在 PR check 顯示警示讓 reviewer 注意。
+    #
+    # darwin 跑兩次(amd64 / arm64)成本太高且行為等價,只跑 windows 已能涵蓋
+    # 主要 cross-platform build tag pile。
+    - name: Run lint (GOOS=windows cross-platform tags, advisory)
+      uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+      with:
+        version: v2.12.0
+        args: --timeout=5m
+      env:
+        GOOS: windows
+        GOARCH: amd64
+      continue-on-error: true
+
+  security:
+    runs-on: ubuntu-latest
+    # P0-3(b): SARIF upload 需要 security-events: write。其餘 read-only。
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Set up Go
+      uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+      with:
+        go-version: '1.26'
+        cache: true
+
+    - name: Install gosec (pinned v2.26.1 via go install)
+      run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
+
+    # P1-H16:gosec 改 strict mode(makefile security target 已加 -severity=high
+    # -confidence=high)。HIGH/HIGH finding 會讓 step 失敗、擋 PR;LOW/MEDIUM
+    # 仍會在 log 印出但不擋 build,符合 CI quality gate 期望。
+    - name: Run security scan (strict HIGH severity gate)
+      run: make security
+
+    # P0-3(b): gosec 寫 gosec.sarif 但過去 workflow 完全沒 upload — 檔案隨 runner
+    # ephemeral FS 一起被丟掉,GitHub Security tab / code-scanning 永遠空白。
+    # 補上 upload-sarif step,並用 `if: always() && hashFiles(...)` 保證:
+    #   - gosec exit 0 → 上傳
+    #   - gosec exit 1 (HIGH finding 擋 PR) → 仍上傳,讓 Security tab 顯示
+    #   - gosec 根本沒寫出 sarif (極端情況) → 跳過,避免 step 自己 fail
+    - name: Upload SARIF to GitHub code-scanning
+      if: always() && hashFiles('gosec.sarif') != ''
+      uses: github/codeql-action/upload-sarif@e8893c57a1f3a2b659b6b55564fdfdbbd2982911 # v3.24.0
+      with:
+        sarif_file: gosec.sarif
+        category: gosec
+
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Set up Go
+      uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+      with:
+        go-version: '1.26'
+        cache: true
+
+    - name: Stub frontend/dist
+      run: |
+        mkdir -p frontend/dist
+        touch frontend/dist/.gitkeep
+
+    - name: Install Linux GUI dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1-mesa-dev xorg-dev libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc
+
+    # P1-H15 + P0-3(c): coverage gate 走 Makefile `coverage-check`,該 target 已加
+    # `-race` 與 `-coverpkg` 限定分母(見 Makefile patch),避免 race-only path 不被
+    # 算入分母(false-positive)與 `./test/integration/...` real-data 檔案被算入
+    # 分母卻 t.Skip(false-negative)。
+    - name: Run coverage gate (90% threshold, -race + -coverpkg)
+      run: make coverage-check
+
+  integration:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Set up Go
+      uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+      with:
+        go-version: '1.26'
+        cache: true
+
+    - name: Stub frontend/dist
+      run: |
+        mkdir -p frontend/dist
+        touch frontend/dist/.gitkeep
+
+    - name: Install Linux GUI dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1-mesa-dev xorg-dev libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc
+
+    # P0-E-H19:預設 integration tests 必須真的跑（過去 EMG_TEST_FIXTURES_DIR
+    # 未設定造成全 t.Skip 卻看似 PASS，等同假覆蓋）。real-data tests 已用
+    # `integration_realdata` build tag 隔離，這個 step 只跑非 real-data
+    # 整合測試，確保 CI 至少能驗到 calculator/parser/io 整合行為。
+    - name: Run integration tests (non real-data)
+      run: make test-int
+
+    # P0-E-H19:私有 fixtures 整合測試（real-data）需要 secret 提供路徑與資料。
+    # 設計原則：
+    #   - secret `EMG_TEST_FIXTURES_DIR` 未提供時 echo 警告但不失敗，
+    #     避免 fork PR / 新 contributor 無法跑 CI；
+    #   - secret 有值時透過 cache / artifact 還原 fixtures 後跑 build tag 版本；
+    #   - 目前先預留 step skeleton 與檢查訊息，後續 follow-up 再串 LFS 或
+    #     download-artifact 還原私有資料。
+    # 安全：secret 經 env 注入後僅以 shell 變數 `$EMG_TEST_FIXTURES_DIR` 引用，
+    # 不在 run 區塊內以 `${{ }}` 直接 string interpolation。
+    - name: Run real-data integration tests (opt-in via secret)
+      env:
+        EMG_TEST_FIXTURES_DIR: ${{ secrets.EMG_TEST_FIXTURES_DIR }}
+      run: |
+        if [ -z "$EMG_TEST_FIXTURES_DIR" ]; then
+          echo "::warning::secrets.EMG_TEST_FIXTURES_DIR not set — real-data integration tests skipped."
+          echo "(這是設計上的合理 skip：未提供 fixtures secret 時不擋 CI；一旦設定即會真的跑。)"
+          exit 0
+        fi
+        if [ ! -d "$EMG_TEST_FIXTURES_DIR" ]; then
+          echo "::warning::EMG_TEST_FIXTURES_DIR='$EMG_TEST_FIXTURES_DIR' 不存在 — real-data integration tests skipped."
+          exit 0
+        fi
+        make test-int-realdata
+
+  frontend-test:
+    # P1-27:前端 npm test 與 Go quality gate 並行跑,失敗一樣擋 build job。
+    # 採用 Node 內建 `node --test` 跑 .test.mjs(與 frontend/src/*.test.mjs 既有契約一致),
+    # 不引入 vitest / jest 額外依賴,把 supply-chain 表面降到最低。
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Set up Node.js
+      uses: actions/setup-node@b39b52d1213e96004bfcb1c61a8a6fa8ab84f3e8 # v4.0.1
+      with:
+        node-version: '22'
+
+    - name: Frontend tests
+      working-directory: frontend
+      run: |
+        npm ci
+        npm test
+
   build:
+    # P0-3(a): 4 個 quality gate 都過才 build。任一 fail 都會擋 PR,但 PR check UI
+    # 同時顯示 4 個獨立結果(parallel),reviewer 一眼能看到 cross-cutting 訊號。
+    # P1-27:加入 frontend-test 並行 job,前端測試也是 build 的硬性 gate。
+    needs: [lint, security, coverage, integration, frontend-test]
+    permissions:
+      contents: read
     strategy:
       matrix:
         platform:
@@ -35,15 +263,17 @@ jobs:
       APP_VERSION: v${{ github.run_number }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
       with:
         go-version: '1.26'
+        # P0-14: cache 啟用後 PR build cold cache 從 8+ 分鐘降至 2-3 分鐘
+        cache: true
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@b39b52d1213e96004bfcb1c61a8a6fa8ab84f3e8 # v4.0.1
       with:
         node-version: '22'
 
@@ -62,7 +292,10 @@ jobs:
         echo "WebView2 should be available on Windows runners"
 
     - name: Install Wails
-      run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+      # P0-9: pin CLI version to match go.mod library dep (wails v2.12.0).
+      # 過去 `@latest` 會在任何 future wails 釋出後改變 build artifact,
+      # 違反 reproducible build invariant 且與 module dep 容易 drift。
+      run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
     - name: Install frontend dependencies
       run: |
@@ -153,7 +386,7 @@ jobs:
       shell: powershell
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
       with:
         name: EMG_tool-v${{ github.run_number }}-${{ matrix.platform.name }}
         path: artifacts/EMG_tool-*
@@ -162,25 +395,43 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
+    # P0-2: 唯一一個需要 contents: write 的 job — publish GitHub Release。
+    # 其餘 job 即使 supply-chain 被攻擊也無法 push 到 main / 改 tag / 改 release。
+    permissions:
+      contents: write
+
     steps:
-    - uses: actions/checkout@v4
-    
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
     - name: Download all artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@6b208ae046db98c579e8a3aa621ab581ff575935 # v4.1.1
       with:
         path: ./artifacts
 
     - name: Display structure of downloaded files
       run: ls -la ./artifacts/
 
+    # P0-16: Tag 加 short SHA suffix 避免與 manual git tag 衝突。
+    # 純 v${run_number} 是單調整數，未來 manual `git tag v123` 與 run_number=123
+    # 衝突會讓 release upload 失敗或覆蓋既有 release。加 short SHA 保證唯一。
+    - name: Compute release tag
+      id: tag
+      env:
+        RUN_NUMBER: ${{ github.run_number }}
+        FULL_SHA: ${{ github.sha }}
+      run: |
+        SHORT_SHA="${FULL_SHA:0:7}"
+        TAG="v${RUN_NUMBER}-g${SHORT_SHA}"
+        echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+        echo "Resolved release tag: ${TAG}"
+
     - name: Create Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@9d7c94cfd0a1f3ed45544c887983e9fa900f0564 # v2.0.4
       with:
-        tag_name: v${{ github.run_number }}
-        name: EMG 資料分析工具 v${{ github.run_number }}
+        tag_name: ${{ steps.tag.outputs.tag }}
+        name: EMG 資料分析工具 ${{ steps.tag.outputs.tag }}
         body: |
-          ## EMG 資料分析工具 - Release v${{ github.run_number }}
+          ## EMG 資料分析工具 - Release ${{ steps.tag.outputs.tag }}
           
           ### 支援平台
           - Windows (amd64)

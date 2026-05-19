@@ -21,7 +21,7 @@ func TestEChartsGenerator(t *testing.T) {
 		{"TestGenerateInteractiveChart", testGenerateInteractiveChart},
 		{"TestGetAvailableColumns", testGetAvailableColumns},
 		{"TestRenderChartToWriter", testRenderChartToWriter},
-		{"TestSampleData", testSampleData},
+		{"TestUniformSubsample", testUniformSubsample},
 		{"TestCalculateOptimalSampling", testCalculateOptimalSampling},
 		{"TestGenerateComparisonChart", testGenerateComparisonChart},
 		{"TestConvertToJSON", testConvertToJSON},
@@ -87,6 +87,71 @@ func testGenerateInteractiveChart(t *testing.T) {
 	if !strings.Contains(htmlContent, "echarts") {
 		t.Error("Generated HTML does not contain ECharts references")
 	}
+}
+
+// TestApplyChartOptions_XYAxisLabelRetained 釘住 
+// applySimpleChartOptions (RenderChartToWriter 路徑) 與 setComparisonChartOptions
+// (GenerateComparisonChart 路徑) 原本 silently drop XAxisLabel / YAxisLabel —
+// caller config 帶了 axis label 但 chart HTML 不會渲染出來。修法是把 config 的
+// XAxisLabel / YAxisLabel 傳給 echarts 的 XAxis.Name / YAxis.Name (對應 echarts
+// xAxisName / yAxisName)。
+//
+// 兩個 path 一起測:
+//   - RenderChartToWriter → 走 applySimpleChartOptions
+//   - GenerateComparisonChart → 走 setComparisonChartOptions
+func TestApplyChartOptions_XYAxisLabelRetained(t *testing.T) {
+	generator := NewEChartsGenerator()
+	dataset := createTestDataset()
+
+	const xLabel = "AxisLabelXTest123"
+	const yLabel = "AxisLabelYTest456"
+
+	config := InteractiveChartConfig{
+		Title:           "Axis Label Test",
+		XAxisLabel:      xLabel,
+		YAxisLabel:      yLabel,
+		SelectedColumns: []int{1, 2},
+		Width:           "800px",
+		Height:          "600px",
+	}
+
+	t.Run("RenderChartToWriter retains axis labels", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := generator.RenderChartToWriter(dataset, config, &buf); err != nil {
+			t.Fatalf("RenderChartToWriter() failed: %v", err)
+		}
+		out := buf.String()
+		if !strings.Contains(out, xLabel) {
+			t.Errorf("rendered HTML missing X axis label %q", xLabel)
+		}
+		if !strings.Contains(out, yLabel) {
+			t.Errorf("rendered HTML missing Y axis label %q", yLabel)
+		}
+	})
+
+	t.Run("GenerateComparisonChart retains axis labels", func(t *testing.T) {
+		ds1 := createTestDataset()
+		ds2 := createTestDataset()
+		datasets := []*models.EMGDataset{ds1, ds2}
+		labels := []string{"A", "B"}
+		tempDir := t.TempDir()
+		outputPath := filepath.Join(tempDir, "axis_label_comparison.html")
+
+		if err := generator.GenerateComparisonChart(datasets, labels, &config, outputPath); err != nil {
+			t.Fatalf("GenerateComparisonChart() failed: %v", err)
+		}
+		content, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("read generated file: %v", err)
+		}
+		out := string(content)
+		if !strings.Contains(out, xLabel) {
+			t.Errorf("comparison chart HTML missing X axis label %q", xLabel)
+		}
+		if !strings.Contains(out, yLabel) {
+			t.Errorf("comparison chart HTML missing Y axis label %q", yLabel)
+		}
+	})
 }
 
 // TestGenerateInteractiveChart_NegativeColIndex_NoPanic 防止 panic regression：
@@ -185,41 +250,42 @@ func testRenderChartToWriter(t *testing.T) {
 	}
 }
 
-func testSampleData(t *testing.T) {
+func testUniformSubsample(t *testing.T) {
 	_ = NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createLargeTestDataset()
 
 	// 測試正常採樣
-	sampledData := SampleData(dataset, 2)
+	sampledData := UniformSubsample(dataset, 2)
 	expectedSize := len(dataset.Data)/2 + 1
 
 	if len(sampledData.Data) > expectedSize+1 { // +1 for potential last point
-		t.Errorf("SampleData() returned %d points, expected around %d", len(sampledData.Data), expectedSize)
+		t.Errorf("UniformSubsample() returned %d points, expected around %d",
+			len(sampledData.Data), expectedSize)
 	}
 
 	// 檢查標題是否保持不變
 	if len(sampledData.Headers) != len(dataset.Headers) {
-		t.Error("SampleData() changed headers")
+		t.Error("UniformSubsample() changed headers")
 	}
 
 	// 檢查第一個和最後一個數據點
 	if len(sampledData.Data) > 0 {
 		if sampledData.Data[0].Time != dataset.Data[0].Time {
-			t.Error("SampleData() changed first data point time")
+			t.Error("UniformSubsample() changed first data point time")
 		}
 
 		lastSampled := sampledData.Data[len(sampledData.Data)-1]
 		lastOriginal := dataset.Data[len(dataset.Data)-1]
 
 		if lastSampled.Time != lastOriginal.Time {
-			t.Error("SampleData() did not preserve last data point")
+			t.Error("UniformSubsample() did not preserve last data point")
 		}
 	}
 
 	// 測試採樣率 <= 1
-	notSampledData := SampleData(dataset, 1)
+	notSampledData := UniformSubsample(dataset, 1)
 	if len(notSampledData.Data) != len(dataset.Data) {
-		t.Error("SampleData() with rate 1 should not change data size")
+		t.Error("UniformSubsample() with rate 1 should not change data size")
 	}
 }
 
@@ -423,14 +489,14 @@ func BenchmarkGenerateInteractiveChart(b *testing.B) {
 	}
 }
 
-func BenchmarkSampleData(b *testing.B) {
+func BenchmarkUniformSubsample(b *testing.B) {
 	_ = NewEChartsGenerator() // Keep generator creation for coverage
 	dataset := createLargeTestDataset()
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = SampleData(dataset, 5)
+		_ = UniformSubsample(dataset, 5)
 	}
 }
 

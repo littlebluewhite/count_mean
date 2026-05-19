@@ -1,6 +1,7 @@
 package cci
 
 import (
+	"context"
 	"testing"
 
 	"count_mean/internal/models"
@@ -56,7 +57,10 @@ func BenchmarkCCI_ComputeAllPairs_Parallel(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		result := analyzer.computeAllPairs("bench", emgData, channelMap, nil, nil)
+		result, err := analyzer.computeAllPairs(context.Background(), "bench", emgData, channelMap, nil, nil)
+		if err != nil {
+			b.Fatalf("computeAllPairs error: %v", err)
+		}
 		if len(result.PairResults) == 0 {
 			b.Fatal("expected non-empty results")
 		}
@@ -75,7 +79,10 @@ func BenchmarkCCI_ComputeAllPairs_Sequential(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		result := analyzer.computeAllPairsSequential("bench", emgData, channelMap, nil, nil)
+		result, err := analyzer.computeAllPairsSequential(context.Background(), "bench", emgData, channelMap, nil, nil)
+		if err != nil {
+			b.Fatalf("computeAllPairsSequential error: %v", err)
+		}
 		if len(result.PairResults) == 0 {
 			b.Fatal("expected non-empty results")
 		}
@@ -84,19 +91,25 @@ func BenchmarkCCI_ComputeAllPairs_Sequential(b *testing.B) {
 
 // computeAllPairsSequential 是 computeAllPairs 平行化前的序列版本，
 // 保留在測試碼內僅作為 benchmark 對照組，不參與 prod 邏輯。
+// ctx 對齊新 plumbing：bench 永遠傳 context.Background()，所以實際路徑同舊版。
 func (a *CCIAnalyzer) computeAllPairsSequential(
+	ctx context.Context,
 	subject string,
 	emgData *models.PhaseSyncEMGData,
 	channelMap map[string]string,
 	phasePercents map[string]float64,
 	phaseTimes map[string]float64,
-) *CCIAnalysisResult {
+) (*CCIAnalysisResult, error) {
 	pairs := DefaultMusclePairs()
 	pairResults := make([]CCIResult, 0, len(pairs))
 	meanCurves := make(map[string][]float64, len(pairs))
 
 	for _, pair := range pairs {
-		cciValues := a.computeSinglePair(pair, emgData, channelMap)
+		cciValues, err := a.computeSinglePair(ctx, pair, emgData, channelMap)
+		if err != nil {
+			return nil, err
+		}
+
 		if cciValues == nil {
 			continue
 		}
@@ -116,5 +129,5 @@ func (a *CCIAnalyzer) computeAllPairsSequential(
 		PhasePercents: phasePercents,
 		PhaseTimes:    phaseTimes,
 		MeanCurves:    meanCurves,
-	}
+	}, nil
 }

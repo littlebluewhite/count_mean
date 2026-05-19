@@ -1,5 +1,23 @@
 //go:build !windows
 
+// Package fsperm — Unix platform notes.
+//
+// # Atomic O_NOFOLLOW protection
+//
+// All four OpenFile flag constants below include `syscall.O_NOFOLLOW`, which
+// causes the kernel to reject (`ELOOP`) any open() call whose final path
+// component is a symlink. This blocks the classic symlink-TOCTOU race where
+// an attacker drops a symlink into a writable directory between path
+// validation and open().
+//
+// # Asymmetry with Windows
+//
+// `flags_windows.go` lacks O_NOFOLLOW because the Go standard `syscall`
+// package on Windows has no equivalent. Cross-platform callers must NOT
+// assume kernel-level symlink protection on Windows; pre-validate paths via
+// `filepath.EvalSymlinks` (already done in `security.ResolveLenientPath` /
+// `security.PathValidator.GetSafePath`) before reaching any fsperm OpenFile
+// site. See `flags_windows.go` for the full Windows contract.
 package fsperm
 
 import (
@@ -10,6 +28,9 @@ import (
 // WriteFlags 是應用程式建立 CSV / HTML / log / JSON / PNG 等檔案的標準 OpenFile flag。
 // O_NOFOLLOW 阻擋 symlink-based TOCTOU：攻擊者無法在 OutputDir 內預先植入 symlink
 // 把寫入導向 /etc/passwd 等敏感檔案。darwin / linux 會以 ELOOP 回報。
+//
+// Windows 對照：`flags_windows.go` 的同名常數 **不含 O_NOFOLLOW**（標準 syscall
+// 無等價 flag），caller 必須在 OpenFile 前完成 `filepath.EvalSymlinks` 邊界檢查。
 const WriteFlags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC | syscall.O_NOFOLLOW
 
 // AppendFlags 是 log file 等需 append 行為的 OpenFile flag。
@@ -22,7 +43,11 @@ const AppendFlags = os.O_WRONLY | os.O_CREATE | os.O_APPEND | syscall.O_NOFOLLOW
 const ReadFlags = os.O_RDONLY | syscall.O_NOFOLLOW
 
 // TmpCreateFlags 用於 atomic write 流程中建立 .tmp 中介檔：
-// O_EXCL 確保「前次 crash 留下的 stale tmp」被偵測為錯誤而非靜默覆寫；
+// O_EXCL 確保撞名 (後因 crypto/rand 後綴極小機率) 安全 fail 而非靜默覆寫;
 // 不含 O_TRUNC 因為 O_EXCL 本身保證檔案是新建的。O_NOFOLLOW 與 WriteFlags 對稱
 // 拒絕 symlink-based TOCTOU。
+//
+// 後 tmp filename 在 caller (csvutil.WriteCSVAtomic) 已加 random suffix —
+// O_EXCL 主要 fallback 為 entropy 撞名極小機率;legacy `path + ".tmp"` 殘留不再
+// block 新寫入。
 const TmpCreateFlags = os.O_WRONLY | os.O_CREATE | os.O_EXCL | syscall.O_NOFOLLOW

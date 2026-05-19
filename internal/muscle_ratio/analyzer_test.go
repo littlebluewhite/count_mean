@@ -1,6 +1,7 @@
 package muscle_ratio
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/i18n"
+	"count_mean/internal/models"
+	"count_mean/internal/parsers"
 )
 
 // TestMain 初始化 i18n global singleton，使本 package 所有 test 都能透過 i18n.T()
@@ -129,7 +132,7 @@ func TestAnalyze_MissingChannelFailFast(t *testing.T) {
 		makeRow15("S1", "s1.csv", "1", [10]string{"0.001", "0.002", "0.003", "0.004", "0.005", "100", "0.007", "0.008", "100", "0.010"}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -166,7 +169,7 @@ func TestAnalyze_PhasePoints_FullPhasesYieldRows(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -240,7 +243,7 @@ func TestAnalyze_PhasePoints_NoIntervalMidpointsWhenSDTAbsent(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -300,7 +303,7 @@ func TestAnalyze_PhasePoints_MissingS_OnlyMidDT(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -334,7 +337,7 @@ func TestAnalyze_PhasePoints_MissingD_NoIntervalMidpoints(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -368,7 +371,7 @@ func TestAnalyze_PhasePoints_MissingT_OnlyMidSD(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -406,7 +409,7 @@ func TestAnalyze_PhasePoints_MissingC_NoDuplicateMidSD(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -443,7 +446,7 @@ func TestAnalyze_PhasePoints_MissingT0_NoDuplicateMidDT(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -486,7 +489,7 @@ func TestAnalyze_PhasePoints_MissingC_ReversedSDOrder_NoDuplicate(t *testing.T) 
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -528,7 +531,7 @@ func TestAnalyze_PhasePoints_MissingT0_ReversedDTOrder_NoDuplicate(t *testing.T)
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -564,7 +567,7 @@ func TestAnalyze_PhaseTimeOutOfRange(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -580,7 +583,7 @@ func TestAnalyze_PhaseTimeOutOfRange(t *testing.T) {
 }
 
 // TestAnalyze_ConcurrentCallsNoRace 釘住「並行 Analyze 不應觸發 race」這個 invariant。
-// P2-C 之後 EMGParser 改 stateless，但 Wails 並行 RPC 仍可能在未來 refactor 引入新的 shared
+// 之後 EMGParser 改 stateless，但 Wails 並行 RPC 仍可能在未來 refactor 引入新的 shared
 // mutable state — 此 test 用 race detector 守門。
 //
 // 注意：此 test 必須在 `go test -race` 下跑才會觸發 race detector；普通 `go test` 看不到。
@@ -613,7 +616,7 @@ func TestAnalyze_ConcurrentCallsNoRace(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, err := a.Analyze(&Params{
+				_, err := a.Analyze(context.Background(), &Params{
 					ManifestFile: manifestPath,
 					DataFolder:   dataDir,
 					OutputDir:    outDir,
@@ -651,7 +654,7 @@ func TestAnalyze_EMGFileWithLiteralPercent(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -679,7 +682,7 @@ func TestAnalyze_EMGFileTraversalRejected(t *testing.T) {
 		makeRow15("S1", "../etc/passwd", "1", [10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -711,7 +714,7 @@ func TestAnalyze_CaseOnlySubjectCollision_FailFast(t *testing.T) {
 		makeRow15("sf8", "s2.csv", "1", [10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}),
 	})
 
-	_, err := NewAnalyzer().Analyze(&Params{
+	_, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -727,7 +730,7 @@ func TestAnalyze_CaseOnlySubjectCollision_FailFast(t *testing.T) {
 	}
 }
 
-// TestAnalyze_NFCvsNFDSubjectCollision_FailFast 釘住 P2-L：
+// TestAnalyze_NFCvsNFDSubjectCollision_FailFast 釘住 
 // macOS APFS/HFS+ 對 "café" (NFC, U+00E9) 與 "café" (NFD, e+U+0301) hash 同 on-disk name，
 // 但 strings.ToLower 視為相異。若不 NFC normalize，會放行兩筆 manifest 然後第二筆覆寫前者。
 // 修法：collision key 用 norm.NFC.String 包裹 strings.ToLower。
@@ -748,7 +751,7 @@ func TestAnalyze_NFCvsNFDSubjectCollision_FailFast(t *testing.T) {
 		makeRow15("café", "s2.csv", "1", [10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}),
 	})
 
-	_, err := NewAnalyzer().Analyze(&Params{
+	_, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -777,7 +780,7 @@ func TestAnalyze_FormulaInjectionSubject_Sanitized(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -819,7 +822,7 @@ func TestAnalyze_NegativeTime_Handled(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -847,7 +850,7 @@ func TestAnalyze_DuplicateSanitizedSubjects_FailFast(t *testing.T) {
 		makeRow15("A:B", "s2.csv", "1", [10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}),
 	})
 
-	_, err := NewAnalyzer().Analyze(&Params{
+	_, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -873,7 +876,7 @@ func TestAnalyze_TwoSubjects_BothExported(t *testing.T) {
 		makeRow15("S2", "s2.csv", "1", [10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -901,7 +904,7 @@ func TestAnalyze_TwoSubjects_BothExported(t *testing.T) {
 	assert.Equal(t, 4, csvCount, "expected 4 CSV files (2 subjects × 2 outputs)")
 
 	// 不只 FileExists — 實際讀檔內容確認 4 個 CSV 都有合理 header + 至少一筆 data row。
-	// FileExists 對「寫到一半失敗」的截斷檔也會回 true（雖然 P1-A atomic write 後不該發生）。
+	// FileExists 對「寫到一半失敗」的截斷檔也會回 true（雖然 atomic write 後不該發生）。
 	for _, sr := range result {
 		for _, p := range []string{sr.OutputAllPath, sr.OutputPhasePath} {
 			content, readErr := os.ReadFile(p)
@@ -929,7 +932,7 @@ func TestAnalyze_NaNCellWrittenAsEmpty(t *testing.T) {
 		makeRow15("S1", "s1.csv", "1", [10]string{"0.01", "0.02", "0.03", "0.04", "0.005", "20", "0.025", "0.03", "30", "0.04"}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -973,7 +976,7 @@ func TestAnalyze_EMGUpstreamNaN_OutputCellEmpty(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -1018,7 +1021,7 @@ func TestAnalyze_EmptyManifest_FailFast(t *testing.T) {
 	manifestPath := filepath.Join(tempDir, "manifest.csv")
 	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestHeaderLine+"\n"), 0o600))
 
-	_, err := NewAnalyzer().Analyze(&Params{
+	_, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -1042,7 +1045,7 @@ func TestAnalyze_EmptySubject_Rejected(t *testing.T) {
 		makeRow15("   ", "s1.csv", "1", [10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -1076,7 +1079,7 @@ func TestAnalyze_EMGFileNotFound(t *testing.T) {
 			[10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -1110,7 +1113,7 @@ func TestAnalyze_PhaseTimeAtBoundary(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -1146,7 +1149,7 @@ func TestAnalyze_Output2WriteFailure_StickyOutput1Success(t *testing.T) {
 		}),
 	})
 
-	result, err := NewAnalyzer().Analyze(&Params{
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
@@ -1191,7 +1194,7 @@ func TestAnalyze_ConcurrentCallsNoRace_IsolatedFiles(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			perOut := filepath.Join(outDir, fmt.Sprintf("out%d", idx))
-			_, err := a.Analyze(&Params{
+			_, err := a.Analyze(context.Background(), &Params{
 				ManifestFile: manifestPath,
 				DataFolder:   dataDir,
 				OutputDir:    perOut,
@@ -1200,4 +1203,115 @@ func TestAnalyze_ConcurrentCallsNoRace_IsolatedFiles(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// TestAnalyze_ContextCancelledBeforeStart 釘住 修法:ctx 已 Cancel 入場
+// 必須在第一個 subject 前 break,returns ctx.Err()(包 i18n cancelled key)。
+// partial results 為 empty(0 subject 處理完)。
+func TestAnalyze_ContextCancelledBeforeStart(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "s.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S", "s.csv", "1", [10]string{
+			"0.01", "0.02", "0.03", "0.04", "0.05",
+			"20", "0.07", "0.08", "30", "0.09",
+		}),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 入場前已 cancel
+
+	results, err := NewAnalyzer().Analyze(ctx, &Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+	})
+
+	require.Error(t, err, "ctx 已 cancel,Analyze 必須回 error")
+	assert.ErrorIs(t, err, context.Canceled, "err 必須包 context.Canceled (errors.Is 命中)")
+	assert.Empty(t, results, "ctx 已 cancel,不應有 subject 處理完成")
+}
+
+// TestAnalyze_NilContext 釘住 入參防呆:ctx==nil 必須 fail-fast,
+// 不能 panic(nil ctx select case 會 panic)。
+func TestAnalyze_NilContext(t *testing.T) {
+	tempDir := t.TempDir()
+	_, err := NewAnalyzer().Analyze(nil, &Params{ //nolint:staticcheck // intentional nil ctx
+		ManifestFile: filepath.Join(tempDir, "no-manifest.csv"),
+		DataFolder:   tempDir,
+		OutputDir:    tempDir,
+	})
+	require.Error(t, err, "nil ctx 必須回 error")
+	assert.Contains(t, err.Error(), "ctx", "錯誤訊息應指出 ctx 為 nil")
+}
+
+// TestCollectPhasePoints_MotionIndexBoundary 釘住 修法:
+// motion-index OptFloat 值超出 [1, MaxReasonableMotionIndex] 邊界時,
+// collectPhasePoints 必須 skip 該 phase point(不 panic、不 wrap-around)。
+//
+// 防禦對象:malicious / 損毀 manifest 帶 D=1e15 之類異常大值。parseInt 的 cap
+// 是第一道防線,collectPhasePoints 的 boundary check 是第二道(defense-in-depth);
+// 模擬「繞過 parseInt 直接 struct-init manifest」的攻擊路徑。
+//
+// 測試策略:直接 struct-init PhaseManifest(D 設超過 cap),呼叫 Analyzer 內部
+// collectPhasePoints。期望:不 panic + skip D 後若剩 phase 不足 2 個則回 warn。
+func TestCollectPhasePoints_MotionIndexBoundary(t *testing.T) {
+	a := NewAnalyzer()
+
+	// 製造一個只剩 D 的 manifest(其餘 phase 都未提供),且 D 是越界值。
+	// 預期:D 被 boundary check skip → phases 數=0 → "insufficient phases" warn。
+	m := &models.PhaseManifest{
+		Subject:         "boundary_test",
+		EMGFile:         "ignored",
+		EMGMotionOffset: 1,
+		PhasePoints: models.PhasePoints{
+			// D > MaxReasonableMotionIndex (1e9) — 越界 sentinel,parseInt 不會接受
+			// 此值,但直接 struct-init 可繞過。
+			D: parsers.MaxReasonableMotionIndex + 1,
+		},
+	}
+	emg := &models.PhaseSyncEMGData{
+		Time:    []float64{0.0, 0.001, 0.002},
+		Headers: []string{},
+	}
+
+	// 不應 panic。
+	points, warn := a.collectPhasePoints(m, emg)
+	require.NotEqual(t, "", warn, "越界 D 應使 collectPhasePoints 跳過後 insufficient phases warn")
+	assert.Nil(t, points, "boundary skip 後沒有可用 phase point")
+}
+
+// TestCollectPhasePoints_NegativeMotionIndex 對應 的負值邊界:
+// motionIndexOpt 已對 v<=0 回 NoOpt,collectPhasePoints 不會看到負值。
+// 此 test 是 belt-and-suspenders — 若未來 caller 繞過 motionIndexOpt 直接
+// 注入 MakeOpt(-1) 到 PhasePoints.D,collectPhasePoints 仍要 skip 不 panic。
+//
+// 因為 PhasePoints.D 是 int,negative 走 motionIndexOpt 後變 NoOpt(.Set=false),
+// 不會進 boundary check 路徑。此 test pin 既有契約 — 拿 motion-index 改 OptFloat 後
+// 仍維持「未提供」semantics。
+func TestCollectPhasePoints_NegativeMotionIndex(t *testing.T) {
+	a := NewAnalyzer()
+
+	m := &models.PhaseManifest{
+		Subject:         "negative_test",
+		EMGFile:         "ignored",
+		EMGMotionOffset: 1,
+		PhasePoints: models.PhasePoints{
+			D: -100, // 負 motion index — motionIndexOpt 回 NoOpt
+		},
+	}
+	emg := &models.PhaseSyncEMGData{
+		Time:    []float64{0.0, 0.001, 0.002},
+		Headers: []string{},
+	}
+
+	points, warn := a.collectPhasePoints(m, emg)
+	require.NotEqual(t, "", warn, "負 D 走 NoOpt,collectPhasePoints 應跳過")
+	assert.Nil(t, points)
 }

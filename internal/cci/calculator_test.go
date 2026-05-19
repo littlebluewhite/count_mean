@@ -1,6 +1,7 @@
 package cci
 
 import (
+	"context"
 	"math"
 	"strings"
 	"testing"
@@ -43,7 +44,7 @@ func TestCalculateCCITimeSeries(t *testing.T) {
 	ch1 := []float64{0.3, 0.5, 0.1}
 	ch2 := []float64{0.5, 0.3, 0.4}
 
-	result, err := CalculateCCITimeSeries(ch1, ch2)
+	result, err := CalculateCCITimeSeries(context.Background(), ch1, ch2)
 	require.NoError(t, err)
 	require.Len(t, result, 3)
 
@@ -57,7 +58,7 @@ func TestCalculateCCITimeSeries_LengthMismatch(t *testing.T) {
 	ch1 := []float64{0.3, 0.5}
 	ch2 := []float64{0.5}
 
-	_, err := CalculateCCITimeSeries(ch1, ch2)
+	_, err := CalculateCCITimeSeries(context.Background(), ch1, ch2)
 	assert.Error(t, err)
 }
 
@@ -116,7 +117,7 @@ func TestBuildChannelMap_MissingChannel(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestMapHeaderToShortName_LeftSideRejected 釘住 P2-I：CCI 對齊 muscle_ratio 後，
+// TestMapHeaderToShortName_LeftSideRejected 釘住 CCI 對齊 muscle_ratio 後，
 // "L." 前綴的 header 一律回空字串、被 BuildChannelMap 跳過 — 不再像舊版會把 L.RA
 // 也 strip 成 "RA" 與 R.RA 互覆蓋（last-wins by header order）。
 func TestMapHeaderToShortName_LeftSideRejected(t *testing.T) {
@@ -151,7 +152,7 @@ func TestMapHeaderToShortName_NonRPrefixRejected(t *testing.T) {
 	}
 }
 
-// TestBuildChannelMap_LeftAndRightPriority 釘住 P2-I 的核心契約：
+// TestBuildChannelMap_LeftAndRightPriority 釘住 的核心契約：
 // 同份 EMG 同時含左右 16 通道時，CCI 確定取右側、跳過左側，與 muscle_ratio 完全對稱。
 // 修法前 last-wins by header order，channelMap["RA"] 可能指向 L.RA 或 R.RA 取決於排序。
 func TestBuildChannelMap_LeftAndRightPriority(t *testing.T) {
@@ -183,6 +184,33 @@ func TestBuildChannelMap_LeftAndRightPriority(t *testing.T) {
 		assert.True(t, strings.HasPrefix(fullHeader, "R."),
 			"短名 %q 應對應 R.* header，實際=%q", short, fullHeader)
 	}
+}
+
+// TestBuildChannelMap_DuplicateChannelFailFast 守護 
+// 同份 EMG 出現兩個 R.RA (例如資料採集失誤、檔案合併出 bug) 必須 fail-fast,
+// 不再 silent overwrite (last-wins by header order)。與 muscle_ratio 行為對稱,
+// 兩個 caller 共用 musclemap.AssignShort helper。
+func TestBuildChannelMap_DuplicateChannelFailFast(t *testing.T) {
+	// 故意放兩個 R.RA — 同樣的短名映射,過去 last-wins,現在應 fail-fast
+	headers := []string{
+		"R.RA: EMG 1 (first session)",
+		"R.RA: EMG 2 (second session)", // 重複
+		"R.ES: EMG 3",
+		"R.IL: EMG 4",
+		"R.GMax: EMG 5",
+		"R.RF: EMG 6",
+		"R.BF: EMG 7",
+		"R.TA&IO: EMG 8",
+		"R.MF: EMG 9",
+	}
+
+	_, err := BuildChannelMap(headers)
+	require.Error(t, err, "duplicate R.RA 必須 fail-fast,不能 silent overwrite")
+	assert.Contains(t, err.Error(), "重複的肌肉通道", "error 必須說明重複根因")
+	assert.Contains(t, err.Error(), "RA", "error 必須指名重複的 short name")
+	// 兩個 header 都應該出現在 error 訊息中供使用者診斷
+	assert.Contains(t, err.Error(), "first session")
+	assert.Contains(t, err.Error(), "second session")
 }
 
 // TestBuildChannelMap_LeftOnlyFailFast 釘住「實驗只貼左側 → CCI 應 fail-fast 不 silent

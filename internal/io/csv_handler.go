@@ -7,6 +7,7 @@ import (
 	"encoding/csv"
 	stderrors "errors"
 	"fmt"
+	stdio "io" // alias to avoid name shadow with package io
 	"math"
 	"os"
 	"path/filepath"
@@ -240,7 +241,21 @@ func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
 		return nil, appErr
 	}
 
-	records, err := csv.NewReader(bufReader).ReadAll()
+	// 明確套用 strict defaults，把 csv.NewReader 的 DoS / quote-injection
+	// 守門收斂在一個地方，避免日後有人 silently 翻 LazyQuotes/FieldsPerRecord：
+	//   - FieldsPerRecord = 0：保留 Go 預設行為，header 之後 enforce 同欄位數。
+	//     ReadAll 路徑要求整檔欄位一致（與既存 validateCSVRecords/ValidateCSVData 對齊）。
+	//   - LazyQuotes = false：reject 未配對引號（即 MalformedCSV test pins 的契約）。
+	//     attacker-controlled CSV 不應靠不規範引號吃進 reader 的 cap 配置。
+	//   - ReuseRecord = false：ReadAll 內部把每筆 record 完整 materialize 在回傳的
+	//     [][]string，shared backing array 不適用；顯式 false 避免未來 refactor 切到
+	//     row-by-row 時誤承載 reuse semantics。
+	reader := csv.NewReader(bufReader)
+	reader.FieldsPerRecord = 0
+	reader.LazyQuotes = false
+	reader.ReuseRecord = false
+
+	records, err := reader.ReadAll()
 	if err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "無法讀取 CSV 資料")
 		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]interface{}{"path": cleanPath})
@@ -346,9 +361,21 @@ func (h *CSVHandler) WriteCSVToOutput(filename string, data [][]string) error {
 }
 
 // WriteCSV 寫入 CSV 檔案.
-// 採用 named return 以便在 defer 中捕獲 file.Close() 錯誤：NFS 等遠端檔案
-// 系統的延遲寫入失敗只會在 Close 時浮現，先前僅 log 不傳播會讓 caller 誤以為
-// 寫入成功。
+//
+// 採用 named return 以便在 defer 中捕獲 file.Sync() / file.Close() 錯誤：
+//   - Sync (fsync syscall) 保證資料真的落 disk;否則 OS page cache 內的
+//     bytes 在 power loss / kernel panic 後會失蹤,caller 卻收到 nil error。
+//   - Close 失敗的常見原因是 buffered write flush 階段失敗(NFS 延遲寫入
+//     是其中一種,但 local FS 同樣可能因 disk full / quota / I/O error 等
+//     在 Close 浮現);僅 log 不傳播會讓 caller 誤以為寫入成功。
+//
+// 原本只 Close 不 Sync,且註解誤標「NFS 延遲寫入失敗只在 Close 時
+// 浮現」— 對 local FS 是錯誤假設(local FS 的 fsync 與 close 是兩個獨立 syscall,
+// close 不會自動 flush dirty page)。改為 defer 內 Sync → Close 兩段式收尾,
+// 任一階段失敗都升為 named return err。
+//
+// Caller 替代方案:如需更強保證(crash-safe rename + tmp 清理),改走
+// csvutil.WriteCSVAtomic — 它已內建 fsync + atomic rename。
 func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 	h.logger.Debug("開始寫入 CSV 檔案", map[string]interface{}{
 		"filename":    filename,
@@ -356,7 +383,14 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 		"bom_enabled": h.config.BOMEnabled,
 	})
 
-	sanitizedPath := h.pathValidator.SanitizePath(filename)
+	sanitizedPath, sanitizeErr := h.pathValidator.SanitizePath(filename)
+	if sanitizeErr != nil {
+		h.logger.Error("寫入路徑淨化失敗", sanitizeErr, map[string]interface{}{
+			"original_path": filename,
+		})
+
+		return fmt.Errorf("路徑驗證失敗: %w", sanitizeErr)
+	}
 	if err := h.pathValidator.ValidateFilePath(sanitizedPath); err != nil {
 		h.logger.Error("寫入路徑驗證失敗", err, map[string]interface{}{
 			"original_path":  filename,
@@ -375,11 +409,34 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 		return err
 	}
 
-	// 直接打開而不先 Stat：先前的 Stat→OpenFile 是 TOCTOU 結構，攻擊者可在兩
-	// 個 syscall 之間以 symlink swap 把輸出導向任意檔案。改用 fsperm.WriteFlags
-	// (含 O_NOFOLLOW on unix) 由 OS 在 open 階段直接拒絕 symlink。
-	//nolint:gosec // sanitizedPath is sanitized and validated
-	file, err := os.OpenFile(sanitizedPath, fsperm.WriteFlags, fsperm.FilePerm)
+	// 空 data 的處理必須區分「target 是否已存在」:
+	//   (a) target 不存在 → return nil(no-op 安全;不建檔案,caller 期望「空輸入
+	//       產不出檔案」)。
+	//   (b) target *已存在* → 必須 truncate stale 內容,否則 caller 以為這次寫入
+	//       了空結果,但磁碟上仍是上次完整資料 — patient 載入時會誤以為是新分析。
+	// truncate 策略:BOMEnabled 時保留 BOM(維持「這是 UTF-8 CSV」hint);
+	// BOMEnabled=false 則 truncate 到 0 byte(完全空檔)。
+	// path 驗證必須先過,空 data 也不該被當成 path-validation bypass 的後門。
+	if len(data) == 0 {
+		return h.handleEmptyDataWrite(sanitizedPath, filename)
+	}
+
+	// 原本 os.OpenFile(sanitizedPath, WriteFlags) 是 lexical-only + O_NOFOLLOW
+	// 兩段式守門:
+	//   - sanitizedPath 只是字串清理,沒 EvalSymlinks resolve,parent component 是
+	//     symlink 時 lexical isPathWithinBase 通過,kernel 在 syscall 階段跟到底,
+	//     檔案落在 OutputDir 外。
+	//   - O_NOFOLLOW 只擋 leaf component 為 symlink 的 case,parent 為 symlink
+	//     完全不擋。
+	//
+	// 改用 fsperm.OpenWriteValidated:內部會 EvalSymlinks resolve sanitizedPath 後
+	// 比對 GetAllowedBasePaths(),resolved path 落在 base 外直接 reject;同時
+	// Linux 用 openat2(RESOLVE_BENEATH)、Darwin 用 O_NOFOLLOW_ANY 取得 kernel-
+	// level atomic 保證。詳見 internal/security/fsperm/validated_open.go 註解。
+	//
+	// GetAllowedBasePaths 透過 PathValidator 的 RWMutex 拿快照,確保與 SetAllowedBasePaths
+	// 並發呼叫安全。
+	file, err := fsperm.OpenWriteValidated(sanitizedPath, h.pathValidator.GetAllowedBasePaths())
 	if err != nil {
 		h.logger.Error("無法建立輸出檔案", err, map[string]interface{}{
 			"path": sanitizedPath,
@@ -388,7 +445,22 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 		return fmt.Errorf("無法建立檔案 %s: %w", sanitizedPath, err)
 	}
 
+	// 兩段式收尾 — 先 Sync 再 Close。
+	//   - Sync 失敗(fsync syscall 拒絕,disk full / I/O error / EIO)代表 OS
+	//     不能保證 page cache 的 bytes 已寫到 storage,必須回 err。
+	//   - Sync 成功之後,Close 失敗多半是 fd 重複關閉之類,但仍記 err 以保險。
+	// 兩階段都 mutate named return err,但只在原 err 為 nil 時覆寫(避免遮蔽
+	// payload write 失敗的根因 err)。
 	defer func() {
+		if syncErr := file.Sync(); syncErr != nil {
+			h.logger.Warn("fsync 輸出檔案時發生錯誤", map[string]interface{}{
+				"file":  file.Name(),
+				"error": syncErr.Error(),
+			})
+			if err == nil {
+				err = fmt.Errorf("fsync 輸出檔案 %s 失敗: %w", filename, syncErr)
+			}
+		}
 		if closeErr := file.Close(); closeErr != nil {
 			h.logger.Warn("關閉輸出檔案時發生錯誤", map[string]interface{}{
 				"file":  file.Name(),
@@ -400,19 +472,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 		}
 	}()
 
-	if h.config.BOMEnabled {
-		if err := csvutil.WriteBOM(file); err != nil {
-			return fmt.Errorf("無法寫入 BOM 到 %s: %w", filename, err)
-		}
-	}
-
-	// Single chokepoint sanitize: csv_converter sanitizes headers; this catches
-	// body-row labels (e.g. result.PhaseName from config.json) that bypass the
-	// converter-level guard. SanitizeCellForWrite is idempotent so doubling up
-	// is harmless. Closes the formula-injection vector noted by review wave 7
-	// security/QA agents (PhaseName="=cmd|/c calc!A1" landing in row[0]).
-	w := csv.NewWriter(file)
-	if err := w.WriteAll(csvutil.SanitizeAllRows(data)); err != nil {
+	if err := writeCSVPayload(file, data, h.config.BOMEnabled); err != nil {
 		h.logger.Error("CSV 資料寫入失敗", err, map[string]interface{}{
 			"path":     sanitizedPath,
 			"filename": filename,
@@ -426,6 +486,113 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 		"row_count": len(data),
 		"bom_used":  h.config.BOMEnabled,
 	})
+
+	return nil
+}
+
+// handleEmptyDataWrite 處理 WriteCSV 收到 empty data 的兩個分支:
+//   - target 不存在:return nil(no-op 安全)。
+//   - target 已存在:用 fsperm.OpenWriteValidated 重開檔(O_TRUNC),寫入空內容
+//     (BOMEnabled → BOM-only 維持 CSV 語意 hint;else → 0 byte)。
+//
+// caller (WriteCSV) 已完成 SanitizePath / ValidateFilePath / IsCSVFile 三段守門,
+// 此 helper 不重覆驗證以避免 lexical/resolved 兩條路徑不一致;但仍走 fsperm
+// safe-open(保留 symlink / parent-symlink 攻擊面的 kernel-level reject)。
+func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string) (err error) {
+	if _, statErr := os.Stat(sanitizedPath); statErr != nil {
+		if os.IsNotExist(statErr) {
+			h.logger.Warn("WriteCSV 收到空 data，目標不存在,跳過建檔", map[string]interface{}{
+				"filename": originalFilename,
+			})
+			return nil
+		}
+		// 其他 stat 錯誤(permission denied、I/O error 等)— 不該當成 not-exist
+		// 處理(會 silently skip truncate),回傳錯誤讓 caller 知道。
+		h.logger.Error("WriteCSV 空 data 路徑探測失敗", statErr, map[string]interface{}{
+			"path": sanitizedPath,
+		})
+		return fmt.Errorf("空 data 探測目標檔案失敗: %w", statErr)
+	}
+
+	// target 已存在 — 必須 truncate stale 內容,不能讓 caller 以為「寫了空結果」
+	// 但磁碟仍是舊資料。fsperm.OpenWriteValidated 內含 O_TRUNC(WriteFlags),
+	// 重新 open 等同 truncate。
+	file, err := fsperm.OpenWriteValidated(sanitizedPath, h.pathValidator.GetAllowedBasePaths())
+	if err != nil {
+		h.logger.Error("無法 truncate stale 檔案", err, map[string]interface{}{
+			"path": sanitizedPath,
+		})
+		return fmt.Errorf("無法 truncate %s: %w", sanitizedPath, err)
+	}
+
+	// 兩段式收尾(同 WriteCSV main path):先 Sync 再 Close。
+	defer func() {
+		if syncErr := file.Sync(); syncErr != nil {
+			h.logger.Warn("fsync truncated 檔案時發生錯誤", map[string]interface{}{
+				"file":  file.Name(),
+				"error": syncErr.Error(),
+			})
+			if err == nil {
+				err = fmt.Errorf("fsync truncated 檔案 %s 失敗: %w", originalFilename, syncErr)
+			}
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			h.logger.Warn("關閉 truncated 檔案時發生錯誤", map[string]interface{}{
+				"file":  file.Name(),
+				"error": closeErr.Error(),
+			})
+			if err == nil {
+				err = fmt.Errorf("關閉 truncated 檔案 %s 失敗: %w", originalFilename, closeErr)
+			}
+		}
+	}()
+
+	if h.config.BOMEnabled {
+		if writeErr := csvutil.WriteBOM(file); writeErr != nil {
+			return fmt.Errorf("寫入 BOM-only truncated 檔案失敗: %w", writeErr)
+		}
+	}
+	// BOMEnabled=false 時不寫任何 byte,truncate 後檔案長度為 0。
+
+	h.logger.Info("WriteCSV 空 data + 既有目標檔案: 已 truncate", map[string]interface{}{
+		"path":     sanitizedPath,
+		"bom_used": h.config.BOMEnabled,
+	})
+
+	return nil
+}
+
+// writeCSVPayload 把 [data] 透過 csv.Writer 寫到 w，必要時先寫 BOM。
+//
+// 先前 inline 在 WriteCSV 內，僅靠 csv.Writer.WriteAll 的回傳值判斷
+// 寫入是否成功。WriteAll 本身已包含 Flush 並回 flush error，但若未來 csv 套件
+// 修改契約（或 caller 改成手動 Write loop），缺少 writer.Error() 顯式檢查會
+// 讓 bufio 累積的延遲錯誤被靜默吞掉。改成獨立 helper 並補上顯式 Error() check
+// 同時支援注入 fake io.Writer 進行 flush-failure 測試。
+//
+// Single chokepoint sanitize: csv_converter sanitizes headers; SanitizeAllRows
+// catches body-row labels (e.g. result.PhaseName from config.json) that bypass
+// the converter-level guard. SanitizeCellForWrite is idempotent so doubling up
+// is harmless. Closes the formula-injection vector noted by review wave 7
+// security/QA agents (PhaseName="=cmd|/c calc!A1" landing in row[0]).
+func writeCSVPayload(w stdio.Writer, data [][]string, bomEnabled bool) error {
+	if bomEnabled {
+		if err := csvutil.WriteBOM(w); err != nil {
+			return fmt.Errorf("無法寫入 BOM: %w", err)
+		}
+	}
+
+	writer := csv.NewWriter(w)
+	if err := writer.WriteAll(csvutil.SanitizeAllRows(data)); err != nil {
+		return fmt.Errorf("WriteAll 失敗: %w", err)
+	}
+
+	// 顯式 writer.Error() check：即使 WriteAll 回 nil，仍可能有先前 Write 累積
+	// 在 bufio 內的延遲錯誤未被回報（csv.Writer 文件明文要求呼叫 Error() 確認）。
+	// 防止 named-return + defer 結構在未來 refactor 中被誤刪而 silently lose error。
+	if err := writer.Error(); err != nil {
+		return fmt.Errorf("csv.Writer flush 失敗: %w", err)
+	}
 
 	return nil
 }

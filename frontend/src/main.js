@@ -24,7 +24,7 @@ import {
     AnalyzeMuscleRatio,
     GetVersion
 } from '../wailsjs/go/gui/App.js';
-import { OnFileDrop } from '../wailsjs/runtime/runtime.js';
+import { OnFileDrop, OnFileDropOff, EventsOn, EventsOff } from '../wailsjs/runtime/runtime.js';
 import { initI18n, t, tHtml, changeLanguage, onLocaleChange, getCurrentLocale } from './i18n.js';
 
 // 應用程序主類
@@ -97,6 +97,52 @@ class EMGAnalysisApp {
         // 初始化拖曳功能
         this.initDragAndDrop();
 
+        // 訂閱後端進度事件(P1-A14-2:取代舊的 polling 模型)
+        this.initProgressSubscription();
+
+        // 註冊 CCI iframe 的 postMessage listener(P0-A H1 修補)。
+        // 舊版每次 showCCIResult 都 addEventListener 一個新 closure,跑 N 次分析
+        // 就累積 N 個 listener — listener leak 加 N 次 updateCCIPhaseLines 觸發,
+        // 重畫 phase line 會在 setOption 後互相干擾、最後 chart 渲染抖動。
+        // 改為 init() 時註冊一次,handler 從 this._cciResult 取 context;
+        // 沒有 active CCI 結果時 (e.g. 切到別的 panel) 直接 no-op。
+        //
+        // P2-9:init() 在 Vite HMR / 測試重複呼叫情境下會跑多次 — 若不先解綁
+        // 舊 listener,每次 reload 都累積一個新的 handler。先 removeEventListener
+        // 前一次 ref(第一次 init 時 this._cciMessageHandler === undefined,
+        // removeEventListener 會 silently no-op,合 contract),再 add 新的。
+        if (typeof this._cciMessageHandler === 'function') {
+            window.removeEventListener('message', this._cciMessageHandler);
+        }
+        // P1-13:postMessage handler 必須 verify event.origin + event.source —
+        // 否則任何頁面(惡意 iframe / 開發 cross-origin tool)都可以 postMessage
+        // 到我們的 window 觸發 updateCCIPhaseLines。Wails webview 預設同 origin
+        // (production embedded scheme;dev 是 localhost),但 P1-12 移除 iframe
+        // 的 allow-same-origin 後,iframe.contentWindow.postMessage 的 origin
+        // 會是 "null" — 我們明確只接受 "null" 或當前 window.location.origin。
+        //
+        // 沒此 guard 的 PoC:攻擊者誘導使用者打開含 <iframe src="malicious">
+        // 的網頁,該 iframe top.postMessage("cci-chart-restored", "*") 可觸發
+        // updateCCIPhaseLines。雖然此 method 本身只重畫 chart,但任何「無 origin
+        // check 的 message listener」都是後續攻擊面擴張的入口(future feature 加
+        // 進更敏感 message type 時 silent 引入 vector)。
+        const expectedOrigin = window.location.origin;
+        this._cciMessageHandler = (e) => {
+            // null origin = sandboxed iframe (P1-12 後 chart iframe 就屬此類);
+            // same origin = top window 同源訊息(理論上不會由 chart iframe 發,
+            // 但其他 future feature 可能);任何外來 origin reject。
+            if (e.origin !== 'null' && e.origin !== expectedOrigin) {
+                return;
+            }
+            // event.source 必須是我們自己 append 的 chart iframe 的 contentWindow,
+            // 或同 window 內。沒 _cciResult 代表沒在 CCI panel,無關 message 無視。
+            if (!this._cciResult) return;
+            if (e.data === 'cci-chart-restored' || e.data === 'cci-chart-legend-changed') {
+                setTimeout(() => this.updateCCIPhaseLines(), 100);
+            }
+        };
+        window.addEventListener('message', this._cciMessageHandler);
+
         // 綁定事件
         this.bindEvents();
 
@@ -104,17 +150,63 @@ class EMGAnalysisApp {
         this.updateStatus(t('status.app_ready'));
     }
 
-    // 初始化拖曳功能
+    // 訂閱後端透過 Wails Events 推送的 "progress" 事件。
+    // 後端 ProgressManager.UpdateProgress 會在每次 calculator 觸發進度時
+    // 呼叫 runtime.EventsEmit(ctx, "progress", ProgressInfo)。前端只需 EventsOn
+    // 一次即可在任何分析(CalculateMaxMean / AnalyzeCCI / AnalyzePhaseSync ...)
+    // 期間收到 push 訊息,毋需 polling GetCurrentProgress。
+    //
+    // 目前 UI 還沒有進度條,先把資料保存在 this.latestProgress 並 debug log,
+    // 後續若加入 progress bar 元件只要讀 this.latestProgress 即可。
+    //
+    // P2-9:idempotent 保護 — 若已 subscribed,先 unsub,避免 HMR / 重複 init
+    // 累積多個 closure。teardownProgressSubscription 已有同邏輯,這裡直接 reuse。
+    initProgressSubscription() {
+        this.teardownProgressSubscription();
+        this.latestProgress = null;
+        // EventsOn 回傳 unsubscribe function;保存起來以便日後 reload 時清理。
+        this._unsubscribeProgress = EventsOn('progress', (info) => {
+            this.latestProgress = info;
+            if (typeof console !== 'undefined' && console.debug) {
+                console.debug('[progress]', info);
+            }
+        });
+    }
+
+    // 釋放進度事件訂閱(若未來在熱重啟 / SPA 切換時用到)。
+    teardownProgressSubscription() {
+        if (typeof this._unsubscribeProgress === 'function') {
+            this._unsubscribeProgress();
+            this._unsubscribeProgress = null;
+        } else {
+            // EventsOn 在某些舊版 Wails runtime 不回 unsubscribe — fallback 走 EventsOff
+            EventsOff('progress');
+        }
+    }
+
+    // 初始化拖曳功能。
+    //
+    // P2-9:Wails OnFileDrop 沒有 callback-level unregister(它是 single-callback
+    // listener,內部全域覆寫),所以重複 init 時要先 OnFileDropOff() 清掉前一個
+    // 註冊。沒此守護,HMR / re-init 後同一個 drop 事件會觸發多次 — drop 一個
+    // 檔案會在多個 handler 中 race(可能跑到舊的 closure 引用了已銷毀的
+    // EMGAnalysisApp instance,引發 silent state corruption)。
     initDragAndDrop() {
+        // OnFileDropOff 在從未 OnFileDrop 過時也是 no-op-safe(Wails runtime 內部
+        // 用 try/catch 把 handler 設成 null),所以可以無條件呼叫。
+        if (typeof OnFileDropOff === 'function') {
+            OnFileDropOff();
+        }
+
         OnFileDrop((x, y, paths) => {
             // 找到目標元素
             const targetElement = document.elementFromPoint(x, y);
             const dropTarget = this.findDropTarget(targetElement);
-            
+
             if (dropTarget && paths.length > 0) {
                 // 只處理第一個檔案
                 const filePath = paths[0];
-                
+
                 // 驗證是否為 CSV 檔案
                 if (filePath.toLowerCase().endsWith('.csv')) {
                     this.handleFileDrop(dropTarget, filePath);
@@ -841,12 +933,15 @@ class EMGAnalysisApp {
         try {
             this.updateStatus(t('status.chart_downloading'));
 
-            // 等待 iframe 完全加載
+            // 等待 iframe 完全加載。
+            // P2-10:用 addEventListener('load') 取代 iframe.onload = resolve,
+            // 避免覆寫前一個 onload handler(若有人在外層另設 onload 做 chart
+            // 初始化會被蓋掉)。{once: true} 避免下次 reload 重複觸發。
             await new Promise(resolve => {
                 if (iframe.contentDocument.readyState === 'complete') {
                     resolve();
                 } else {
-                    iframe.onload = resolve;
+                    iframe.addEventListener('load', resolve, { once: true });
                 }
             });
 
@@ -1111,15 +1206,34 @@ class EMGAnalysisApp {
         try {
             const headers = await GetCSVHeaders({filePath: file});
             // 第一個欄位為時間，必選且禁止取消
-            selector.innerHTML = headers.map((col, index) => `
-                <div class="checkbox-item">
-                    <input type="checkbox"
-                           id="col_${index}"
-                           value="${index}"
-                           ${index === 0 ? 'checked disabled' : 'checked'}>
-                    <label for="col_${index}">${col}</label>
-                </div>
-            `).join('');
+            // P0-2: 不可把 raw CSV header 拼進 innerHTML — GetCSVHeaders 沒 escape,
+            // 惡意 header(例: `<img src=x onerror=...>`)會在 Wails WebView 內被當
+            // HTML 解析造成 XSS。改用 createElement + textContent(對齊 line 1311-1316
+            // 與 1541-1546 的安全 pattern)。
+            while (selector.firstChild) {
+                selector.removeChild(selector.firstChild);
+            }
+            headers.forEach((col, index) => {
+                const item = document.createElement('div');
+                item.className = 'checkbox-item';
+
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.id = `col_${index}`;
+                cb.value = String(index);
+                cb.checked = true;
+                if (index === 0) {
+                    cb.disabled = true;
+                }
+
+                const label = document.createElement('label');
+                label.setAttribute('for', `col_${index}`);
+                label.textContent = col;
+
+                item.appendChild(cb);
+                item.appendChild(label);
+                selector.appendChild(item);
+            });
             // 綁定預覽更新
             document.querySelectorAll('#columnSelector input[type="checkbox"]').forEach(cb => {
                 cb.addEventListener('change', () => this.previewInteractiveChart());
@@ -1164,6 +1278,23 @@ class EMGAnalysisApp {
             iframe.style.width = '100%';
             iframe.style.height = '520px';
             iframe.style.border = 'none';
+            // P1-12:移除 `allow-same-origin` — sandbox 不再是 chart HTML 注入的
+            // 安全邊界。**Go 端 sanitize 是 chart HTML 內容的唯一防線**
+            // (internal/chart/echarts.go::escapeForHTML + internal/cci/chart.go
+            // 的 JSON encoder escape-HTML=true)。
+            //
+            // 取捨:沒有 allow-same-origin → parent 無法跨 frame 讀
+            // iframe.contentWindow.echarts/contentDocument,因此「下載 chart 為 PNG」
+            // 與「更新 CCI phase line」功能會失效。這是接受的 trade-off:
+            //   - 安全收益:即使 Go 端 sanitize 在未來改動中破口,iframe 內 JS
+            //     也無法操作 parent (SOP 隔離),不會升級為 RCE on Wails webview
+            //   - 功能成本:下載 PNG / 動態 phase line 需要改走「iframe 內主動
+            //     postMessage 給 parent」的設計(屬未來 follow-up,本 PR 不做)
+            //
+            // 仍排除:allow-top-navigation / allow-forms / allow-popups / allow-modals /
+            // allow-pointer-lock / allow-plugins / allow-presentation — 即便 chartHTML
+            // 被汙染,也不能跳 top frame、開新視窗、彈 alert 阻塞 UI。
+            iframe.sandbox = 'allow-scripts';
             iframe.srcdoc = html;            // 直接塞 srcdoc
 
             wrapper.appendChild(iframe);
@@ -1359,31 +1490,64 @@ class EMGAnalysisApp {
     }
     
     // 顯示分期同步分析結果
+    //
+    // P0-A H2 修補:result.subject / startPhase / endPhase / outputPath / report
+    // 來自後端 manifest CSV(user-controlled),舊版以 innerHTML 字串拼接寫入,
+    // 例如 subject = `<img src=x onerror=alert(1)>` 即 XSS。改全 DOM API +
+    // textContent,結構與舊版一致。設計樣式參考同檔 showNormalizedPhaseSyncResult。
     async showPhaseSyncResult(result) {
         const resultDiv = document.getElementById('phaseSyncResult');
         const contentDiv = document.getElementById('phaseSyncResultContent');
-        
-        let html = `
-            <div class="result-info">
-                <p><strong>主題：</strong>${result.subject}</p>
-                <p><strong>分析區間：</strong>${result.startPhase} (${result.startTime.toFixed(3)}s) → ${result.endPhase} (${result.endTime.toFixed(3)}s)</p>
-                <p><strong>輸出檔案：</strong>${result.outputPath}</p>
-            </div>
-            
-            <div class="result-report">
-                <h4>分析報告</h4>
-                <pre class="result-pre">${result.report}</pre>
-            </div>
-            
-            <div class="button-group">
-                <button class="btn btn-primary" onclick="app.openOutputFolder()">開啟輸出資料夾</button>
-            </div>
-        `;
-        
-        contentDiv.innerHTML = html;
+        contentDiv.textContent = '';
+
+        const fmtTime = t => (typeof t === 'number' ? t.toFixed(3) : '—');
+
+        // result-info(全 user-controlled 字串走 textContent)
+        const info = document.createElement('div');
+        info.className = 'result-info';
+        const lines = [
+            ['主題:', result.subject],
+            ['分析區間:',
+                `${result.startPhase} (${fmtTime(result.startTime)}s) → ${result.endPhase} (${fmtTime(result.endTime)}s)`],
+            ['輸出檔案:', result.outputPath],
+        ];
+        lines.forEach(([label, value]) => {
+            const p = document.createElement('p');
+            const strong = document.createElement('strong');
+            strong.textContent = label;
+            p.appendChild(strong);
+            p.appendChild(document.createTextNode(value != null ? String(value) : ''));
+            info.appendChild(p);
+        });
+        contentDiv.appendChild(info);
+
+        // 分析報告(report 來自後端拼接含 user-controlled subject;textContent)
+        if (result.report) {
+            const reportWrap = document.createElement('div');
+            reportWrap.className = 'result-report';
+            const h4 = document.createElement('h4');
+            h4.textContent = '分析報告';
+            reportWrap.appendChild(h4);
+            const pre = document.createElement('pre');
+            pre.className = 'result-pre';
+            pre.textContent = result.report;
+            reportWrap.appendChild(pre);
+            contentDiv.appendChild(reportWrap);
+        }
+
+        // 開啟輸出資料夾按鈕
+        const btnGroup = document.createElement('div');
+        btnGroup.className = 'button-group';
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary';
+        btn.textContent = '開啟輸出資料夾';
+        btn.addEventListener('click', () => this.openOutputFolder());
+        btnGroup.appendChild(btn);
+        contentDiv.appendChild(btnGroup);
+
         resultDiv.style.display = 'block';
     }
-    
+
     // ==================== 共同收縮分析 (CCI Rudolph) ====================
 
     // 共同收縮分析面板
@@ -1522,88 +1686,171 @@ class EMGAnalysisApp {
     }
 
     // 顯示 CCI 分析結果
+    //
+    // P0-A H2 修補:result.subject / pairNames / outputCSVPath / report 來自後端
+    // CSV / 分析輸出(user-controlled),舊版以 innerHTML 字串拼接直接寫入,
+    // 含 `<img src=x onerror=alert(1)>` 之 subject 會在 Wails WebView 內觸發
+    // XSS(等同 RPC 任意執行)。改為全 DOM API + textContent(safe DOM 樹建構),
+    // 結構保持與舊版一致以避免破壞 CSS。
+    //
+    // phase checkbox / chart wrapper 等 static template 仍走 DOM API 維持單一風格;
+    // phase 名稱(P0/P1/.../L)是 hard-coded whitelist 過濾後的固定字串,非 user
+    // input;chart iframe 內容由 srcdoc 安全注入(已在 Go 端 sanitize)。
+    //
+    // P0-A H1 修補:postMessage listener 已在 init() 註冊一次,此處不再 inline
+    // addEventListener,避免每跑一次分析就累積一個 listener。
     showCCIResult(result) {
         const resultDiv = document.getElementById('cciResult');
         const contentDiv = document.getElementById('cciResultContent');
+        contentDiv.textContent = '';
 
-        // Build phase checkboxes
-        let phaseCheckboxes = '';
-        if (result.phasePercents) {
-            const phaseOrder = ['P0','P1','P2','S','C','D','T0','T','O','L'];
-            const available = phaseOrder.filter(p => result.phasePercents[p] !== undefined);
-            phaseCheckboxes = `
-                <div class="form-group" style="margin-top: 0.5rem;">
-                    <label><strong>分期點顯示：</strong></label>
-                    <div class="checkbox-group" style="display:flex;flex-wrap:wrap;gap:0.5rem;">
-                        ${available.map(p => `
-                            <div class="checkbox-item">
-                                <input type="checkbox" id="phase_${p}" value="${p}" checked
-                                       onchange="app.updateCCIPhaseLines()">
-                                <label for="phase_${p}">${p}</label>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-            `;
-        }
+        // ---- 1. result-info(全 user-controlled 字串,走 textContent)----
+        const info = document.createElement('div');
+        info.className = 'result-info';
+        const pairNamesText = Array.isArray(result.pairNames) ? result.pairNames.join(', ') : '';
+        const infoRows = [
+            ['主題:', result.subject],
+            ['肌肉配對:', pairNamesText],
+            ['CSV 輸出:', result.outputCSVPath],
+        ];
+        infoRows.forEach(([label, value]) => {
+            const p = document.createElement('p');
+            const strong = document.createElement('strong');
+            strong.textContent = label;
+            p.appendChild(strong);
+            p.appendChild(document.createTextNode(value != null ? String(value) : ''));
+            info.appendChild(p);
+        });
+        contentDiv.appendChild(info);
 
-        let chartSection = '';
+        // ---- 2. chart section + phase checkboxes(phase 名 whitelisted)----
         if (result.chartHTML) {
-            chartSection = `
-                <div style="margin: 1rem 0;">
-                    <div id="cciChartContent"></div>
-                    ${phaseCheckboxes}
-                    <div id="cciPhasePositions" style="margin-top: 0.5rem;"></div>
-                    <div class="button-group" style="margin-top: 0.5rem;">
-                        <button class="btn btn-primary" onclick="app.downloadCCIChart()">下載圖表</button>
-                    </div>
-                </div>
-            `;
+            const chartWrap = document.createElement('div');
+            chartWrap.style.margin = '1rem 0';
+
+            const chartContent = document.createElement('div');
+            chartContent.id = 'cciChartContent';
+            chartWrap.appendChild(chartContent);
+
+            if (result.phasePercents) {
+                const phaseOrder = ['P0','P1','P2','S','C','D','T0','T','O','L'];
+                const available = phaseOrder.filter(p => result.phasePercents[p] !== undefined);
+                if (available.length > 0) {
+                    const formGroup = document.createElement('div');
+                    formGroup.className = 'form-group';
+                    formGroup.style.marginTop = '0.5rem';
+                    const label = document.createElement('label');
+                    const strong = document.createElement('strong');
+                    strong.textContent = '分期點顯示:';
+                    label.appendChild(strong);
+                    formGroup.appendChild(label);
+
+                    const checkboxGroup = document.createElement('div');
+                    checkboxGroup.className = 'checkbox-group';
+                    checkboxGroup.style.display = 'flex';
+                    checkboxGroup.style.flexWrap = 'wrap';
+                    checkboxGroup.style.gap = '0.5rem';
+                    available.forEach(p => {
+                        // phase 名來自 phaseOrder whitelist(P0/P1/.../L),非 user input;
+                        // 但這裡仍用 textContent + 屬性 setter 維持 single-style。
+                        const item = document.createElement('div');
+                        item.className = 'checkbox-item';
+                        const cb = document.createElement('input');
+                        cb.type = 'checkbox';
+                        cb.id = 'phase_' + p;
+                        cb.value = p;
+                        cb.checked = true;
+                        cb.addEventListener('change', () => this.updateCCIPhaseLines());
+                        const cbLabel = document.createElement('label');
+                        cbLabel.setAttribute('for', 'phase_' + p);
+                        cbLabel.textContent = p;
+                        item.appendChild(cb);
+                        item.appendChild(cbLabel);
+                        checkboxGroup.appendChild(item);
+                    });
+                    formGroup.appendChild(checkboxGroup);
+                    chartWrap.appendChild(formGroup);
+                }
+            }
+
+            const phasePositions = document.createElement('div');
+            phasePositions.id = 'cciPhasePositions';
+            phasePositions.style.marginTop = '0.5rem';
+            chartWrap.appendChild(phasePositions);
+
+            const btnGroup = document.createElement('div');
+            btnGroup.className = 'button-group';
+            btnGroup.style.marginTop = '0.5rem';
+            const downloadBtn = document.createElement('button');
+            downloadBtn.className = 'btn btn-primary';
+            downloadBtn.textContent = '下載圖表';
+            downloadBtn.addEventListener('click', () => this.downloadCCIChart());
+            btnGroup.appendChild(downloadBtn);
+            chartWrap.appendChild(btnGroup);
+
+            contentDiv.appendChild(chartWrap);
         }
 
-        contentDiv.innerHTML = `
-            <div class="result-info">
-                <p><strong>主題：</strong>${result.subject}</p>
-                <p><strong>肌肉配對：</strong>${result.pairNames.join(', ')}</p>
-                <p><strong>CSV 輸出：</strong>${result.outputCSVPath}</p>
-            </div>
+        // ---- 3. 分析報告(report 來自後端拼接,含 subject;走 textContent)----
+        if (result.report) {
+            const reportWrap = document.createElement('div');
+            reportWrap.className = 'result-report';
+            const h4 = document.createElement('h4');
+            h4.textContent = '分析報告';
+            reportWrap.appendChild(h4);
+            const pre = document.createElement('pre');
+            pre.className = 'result-pre';
+            pre.textContent = result.report;
+            reportWrap.appendChild(pre);
+            contentDiv.appendChild(reportWrap);
+        }
 
-            ${chartSection}
-
-            <div class="result-report">
-                <h4>分析報告</h4>
-                <pre class="result-pre">${result.report}</pre>
-            </div>
-
-            <div class="button-group">
-                <button class="btn btn-primary" onclick="app.openOutputFolder()">開啟輸出資料夾</button>
-            </div>
-        `;
+        // ---- 4. 開啟輸出資料夾按鈕 ----
+        const openBtnGroup = document.createElement('div');
+        openBtnGroup.className = 'button-group';
+        const openBtn = document.createElement('button');
+        openBtn.className = 'btn btn-primary';
+        openBtn.textContent = '開啟輸出資料夾';
+        openBtn.addEventListener('click', () => this.openOutputFolder());
+        openBtnGroup.appendChild(openBtn);
+        contentDiv.appendChild(openBtnGroup);
 
         resultDiv.style.display = 'block';
 
-        // Load interactive chart in iframe
+        // Load interactive chart in iframe(srcdoc 安全注入 — Go 端 sanitize 已防 XSS)
         if (result.chartHTML) {
             const wrapper = document.getElementById('cciChartContent');
             const iframe = document.createElement('iframe');
             iframe.style.width = '100%';
             iframe.style.height = '620px';
             iframe.style.border = 'none';
+            // P1-12:移除 `allow-same-origin`(同 previewInteractiveChart)。
+            // sandbox 不再是 CCI chart HTML 注入的安全邊界,**Go 端 sanitize 是
+            // 唯一防線**(cci/chart.go 的 JSON encoder + i18n key escape)。
+            //
+            // 取捨:跨 frame 讀 iframe.contentWindow.echarts / contentDocument 失效,
+            // 因此 updateCCIPhaseLines 與 downloadCCIChart 功能會在此版本失效。
+            // 這是 deliberate trade-off:
+            //   - 安全收益:Go-side sanitize 破口時,iframe JS 也無法操作 parent
+            //   - 功能成本:phase line 動態更新 / PNG 下載需要重寫為「iframe 主動
+            //     postMessage(...) 給 parent」的設計(屬未來 follow-up,本 PR 不做)
+            //
+            // 仍排除:top-navigation / forms / popups / modals / pointer-lock /
+            // plugins / presentation。
+            iframe.sandbox = 'allow-scripts';
             iframe.srcdoc = result.chartHTML;
             wrapper.appendChild(iframe);
 
-            // Draw phase lines once iframe loads
-            iframe.onload = () => this.updateCCIPhaseLines();
+            // Draw phase lines once iframe loads。
+            // P2-10:用 addEventListener('load') 取代 iframe.onload = ...,
+            // 避免被後續(例如 downloadCCIChart 等待 iframe ready)的賦值蓋掉造成
+            // updateCCIPhaseLines handler 失效。{once: true} 確保不會 leak。
+            iframe.addEventListener('load', () => this.updateCCIPhaseLines(), { once: true });
         }
 
-        // Listen for restore/legend events from iframe to re-apply phase lines
-        window.addEventListener('message', (e) => {
-            if (e.data === 'cci-chart-restored' || e.data === 'cci-chart-legend-changed') {
-                setTimeout(() => this.updateCCIPhaseLines(), 100);
-            }
-        });
-
-        // Store for download and phase line updates
+        // Store for download and phase line updates。
+        // postMessage listener 已在 init() 註冊一次(this._cciMessageHandler),
+        // 此處只更新 _cciResult 引用,handler 會在收到 iframe 事件時讀取此 context。
         this._cciResult = result;
         this._originalPctLabels = null;
     }
@@ -1779,11 +2026,16 @@ class EMGAnalysisApp {
         try {
             this.updateStatus(t('status.cci_chart_downloading'));
 
+            // P2-10:用 addEventListener('load') 取代 iframe.onload = resolve。
+            // 過去這裡寫 iframe.onload = resolve 會「覆蓋」showCCIResult 內已
+            // 設定的 () => this.updateCCIPhaseLines() handler — 若 download
+            // 在 iframe load 完成之前被觸發,phase lines 永遠不會被畫上。
+            // 改用 addEventListener({once:true}) 後兩個 handler 各自獨立。
             await new Promise(resolve => {
                 if (iframe.contentDocument.readyState === 'complete') {
                     resolve();
                 } else {
-                    iframe.onload = resolve;
+                    iframe.addEventListener('load', resolve, { once: true });
                 }
             });
 

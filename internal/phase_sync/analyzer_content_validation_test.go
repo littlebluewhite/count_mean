@@ -84,9 +84,13 @@ func TestMotionIndexValidation_D_OutOfRange(t *testing.T) {
 	// Create EMG file
 	createTestEMGFileN(t, tmpDir, 0, 1.0)
 
-	// Create manifest with D = 150 (out of range, max is 100)
+	// Create manifest with D = 150 (out of range, max is 100). Keep D < O so the
+	// P1-A4-3 (D/O) monotonicity check in ValidatePhaseManifest passes and we
+	// reach the per-D-range check inside validateMotionPhasePoints. O = 180 is
+	// also out of range but D is checked first, so the assertion on "D 分期點"
+	// stays meaningful.
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
-TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,150,0.6,0.7,80,0.8`
+TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,150,0.6,0.7,180,0.8`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
 	err := os.WriteFile(manifestPath, []byte(manifestContent), fsperm.FilePerm)
 	require.NoError(t, err)
@@ -186,9 +190,10 @@ func TestForceTimeValidation_T_OutOfRange(t *testing.T) {
 	// Create EMG file
 	createTestEMGFileN(t, tmpDir, 0, 2.0)
 
-	// Create manifest with T = 2.0 (out of range, max force time is ~0.999)
+	// Create manifest with T = 2.0 (out of range, max force time is ~0.999).
+	// L 改為 2.1（> T）以確保 monotonicity 通過而 force-range 驗證才 trigger。
 	manifestContent := `Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
-TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,2.0,80,0.8`
+TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,2.0,80,2.1`
 	manifestPath := filepath.Join(tmpDir, "manifest.csv")
 	err := os.WriteFile(manifestPath, []byte(manifestContent), fsperm.FilePerm)
 	require.NoError(t, err)

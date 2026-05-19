@@ -15,7 +15,7 @@ import (
 // mutated from outside the package — external callers obtain a fresh slice
 // copy via BOMBytes().
 //
-// 此前以 `var BOM []byte` 暴露給 callers — Wave 5 code review 三個 agent 都標
+// 此前以 `var BOM []byte` 暴露給 callers
 // 出該 surface 可被任意 caller 透過 `csvutil.BOM[0] = 0xFF` 全域汙染 BOM 偵測/
 // 寫入。改用 array + 拷貝 getter 後型別系統直接擋下這個 attack surface。
 var bomArray = [3]byte{0xEF, 0xBB, 0xBF}

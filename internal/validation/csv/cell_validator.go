@@ -12,18 +12,42 @@ import (
 )
 
 // CellContext provides context information for cell validation.
+//
+// IsHeader 欄位讓 cell validator 區分「header row cell」與「body row cell」：
+// EMG/Motion/ANC 等檔案的 header 中通常會有 `Subject ID`、`Frame ID`、`Mid Foot`、
+// `=Channel1` 這類字串 — `Subject ID` 的 `id` 子串會誤命中 command injection、`=`
+// 開頭的 channel name 會誤命中 formula starter。但 header 本身不會被 Excel re-execute
+// 也不會被當 SQL 語句執行，把 SQL/Command/DangerousFunctions 規則 scoped 到 body cell
+// 是合理且安全的取捨；formula starter / control char / UTF-8 / suspicious extension
+// 仍保留對 header 的守門（這些在 Excel 開啟時仍可能被攻擊者利用）。
 type CellContext struct {
 	Row      int
 	Col      int
 	Filename string
+	IsHeader bool
 }
 
-// NewCellContext creates a new CellContext.
+// NewCellContext creates a new CellContext for a body row cell.
 func NewCellContext(row, col int, filename string) *CellContext {
 	return &CellContext{
 		Row:      row,
 		Col:      col,
 		Filename: filename,
+	}
+}
+
+// NewHeaderCellContext creates a new CellContext flagged as header row.
+//
+// header cell 仍跑 formula starter / control char / UTF-8 / suspicious extension /
+// script injection 守門（Excel 開啟時仍會 trigger），但 skip SQL / Command /
+// DangerousFunctions 比對 — 後三者只在 body data 被當 query / 命令 / spreadsheet
+// function payload 才有風險。
+func NewHeaderCellContext(row, col int, filename string) *CellContext {
+	return &CellContext{
+		Row:      row,
+		Col:      col,
+		Filename: filename,
+		IsHeader: true,
 	}
 }
 
@@ -40,6 +64,12 @@ func NewCellValidator() *CellValidator {
 }
 
 // ValidateCell validates a single CSV cell for malicious content.
+//
+// header row 跳過 SQL / Command / DangerousFunctions 比對（這些規則 substring
+// 比對對 EMG header `Subject ID`、`Frame ID`、`Mid Foot` 等合法欄位名假陽性嚴重；
+// 且 header 本身不會作為 SQL/Shell payload 被執行）。formula starter / script
+// injection / control char / UTF-8 / suspicious extension 仍對 header 守門 — 這些
+// 在 Excel 開啟時仍會 trigger，header cell 也必須擋。
 func (v *CellValidator) ValidateCell(cell string, ctx *CellContext) error {
 	// Check for excessive cell content (potential DoS attack)
 	if err := checkCellLength(cell, ctx); err != nil {
@@ -56,24 +86,28 @@ func (v *CellValidator) ValidateCell(cell string, ctx *CellContext) error {
 		return err
 	}
 
-	// Check for dangerous functions
-	if err := v.checkDangerousFunctions(cell, ctx); err != nil {
-		return err
+	if !ctx.IsHeader {
+		// Check for dangerous functions（body-only）
+		if err := v.checkDangerousFunctions(cell, ctx); err != nil {
+			return err
+		}
 	}
 
-	// Check for script injection
+	// Check for script injection（header / body 都跑，Excel 預覽會 render header）
 	if err := v.checkScriptInjection(cell, ctx); err != nil {
 		return err
 	}
 
-	// Check for SQL injection
-	if err := v.checkSQLInjection(cell, ctx); err != nil {
-		return err
-	}
+	if !ctx.IsHeader {
+		// Check for SQL injection（body-only）
+		if err := v.checkSQLInjection(cell, ctx); err != nil {
+			return err
+		}
 
-	// Check for command injection
-	if err := v.checkCommandInjection(cell, ctx); err != nil {
-		return err
+		// Check for command injection（body-only）
+		if err := v.checkCommandInjection(cell, ctx); err != nil {
+			return err
+		}
 	}
 
 	// Check for control characters

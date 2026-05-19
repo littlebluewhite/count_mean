@@ -2,7 +2,6 @@ package gui
 
 import (
 	"bytes"
-	"encoding/base64"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"count_mean/internal/calculator"
 	"count_mean/internal/cci"
 	"count_mean/internal/security/fsperm"
+	"count_mean/internal/security/redact"
 )
 
 // CCIParams 共同收縮分析參數.
@@ -39,11 +39,31 @@ type CCIDownloadParams struct {
 }
 
 // AnalyzeCCI 執行 CCI Rudolph 共同收縮分析.
-func (a *App) AnalyzeCCI(params CCIParams) (*CCIResult, error) {
+//
+// 錯誤通道契約（Wave 3 Batch R）：
+//
+//	AnalyzeCCI 永遠回傳 non-nil *CCIResult；所有可預期失敗（參數驗證、路徑驗證、
+//	下游分析錯誤、CSV/圖表生成失敗）都包成 result.Success=false + result.Message。
+//	Go err 只在 `recoverHandlerPanic` 透過 named return 灌入 panic 時才為 non-nil
+//	（不可預期錯誤）。如此前端可以單一路徑檢查 `result.success`/`result.message`，
+//	不必同時 try/catch + 檢 result.success（之前的雙通道設計）。
+func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
+	defer recoverHandlerPanic("AnalyzeCCI", a.logger, &err)
+
 	a.logger.Info("開始 CCI 分析", map[string]interface{}{"params": params})
 
-	if err := validateCCIParams(params); err != nil {
-		return nil, err
+	if validationErr := validateCCIParams(params); validationErr != nil {
+		return failedCCIResult(validationErr.Error()), nil
+	}
+
+	// 邊界路徑驗證 — 在 analyzer 內部 defense-in-depth 之前先擋 traversal /
+	// 系統敏感目錄。downstream cci.Analyzer 仍會二次擋，但 GUI 邊界提早 reject 對
+	// 前端 UX 與 audit 較友善（不會等中途某個 reader 才失敗）。
+	if pathErr := validateExternalPathInputs(
+		"分期總檔案", params.ManifestFile,
+		"資料夾", params.DataFolder,
+	); pathErr != nil {
+		return failedCCIResult(pathErr.Error()), nil
 	}
 
 	analysisParams := &cci.CCIParams{
@@ -52,22 +72,29 @@ func (a *App) AnalyzeCCI(params CCIParams) (*CCIResult, error) {
 		SubjectIndex: params.SubjectIndex,
 	}
 
-	analysisResult, err := a.cciAnalyzer.AnalyzeCCI(analysisParams)
-	if err != nil {
-		return failedCCIResult(fmt.Sprintf("分析失敗: %v", err)), nil
+	// 用 a.context() 帶 Wails 注入的 lifecycle ctx，支援 Shutdown / 使用者中止取消
+	// 長 CCI 計算（12 個 pair × N 點的並行 hot loop）。
+	analysisResult, analyzeErr := a.cciAnalyzer.AnalyzeCCI(a.context(), analysisParams)
+	if analyzeErr != nil {
+		// error message 內可能含 absolute path(downstream parser 把
+		// PathError 用 %w wrap 傳上來),前端不該看到 /Volumes/patient_xx/...
+		// 之類 PII。走 redact.RedactForMessage 先處理再塞 result.Message。
+		return failedCCIResult(fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(analyzeErr))), nil
 	}
 
 	// Export CSV
 	s := a.state.Load()
-	csvPath, err := a.cciAnalyzer.ExportToCSV(analysisResult, s.config.OutputDir)
-	if err != nil {
-		return failedCCIResult(fmt.Sprintf("CSV 導出失敗: %v", err)), nil
+	// 帶 ctx 讓大 dataset CSV 匯出也能配合 Wails Shutdown / 使用者中止取消。
+	csvPath, exportErr := a.cciAnalyzer.ExportToCSV(a.context(), analysisResult, s.config.OutputDir)
+	if exportErr != nil {
+		return failedCCIResult(fmt.Sprintf("CSV 導出失敗: %s", redact.RedactForMessage(exportErr))), nil
 	}
 
 	// Generate interactive chart HTML
+	// 帶 ctx 讓大 dataset render 也能配合 Wails Shutdown / 使用者中止取消。
 	var buf bytes.Buffer
-	if err := cci.GenerateCCIInteractiveChart(analysisResult, &buf); err != nil {
-		return failedCCIResult(fmt.Sprintf("圖表生成失敗: %v", err)), nil
+	if chartErr := cci.GenerateCCIInteractiveChart(a.context(), analysisResult, &buf); chartErr != nil {
+		return failedCCIResult(fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(chartErr))), nil
 	}
 
 	pairNames := make([]string, len(analysisResult.PairResults))
@@ -77,7 +104,7 @@ func (a *App) AnalyzeCCI(params CCIParams) (*CCIResult, error) {
 
 	report := cci.GenerateReport(analysisResult)
 
-	result := &CCIResult{
+	result = &CCIResult{
 		OutputCSVPath: csvPath,
 		Subject:       analysisResult.Subject,
 		PairNames:     pairNames,
@@ -95,7 +122,9 @@ func (a *App) AnalyzeCCI(params CCIParams) (*CCIResult, error) {
 }
 
 // DownloadCCIChart 下載 CCI 圖表為 PNG 檔案.
-func (a *App) DownloadCCIChart(params CCIDownloadParams) (*ChartResult, error) {
+func (a *App) DownloadCCIChart(params CCIDownloadParams) (result *ChartResult, err error) {
+	defer recoverHandlerPanic("DownloadCCIChart", a.logger, &err)
+
 	a.logger.Info("開始下載 CCI 圖表", nil)
 
 	dataURL := params.ImageData
@@ -105,9 +134,11 @@ func (a *App) DownloadCCIChart(params CCIDownloadParams) (*ChartResult, error) {
 
 	base64Data := strings.TrimPrefix(dataURL, "data:image/png;base64,")
 
-	pngData, err := base64.StdEncoding.DecodeString(base64Data)
+	// base64 decode 前先擋 size,decode 後驗 PNG signature + IHDR
+	// dimension。詳見 gui/png_validation.go DecodeAndValidatePNG。
+	pngData, err := DecodeAndValidatePNG(base64Data)
 	if err != nil {
-		return nil, fmt.Errorf("解碼圖片數據失敗: %w", err)
+		return nil, fmt.Errorf("PNG 驗證失敗: %w", err)
 	}
 
 	// params.Subject 來自前端，需先 sanitize 避免路徑穿越（"../x" 之類）。
@@ -117,6 +148,28 @@ func (a *App) DownloadCCIChart(params CCIDownloadParams) (*ChartResult, error) {
 		s.config.OutputDir,
 		fmt.Sprintf("%s_CCI_Rudolph.png", safeSubject),
 	)
+
+	// M23(P2)：boundary 路徑驗證 — 對齊 AnalyzeCCI / AnalyzeMuscleRatio /
+	// AnalyzeNormalizedPhaseSync 的 defense-in-depth 模式。
+	//
+	// 為何需要:雖然 OutputDir 來自 config 而非前端直接控,但 config 可能
+	// 被惡意修改(直接編輯 config.json 或舊版 bug 讓 traversal 寫進去),
+	// 而 SanitizeFileName 對 Subject 已做基本處理仍不能保證最終 outputPath
+	// 不落到系統敏感目錄。fsperm.WriteFileNoFollow 雖會擋 symlink follow,
+	// 但 boundary 提早 reject 對 audit log 與錯誤訊息都更友善。
+	//
+	// 為何擋的是組合後的 outputPath:外部攻擊面其實是「OutputDir + Subject」
+	// 的合成結果,單獨驗 OutputDir 不能完全覆蓋(Subject 雖經 sanitize 仍
+	// 可能拼出意外路徑),驗合成後路徑是 strongest invariant。
+	//
+	// label 直接帶 "PNG 輸出路徑" 一次到位,validateExternalPathInputs 已會
+	// 在後面附上「路徑驗證失敗: <reason>」。原本還在 caller 端再 wrap 一層
+	// fmt.Errorf("PNG 輸出 %w", pathErr) 會產生重複 label
+	// 「PNG 輸出 輸出路徑 路徑驗證失敗: ...」— 同樣資訊出現兩次,使用者看了
+	// 還會以為是兩個獨立步驟都失敗。集中在 label 參數,wrap chain 只一次。
+	if pathErr := validateExternalPathInputs("PNG 輸出路徑", outputPath); pathErr != nil {
+		return nil, pathErr
+	}
 
 	if err := fsperm.WriteFileNoFollow(outputPath, pngData); err != nil {
 		return nil, fmt.Errorf("保存圖片失敗: %w", err)

@@ -107,18 +107,18 @@ func TestPhaseCalculator_ValidatePhaseOrder(t *testing.T) {
 func TestPhaseCalculator_GetPhaseTimeRange(t *testing.T) {
 	pc := NewPhaseCalculator()
 
-	// Create test phase points
+	// Batch T：force-time 欄位改 OptFloat，需用 MakeOpt 包裝。D/O 仍是 int。
 	phasePoints := models.PhasePoints{
-		P0: 1.0, // force time
-		P1: 2.0, // force time
-		P2: 3.0, // force time
-		S:  4.0, // force time
-		C:  5.0, // force time
-		D:  350, // motion index (increased to be later than P0)
-		T0: 6.0, // force time
-		T:  7.0, // force time
-		O:  450, // motion index (increased)
-		L:  8.0, // force time
+		P0: models.MakeOpt(1.0), // force time
+		P1: models.MakeOpt(2.0), // force time
+		P2: models.MakeOpt(3.0), // force time
+		S:  models.MakeOpt(4.0), // force time
+		C:  models.MakeOpt(5.0), // force time
+		D:  350,                 // motion index (increased to be later than P0)
+		T0: models.MakeOpt(6.0), // force time
+		T:  models.MakeOpt(7.0), // force time
+		O:  450,                 // motion index (increased)
+		L:  models.MakeOpt(8.0), // force time
 	}
 
 	tests := []struct {
@@ -184,18 +184,20 @@ func TestPhaseCalculator_GetPhaseTimeRange(t *testing.T) {
 			},
 		},
 		{
-			name: "zero start value",
+			// Batch T 後語意：P0 未提供 (NoOpt) 仍回 ErrPhaseValueZero。
+			// 對應原本 "zero start value" 但用 OptFloat 區分「真實 0」與「未提供」。
+			name: "unset start value (NoOpt)",
 			phasePoints: models.PhasePoints{
-				P0: 0.0, // Invalid: zero value
-				P1: 2.0,
-				P2: 3.0,
-				S:  4.0,
-				C:  5.0,
+				P0: models.NoOpt(), // 未提供
+				P1: models.MakeOpt(2.0),
+				P2: models.MakeOpt(3.0),
+				S:  models.MakeOpt(4.0),
+				C:  models.MakeOpt(5.0),
 				D:  350,
-				T0: 6.0,
-				T:  7.0,
+				T0: models.MakeOpt(6.0),
+				T:  models.MakeOpt(7.0),
 				O:  450,
-				L:  8.0,
+				L:  models.MakeOpt(8.0),
 			},
 			startPhase:      "P0",
 			endPhase:        "P1",
@@ -204,18 +206,18 @@ func TestPhaseCalculator_GetPhaseTimeRange(t *testing.T) {
 			errorMsg:        "phase value is zero or not set",
 		},
 		{
-			name: "zero end value",
+			name: "unset end value (NoOpt)",
 			phasePoints: models.PhasePoints{
-				P0: 1.0,
-				P1: 0.0, // Invalid: zero value
-				P2: 3.0,
-				S:  4.0,
-				C:  5.0,
+				P0: models.MakeOpt(1.0),
+				P1: models.NoOpt(), // 未提供
+				P2: models.MakeOpt(3.0),
+				S:  models.MakeOpt(4.0),
+				C:  models.MakeOpt(5.0),
 				D:  350,
-				T0: 6.0,
-				T:  7.0,
+				T0: models.MakeOpt(6.0),
+				T:  models.MakeOpt(7.0),
 				O:  450,
-				L:  8.0,
+				L:  models.MakeOpt(8.0),
 			},
 			startPhase:      "P0",
 			endPhase:        "P1",
@@ -224,24 +226,46 @@ func TestPhaseCalculator_GetPhaseTimeRange(t *testing.T) {
 			errorMsg:        "phase value is zero or not set",
 		},
 		{
+			// D/O 仍是 int 0-sentinel — 任務範圍外保留。
 			name: "zero motion index",
 			phasePoints: models.PhasePoints{
-				P0: 1.0,
-				P1: 2.0,
-				P2: 3.0,
-				S:  4.0,
-				C:  5.0,
-				D:  0, // Invalid: zero motion index
-				T0: 6.0,
-				T:  7.0,
+				P0: models.MakeOpt(1.0),
+				P1: models.MakeOpt(2.0),
+				P2: models.MakeOpt(3.0),
+				S:  models.MakeOpt(4.0),
+				C:  models.MakeOpt(5.0),
+				D:  0, // motion-index 0 = 未提供 sentinel
+				T0: models.MakeOpt(6.0),
+				T:  models.MakeOpt(7.0),
 				O:  350,
-				L:  8.0,
+				L:  models.MakeOpt(8.0),
 			},
 			startPhase:      "P0",
 			endPhase:        "D",
 			emgMotionOffset: 100,
 			expectErr:       true,
 			errorMsg:        "phase value is zero or not set",
+		},
+		{
+			// Batch T 新增：Set=true Value=0 應視為合法的「t=0 真實時間」，
+			// 不再被誤判為「未提供」。這是 OptFloat 重構的核心測試。
+			name: "Set=true Value=0 is legitimate (Batch T regression)",
+			phasePoints: models.PhasePoints{
+				P0: models.MakeOpt(0.0), // t=0 是真實時間，不是 sentinel
+				P1: models.MakeOpt(1.0),
+				P2: models.MakeOpt(2.0),
+				S:  models.MakeOpt(3.0),
+				C:  models.MakeOpt(4.0),
+				D:  350,
+				T0: models.MakeOpt(5.0),
+				T:  models.MakeOpt(6.0),
+				O:  450,
+				L:  models.MakeOpt(7.0),
+			},
+			startPhase:      "P0",
+			endPhase:        "P1",
+			emgMotionOffset: 100,
+			expectErr:       false, // OptFloat 之後 t=0 不再是 ErrPhaseValueZero
 		},
 		{
 			name:            "invalid phase order",
@@ -330,16 +354,16 @@ func TestPhaseCalculator_GetPhaseTimeRange_EdgeCases(t *testing.T) {
 	//   P0 (force 10.0): EMG_time = 10.0 - 0 = 10.0
 	//   D (motion 3000): EMG_time = (3000-1)/250 = 11.996
 	phasePoints := models.PhasePoints{
-		P0: 10.0,    // Force time
-		P1: 999.999, // Very large force time
-		P2: 12.0,
-		S:  13.0,
-		C:  14.0,
+		P0: models.MakeOpt(10.0),    // Force time
+		P1: models.MakeOpt(999.999), // Very large force time
+		P2: models.MakeOpt(12.0),
+		S:  models.MakeOpt(13.0),
+		C:  models.MakeOpt(14.0),
 		D:  3000, // Motion index (EMG_time = (3000-offset)/250, must be > P0's EMG_time)
-		T0: 16.0,
-		T:  17.0,
+		T0: models.MakeOpt(16.0),
+		T:  models.MakeOpt(17.0),
 		O:  9999, // Large motion index
-		L:  18.0,
+		L:  models.MakeOpt(18.0),
 	}
 
 	tests := []struct {
@@ -421,16 +445,16 @@ func BenchmarkPhaseCalculator_GetPhaseTimeRange(b *testing.B) {
 	pc := NewPhaseCalculator()
 
 	phasePoints := models.PhasePoints{
-		P0: 1.0,
-		P1: 2.0,
-		P2: 3.0,
-		S:  4.0,
-		C:  5.0,
+		P0: models.MakeOpt(1.0),
+		P1: models.MakeOpt(2.0),
+		P2: models.MakeOpt(3.0),
+		S:  models.MakeOpt(4.0),
+		C:  models.MakeOpt(5.0),
 		D:  250,
-		T0: 6.0,
-		T:  7.0,
+		T0: models.MakeOpt(6.0),
+		T:  models.MakeOpt(7.0),
 		O:  350,
-		L:  8.0,
+		L:  models.MakeOpt(8.0),
 	}
 
 	b.ResetTimer()
@@ -453,16 +477,16 @@ func TestPhaseCalculator_ConcurrentAccess(t *testing.T) {
 	pc := NewPhaseCalculator()
 
 	phasePoints := models.PhasePoints{
-		P0: 1.0,
-		P1: 2.0,
-		P2: 3.0,
-		S:  4.0,
-		C:  5.0,
+		P0: models.MakeOpt(1.0),
+		P1: models.MakeOpt(2.0),
+		P2: models.MakeOpt(3.0),
+		S:  models.MakeOpt(4.0),
+		C:  models.MakeOpt(5.0),
 		D:  250,
-		T0: 6.0,
-		T:  7.0,
+		T0: models.MakeOpt(6.0),
+		T:  models.MakeOpt(7.0),
 		O:  350,
-		L:  8.0,
+		L:  models.MakeOpt(8.0),
 	}
 
 	// Run multiple goroutines simultaneously

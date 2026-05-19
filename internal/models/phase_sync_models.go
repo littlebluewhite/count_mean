@@ -9,12 +9,14 @@ import "time"
 //   - MotionFile / ForceFile / EMGFile：相對於 DataFolder 的檔名，路徑解析走 manifest.ResolveEMGFile（lenient）
 //   - EMGMotionOffset：EMG 第一筆樣本對應的 Motion index；用於 motion-time ↔ EMG-time 轉換
 //     （見 synchronizer.TimeSynchronizer.MotionIndexToEMGTime）
-//   - PhasePoints：10 個分期點，混合 force-time（float64 秒）與 motion-index（int），由 PhasePoint.IsMotionIndex 區分
+//   - PhasePoints：10 個分期點，混合 force-time（OptFloat 秒，可區分 t=0 與「未提供」）
+//     與 motion-index（int，0 仍為「未提供」sentinel），由 PhasePoint.IsMotionIndex 區分
 //
-// 0 即空契約：
-//   - PhasePoints 內任何欄位為 0（int=0 或 float64=0.0）視為「該分期點未標定，應跳過」
-//   - 0 是合法的「空值」標記，不應誤判為「時間/index 為 0」的有效值
-//   - parsers.GetPhaseValue 與 cci.getPhasePointDefs 都依此契約跳過 0 值
+// "未提供" 契約（Batch T 重構後）：
+//   - 力板時間欄位 (P0/P1/P2/S/C/T0/T/L)：型別為 OptFloat，Set=false 表示未提供。
+//     Set=true && Value=0 是合法的「t=0 真實時間」，與「NA / 空白 / x / -」嚴格區分。
+//   - motion-index 欄位 (D/O)：型別仍為 int，0 仍代表「未提供」sentinel（任務範圍外）。
+//   - parsers.GetPhaseValue 把兩種欄位都統一回傳成 OptFloat — 未提供 → NoOpt()。
 //
 // EMGMotionOffset 定義：
 //   - 正值：EMG 起點晚於 Motion 起點 N 個 motion frame
@@ -37,18 +39,21 @@ type PhaseManifest struct {
 	PhasePoints     PhasePoints // 分期點數據
 }
 
-// PhasePoints 分期點定義.
+// PhasePoints 分期點定義。
+//
+// Batch T 重構：8 個力板時間欄位改為 OptFloat，用 Set 旗標區分「未提供」與「t=0」。
+// D 與 O 仍為 int（motion-index sentinel），暫保留 0 即未提供契約。
 type PhasePoints struct {
-	P0 float64 // 力板時間
-	P1 float64 // 力板時間
-	P2 float64 // 力板時間
-	S  float64 // 啟動瞬間-力板時間
-	C  float64 // 下蹲轉換-力板時間
-	D  int     // 下蹲結束-motion index
-	T0 float64 // 正沖涼結束-力板時間
-	T  float64 // 起跳瞬間-力板時間
-	O  int     // 展體轉間-motion index
-	L  float64 // 著地瞬間-力板時間
+	P0 OptFloat // 力板時間
+	P1 OptFloat // 力板時間
+	P2 OptFloat // 力板時間
+	S  OptFloat // 啟動瞬間-力板時間
+	C  OptFloat // 下蹲轉換-力板時間
+	D  int      // 下蹲結束-motion index（0 = 未提供 sentinel）
+	T0 OptFloat // 正沖涼結束-力板時間
+	T  OptFloat // 起跳瞬間-力板時間
+	O  int      // 展體轉間-motion index（0 = 未提供 sentinel）
+	L  OptFloat // 著地瞬間-力板時間
 }
 
 // AnalysisParams 分析參數.
@@ -101,13 +106,18 @@ type PhaseTimeRange struct {
 	EndType   string // "force" or "motion"
 }
 
-// ValidationError 驗證錯誤.
-type ValidationError struct {
+// PhaseSyncValidationError 驗證錯誤 — phase sync / manifest 解析期間欄位驗證失敗。
+//
+// 原名 ValidationError 與 internal/errors.ValidationError 同名，跨 package
+// 引用易讀錯（且 IDE / golangci-lint 不會擋）。改名為 PhaseSyncValidationError
+// 後語意更聚焦：本型別只在 internal/parsers/phase_manifest_parser.go 的
+// ValidatePhaseManifest 內使用，回傳給 internal/phase_sync 與 internal/cci。
+type PhaseSyncValidationError struct {
 	Field   string
 	Message string
 }
 
-func (e ValidationError) Error() string {
+func (e PhaseSyncValidationError) Error() string {
 	return e.Field + ": " + e.Message
 }
 

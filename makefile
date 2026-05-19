@@ -13,7 +13,8 @@ help:
 	@echo "Testing Automation Targets:"
 	@echo "  test        - Run all tests"
 	@echo "  test-unit   - Run unit tests only"
-	@echo "  test-int    - Run integration tests only"
+	@echo "  test-int    - Run integration tests only (non real-data)"
+	@echo "  test-int-realdata - Run real-data integration tests (needs EMG_TEST_FIXTURES_DIR)"
 	@echo "  bench       - Run benchmark tests"
 	@echo "  bench-std   - Run standard Go benchmarks"
 	@echo "  coverage    - Run coverage analysis (90% target)"
@@ -49,8 +50,20 @@ test-unit:
 	go test -race -v ./internal/... ./gui/...
 
 test-int:
-	@echo "Running integration tests..."
+	@echo "Running integration tests (non real-data)..."
+	# `integration_realdata` build tag 用於需要私有 fixtures 的 test,預設不跑;
+	# 改由 `make test-int-realdata` 或 CI 在備齊 EMG_TEST_FIXTURES_DIR 後 opt-in,
+	# 避免空跑誤判 PASS。
 	go test -v ./test/integration/...
+
+# 私有 fixtures 整合測試:需設定 EMG_TEST_FIXTURES_DIR 指向實驗資料夾。
+# 缺 env var 時 test 內部會 t.Skip。
+test-int-realdata:
+	@echo "Running real-data integration tests (requires EMG_TEST_FIXTURES_DIR)..."
+	@if [ -z "$$EMG_TEST_FIXTURES_DIR" ]; then \
+		echo "⚠️  EMG_TEST_FIXTURES_DIR not set — tests will t.Skip individually."; \
+	fi
+	go test -tags integration_realdata -v ./test/integration/...
 
 test-race:
 	@echo "Running race condition tests across the whole tree (super-set of test-unit)..."
@@ -69,12 +82,15 @@ bench-all:
 	@echo "Running all benchmarks..."
 	go test -bench=. -benchmem ./test/benchmark/
 
-# Coverage targets (Task 13.3)
+# Cell-level CSV validator benchmark — 量測 hot path 守門 overhead。
+bench-csv-validator:
+	@echo "Running CSV validator benchmarks..."
+	go test -bench=BenchmarkValidate -benchmem -run=^$$ ./internal/validation/csv/
+
+# Coverage targets
 coverage:
 	@echo "Running coverage analysis with 90% target..."
 	@chmod +x ./scripts/coverage.sh
-	@sed -i '' 's/go test/~\/sdk\/go\/bin\/go test/g' ./scripts/coverage.sh
-	@sed -i '' 's/go tool/~\/sdk\/go\/bin\/go tool/g' ./scripts/coverage.sh
 	./scripts/coverage.sh
 
 coverage-html:
@@ -84,38 +100,51 @@ coverage-html:
 	go tool cover -html=coverage/coverage.out -o coverage/coverage.html
 	@echo "Coverage report generated: coverage/coverage.html"
 
+# Coverage gate 三項守門:
+#   1. `-race`:race-only test 在無 -race 環境 t.Skip,不帶 -race 會讓 race
+#      path 不進分母,造成 false-positive 通過 90% gate。
+#   2. `-coverpkg`:限定分母只看實作 package,避免 integration test helper
+#      污染數字。
+#   3. 顯式列舉 package list 取代 `./...`,避免新增 sub-tree 時 silent drift。
 coverage-check:
-	@echo "Checking 90% coverage threshold..."
-	go test -coverprofile=coverage.out -covermode=atomic ./...
-	@COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
+	@echo "Checking 90% coverage threshold (-race + -coverpkg)..."
+	go test -race -coverprofile=coverage.out -covermode=atomic \
+		-coverpkg=count_mean/internal/...,count_mean/gui/... \
+		./internal/... ./gui/... ./test/...
+	@COVERAGE=$$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/,"",$$3); print $$3}'); \
+	if [ -z "$$COVERAGE" ]; then echo "❌ ERROR: cannot parse coverage from coverage.out"; exit 1; fi; \
 	echo "Current coverage: $$COVERAGE%"; \
-	if command -v bc >/dev/null 2>&1; then \
-		if [ $$(echo "$$COVERAGE < 90" | bc -l) -eq 1 ]; then \
-			echo "❌ Coverage $$COVERAGE% is below 90% threshold"; \
-			exit 1; \
-		else \
-			echo "✅ Coverage $$COVERAGE% meets 90% threshold"; \
-		fi; \
-	else \
-		if [ $$(echo "$$COVERAGE" | cut -d. -f1) -lt 90 ]; then \
-			echo "❌ Coverage $$COVERAGE% is below 90% threshold"; \
-			exit 1; \
-		else \
-			echo "✅ Coverage $$COVERAGE% meets 90% threshold"; \
-		fi; \
-	fi
+	awk -v c="$$COVERAGE" 'BEGIN { exit !(c >= 90) }' && \
+		echo "✅ Coverage $$COVERAGE% meets 90% threshold" || \
+		(echo "❌ Coverage $$COVERAGE% is below 90% threshold"; exit 1)
+
+# golangci-lint version pin:不同 major version 的 linter 集合與 default config
+# 都不同,不 pin 會出現「本機 PASS / CI FAIL」的詭異現象。
+# 只 pin major.minor 而非 full semver:patch release 不改變 linter 啟用集合。
+# Bump 時同步更新 .github/workflows/ 內 setup-golangci-lint step 的 version —
+# 兩處 drift 是 lint 結果不一致的 root cause。
+GOLANGCI_LINT_VERSION ?= 2.12
 
 # Linting targets
 lint:
-	@echo "Running golangci-lint..."
+	@echo "Running golangci-lint (pinned $(GOLANGCI_LINT_VERSION).x)..."
+	@INSTALLED=$$(golangci-lint version 2>/dev/null | head -1); \
+	echo "Detected: $$INSTALLED"; \
+	case "$$INSTALLED" in \
+		*"has version $(GOLANGCI_LINT_VERSION)."*) ;; \
+		*) echo "❌ golangci-lint version mismatch (want $(GOLANGCI_LINT_VERSION).x, got: $$INSTALLED)"; \
+		   echo "Install pinned version:"; \
+		   echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION).0"; \
+		   exit 1 ;; \
+	esac
 	golangci-lint run --timeout=5m
 
 lint-fix:
 	@echo "Running golangci-lint with auto-fix..."
 	golangci-lint run --fix --timeout=5m
 
-# i18n-check: 守 catalog 一致性 — verb sequence 4 locale 一致、無 %w、所有 muscle_ratio key 在 4 locale 都 covered。
-# P3-E Phase 5 tooling，可獨立執行 (i18n-only diff PR 不需跑全 lint)。
+# i18n-check: 守 catalog 一致性 — verb sequence 4 locale 一致、無 %w、
+# muscle_ratio key 在 4 locale 都 covered。獨立執行,i18n-only diff PR 不必跑全 lint。
 i18n-check:
 	@echo "Checking i18n catalog (verb consistency / %w guard / coverage)..."
 	go test -v -run "TestI18n_NoCatalogPercentWVerb|TestI18n_VerbConsistencyAcrossLocales|TestI18n_AllMuscleRatioKeysCovered|TestT_MuscleRatioKeysVerbCompat|TestI18n_CallerWrapPatternPreservesErrorsIs" ./internal/i18n/...
@@ -127,10 +156,12 @@ ci: test bench coverage lint security
 ci-fast: test-unit bench-std coverage-check lint
 	@echo "✅ Fast CI pipeline executed successfully!"
 
-# Security targets
+# Strict mode: HIGH severity + HIGH confidence finding 才 exit non-zero,
+# 較低 severity 印出但不擋 build。SARIF 輸出方便 GitHub code-scanning 上傳;
+# 失敗時 sarif 檔已寫出。
 security:
-	@echo "Running security analysis..."
-	gosec ./...
+	@echo "Running security analysis (strict: HIGH severity + HIGH confidence blocks)..."
+	gosec -severity=high -confidence=high -fmt=sarif -out=gosec.sarif -stdout -verbose=text ./...
 
 # ===================
 # BUILD TARGETS
@@ -154,18 +185,6 @@ build-wails:
 build-macos:
 	go build -o emg_gui_tool_macos main.go
 
-# Build for Windows using fyne-cross (requires Docker)
-build-windows:
-	@echo "Building for Windows requires fyne-cross and Docker"
-	@echo "Install fyne-cross: go install github.com/fyne-io/fyne-cross@latest"
-	@echo "Then run: fyne-cross windows -arch amd64 -output emg_gui_tool.exe ."
-
-# Build for Linux using fyne-cross (requires Docker)
-build-linux:
-	@echo "Building for Linux requires fyne-cross and Docker"
-	@echo "Install fyne-cross: go install github.com/fyne-io/fyne-cross@latest"
-	@echo "Then run: fyne-cross linux -arch amd64 -output emg_gui_tool_linux ."
-
 # Build all platforms using the build script
 build-all:
 	./build_cross.sh
@@ -186,11 +205,12 @@ build-cross:
 # ===================
 
 # Installation targets
+# 版本 pin 必須與 .github/workflows/ 及 go.mod 同步;drift 會造成 dev-setup 失敗。
 install:
 	@echo "Installing development dependencies..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-	go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
-	go install github.com/wailsapp/wails/v2/cmd/wails@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION).0
+	go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
+	go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
 install-tools:
 	@echo "Installing additional tools..."
@@ -236,14 +256,3 @@ clean-all: clean
 	go clean -cache
 	go clean -modcache
 
-# ===================
-# COMPATIBILITY TARGETS
-# ===================
-
-# Old targets (kept for compatibility)
-w-build:
-	@echo "Direct cross-compilation not supported for GUI apps."
-	@echo "Please use 'make build-windows' for instructions."
-
-u-build:
-	go build -o main main.go

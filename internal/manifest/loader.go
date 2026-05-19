@@ -10,6 +10,7 @@
 package manifest
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,13 @@ import (
 	"count_mean/internal/security"
 )
 
+// sentinel errors 讓 caller 可用 errors.Is 區分原因。原本 fmt.Errorf
+// 動態字串 caller 只能 strings.Contains 比對，重構時 message 一改就 break。
+var (
+	ErrManifestEMGPathInvalid = errors.New("EMG 檔案路徑驗證失敗")
+	ErrManifestEMGFileMissing = errors.New("EMG 檔案不存在")
+)
+
 // LoadManifests 解析分期總檔案，回傳所有 manifest 紀錄。
 func LoadManifests(filepath string) ([]models.PhaseManifest, error) {
 	return parsers.NewPhaseManifestParser().ParseFile(filepath)
@@ -26,8 +34,8 @@ func LoadManifests(filepath string) ([]models.PhaseManifest, error) {
 
 // ResolveEMGFile 把 manifest.EMGFile 相對檔名解析為 baseFolder 下的絕對路徑。
 // 整合：EvalSymlinks(baseFolder) → security.ResolveLenientPath → os.Stat IsNotExist。
-//
-//nolint:err113 // dynamic errors with Chinese messages for user-facing output
+// 錯誤 wraps sentinel ErrManifestEMGPathInvalid / ErrManifestEMGFileMissing，
+// caller 可用 errors.Is 區分（路徑驗證失敗 vs. 檔案不存在）。
 func ResolveEMGFile(baseFolder, emgFile string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(baseFolder); err == nil {
 		baseFolder = resolved
@@ -35,11 +43,11 @@ func ResolveEMGFile(baseFolder, emgFile string) (string, error) {
 
 	emgPath, err := security.ResolveLenientPath(baseFolder, emgFile)
 	if err != nil {
-		return "", fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
+		return "", fmt.Errorf("%w: %w", ErrManifestEMGPathInvalid, err)
 	}
 
 	if _, err := os.Stat(emgPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("EMG 檔案不存在: %s", emgPath)
+		return "", fmt.Errorf("%w: %s", ErrManifestEMGFileMissing, emgPath)
 	}
 
 	return emgPath, nil

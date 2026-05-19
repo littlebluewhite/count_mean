@@ -7,7 +7,17 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"count_mean/internal/logging"
 )
+
+// backpressureLogger 是 NewBackpressureController 在偵測 zero-value fallback 時用的 logger。
+// 為 testability 抽 var,測試可 override 把 log 寫到 buffer。
+//
+//nolint:gochecknoglobals // injection point for testing
+var backpressureLogger = func() *logging.Logger {
+	return logging.GetLogger("backpressure")
+}
 
 // Backpressure controller constants.
 const (
@@ -72,13 +82,61 @@ type BackpressureController struct {
 // 對 non-positive interval 會 panic（"non-positive interval for NewTicker"）；
 // caller 傳 zero-value config（例如自行 new BackpressureConfig 但沒設這欄）時
 // 應拿到 sane default 而非 crash（codex Wave 6 second-pass P3）。
+//
+// 過去 normalize 只做了 CheckInterval 與 MaxMemoryMB,但 caller zero-value
+// config 還可能踩到 MaxWorkers/MemoryThreshold/ThrottleThreshold = 0:
+//   - MaxWorkers=0 → GetOptimalWorkerCount 回 0,worker pool 開不出來,job 全卡;
+//   - MemoryThreshold=0 → isThrottled 永遠 true,GetMemoryUsageInfo 觀察值失真;
+//   - ThrottleThreshold=0 → WaitForCapacity 第一句 `< 0` 直接 false,進入 ticker
+//     loop 卡 100ms 才檢查一次,整體 throughput 大跌。
+// 一併 sweep 並透過 backpressureLogger() 寫入 warn,讓使用者知道走 fallback。
+// (註解過去說「log warn」但實作沒做,L17 修補)。
 func NewBackpressureController(config *BackpressureConfig) *BackpressureController {
 	if config == nil {
 		config = DefaultBackpressureConfig()
 	}
 
+	logger := backpressureLogger()
+
 	if config.CheckInterval <= 0 {
+		logger.Warn("BackpressureConfig.CheckInterval <= 0,fallback 100ms 預設值", map[string]interface{}{
+			"original": config.CheckInterval.String(),
+		})
 		config.CheckInterval = 100 * time.Millisecond
+	}
+
+	// MaxMemoryMB == 0 會讓 getMemoryUsageRatio 除以 0 變 +Inf,
+	// WaitForCapacity 永遠 "超過記憶體上限" → 死鎖。退回 default 1GB 並 log warn。
+	if config.MaxMemoryMB == 0 {
+		logger.Warn("BackpressureConfig.MaxMemoryMB == 0,fallback default 1GB",
+			map[string]interface{}{"fallback_mb": defaultMaxMemoryMB})
+		config.MaxMemoryMB = defaultMaxMemoryMB
+	}
+
+	// sweep 其他 zero-value 欄位。
+	if config.MaxWorkers <= 0 {
+		fallback := runtime.NumCPU()
+		logger.Warn("BackpressureConfig.MaxWorkers <= 0,fallback runtime.NumCPU()",
+			map[string]interface{}{"original": config.MaxWorkers, "fallback": fallback})
+		config.MaxWorkers = fallback
+	}
+
+	if config.MemoryThreshold <= 0 {
+		logger.Warn("BackpressureConfig.MemoryThreshold <= 0,fallback default",
+			map[string]interface{}{
+				"original": config.MemoryThreshold,
+				"fallback": defaultMemoryThreshold,
+			})
+		config.MemoryThreshold = defaultMemoryThreshold
+	}
+
+	if config.ThrottleThreshold <= 0 {
+		logger.Warn("BackpressureConfig.ThrottleThreshold <= 0,fallback default",
+			map[string]interface{}{
+				"original": config.ThrottleThreshold,
+				"fallback": defaultThrottleThreshold,
+			})
+		config.ThrottleThreshold = defaultThrottleThreshold
 	}
 
 	return &BackpressureController{
@@ -145,6 +203,33 @@ func (bc *BackpressureController) GetOptimalWorkerCount() int {
 // 用 Ticker（而非 time.After）避免 ctx 取消時 leak 未觸發的 timer：
 // time.After 直到觸發前都留在 runtime time wheel，若 CheckInterval 較長且
 // ctx 反覆取消重建，會堆積 timer goroutine（Wave 6 review P2）。
+//
+// # 命名語意警示
+//
+// **「WaitForCapacity」字面上像是「block 直到有可用容量再放行」，但實作只 gate
+// 新任務的進入點 — 已經 in-flight 的 job 完全不受影響、不會被 pause 或 reset。
+// 換句話說:**
+//
+//   - 本函式 == job admission throttle (gate-keeper):新 job 進入前先呼此函式
+//     等到 memory ratio < ThrottleThreshold 再放行;期間若 ctx 取消即 return err。
+//   - 本函式 != global memory pause:已開始執行的 worker (例如正在 ReadAll 一個
+//     200MB CSV 的 sliding window worker) 不會因為這裡偵測到 memory 超標就被打斷。
+//     它只是 "下一個 job 不能進來",不是 "整個 process pause"。
+//
+// 因此 caller 不能假設「呼 WaitForCapacity 成功 return 後 memory 已降下來」—
+// 它只代表「memory 在 ratio < ThrottleThreshold 的瞬間,所以你的新 job 此刻可以
+// 進場」。memory 何時實際降下來,取決於 in-flight job 各自完成的時間。
+//
+// 不改名為 TryReserveCapacity / AdmitNewJob 等更精確的名字,是因為:
+//   (1) WaitForCapacity 是 public API,改名會讓既有 caller (cci / muscle_ratio /
+//       calculator worker pool) 全部需要 migration
+//   (2) 行為契約已透過此 docstring 釘住,reader 在 code review 時看到此處
+//       即可理解;Rename 的 net benefit 不夠 cover blast radius。
+//   (3) 既有測試 (backpressure_test.go) 已 lock 「ctx 取消立即回 err」「memory
+//       降到 threshold 後 return nil」兩條主契約,行為不變。
+//
+// 若未來新增 caller 看到「WaitForCapacity」字面預期 stronger pause semantics,
+// 此 docstring 是 single source of truth — 與 caller 對齊用此處說明。
 func (bc *BackpressureController) WaitForCapacity(ctx context.Context) error {
 	if bc.getMemoryUsageRatio() < bc.config.ThrottleThreshold {
 		return nil
@@ -183,6 +268,15 @@ func (bc *BackpressureController) RecordJobComplete() {
 	if bc.activeJobs > 0 {
 		bc.activeJobs--
 	}
+}
+
+// ActiveJobs 回傳目前未完成的任務數，供測試驗證
+// RecordJobStart / RecordJobComplete 對稱性（reproducer 用）。
+func (bc *BackpressureController) ActiveJobs() int {
+	bc.mutex.RLock()
+	defer bc.mutex.RUnlock()
+
+	return bc.activeJobs
 }
 
 // GetStats 獲取統計信息.

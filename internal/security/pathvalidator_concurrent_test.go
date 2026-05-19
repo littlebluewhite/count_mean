@@ -33,7 +33,8 @@ func TestPathValidator_ConcurrentSetAndValidate(t *testing.T) {
 			base := filepath.Join(tmpRoot, fmt.Sprintf("race-test-%d", idx))
 
 			for j := 0; j < iterations; j++ {
-				validator.SetAllowedBasePaths([]string{base})
+				// 忽略 error：base 永遠非空，這裡只測 race。
+				_ = validator.SetAllowedBasePaths([]string{base})
 				_ = validator.GetAllowedBasePaths()
 				// Errors here are tolerated: another goroutine may have
 				// overwritten the allow-list. We only care about preventing

@@ -2,13 +2,15 @@ package io
 
 import (
 	"bufio"
+	"context"
 	"encoding/csv"
 	stderrors "errors"
 	"fmt"
-	"io"
+	stdio "io" // alias to avoid name shadow with package io
 	"math"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"count_mean/internal/config"
@@ -28,6 +30,33 @@ const (
 	defaultBufferSizeKB = 64
 	fullProgress        = 100.0
 )
+
+// isLargeFileThreshold 是「整檔 ReadAll OOM 風險邊界」 — 超過此尺寸,GetFileInfo
+// 標 IsLarge=true,csv_handler.checkFileSizeAndFormat 會拒絕 ReadAll path 並建議 caller
+// 切到 streaming。
+//
+// 設計考量:
+//   - csv.Reader.ReadAll 把整檔 records materialize 在 [][]string 切片,實測 memory
+//     使用約是 source bytes 的 4-10x(Go string header 16B + 每 record [][]string
+//     header + GC overhead);200MB source → 800MB-2GB heap 對 GUI process 是 OOM 風險。
+//   - 早期實作 200MB(`maxFileSize/10` = 2GB/10)是 streaming threshold,但同時被 ReadAll
+//     path 沿用,導致 200MB CSV 走 ReadAll 路徑時 GUI 可能 OOM crash。
+//   - 改為 100MB 對 GUI deployment 是合理 trade-off:典型 EMG CSV 1-50MB,100MB 已是
+//     極端 outlier;真正 100MB+ 的 dataset 本就應該走 streaming(ProcessLargeFile)。
+//
+// 對應上限:maxFileSize(2GB)維持不變 — 那是「絕對拒絕」的上限,streaming 仍可處理
+// 100MB-2GB 區間。
+const isLargeFileThreshold = 100 * kilobyte * kilobyte
+
+// scanWarnSampleLimit是 scanFileStructure 對 malformed row 的 per-row
+// warning 上限。原本每筆 malformed row 都 emit 一筆 Warn log,惡意輸入(連續
+// 數百萬筆 quote-mismatch row)能在幾秒內把 log 檔灌爆(每筆 ~200B,百萬筆 ~200MB,
+// CI/operator 的 log shipping 又把它放大 4-10 倍)。
+//
+// 修法:前 scanWarnSampleLimit 筆照樣 Warn(含 row+原始 error),之後 suppress;
+// scan 結束統一 emit 一筆 summary Warn 帶總計 skippedRows、columnCount 與
+// suppressed 計數,讓 operator 既知道有問題又不被 log 噪音淹沒。
+const scanWarnSampleLimit = 10
 
 // Static errors for err113 compliance.
 var errDataRowTooShort = stderrors.New("數據行長度不足")
@@ -49,7 +78,14 @@ type LargeFileHandler struct {
 	maxFileSize int64 // 最大文件大小 (bytes)
 
 	// 緩衝區池
-	bufferPool *BufferPool
+	//
+	// 用 atomic.Pointer 而非裸 *BufferPool — ResetBufferPool 會在 streaming
+	// 路徑(GetBufferPoolStats / parseDataRow / processSlidingWindowRecord)同時讀
+	// h.bufferPool 時 Store 一根新指針。裸 field 在 Go memory model 下並發讀寫
+	// 同一個 word 是 DATA RACE(`go test -race` 重現,V6 audit),即使現有 caller
+	// 不會主動 Reset,UB 仍然存在。改 atomic.Pointer 後 Store/Load 提供 happens-before
+	// 序列化,race 消失,熱路徑成本 = 一個 atomic load(MOV+LFENCE,< 1ns)。
+	bufferPool atomic.Pointer[BufferPool]
 }
 
 // NewLargeFileHandler 創建大文件處理器.
@@ -60,7 +96,7 @@ func NewLargeFileHandler(config *config.AppConfig) *LargeFileHandler {
 		config.OperateDir,
 	}
 
-	return &LargeFileHandler{
+	h := &LargeFileHandler{
 		config:        config,
 		pathValidator: security.NewPathValidator(allowedPaths),
 		validator:     validation.NewInputValidator(),
@@ -71,10 +107,13 @@ func NewLargeFileHandler(config *config.AppConfig) *LargeFileHandler {
 		memoryLimit: 512 * kilobyte * kilobyte,          // 512MB 記憶體限制
 		bufferSize:  defaultBufferSizeKB * kilobyte,     // 64KB 緩衝區
 		maxFileSize: 2 * kilobyte * kilobyte * kilobyte, // 2GB 最大文件大小
-
-		// 緩衝區池
-		bufferPool: NewBufferPool(),
 	}
+
+	// 緩衝區池 — atomic.Pointer 不能用 struct literal 初始化(Pointer[T] 沒有導出
+	// field),必須 Store。
+	h.bufferPool.Store(NewBufferPool())
+
+	return h
 }
 
 // FileInfo 文件信息.
@@ -104,8 +143,11 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 		"filename": filename,
 	})
 
-	// 清理路徑
-	sanitizedPath := h.pathValidator.SanitizePath(filename)
+	// 清理路徑 — 後 SanitizePath 改回 (string, error),原 silent rewrite 取消。
+	sanitizedPath, sanitizeErr := h.pathValidator.SanitizePath(filename)
+	if sanitizeErr != nil {
+		return nil, errors.WrapError(sanitizeErr, errors.ErrCodePathValidation, "路徑淨化失敗")
+	}
 
 	// 檢查路徑遍歷攻擊：用 element-based 比對而非 substring，與 PathValidator
 	// 一致 — 含字面雙點的合法檔名（report..v2.csv）不應被誤拒
@@ -131,9 +173,13 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 	}
 
 	info := &FileInfo{
-		Path:    absPath,
-		Size:    fileInfo.Size(),
-		IsLarge: fileInfo.Size() > h.maxFileSize/10, // 超過200MB視為大文件
+		Path: absPath,
+		Size: fileInfo.Size(),
+		// 從 maxFileSize/10 (= 200MB) 降到 isLargeFileThreshold (100MB)。
+		// ReadAll path 在 100MB 已是 GUI process OOM 邊界 (memory peak 4-10x source),
+		// 200MB ReadAll 對典型 8-16GB RAM Mac 仍有 crash 風險。100MB+ 的真實 dataset
+		// 應走 streaming ProcessLargeFile path,不該卡在 ReadAll。
+		IsLarge: fileInfo.Size() > isLargeFileThreshold,
 	}
 
 	// 檢查是否為超大文件
@@ -146,7 +192,7 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 	}
 
 	// 快速掃描獲取行數和列數
-	lineCount, columnCount, err := h.scanFileStructure(absPath)
+	lineCount, skippedRows, columnCount, err := h.scanFileStructure(absPath)
 	if err != nil {
 		return nil, err
 	}
@@ -154,10 +200,25 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 	info.LineCount = lineCount
 	info.ColumnCount = columnCount
 
+	// scanFileStructure 內部對 malformed row (field count 不符) 會
+	// 用 continue 跳過，先前 caller 拿不到任何訊號。改為由 scanFileStructure
+	// 回傳 skippedRows，這裡若 > 0 就 log warning，避免 silently dropped row
+	// 在下游分析結果中造成 missing data 卻無人察覺。
+	if skippedRows > 0 {
+		h.logger.Warn("掃描檔案時跳過 malformed 行", map[string]interface{}{
+			"file_size":     info.Size,
+			"line_count":    lineCount,
+			"skipped_rows":  skippedRows,
+			"column_count":  columnCount,
+			"original_path": filename,
+		})
+	}
+
 	h.logger.Info("文件信息獲取完成", map[string]interface{}{
 		"file_size":    info.Size,
 		"line_count":   info.LineCount,
 		"column_count": info.ColumnCount,
+		"skipped_rows": skippedRows,
 		"is_large":     info.IsLarge,
 	})
 
@@ -165,10 +226,18 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 }
 
 // scanFileStructure 快速掃描文件結構.
-func (h *LargeFileHandler) scanFileStructure(filename string) (int64, int, error) {
+//
+// 回傳 (validLineCount, skippedRows, columnCount, error)：
+//   - validLineCount: header + 通過 csv.Reader 解析的 data row 數
+//   - skippedRows: field count 與 header 不符或其他 parser error 被 continue 跳過的 row 數
+//
+// 加 skippedRows 是 先前只回 (lineCount, columnCount, error)，malformed
+// row 被 silently 丟棄，operator 無從察覺下游 missing data。Caller 應在
+// skippedRows > 0 時 log warning（GetFileInfo 已實作）。
+func (h *LargeFileHandler) scanFileStructure(filename string) (int64, int64, int, error) {
 	file, err := os.OpenFile(filename, fsperm.ReadFlags, 0) //nolint:gosec // filename sanitized and validated; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with WriteFlags)
 	if err != nil {
-		return 0, 0, fmt.Errorf("無法開啟文件 %s: %w", filename, err)
+		return 0, 0, 0, fmt.Errorf("無法開啟文件 %s: %w", filename, err)
 	}
 
 	defer func() {
@@ -185,35 +254,55 @@ func (h *LargeFileHandler) scanFileStructure(filename string) (int64, int, error
 	// bufio + PeekBOM + csv.NewReader 三段式。
 	bufReader := bufio.NewReaderSize(file, h.bufferSize)
 	if _, err := csvutil.PeekBOM(bufReader); err != nil {
-		return 0, 0, fmt.Errorf("BOM 偵測失敗 %s: %w", filename, err)
+		return 0, 0, 0, fmt.Errorf("BOM 偵測失敗 %s: %w", filename, err)
 	}
 	reader := csv.NewReader(bufReader)
+
+	// strict defaults — header 後 enforce 同欄位數（FieldsPerRecord=0 由 reader
+	// 從第一筆自動鎖定），未配對引號 fail-fast（LazyQuotes=false），row-by-row 走流式且
+	// 不跨 read 共享 record slice，故啟用 ReuseRecord=true 省 alloc。
+	//
+	// 注意 ReuseRecord=true 的安全契約：本 func 完全忽略每筆 record 的內容（只計數），
+	// 不在跨 Read 邊界儲存 slice，所以 backing array 被覆寫無影響。若未來改動本 func
+	// 要 cross-read 保留 record（例如收集 sample），必須 deep copy 或關 ReuseRecord。
+	reader.FieldsPerRecord = 0
+	reader.LazyQuotes = false
+	reader.ReuseRecord = true
 
 	// 讀取第一行獲取列數
 	firstRow, err := reader.Read()
 	if err != nil {
-		if stderrors.Is(err, io.EOF) {
-			return 0, 0, nil
+		if stderrors.Is(err, stdio.EOF) {
+			return 0, 0, 0, nil
 		}
 
-		return 0, 0, fmt.Errorf("讀取文件標題行失敗: %w", err)
+		return 0, 0, 0, fmt.Errorf("讀取文件標題行失敗: %w", err)
 	}
 
 	columnCount := len(firstRow)
 	lineCount := int64(1)
+	skippedRows := int64(0)
 
 	// 計算剩餘行數
+	//
+	// 首 N 筆 malformed 仍 emit 個別 Warn(operator 可以拿到原始 csv error
+	// 用來定位 culprit row),超過 N 筆改 suppress,避免 log 爆炸。Scan 結束統一
+	// emit summary Warn 帶 skippedRows / columnCount / suppressed 計數。
 	for {
 		_, err := reader.Read()
-		if stderrors.Is(err, io.EOF) {
+		if stderrors.Is(err, stdio.EOF) {
 			break
 		}
 
 		if err != nil {
-			h.logger.Warn("掃描文件時遇到錯誤，繼續處理", map[string]interface{}{
-				"error": err.Error(),
-				"line":  lineCount,
-			})
+			skippedRows++
+			if skippedRows <= scanWarnSampleLimit {
+				h.logger.Warn("掃描文件時遇到錯誤，繼續處理", map[string]interface{}{
+					"error":         err.Error(),
+					"line":          lineCount + skippedRows,
+					"skipped_total": skippedRows,
+				})
+			}
 
 			continue
 		}
@@ -221,11 +310,25 @@ func (h *LargeFileHandler) scanFileStructure(filename string) (int64, int, error
 		lineCount++
 	}
 
-	return lineCount, columnCount, nil
+	if skippedRows > scanWarnSampleLimit {
+		h.logger.Warn("malformed 行 sample 已達上限,後續逐筆 warn 已 suppress", map[string]interface{}{
+			"file":               filename,
+			"skipped_total":      skippedRows,
+			"warn_sample_limit":  scanWarnSampleLimit,
+			"suppressed_after_n": skippedRows - scanWarnSampleLimit,
+		})
+	}
+
+	return lineCount, skippedRows, columnCount, nil
 }
 
 // streamingContext 流式處理上下文.
+//
+// 加入 ctx — 讓 executeStreamingLoop 在 hot path 內每 progressInterval 筆
+// 檢查一次 ctx.Err(),caller 端 (Wails Shutdown / user cancel) 可在合理時間內
+// 中斷大檔 streaming,而不必等到整檔處理完才返回。
 type streamingContext struct {
+	ctx              context.Context //nolint:containedctx // streaming loop needs ctx for cancellation; carried in state struct
 	reader           *csv.Reader
 	headers          []string
 	fileInfo         *FileInfo
@@ -239,12 +342,20 @@ type streamingContext struct {
 type recordProcessor func(ctx *streamingContext, record []string) error
 
 // processStreamingFile 通用流式文件處理.
+//
+// 加入 ctx — caller 取消時 executeStreamingLoop 在每 progressInterval 筆
+// 檢查一次 ctx.Err(),早退並 wrap ctx err 回 caller。ctx == nil 視為 background
+// (defensive,不該發生但 fail-safe)。
 func (h *LargeFileHandler) processStreamingFile(
+	ctx context.Context,
 	filename string,
 	callback ProgressCallback,
 	processor recordProcessor,
 	resultBuilder func(*streamingContext) []models.MaxMeanResult,
 ) (*StreamingResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	startTime := time.Now()
 
 	// 獲取文件信息
@@ -268,13 +379,47 @@ func (h *LargeFileHandler) processStreamingFile(
 	}
 	reader := csv.NewReader(bufReader)
 
+	// strict defaults（同 scanFileStructure）。ReuseRecord=true 在此安全：
+	// executeStreamingLoop 把 record 直接傳給 processor，processSlidingWindowRecord
+	// 透過 parseDataRow 立即把每個 cell 轉成新 float64 並 copy 進 ring buffer，原 record
+	// slice 在下一輪 Read 前已完全消化，沒有跨 Read 的字串保存。
+	//
+	// 若未來新增 record sample / replay 邏輯需要在 loop 結束後保留 record 內容，
+	// 必須 deep copy 或關 ReuseRecord，否則 backing array 已被覆寫。
+	reader.FieldsPerRecord = 0
+	reader.LazyQuotes = false
+	reader.ReuseRecord = true
+
 	// 讀取標題行
-	headers, err := reader.Read()
+	rawHeaders, err := reader.Read()
 	if err != nil {
 		return nil, errors.WrapError(err, errors.ErrCodeDataParsing, "無法讀取標題行")
 	}
 
-	ctx := &streamingContext{
+	// 配套：ReuseRecord=true 下 reader.Read() 回傳的 slice 與下一輪 Read 共享
+	// backing array，下個 Read 一觸發就會把 headers 的 string slots 覆寫成第一筆資料的內容
+	// （見 TestLargeFileHandler_ProcessLargeFileInChunks_StripsBOM）。Headers 要跨整個
+	// streaming 生命週期保存，因此必須立刻 deep copy 到獨立 slice。
+	headers := make([]string, len(rawHeaders))
+	copy(headers, rawHeaders)
+
+	// headers 也要過 cell-level 注入守門 — header row 同樣可能挾帶
+	// `=cmd|/c calc!A1` 形式的 formula injection（被 Excel 開啟時觸發）或
+	// suspicious 函式名。先前 ValidateCSVData 對小檔 enforce 這條防線，大檔 streaming
+	// 卻完全 bypass；這裡補上 row=1, expectedColumns=-1（已自行 copy，欄位數由
+	// 後續 row 比對）。
+	//
+	// 用 ValidateCSVHeaderRow 而非 ValidateCSVRow，scoped 跳過 SQL/Command/
+	// DangerousFunctions 比對。EMG/Motion header（`Subject ID`、`Frame ID`、`Mid Foot`、
+	// `=Channel1`）在 substring 比對下假陽性嚴重，但 formula starter（`=cmd|/c calc`）
+	// 仍會被 checkFormulaInjection 擋下，所以 header 的 RejectsHeaderInjection 契約
+	// 不受影響。
+	if err := h.validator.ValidateCSVHeaderRow(headers, 1, -1, fileInfo.Path); err != nil {
+		return nil, errors.WrapError(err, errors.ErrCodeDataParsing, "標題行驗證失敗")
+	}
+
+	streamCtx := &streamingContext{
+		ctx:              ctx,
 		reader:           reader,
 		headers:          headers,
 		fileInfo:         fileInfo,
@@ -285,32 +430,32 @@ func (h *LargeFileHandler) processStreamingFile(
 	}
 
 	// 執行流式處理
-	if err := h.executeStreamingLoop(ctx, processor); err != nil {
+	if err := h.executeStreamingLoop(streamCtx, processor); err != nil {
 		return nil, err
 	}
 
 	// 最終進度回調
-	h.reportFinalProgress(ctx)
+	h.reportFinalProgress(streamCtx)
 
 	// 構建結果
 	result := &StreamingResult{
 		Headers:        headers,
 		StartTime:      startTime,
 		TotalLines:     fileInfo.LineCount,
-		ProcessedLines: ctx.processedLines,
+		ProcessedLines: streamCtx.processedLines,
 		EndTime:        time.Now(),
 		MemoryUsed:     h.getMemoryUsage(),
 	}
 	result.Duration = result.EndTime.Sub(startTime)
 
 	if resultBuilder != nil {
-		result.Results = resultBuilder(ctx)
+		result.Results = resultBuilder(streamCtx)
 	} else {
 		result.Results = make([]models.MaxMeanResult, 0)
 	}
 
 	h.logger.Info("流式處理完成", map[string]interface{}{
-		"processed_lines": ctx.processedLines,
+		"processed_lines": streamCtx.processedLines,
 		"duration_ms":     result.Duration.Milliseconds(),
 		"memory_used_mb":  result.MemoryUsed / 1024 / 1024,
 	})
@@ -332,7 +477,7 @@ func (h *LargeFileHandler) executeStreamingLoop(ctx *streamingContext, processor
 
 	for {
 		record, err := ctx.reader.Read()
-		if stderrors.Is(err, io.EOF) {
+		if stderrors.Is(err, stdio.EOF) {
 			break
 		}
 
@@ -360,6 +505,19 @@ func (h *LargeFileHandler) executeStreamingLoop(ctx *streamingContext, processor
 			continue
 		}
 
+		// 每筆 row 跑 cell-level 守門（formula injection / script / SQL /
+		// command injection / control char / suspicious file extension / 32KB 上限）。
+		// expectedColumns 傳 -1 — 欄位數已在上方檢查並選擇 skip-and-continue，避免在這
+		// 重複 fail-fast。Cell-level 守門對 hot path 影響：每 cell O(len(cell))；ctx.headers
+		// rough channel 數通常 < 30，主要 cost 在字串 prefix/contains 比對，benchmark 對
+		// 30M-row 大檔 throughput 影響預期 < 5%（cross-compare Wave 7 P1 trade-off）。
+		// 失敗即終止：streaming 路徑與 csv_handler bulk 路徑語意對齊（malicious row 必須
+		// fail-fast，不能默默 continue 然後在後續分析輸出污染結果）。
+		validationRow := int(ctx.processedLines + 1)
+		if err := h.validator.ValidateCSVRow(record, validationRow, -1, ctx.fileInfo.Path); err != nil {
+			return fmt.Errorf("第 %d 行內容驗證失敗: %w", validationRow, err)
+		}
+
 		// 執行處理器
 		if err := processor(ctx, record); err != nil {
 			return err
@@ -381,16 +539,29 @@ func (h *LargeFileHandler) executeStreamingLoop(ctx *streamingContext, processor
 // 兩件事共用 progressInterval 觸發條件：runtime.ReadMemStats 是 STW-ish
 // 操作，每筆 row 跑會把 sliding window 的 O(n×channels) 優化全部抵銷；
 // 每 progressInterval 跑一次足夠 fail-fast 也避免 hot-path overhead。
+//
+// 在同 cadence 也檢查 ctx.Err() — caller cancel (Wails Shutdown / user-cancel)
+// 在 progressInterval 內(典型 chunkSize=1000 行,~毫秒級)就會被偵測到並早退。
+// 不每筆 row 都跑因為 ctx.Err() 雖然便宜(atomic load),累積 30M 筆仍是不必要的
+// 開銷;每 progressInterval 跑一次足夠 responsive 且不污染 hot path。
 func (h *LargeFileHandler) reportProgressIfNeeded(ctx *streamingContext) error {
 	if ctx.processedLines-ctx.lastProgress < ctx.progressInterval {
 		return nil
+	}
+
+	// cancellation check — 在 memory check 之前先看 caller 是否已取消。
+	// 順序刻意把 ctx.Err() 排在 memory check 之前:取消優先於 memory 偵測。
+	if ctx.ctx != nil {
+		if ctxErr := ctx.ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("streaming 被取消: %w", ctxErr)
+		}
 	}
 
 	h.reportProgress(ctx)
 	ctx.lastProgress = ctx.processedLines
 
 	// 記錄緩衝區池統計
-	poolStats := h.bufferPool.GetStats()
+	poolStats := h.bufferPool.Load().GetStats()
 	h.logger.Debug("緩衝區池統計", map[string]interface{}{
 		"reuse_ratio":       poolStats.ReuseRatio,
 		"string_array_gets": poolStats.StringArrayGets,
@@ -473,7 +644,30 @@ type slidingWindowState struct {
 }
 
 // ProcessLargeFileInChunks 分塊處理大文件.
+//
+// 既有 caller 介面保留不變(callback 簽名相容),內部呼叫 context-aware
+// 的 ProcessLargeFileInChunksWithContext 並傳入 context.Background(),
+// 確保 backward compatible — 既有 caller 不必修改。
+// 需要 cancellation responsiveness 的 caller(Wails Shutdown / user-cancel)
+// 應改呼 ProcessLargeFileInChunksWithContext 並傳入可取消的 ctx。
 func (h *LargeFileHandler) ProcessLargeFileInChunks(
+	filename string,
+	windowSize int,
+	callback ProgressCallback,
+) (*StreamingResult, error) {
+	return h.ProcessLargeFileInChunksWithContext(
+		context.Background(), filename, windowSize, callback,
+	)
+}
+
+// ProcessLargeFileInChunksWithContext 是 ProcessLargeFileInChunks 的 ctx-aware
+// 變體。streaming 流程在每 progressInterval 筆檢查一次 ctx.Err(),caller
+// 取消時 wrap ctx err return,讓 GUI Shutdown / user-cancel 不必等整檔處理完。
+//
+// 對 ctx 為 nil 的 caller 退化為 background(no cancellation)— 由 processStreamingFile
+// 統一保護,本層只負責傳遞。
+func (h *LargeFileHandler) ProcessLargeFileInChunksWithContext(
+	ctx context.Context,
 	filename string,
 	windowSize int,
 	callback ProgressCallback,
@@ -497,7 +691,7 @@ func (h *LargeFileHandler) ProcessLargeFileInChunks(
 		return h.buildSlidingWindowResults(state)
 	}
 
-	result, err := h.processStreamingFile(filename, callback, processor, resultBuilder)
+	result, err := h.processStreamingFile(ctx, filename, callback, processor, resultBuilder)
 	if err != nil {
 		return nil, err
 	}
@@ -738,8 +932,8 @@ func (h *LargeFileHandler) processSlidingWindowRecord(
 
 	// ring buffer 已 copy in，parseDataRow 借出的 channels slice 立刻歸還 pool。
 	// Put 後立即 nil 別名，避免未來新增 post-feed 邏輯誤讀已歸還 pool 的 slot
-	// 造成 race against next GetFloat64Slice (Wave 5 PR3 defensive)。
-	h.bufferPool.PutFloat64Slice(emgData.Channels)
+	// 造成 race against next GetFloat64Slice。
+	h.bufferPool.Load().PutFloat64Slice(emgData.Channels)
 	emgData.Channels = nil
 
 	return nil
@@ -782,7 +976,7 @@ func (h *LargeFileHandler) buildSlidingWindowResults(state *slidingWindowState) 
 
 // logFinalStats 記錄最終統計信息.
 func (h *LargeFileHandler) logFinalStats(result *StreamingResult) {
-	finalPoolStats := h.bufferPool.GetStats()
+	finalPoolStats := h.bufferPool.Load().GetStats()
 	finalMemStats := h.getDetailedMemoryStats()
 
 	h.logger.Info("分塊處理統計", map[string]interface{}{
@@ -797,7 +991,7 @@ func (h *LargeFileHandler) logFinalStats(result *StreamingResult) {
 
 // GetBufferPoolStats 獲取緩衝區池統計信息.
 func (h *LargeFileHandler) GetBufferPoolStats() BufferPoolStats {
-	return h.bufferPool.GetStats()
+	return h.bufferPool.Load().GetStats()
 }
 
 // GetMemoryStats 獲取記憶體統計信息.
@@ -806,8 +1000,16 @@ func (h *LargeFileHandler) GetMemoryStats() *MemoryStats {
 }
 
 // ResetBufferPool 重置緩衝區池.
+//
+// 用 atomic.Store 取代裸指針賦值 — 對應 field 改 atomic.Pointer[BufferPool]
+// 的契約。Store 提供 release semantics,確保新 pool 完整 init 才被其他 goroutine
+// 透過 Load 觀察到;同時與 GetBufferPoolStats / parseDataRow / processSlidingWindowRecord
+// 的 Load 形成 happens-before pair,race detector 不再 fire。
+//
+// 舊版直接賦值在 Go memory model 下是 UB,並發訪問同一個指針 word 即使現有 caller
+// 不存在(本 method 目前 dead API),仍埋著未來新增 caller 即觸發 race 的地雷。
 func (h *LargeFileHandler) ResetBufferPool() {
-	h.bufferPool = NewBufferPool()
+	h.bufferPool.Store(NewBufferPool())
 	h.logger.Info("緩衝區池已重置")
 }
 
@@ -824,12 +1026,18 @@ func (h *LargeFileHandler) parseDataRow(record []string, scalingFactor int) (*mo
 	}
 
 	// 解析通道數據
-	channels := h.bufferPool.GetFloat64Slice()
+	//
+	// Load 一次,後續 Get/Put 共用同一個 BufferPool snapshot — 若中途有
+	// concurrent ResetBufferPool 也只會影響下一筆 parseDataRow,本筆借出/歸還
+	// 仍對到同一個 pool,避免 Get 在舊 pool / Put 在新 pool 造成 stats 漂移與
+	// wrapper 泄漏。
+	pool := h.bufferPool.Load()
+	channels := pool.GetFloat64Slice()
 	// 注意：這裡不能使用defer，因為channels需要返回給調用者
 	for i := 1; i < len(record); i++ {
 		val, err := util.Str2Number[float64, int](record[i], scalingFactor)
 		if err != nil {
-			h.bufferPool.PutFloat64Slice(channels) // 出錯時歸還緩衝區
+			pool.PutFloat64Slice(channels) // 出錯時歸還緩衝區
 			return nil, fmt.Errorf("解析通道 %d 失敗: %w", i, err)
 		}
 

@@ -1,15 +1,20 @@
 package parsers
 
 import (
-	"encoding/csv"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 
 	"count_mean/internal/csvutil"
 	"count_mean/internal/models"
-	"count_mean/internal/security/fsperm"
 )
+
+// ErrEMGWriterSymlinkTarget 表示 outputPath 是 symlink — atomic write 流程不會
+// 跟蹤 symlink target,但為了與原本 direct-write 的 O_NOFOLLOW 行為對齊(defense
+// in depth),pre-check 直接 reject。Caller 不應該把 symlink 當輸出檔。
+var ErrEMGWriterSymlinkTarget = errors.New("輸出路徑為 symlink,拒絕寫入")
 
 // defaultEMGCSVPrecision 為 EMG CSV 預設小數位數，與分期同步分析統計輸出一致。
 const defaultEMGCSVPrecision = 6
@@ -23,16 +28,31 @@ const defaultEMGCSVPrecision = 6
 //
 // precision 控制浮點數欄位的小數位數；若 <= 0 則使用預設值 6。
 //
-// 此函式不負責路徑驗證 — 呼叫端必須先確認 outputPath 在允許範圍內。
+// # Path-validation contract
 //
-// Flush 與 Close 的錯誤都顯式透過 named return 回傳：csv.Writer 把寫入錯誤延後到
-// Flush 才丟，磁碟滿/網路磁碟掉線等情境若靠裸 defer 忽略，caller 拿到 nil 但檔案
-// 實際內容不完整。對齊 cci/analyzer.go:writeCSVFile 與 emg_statistics.go:ExportToCSV。
+// 此函式 **不** 負責路徑驗證 — 呼叫端必須先用 internal/security.PathValidator
+// 或 lenient_path 確認 outputPath 在允許的 OutputDir 範圍內、不含 traversal
+// segment。Audit (2026-05-17)：所有 production caller 都已符合：
+//   - gui/normalized_phase_sync_handlers.go:131 — outputDir 來自 app config，
+//     檔名走 calculator.SanitizeFileName(subject) 再 filepath.Join 後傳入。
+//
+// # Atomic write
+//
+// 改走 csvutil.WriteCSVAtomic：tmp 檔（path+".tmp.<crypto/rand hex>"，O_EXCL,
+// 後 random suffix 不可預測）→ BOM → SanitizeHeaderRow(header) → 逐列 emit
+// (emit 自動 sanitize) → Flush → fsync → Close → os.Rename(tmp, path)。
+// 任一步驟失敗即清掉 tmp，final path 不變動，避免中途 crash 留下 partial / truncated CSV。
+//
+// 同步沿用 WriteCSVAtomic 內部 fsperm.TmpCreateFlags / fsperm.FilePerm — tmp
+// 檔在 unix 下 owner-only、與原本 direct-write 的 0o600 一致;O_NOFOLLOW 由
+// WriteCSVAtomic 處理（symlink 防護不在本函式邊界,而是 fsperm 層）。
+//
+// Caller signature 不變：仍是 (data, outputPath, precision) → error。
 func ExportPhaseSyncDataToCSV(
 	data *models.PhaseSyncEMGData,
 	outputPath string,
 	precision int,
-) (err error) {
+) error {
 	if data == nil {
 		return fmt.Errorf("EMG 數據為空: %w", ErrNilData)
 	}
@@ -41,55 +61,58 @@ func ExportPhaseSyncDataToCSV(
 		precision = defaultEMGCSVPrecision
 	}
 
-	// fsperm.WriteFlags 含 O_NOFOLLOW (unix) 拒絕 symlink；FilePerm=0o600 限定 owner 讀寫。
-	//nolint:gosec // outputPath validated by caller
-	file, err := os.OpenFile(outputPath, fsperm.WriteFlags, fsperm.FilePerm)
-	if err != nil {
-		return fmt.Errorf("無法創建輸出檔案 %s: %w", outputPath, err)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("關閉檔案失敗: %w", closeErr)
+	// atomic write 配套:tmp+rename 對 symlink path 會「替換 symlink entry」而
+	// 非「跟著寫到 target」— target 不會被覆寫,但 symlink 本身會被替換成 regular
+	// file。原本 direct-write 模式靠 O_NOFOLLOW 對 symlink path 直接 fail-open,改
+	// atomic 後失去這個語義。Pre-check Lstat 補上 reject — 與 ExportPhaseSyncDataToCSV_RejectsSymlinkTarget
+	// 契約對齊。Lstat 不解 link,所以 outputPath 本身為 symlink 會被識別。
+	if info, err := os.Lstat(outputPath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %s", ErrEMGWriterSymlinkTarget, outputPath)
 		}
-	}()
-
-	if err := csvutil.WriteBOM(file); err != nil {
-		return fmt.Errorf("無法寫入 BOM: %w", err)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("檢查輸出路徑失敗 %s: %w", outputPath, err)
 	}
 
-	writer := csv.NewWriter(file)
-
-	if err := writer.Write(csvutil.SanitizeHeaderRow(buildEMGCSVHeader(data.Headers))); err != nil {
-		return fmt.Errorf("寫入標頭失敗: %w", err)
+	// 統一用 strconv.FormatFloat 取代雙軌（time 用 FormatFloat，channel 用
+	// Sprintf "%%.Nf"）。Sprintf 對 NaN/Inf 寫出「NaN」/「+Inf」字面，而 muscle_ratio /
+	// phase_sync 的 NaN-missing-data 慣例期望輸出空 cell — 雙軌不對稱會造成 row 內混
+	// 「NaN 字面」與「空 cell」。改全程 FormatFloat 並對 NaN/Inf 顯式輸出空字串。
+	formatCell := func(v float64) string {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return ""
+		}
+		return strconv.FormatFloat(v, 'f', precision, 64)
 	}
 
-	floatFormat := fmt.Sprintf("%%.%df", precision)
+	emit := func(write func(row []string) error) error {
+		for i := range data.Time {
+			row := make([]string, 0, len(data.Headers)+1)
+			row = append(row, formatCell(data.Time[i]))
 
-	for i := range data.Time {
-		row := make([]string, 0, len(data.Headers)+1)
-		row = append(row, strconv.FormatFloat(data.Time[i], 'f', precision, 64))
+			for _, name := range data.Headers {
+				channel := data.Channels[name]
 
-		for _, name := range data.Headers {
-			channel := data.Channels[name]
+				if i >= len(channel) {
+					row = append(row, "")
+					continue
+				}
 
-			if i >= len(channel) {
-				row = append(row, "")
-				continue
+				row = append(row, formatCell(channel[i]))
 			}
 
-			row = append(row, fmt.Sprintf(floatFormat, channel[i]))
+			if err := write(row); err != nil {
+				return fmt.Errorf("寫入第 %d 列失敗: %w", i+1, err)
+			}
 		}
-
-		if err := writer.Write(row); err != nil {
-			return fmt.Errorf("寫入第 %d 列失敗: %w", i+1, err)
-		}
+		return nil
 	}
 
-	writer.Flush()
-
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("CSV writer 錯誤: %w", err)
+	if err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: buildEMGCSVHeader(data.Headers),
+		Emit:   emit,
+	}); err != nil {
+		return fmt.Errorf("無法寫入輸出檔案 %s: %w", outputPath, err)
 	}
 
 	return nil

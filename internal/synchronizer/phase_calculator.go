@@ -41,6 +41,9 @@ func NewPhaseCalculator() *PhaseCalculator {
 
 // GetPhaseTimeRange 根據開始和結束分期點，計算時間範圍.
 //
+// Batch T：startValue / endValue 從 float64 換成 OptFloat。Set=false（未提供）
+// 仍回 ErrPhaseValueZero — 與既有錯誤訊息對外契約保持一致。
+//
 //nolint:gocritic // hugeParam: phasePoints passed by value for API compatibility
 func (pc *PhaseCalculator) GetPhaseTimeRange(
 	phasePoints models.PhasePoints,
@@ -49,23 +52,25 @@ func (pc *PhaseCalculator) GetPhaseTimeRange(
 	emgMotionOffset int,
 ) (*models.PhaseTimeRange, error) {
 	// 獲取開始分期點的值和類型
-	startValue, startIsMotionIndex, err := parsers.GetPhaseValue(&phasePoints, startPhase)
+	startOpt, startIsMotionIndex, err := parsers.GetPhaseValue(&phasePoints, startPhase)
 	if err != nil {
 		return nil, fmt.Errorf("獲取開始分期點 %s 失敗: %w", startPhase, err)
 	}
 
 	// 獲取結束分期點的值和類型
-	endValue, endIsMotionIndex, err := parsers.GetPhaseValue(&phasePoints, endPhase)
+	endOpt, endIsMotionIndex, err := parsers.GetPhaseValue(&phasePoints, endPhase)
 	if err != nil {
 		return nil, fmt.Errorf("獲取結束分期點 %s 失敗: %w", endPhase, err)
 	}
 
-	// 檢查值的有效性
-	if startValue == 0 {
+	// 檢查值的有效性 — Set=false 視為「未提供」
+	startValue, startOK := startOpt.Get()
+	if !startOK {
 		return nil, fmt.Errorf("開始分期點 %s: %w", startPhase, ErrPhaseValueZero)
 	}
 
-	if endValue == 0 {
+	endValue, endOK := endOpt.Get()
+	if !endOK {
 		return nil, fmt.Errorf("結束分期點 %s: %w", endPhase, ErrPhaseValueZero)
 	}
 

@@ -9,15 +9,39 @@ import (
 	"count_mean/util"
 )
 
+// MaxReasonableMotionIndex 是 motion-index(D / O)欄位的合理上限。
+//
+// 1e9 frame ≈ 250 Hz 取樣率下 46 天連續錄製 — 涵蓋任何合理的動作 capture
+// session,超過此值視為惡意 / 損毀輸入。
+//
+// **攻擊向量(V5):** `D=1e15` + `O=0` sentinel 組合下,validateMotionIndexOrder
+// 把 O=0 當「未提供」跳過,只有 D 一個 motion-index 點。單元素 list monotonicity
+// 永遠 pass,下游 phase_sync sliding window / chart axis 拿到 1e15 frame index
+// 直接 OOM / hang(DoS)。parseInt 在 motion-index path 加 cap 攔住此向量。
+const MaxReasonableMotionIndex = 1_000_000_000
+
 // ParseFloatCell trims whitespace and parses a CSV cell as float64.
 // Returns (0, false) when the cell is empty, whitespace-only, or unparseable —
 // callers that want "best-effort zero fallback" can ignore ok and just use the value.
 //
+// **NaN/Inf 行為**：strconv.ParseFloat 對 "NaN" / "Inf" 字面回 (value, nil)，
+// 本函式也照樣 return (NaN/Inf, true)。這是**刻意設計** — EMG sensor 對於
+// missing-data cell 會輸出字面 "NaN"，下游 muscle_ratio / phase_sync 看到
+// NaN 會把該 row 輸出為空白 cell（見 muscle_ratio/analyzer_test.go 的 NaN-handling test）。
+// 若 caller 需要拒絕 NaN/Inf（例如 phase manifest 時間欄位），請在 caller 端加
+// math.IsNaN / math.IsInf 檢查；phase_manifest_parser.go 的 parseFloat 已對稱實作。
+//
 // **行為設計**：刻意在解析前 `strings.TrimSpace` 是為了容納科學儀器（ANC 力板、
 // EMG sensor）輸出的文字檔常見的 trailing tab / leading space。此前 ANC parser
 // 用 `strconv.ParseFloat(fields[0], 64)` 對 ` 0.001 \t1.23` 這類 row 會回 error
-// 整行被 skip — Wave 4 cleanup 統一改走本函式後，這類 row 會被正確接受。
+// 整行被 skip
 // 若你需要嚴格 round-trip 解析（拒絕任何前後空白），請改用 `strconv.ParseFloat`。
+//
+// **缺值 vs 字面 NaN**：本函式 **無法** 區分「empty cell（missing-data）」與
+// 「字面 0」(兩者都回 `(0, false)` / `(0, true)`)；也無法區分「字面 NaN」與
+// 「missing」(後者回 `(0, false)`，前者回 `(NaN, true)`)。需要嚴格 round-trip
+// 區分 missing/NaN/Inf 的 caller (例如 emg_writer 配套讀回測試) 改用
+// `ParseFloatCellWithMissing` + `FormatFloatCell`。
 func ParseFloatCell(s string) (float64, bool) {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
@@ -31,6 +55,83 @@ func ParseFloatCell(s string) (float64, bool) {
 
 	return val, true
 }
+
+// ParseFloatCellWithMissing parses a CSV cell with explicit "missing" semantics —
+// the round-trip-safe counterpart to `FormatFloatCell`.
+//
+// Return semantics (v, isMissing):
+//   - ""（含 whitespace-only）→ `(NaN, true)`  — 「missing-data」訊號
+//   - "NaN"（不分大小寫）       → `(NaN, false)` — 字面 NaN 值（非 missing）
+//   - "+Inf" / "-Inf" / "Inf"    → `(±Inf, false)`
+//   - 合法數字                   → `(v, false)`
+//   - 不可解析                   → `(NaN, false)` — 視為「壞 NaN-ish 值」交 caller 決定
+//
+// **與 ParseFloatCell 差異**：ParseFloatCell 把 "" 與 "NaN" / "Inf" 不可分地壓
+// 在 ok=true/false 同一個維度;此函式拆成 `isMissing` 與 `v` 兩個維度,讓 writer
+// 端可以用 FormatFloatCell 還原 "" / "NaN" / "+Inf" 三種不同字面,跑 round-trip
+// 不損失。新 caller 若關心 missing 與 NaN value 的區別,應該選此函式。
+//
+// 為什麼 unparseable 回 `(NaN, false)` 而非 `(NaN, true)`：parse 失敗代表 cell
+// 有 garbage（可能是 corrupted sensor output 或惡意輸入）;`isMissing=true` 是
+// 「sensor 主動告知此 sample 沒被測到」的 semantic 訊號,不該被混入 garbage
+// fallback。caller 想 fail-fast 可以直接 `if math.IsNaN(v) && !isMissing` 判定。
+func ParseFloatCellWithMissing(s string) (float64, bool) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return math.NaN(), true
+	}
+
+	val, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		return math.NaN(), false
+	}
+
+	return val, false
+}
+
+// FormatFloatCell formats a float64 for CSV output with explicit missing-cell support —
+// the round-trip-safe counterpart to `ParseFloatCellWithMissing`.
+//
+// Output semantics:
+//   - isMissing=true             → ""        （空 cell — 表示 missing-data，無論 v 為何）
+//   - math.IsNaN(v) && !isMissing → "NaN"    （字面 NaN — 表示真實 NaN 值）
+//   - math.IsInf(v, +1)           → "+Inf"
+//   - math.IsInf(v, -1)           → "-Inf"
+//   - 其他                        → strconv.FormatFloat(v, 'f', precision, 64)
+//
+// **與 emg_writer.go 的 formatCell 差異**：emg_writer 對 NaN / Inf 一律寫空字串,
+// 這是 muscle_ratio 對 NaN-as-missing 的 legacy 契約(見 analyzer_test.go
+// TestAnalyze_NaNCellWrittenAsEmpty / TestAnalyze_EMGUpstreamNaN_OutputCellEmpty)。
+// FormatFloatCell 提供 **嚴格區分** 的新語意,讓未來真正需要 round-trip 保留
+// NaN 字面 / Inf 字面 的 writer(例如 manifest export)可以採用,不破壞既有契約。
+//
+// precision <= 0 視為 6（與 emg_writer.defaultEMGCSVPrecision 對齊）。
+func FormatFloatCell(v float64, isMissing bool, precision int) string {
+	if isMissing {
+		return ""
+	}
+
+	if math.IsNaN(v) {
+		return "NaN"
+	}
+
+	if math.IsInf(v, 1) {
+		return "+Inf"
+	}
+
+	if math.IsInf(v, -1) {
+		return "-Inf"
+	}
+
+	if precision <= 0 {
+		precision = defaultFloatCellPrecision
+	}
+
+	return strconv.FormatFloat(v, 'f', precision, 64)
+}
+
+// defaultFloatCellPrecision 為 FormatFloatCell 預設小數位數，與 emg_writer 對齊。
+const defaultFloatCellPrecision = 6
 
 // ParseTimeAndChannels parses record[0] as time and record[channelStartIdx:] as channel values.
 // Returns (0, nil, false) when the time cell is empty or unparseable — signal to skip the row.

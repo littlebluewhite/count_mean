@@ -26,17 +26,18 @@ func TestPhaseManifest(t *testing.T) {
 }
 
 func testPhaseManifestCreation(t *testing.T) {
+	// Batch T：float 欄位改 OptFloat，需用 MakeOpt 包裝。
 	phasePoints := PhasePoints{
-		P0: 0.1,
-		P1: 0.2,
-		P2: 0.3,
-		S:  0.4,
-		C:  0.5,
+		P0: MakeOpt(0.1),
+		P1: MakeOpt(0.2),
+		P2: MakeOpt(0.3),
+		S:  MakeOpt(0.4),
+		C:  MakeOpt(0.5),
 		D:  100,
-		T0: 0.6,
-		T:  0.7,
+		T0: MakeOpt(0.6),
+		T:  MakeOpt(0.7),
 		O:  200,
-		L:  0.8,
+		L:  MakeOpt(0.8),
 	}
 
 	manifest := PhaseManifest{
@@ -81,16 +82,16 @@ func testPhaseManifestJSONSerialization(t *testing.T) {
 		EMGFile:         "emg2.csv",
 		EMGMotionOffset: 25,
 		PhasePoints: PhasePoints{
-			P0: 0.15,
-			P1: 0.25,
-			P2: 0.35,
-			S:  0.45,
-			C:  0.55,
+			P0: MakeOpt(0.15),
+			P1: MakeOpt(0.25),
+			P2: MakeOpt(0.35),
+			S:  MakeOpt(0.45),
+			C:  MakeOpt(0.55),
 			D:  150,
-			T0: 0.65,
-			T:  0.75,
+			T0: MakeOpt(0.65),
+			T:  MakeOpt(0.75),
 			O:  250,
-			L:  0.85,
+			L:  MakeOpt(0.85),
 		},
 	}
 
@@ -145,13 +146,15 @@ func testPhaseManifestJSONDeserialization(t *testing.T) {
 		t.Errorf("Deserialized EMGMotionOffset = %d, expected 75", manifest.EMGMotionOffset)
 	}
 
-	if manifest.PhasePoints.P0 != 0.12 {
-		t.Errorf("Deserialized PhasePoints.P0 = %f, expected 0.12", manifest.PhasePoints.P0)
+	// Batch T：OptFloat 的 UnmarshalJSON 接受 bare number，反序列化後應為 MakeOpt(0.12)。
+	v, ok := manifest.PhasePoints.P0.Get()
+	if !ok || v != 0.12 {
+		t.Errorf("Deserialized PhasePoints.P0 = (%f, %v), expected (0.12, true)", v, ok)
 	}
 }
 
 func testPhaseManifestValidation(t *testing.T) {
-	// 測試有效的 manifest
+	// 測試有效的 manifest（Batch T：OptFloat 包裝 float 欄位）
 	validManifest := PhaseManifest{
 		Subject:         "ValidSubject",
 		MotionFile:      "valid_motion.csv",
@@ -159,16 +162,16 @@ func testPhaseManifestValidation(t *testing.T) {
 		EMGFile:         "valid_emg.csv",
 		EMGMotionOffset: 0,
 		PhasePoints: PhasePoints{
-			P0: 0.0,
-			P1: 0.1,
-			P2: 0.2,
-			S:  0.3,
-			C:  0.4,
+			P0: MakeOpt(0.0),
+			P1: MakeOpt(0.1),
+			P2: MakeOpt(0.2),
+			S:  MakeOpt(0.3),
+			C:  MakeOpt(0.4),
 			D:  100,
-			T0: 0.5,
-			T:  0.6,
+			T0: MakeOpt(0.5),
+			T:  MakeOpt(0.6),
 			O:  200,
-			L:  0.7,
+			L:  MakeOpt(0.7),
 		},
 	}
 
@@ -180,9 +183,9 @@ func testPhaseManifestValidation(t *testing.T) {
 		t.Error("Valid manifest should have non-negative EMGMotionOffset")
 	}
 
-	// 測試時間順序
+	// 測試時間順序（Batch T：用 OptFloat.Value 直接比較）
 	points := validManifest.PhasePoints
-	if points.P0 > points.P1 || points.P1 > points.P2 {
+	if points.P0.Value > points.P1.Value || points.P1.Value > points.P2.Value {
 		t.Error("Phase points P0, P1, P2 should be in ascending order")
 	}
 }
@@ -206,20 +209,20 @@ func TestPhasePoints(t *testing.T) {
 
 func testPhasePointsCreation(t *testing.T) {
 	points := PhasePoints{
-		P0: 0.1,
-		P1: 0.2,
-		P2: 0.3,
-		S:  0.4,
-		C:  0.5,
+		P0: MakeOpt(0.1),
+		P1: MakeOpt(0.2),
+		P2: MakeOpt(0.3),
+		S:  MakeOpt(0.4),
+		C:  MakeOpt(0.5),
 		D:  100,
-		T0: 0.6,
-		T:  0.7,
+		T0: MakeOpt(0.6),
+		T:  MakeOpt(0.7),
 		O:  200,
-		L:  0.8,
+		L:  MakeOpt(0.8),
 	}
 
-	if points.P0 != 0.1 {
-		t.Errorf("PhasePoints.P0 = %f, expected 0.1", points.P0)
+	if v, ok := points.P0.Get(); !ok || v != 0.1 {
+		t.Errorf("PhasePoints.P0 = (%f, %v), expected (0.1, true)", v, ok)
 	}
 
 	if points.D != 100 {
@@ -233,16 +236,16 @@ func testPhasePointsCreation(t *testing.T) {
 
 func testPhasePointsJSONSerialization(t *testing.T) {
 	points := PhasePoints{
-		P0: 0.11,
-		P1: 0.21,
-		P2: 0.31,
-		S:  0.41,
-		C:  0.51,
+		P0: MakeOpt(0.11),
+		P1: MakeOpt(0.21),
+		P2: MakeOpt(0.31),
+		S:  MakeOpt(0.41),
+		C:  MakeOpt(0.51),
 		D:  110,
-		T0: 0.61,
-		T:  0.71,
+		T0: MakeOpt(0.61),
+		T:  MakeOpt(0.71),
 		O:  210,
-		L:  0.81,
+		L:  MakeOpt(0.81),
 	}
 
 	jsonData, err := json.Marshal(points)
@@ -281,8 +284,9 @@ func testPhasePointsJSONDeserialization(t *testing.T) {
 		t.Errorf("JSON deserialization failed: %v", err)
 	}
 
-	if points.P0 != 0.13 {
-		t.Errorf("Deserialized P0 = %f, expected 0.13", points.P0)
+	// Batch T：OptFloat.UnmarshalJSON 接受 bare number → MakeOpt(v)。
+	if v, ok := points.P0.Get(); !ok || v != 0.13 {
+		t.Errorf("Deserialized P0 = (%f, %v), expected (0.13, true)", v, ok)
 	}
 
 	if points.D != 130 {
@@ -291,26 +295,26 @@ func testPhasePointsJSONDeserialization(t *testing.T) {
 }
 
 func testPhasePointsValidation(t *testing.T) {
-	// 測試有效的分期點
+	// 測試有效的分期點（Batch T：OptFloat 包裝 float 欄位）
 	validPoints := PhasePoints{
-		P0: 0.0,
-		P1: 0.1,
-		P2: 0.2,
-		S:  0.3,
-		C:  0.4,
+		P0: MakeOpt(0.0),
+		P1: MakeOpt(0.1),
+		P2: MakeOpt(0.2),
+		S:  MakeOpt(0.3),
+		C:  MakeOpt(0.4),
 		D:  100,
-		T0: 0.5,
-		T:  0.6,
+		T0: MakeOpt(0.5),
+		T:  MakeOpt(0.6),
 		O:  200,
-		L:  0.7,
+		L:  MakeOpt(0.7),
 	}
 
-	// 檢查時間順序
-	if validPoints.P0 > validPoints.P1 {
+	// 檢查時間順序（Batch T：用 Value 直接比較）
+	if validPoints.P0.Value > validPoints.P1.Value {
 		t.Error("P0 should be <= P1")
 	}
 
-	if validPoints.P1 > validPoints.P2 {
+	if validPoints.P1.Value > validPoints.P2.Value {
 		t.Error("P1 should be <= P2")
 	}
 
@@ -868,15 +872,15 @@ func testMotionDataValidation(t *testing.T) {
 	}
 }
 
-// TestValidationError 測試驗證錯誤結構.
-func TestValidationError(t *testing.T) {
+// TestPhaseSyncValidationError 測試驗證錯誤結構（改名後）.
+func TestPhaseSyncValidationError(t *testing.T) {
 	tests := []struct {
 		name     string
 		testFunc func(*testing.T)
 	}{
-		{"TestValidationErrorCreation", testValidationErrorCreation},
-		{"TestValidationErrorString", testValidationErrorString},
-		{"TestValidationErrorInterface", testValidationErrorInterface},
+		{"TestPhaseSyncValidationErrorCreation", testPhaseSyncValidationErrorCreation},
+		{"TestPhaseSyncValidationErrorString", testPhaseSyncValidationErrorString},
+		{"TestPhaseSyncValidationErrorInterface", testPhaseSyncValidationErrorInterface},
 	}
 
 	for _, tt := range tests {
@@ -884,35 +888,35 @@ func TestValidationError(t *testing.T) {
 	}
 }
 
-func testValidationErrorCreation(t *testing.T) {
-	err := ValidationError{
+func testPhaseSyncValidationErrorCreation(t *testing.T) {
+	err := PhaseSyncValidationError{
 		Field:   "TestField",
 		Message: "Test error message",
 	}
 
 	if err.Field != "TestField" {
-		t.Errorf("ValidationError.Field = %s, expected 'TestField'", err.Field)
+		t.Errorf("PhaseSyncValidationError.Field = %s, expected 'TestField'", err.Field)
 	}
 
 	if err.Message != "Test error message" {
-		t.Errorf("ValidationError.Message = %s, expected 'Test error message'", err.Message)
+		t.Errorf("PhaseSyncValidationError.Message = %s, expected 'Test error message'", err.Message)
 	}
 }
 
-func testValidationErrorString(t *testing.T) {
-	err := ValidationError{
+func testPhaseSyncValidationErrorString(t *testing.T) {
+	err := PhaseSyncValidationError{
 		Field:   "Subject",
 		Message: "cannot be empty",
 	}
 
 	expectedString := "Subject: cannot be empty"
 	if err.Error() != expectedString {
-		t.Errorf("ValidationError.Error() = %s, expected '%s'", err.Error(), expectedString)
+		t.Errorf("PhaseSyncValidationError.Error() = %s, expected '%s'", err.Error(), expectedString)
 	}
 }
 
-func testValidationErrorInterface(t *testing.T) {
-	validationErr := ValidationError{
+func testPhaseSyncValidationErrorInterface(t *testing.T) {
+	validationErr := PhaseSyncValidationError{
 		Field:   "StartTime",
 		Message: "must be positive",
 	}
@@ -920,12 +924,12 @@ func testValidationErrorInterface(t *testing.T) {
 	// 測試是否實現了 error 接口
 	var err error = validationErr
 	if err.Error() == "" {
-		t.Error("ValidationError should implement error interface")
+		t.Error("PhaseSyncValidationError should implement error interface")
 	}
 
 	expectedString := "StartTime: must be positive"
 	if err.Error() != expectedString {
-		t.Errorf("ValidationError as error interface = %s, expected '%s'", err.Error(), expectedString)
+		t.Errorf("PhaseSyncValidationError as error interface = %s, expected '%s'", err.Error(), expectedString)
 	}
 }
 
@@ -1066,8 +1070,8 @@ func BenchmarkPhaseManifestJSONSerialization(b *testing.B) {
 		EMGFile:         "emg.csv",
 		EMGMotionOffset: 50,
 		PhasePoints: PhasePoints{
-			P0: 0.1, P1: 0.2, P2: 0.3, S: 0.4, C: 0.5,
-			D: 100, T0: 0.6, T: 0.7, O: 200, L: 0.8,
+			P0: MakeOpt(0.1), P1: MakeOpt(0.2), P2: MakeOpt(0.3), S: MakeOpt(0.4), C: MakeOpt(0.5),
+			D: 100, T0: MakeOpt(0.6), T: MakeOpt(0.7), O: 200, L: MakeOpt(0.8),
 		},
 	}
 
@@ -1126,7 +1130,7 @@ func BenchmarkPhaseSyncEMGDataJSONSerialization(b *testing.B) {
 
 // 測試完整的數據流程.
 func TestCompleteDataFlow(t *testing.T) {
-	// 創建完整的分析流程數據
+	// 創建完整的分析流程數據（Batch T：OptFloat 包裝 float 欄位）
 	manifest := PhaseManifest{
 		Subject:         "CompleteFlowSubject",
 		MotionFile:      "motion.csv",
@@ -1134,8 +1138,8 @@ func TestCompleteDataFlow(t *testing.T) {
 		EMGFile:         "emg.csv",
 		EMGMotionOffset: 25,
 		PhasePoints: PhasePoints{
-			P0: 0.1, P1: 0.2, P2: 0.3, S: 0.4, C: 0.5,
-			D: 100, T0: 0.6, T: 0.7, O: 200, L: 0.8,
+			P0: MakeOpt(0.1), P1: MakeOpt(0.2), P2: MakeOpt(0.3), S: MakeOpt(0.4), C: MakeOpt(0.5),
+			D: 100, T0: MakeOpt(0.6), T: MakeOpt(0.7), O: 200, L: MakeOpt(0.8),
 		},
 	}
 

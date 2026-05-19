@@ -118,8 +118,8 @@ func TestDownsampleCCI_BelowThreshold_NoChange(t *testing.T) {
 		},
 	}
 
-	out := downsampleCCIResult(result, 100)
-
+	out, err := downsampleCCIResult(result, 100)
+	require.NoError(t, err)
 	assert.Same(t, result, out, "threshold 大於資料長度時應直接回傳原物件")
 }
 
@@ -164,8 +164,8 @@ func TestDownsampleCCI_UnionPreservesNonFirstPairPeaks(t *testing.T) {
 
 	const threshold = 50
 
-	out := downsampleCCIResult(result, threshold)
-
+	out, err := downsampleCCIResult(result, threshold)
+	require.NoError(t, err)
 	require.NotSame(t, result, out, "資料量 > threshold，應產生新降採樣結果")
 	require.Len(t, out.PairResults, 2)
 
@@ -205,8 +205,8 @@ func TestDownsampleCCI_SharedXAxis(t *testing.T) {
 		},
 	}
 
-	out := downsampleCCIResult(result, 50)
-
+	out, err := downsampleCCIResult(result, 50)
+	require.NoError(t, err)
 	require.Len(t, out.PairResults, 2)
 
 	expectLen := len(out.TimeValues)
@@ -216,32 +216,7 @@ func TestDownsampleCCI_SharedXAxis(t *testing.T) {
 		"P1 length 必須等於 TimeValues length，保證 X 軸對齊")
 }
 
-// TestDownsampleCCI_EmptyPair_Preserved 長度不符 TimeValues 的 pair 應原樣保留（不被 nil 化）。
-func TestDownsampleCCI_EmptyPair_Preserved(t *testing.T) {
-	const n = 500
-
-	timeValues := make([]float64, n)
-	for i := range timeValues {
-		timeValues[i] = float64(i)
-	}
-
-	full := make([]float64, n)
-	for i := range full {
-		full[i] = float64(i) * 0.5
-	}
-
-	result := &CCIAnalysisResult{
-		TimeValues: timeValues,
-		PairResults: []CCIResult{
-			{PairName: "Full", Values: full},
-			{PairName: "Empty", Values: nil},
-		},
-	}
-
-	out := downsampleCCIResult(result, 50)
-
-	require.Len(t, out.PairResults, 2)
-	assert.Equal(t, "Empty", out.PairResults[1].PairName)
-	assert.Nil(t, out.PairResults[1].Values,
-		"長度不符 TimeValues 的 pair 應原物件透傳，Values 保持 nil")
-}
+// 選 A 嚴格後，舊 TestDownsampleCCI_EmptyPair_Preserved 已過時：
+// 它把「長度不符 → silent passthrough」當合約 pin 住，但此行為違反
+// CCIAnalysisResult invariant（Values 必須與 TimeValues 1:1 對齊）。
+// 對應 reject 行為已搬到 chart_guards_test.go:TestDownsampleCCI_MismatchedLength。

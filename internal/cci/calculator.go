@@ -1,10 +1,20 @@
 package cci
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"math"
 	"strings"
+
+	"count_mean/internal/i18n"
+	"count_mean/internal/musclemap"
 )
+
+// cciCancelCheckInterval 控制 CalculateCCITimeSeries 在 hot loop 多久檢查一次 ctx.Done()。
+// 4096 與 internal/calculator/sliding_window.slidingWindowCtxCheckInterval 對齊：
+// throughput / cancel-latency 折衷，300k 點上 mid-flight cancel 在 < 1s 內回應，
+// 同時 hot-loop overhead 約 0.02%（每 4096 次 +1 select）。
+const cciCancelCheckInterval = 4096
 
 // Gait cycle normalization constants.
 const (
@@ -80,14 +90,34 @@ func CalculateCCIRudolph(emg1, emg2 float64) float64 {
 
 // CalculateCCITimeSeries computes CCI Rudolph for two channel data arrays.
 //
-//nolint:err113 // dynamic error for user-facing output
-func CalculateCCITimeSeries(ch1Data, ch2Data []float64) ([]float64, error) {
+// ctx 在 hot loop 每 cciCancelCheckInterval 點檢查一次 ctx.Done()，caller cancel
+// 時提早回傳 ctx.Err()。pre-cancelled ctx 在第一次進入 loop 前就會被偵測；
+// mid-flight cancel 最壞情況等下一個 4096 邊界。
+//
+//nolint:err113 // dynamic error for user-facing output (i18n-backed)
+func CalculateCCITimeSeries(ctx context.Context, ch1Data, ch2Data []float64) ([]float64, error) {
 	if len(ch1Data) != len(ch2Data) {
-		return nil, fmt.Errorf("通道數據長度不一致: %d vs %d", len(ch1Data), len(ch2Data))
+		return nil, errors.New(
+			i18n.T(i18n.KeyErrorCCIChannelLenMismatch, len(ch1Data), len(ch2Data)))
+	}
+
+	// Fast pre-cancel：若 caller 已取消 ctx，避免分配 result slice 與第一次計算。
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	result := make([]float64, len(ch1Data))
 	for i := range ch1Data {
+		// 每 cciCancelCheckInterval 次迭代檢查 ctx；用 select-default 避免每輪都進
+		// runtime select scheduler，hot loop overhead 可忽略。i=0 跳過（已 pre-check）。
+		if i > 0 && i%cciCancelCheckInterval == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+		}
+
 		result[i] = CalculateCCIRudolph(ch1Data[i], ch2Data[i])
 	}
 
@@ -142,7 +172,10 @@ func MapHeaderToShortName(header string) string {
 // as stored in PhaseSyncEMGData.Channels. 與 muscle_ratio.BuildRightSideChannelMap 對稱：
 // 僅取右側通道，缺任一必要肌肉即 fail-fast。
 //
-//nolint:err113 // dynamic error for user-facing output
+// 加入重複偵測,與 muscle_ratio.BuildRightSideChannelMap 對稱 — 兩個 R.RA
+// 過去 silent overwrite (last-wins),現在透過 musclemap.AssignShort fail-fast。
+//
+//nolint:err113 // dynamic error for user-facing output (i18n-backed)
 func BuildChannelMap(headers []string) (map[string]string, error) {
 	channelMap := make(map[string]string, len(headers))
 
@@ -152,13 +185,15 @@ func BuildChannelMap(headers []string) (map[string]string, error) {
 			continue
 		}
 
-		channelMap[shortName] = header
+		if err := musclemap.AssignShort(channelMap, shortName, header); err != nil {
+			return nil, err
+		}
 	}
 
 	required := []string{"RA", "ES", "IL", "GMax", "RF", "BF", "TAIO", "MF"}
 	for _, name := range required {
 		if _, ok := channelMap[name]; !ok {
-			return nil, fmt.Errorf("缺少必要的肌肉通道: %s", name)
+			return nil, errors.New(i18n.T(i18n.KeyErrorCCIMissingMuscleChannel, name))
 		}
 	}
 

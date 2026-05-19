@@ -1,6 +1,7 @@
 package muscle_ratio
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -74,8 +75,16 @@ func NewAnalyzer() *Analyzer {
 //  4. Ensure OutputDir exists
 //  5. For each subject: load EMG → channel map → compute ratios → write 2 CSVs
 //
+// ctx 帶 Wails Shutdown / 使用者中止訊號。subject 迴圈間檢查 ctx.Done(),
+// 收到取消立即停止 — 已完成的 subject 結果保留,未開始的不處理。caller 可以
+// 從 returned []SubjectResult 看到 partial 進度,但 returned error 為
+// ctx.Err()(包 i18n 後),caller(gui handler)可區分「整批失敗」vs「部分取消」。
+//
 //nolint:err113 // dynamic errors for user-facing output
-func (a *Analyzer) Analyze(params *Params) ([]SubjectResult, error) {
+func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("ctx 不能為 nil")
+	}
 	if params == nil {
 		return nil, fmt.Errorf("params 不能為 nil")
 	}
@@ -107,8 +116,23 @@ func (a *Analyzer) Analyze(params *Params) ([]SubjectResult, error) {
 
 	// EMG 路徑解析走 manifest.ResolveEMGFile（內部走 security.ResolveLenientPath，
 	// 允許含 literal "%" 的 BTS 匯出檔名 — 見 internal/manifest 套件 doc）。
+	//
+	// 每個 subject 處理完後檢查 ctx.Done() — Wails Shutdown 或使用者中止會
+	// cancel ctx,迴圈立刻 break。返回 partial results + ctx.Err()(由 caller 包 i18n)。
+	// 不在 analyzeSubject 內部頻繁 poll,subject-level granularity 對 batch UX 已夠 —
+	// 每個 subject 平均 ~100ms-2s,使用者按 cancel 後最多等一個 subject 結束。
 	results := make([]SubjectResult, 0, len(manifests))
 	for i := range manifests {
+		select {
+		case <-ctx.Done():
+			a.logger.Warn("肌肉比值批次被中止", map[string]interface{}{
+				"completed": len(results),
+				"total":     len(manifests),
+				"reason":    ctx.Err(),
+			})
+			return results, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorMuscleRatioCancelled), ctx.Err())
+		default:
+		}
 		m := &manifests[i]
 		results = append(results, a.analyzeSubject(m, params.DataFolder, params.OutputDir))
 	}
@@ -242,21 +266,40 @@ func (a *Analyzer) collectPhasePoints(
 	phases := make([]phasePoint, 0, 10)
 
 	for _, p := range models.AllPhases() {
-		v, _, err := parsers.GetPhaseValue(&m.PhasePoints, p)
+		opt, _, err := parsers.GetPhaseValue(&m.PhasePoints, p)
 		if err != nil {
 			continue
 		}
 
-		// v == 0 是 parser 的空值約定（"", "NA", "x", "-" → 0）。理論上 force-time 0 秒
-		// 是合法的，但 manifest CSV 用 0 同時表達「空」與「真實 0 秒」是專案層級的契約 —
-		// 與 cci/analyzer.go calculateGaitCycle 對稱。若 domain 改變需要區分兩者，要從
-		// parser 層而非此處調整。
-		if v == 0 {
+		// Batch T：用 OptFloat.Get() 判斷「該分期點是否已標定」。Set=false（NA / 空字串）
+		// 跳過；Set=true 帶實際值（含 t=0 也是合法時間）。與 cci/analyzer.go
+		// calculateGaitCycle 對稱。
+		v, ok := opt.Get()
+		if !ok {
 			continue
 		}
 
 		var t float64
 		if p.IsMotionIndex() {
+			// `int(v)` 對 v ∉ [MinInt32, MaxInt32] 範圍時行為 unsafe
+			// (float64 → int 對 32-bit platform 是 implementation-defined,且 1e15
+			// 之類異常大值會 wrap-around 或 truncate)。Manifest parseInt 已對
+			// motion-index 欄位 (D/O) cap 在 MaxReasonableMotionIndex (1e9),
+			// 但 OptFloat 路徑來自 dynamic dispatch — 防呆檢查仍必要,避免未來
+			// 引入新 motion-index phase 時漏防。
+			//
+			// 邊界:`MaxReasonableMotionIndex` (1e9) 與 negative motion index
+			// (≤ 0 是 sentinel "未提供",理論上 OptFloat.Set=true 不該帶 0,但
+			// 防呆)。命中邊界外 → skip 該 phase + log warn,不 propagate(整批仍走)。
+			if v <= 0 || v > float64(parsers.MaxReasonableMotionIndex) {
+				a.logger.Warn("motion-index 分期點越界,跳過", map[string]interface{}{
+					"subject": m.Subject,
+					"phase":   string(p),
+					"value":   v,
+					"cap":     parsers.MaxReasonableMotionIndex,
+				})
+				continue
+			}
 			t = a.timeSynchronizer.MotionIndexToEMGTime(int(v), m.EMGMotionOffset)
 		} else {
 			t = a.timeSynchronizer.ForceTimeToEMGTime(v, m.EMGMotionOffset)

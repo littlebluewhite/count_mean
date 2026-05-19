@@ -31,11 +31,45 @@ var (
 	// ErrZeroReference indicates the reference value is zero (division by zero).
 	ErrZeroReference = errors.New("reference value is zero")
 
+	// ErrNaNReference indicates the reference value is NaN; val / NaN = NaN
+	// would silently pollute the entire normalized dataset. Split from
+	// ErrZeroReferenceso callers can distinguish "data quality issue,
+	// retry/clean" from "real zero MVC, refuse run" — mirrors the sibling
+	// range_normalizer.ErrChannelMaxNaN pattern.
+	ErrNaNReference = errors.New("reference value is NaN")
+
+	// ErrInfReference indicates the reference value is ±Inf; val / Inf yields
+	// 0 or ±Inf and the result is unusable. Split from ErrZeroReference
+	// for the same reason as ErrNaNReference — mirrors range_normalizer.ErrChannelMaxInf.
+	ErrInfReference = errors.New("reference value is Inf")
+
 	// ErrPhaseMismatch indicates phase count does not match labels.
 	ErrPhaseMismatch = errors.New("phase count does not match labels")
 
 	// ErrInvalidReferenceData indicates the reference data is invalid.
 	ErrInvalidReferenceData = errors.New("invalid reference data")
+
+	// ErrReferenceMultipleRows indicates the reference dataset contains more
+	// than one data row. MVC/MAX reference is a single-row contract (one peak
+	// per muscle); silently dropping extra rows in Normalize hides operator
+	// mistakes.
+	ErrReferenceMultipleRows = errors.New("reference dataset must contain exactly one row")
+
+	// ErrNaNInChannel indicates an EMG channel sample is NaN. The sliding-window
+	// MaxMean uses an incremental sum trick; once a NaN sample enters the window,
+	// windowSum becomes NaN and every NaN > maxMean comparison evaluates false,
+	// so the calculator silently returns the initial-window mean while masking
+	// the contamination. Fail-fast surfaces the data-quality issue to
+	// callers rather than returning a misleading finite result.
+	ErrNaNInChannel = errors.New("channel data contains NaN")
+
+	// ErrInfInChannel indicates an EMG channel sample is ±Inf. +Inf propagates
+	// through the sliding-window sum and yields a +Inf result, while -Inf
+	// triggers the same NaN > maxMean masking as ErrNaNInChannel (e.g. the
+	// initial valid window's mean wins despite -Inf contamination later). Both
+	// directions are rejected up front so MaxMean cannot silently mis-compute
+	//.
+	ErrInfInChannel = errors.New("channel data contains Inf")
 )
 
 // CalculatorError wraps a sentinel error with additional context.

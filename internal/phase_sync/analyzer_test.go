@@ -303,6 +303,105 @@ TestSubject,%s,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, motion
 	assert.Contains(t, err.Error(), "Motion 檔案不存在")
 }
 
+// TestPhaseSyncAnalyzer_ResolvePhaseRange_RejectsNegativeForceTime釘住:
+// phase_sync 入口對「對應到 force-time 的負 phase point」必須 fail-fast。manifest
+// parseFloat 允許負值(機械校準偏移,muscle_ratio batch 走時間序列 dump 仍可用),
+// 但 phase_sync 用「time × frequency」算 motion-index 對負時間沒有有效意義,
+// silently 滑入下游可能撞 boundary 或產出污染結果,fail-fast 反映實際 invariant。
+//
+// motion-index 型 phase point(D/O)是 frame number 不是時間,負值已由
+// ValidatePhaseManifest 攔下,此 test 只覆蓋 force-time 路徑(P0/P1/P2/S/C/T0/T/L)。
+func TestPhaseSyncAnalyzer_ResolvePhaseRange_RejectsNegativeForceTime(t *testing.T) {
+	cases := []struct {
+		name       string
+		startPhase models.PhasePoint
+		endPhase   models.PhasePoint
+		negField   string
+		points     models.PhasePoints
+	}{
+		{
+			name:       "negative P0 rejected",
+			startPhase: models.PhaseP0,
+			endPhase:   models.PhaseP2,
+			negField:   "P0",
+			points: models.PhasePoints{
+				P0: models.MakeOpt(-0.5),
+				P1: models.MakeOpt(0.5),
+				P2: models.MakeOpt(1.0),
+			},
+		},
+		{
+			name:       "negative P2 (end) rejected",
+			startPhase: models.PhaseP0,
+			endPhase:   models.PhaseP2,
+			negField:   "P2",
+			points: models.PhasePoints{
+				P0: models.MakeOpt(0.0),
+				P2: models.MakeOpt(-0.3),
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			analyzer := NewPhaseSyncAnalyzer()
+
+			loaded := &LoadedPhaseSyncContext{
+				Manifest: &models.PhaseManifest{
+					Subject:         "T",
+					MotionFile:      "m.csv",
+					ForceFile:       "f.csv",
+					EMGFile:         "e.csv",
+					EMGMotionOffset: 100,
+					PhasePoints:     tc.points,
+				},
+				EMGData: &models.PhaseSyncEMGData{
+					Time: []float64{0.0, 1.0, 2.0},
+				},
+			}
+
+			_, err := analyzer.ResolvePhaseRange(loaded, tc.startPhase, tc.endPhase)
+			require.Error(t, err, "ResolvePhaseRange 必須 reject 負 force-time")
+			require.ErrorIs(t, err, ErrNegativePhaseTime,
+				"必須是 ErrNegativePhaseTime sentinel,方便 caller 用 errors.Is 區分")
+		})
+	}
+}
+
+// TestPhaseSyncAnalyzer_ResolvePhaseRange_AllowsMotionIndex (配套) 釘住:
+// motion-index 型 phase point(D/O)不被 force-time reject 影響,因 D/O 是 frame
+// number 而非時間,負值由 ValidatePhaseManifest 攔下,ResolvePhaseRange 不重複
+// 檢查。此 case 用 D > 0 / O > 0 normal motion-index 走完路徑,確保 不誤殺。
+func TestPhaseSyncAnalyzer_ResolvePhaseRange_AllowsMotionIndex(t *testing.T) {
+	analyzer := NewPhaseSyncAnalyzer()
+
+	loaded := &LoadedPhaseSyncContext{
+		Manifest: &models.PhaseManifest{
+			Subject:         "T",
+			MotionFile:      "m.csv",
+			ForceFile:       "f.csv",
+			EMGFile:         "e.csv",
+			EMGMotionOffset: 100,
+			PhasePoints: models.PhasePoints{
+				D: 200, // 合法 motion-index
+				O: 300, // 合法 motion-index
+			},
+		},
+		EMGData: &models.PhaseSyncEMGData{
+			Time: []float64{0.0, 1.0, 2.0, 3.0, 4.0},
+		},
+	}
+
+	// D / O 都是 motion-index,合法值不該被 reject。後續 GetPhaseTimeRange 取 EMG time
+	// 可能因為 EMGMotionOffset / motion-index 換算超出 [0, 4] 而 fail,但**錯誤類型**
+	// 不能是 ErrNegativePhaseTime。
+	_, err := analyzer.ResolvePhaseRange(loaded, models.PhaseD, models.PhaseO)
+	if err != nil {
+		require.NotErrorIs(t, err, ErrNegativePhaseTime,
+			"motion-index 不該觸發 ErrNegativePhaseTime; err=%v", err)
+	}
+}
+
 // Benchmark test.
 func BenchmarkPhaseSyncAnalyzer_LoadManifestSubjects(b *testing.B) {
 	// Create a large manifest file

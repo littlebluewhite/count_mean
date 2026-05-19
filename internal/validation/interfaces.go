@@ -34,11 +34,23 @@ type NumericValidator interface {
 	ValidatePositiveFloat(value, fieldName string, maxValue float64) (float64, error)
 }
 
-// FilenameValidator defines the interface for filename validation.
+// FilenameValidator defines the read-only interface for filename validation.
+//
+// L16 — 拆分:讀（ValidateFilename）與寫（WithAllowedExtensions）解耦,讓單純需要
+// 「驗證 filename」的 caller 不必依賴 mutator 方法（也避免 mock 起來要 noop 寫實）。
+// 大多 production caller 只需 ValidateFilename — interface 接口面收窄到剛好夠用。
 type FilenameValidator interface {
 	// ValidateFilename validates a filename for safety and correctness.
 	ValidateFilename(filename string) error
+}
 
+// MutableFilenameValidator 為支援動態變更 allowed extension 的 filename validator。
+//
+// L16 — 從原 FilenameValidator 拆出 mutator 子集。新增 caller 應優先 depend on
+// 上方 FilenameValidator(read-only); 只有「動態調整副檔名白名單」的 caller 才
+// 需要這條更大的 interface。標準實作 `filename.Validator` 自動滿足兩條 interface。
+type MutableFilenameValidator interface {
+	FilenameValidator
 	// WithAllowedExtensions sets the allowed file extensions.
 	WithAllowedExtensions(extensions []string)
 }
@@ -58,11 +70,29 @@ type NumericRange struct {
 }
 
 // Safe numeric range constants to prevent overflow attacks.
+//
+// Each constant is intentionally narrower than the language-level max
+// (math.MinInt64 / math.MaxInt64 / -math.MaxFloat64 / math.MaxFloat64) to
+// preserve a calculation buffer — callers can do `value ± 1` for integers or
+// `value * 10` for floats without immediately flipping to overflow / Inf. The
+// "safe…" prefix names this property; the actual value being smaller than the
+// literal type max is intentional and documented (TODO_2 #P1-A8-5).
 const (
-	safeMinInt64   = -9223372036854775807    // Safe int64 min (leaving room for calculations)
-	safeMaxInt64   = 9223372036854775806     // Safe int64 max (leaving room for calculations)
-	safeMinFloat64 = -1.7976931348623157e307 // Safe float64 min
-	safeMaxFloat64 = 1.7976931348623157e307  // Safe float64 max
+	// safeMinInt64 = math.MinInt64 + 1 (-9223372036854775808 + 1). The 1-unit
+	// reserve lets validators subtract small offsets without wrapping.
+	safeMinInt64 = -9223372036854775807
+	// safeMaxInt64 = math.MaxInt64 - 1 (9223372036854775807 - 1). Symmetric
+	// 1-unit reserve for adding small offsets.
+	safeMaxInt64 = 9223372036854775806
+	// safeMinFloat64 is intentionally one decimal order of magnitude greater
+	// than -math.MaxFloat64 (≈-1.7976931348623157e+308). The 10x reserve
+	// gives a safety buffer for downstream arithmetic.
+	safeMinFloat64 = -1.7976931348623157e307
+	// safeMaxFloat64 is intentionally one decimal order of magnitude below
+	// math.MaxFloat64 (≈1.7976931348623157e+308). Same 10x reserve rationale
+	// as safeMinFloat64. Anything outside [-1e307, +1e307] is treated as
+	// suspect input.
+	safeMaxFloat64 = 1.7976931348623157e307
 )
 
 // GetSafeNumericRanges returns predefined safe ranges to prevent overflow attacks.

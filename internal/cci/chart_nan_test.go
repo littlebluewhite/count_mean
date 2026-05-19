@@ -2,6 +2,7 @@ package cci
 
 import (
 	"bytes"
+	"context"
 	"math"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ func TestGenerateCCIInteractiveChart_FiltersNaN(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		err := GenerateCCIInteractiveChart(result, &buf)
+		err := GenerateCCIInteractiveChart(context.Background(), result, &buf)
 		require.NoError(t, err)
 
 		html := buf.String()
@@ -62,7 +63,7 @@ func TestGenerateCCIInteractiveChart_FiltersNaN(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		err := GenerateCCIInteractiveChart(result, &buf)
+		err := GenerateCCIInteractiveChart(context.Background(), result, &buf)
 		require.NoError(t, err)
 
 		html := buf.String()
@@ -88,7 +89,7 @@ func TestGenerateCCIInteractiveChart_FiltersNaN(t *testing.T) {
 
 		var buf bytes.Buffer
 		require.NotPanics(t, func() {
-			err := GenerateCCIInteractiveChart(result, &buf)
+			err := GenerateCCIInteractiveChart(context.Background(), result, &buf)
 			require.NoError(t, err)
 		})
 		assert.NotEmpty(t, buf.String(), "全 NaN 也應產出有效 HTML（雖然線完全斷）")
@@ -109,7 +110,7 @@ func TestGenerateCCIInteractiveChart_FiltersNaN(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		err := GenerateCCIInteractiveChart(result, &buf)
+		err := GenerateCCIInteractiveChart(context.Background(), result, &buf)
 		require.NoError(t, err)
 
 		html := buf.String()

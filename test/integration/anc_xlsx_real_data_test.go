@@ -1,8 +1,15 @@
+//go:build integration_realdata
+
 // Package integration contains integration tests for the EMG data analysis tool.
+// 本檔內 test 依賴 `EMG_TEST_FIXTURES_DIR` 提供的真實私有資料夾
+// (個資/論文資料,不便 commit)。為避免 `go test ./test/integration/...`
+// 預設靜默跳過造成 CI 假覆蓋,改用 build tag `integration_realdata` 明確
+// opt-in;CI 由 secret `EMG_TEST_FIXTURES_DIR` 控制是否真的跑這組 test。
 package integration
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,11 +18,16 @@ import (
 	"count_mean/internal/parsers"
 )
 
-// 此測試需要存在真實的測試檔案，如果檔案不存在會跳過.
+// 用 env var 取代寫死 dev 機器絕對路徑,CI 與其他 dev 機器都能跑;
+// 路徑統一走 `filepath.Join` 避免字串串接造成跨平台分隔符問題。
+// 未設定 env var 或檔案不存在皆 t.Skip — build tag 已隔離 default test 路徑,
+// 故 skip 在這裡只是為了「opt-in 但缺 fixture」這個邊緣情境留逃生口。
 func TestANCParser_RealXLSXFile(t *testing.T) {
-	// 真實測試檔案路徑
-	testFilePath := "/Users/wilson08/pCloud Drive/LED/研究所/0論文/1論文實驗/1實驗資料處理/" +
-		"EMG&Motion&Force plate資料分析/SF2/SF2_BTS_4.anc.xlsx"
+	fixturesDir := os.Getenv("EMG_TEST_FIXTURES_DIR")
+	if fixturesDir == "" {
+		t.Skip("EMG_TEST_FIXTURES_DIR not set; skipping real-data integration test")
+	}
+	testFilePath := filepath.Join(fixturesDir, "SF2", "SF2_BTS_4.anc.xlsx")
 
 	// 檢查檔案是否存在
 	if _, err := os.Stat(testFilePath); os.IsNotExist(err) {
@@ -64,9 +76,14 @@ func TestANCParser_RealXLSXFile(t *testing.T) {
 }
 
 // TestANCParser_RealXLSXFile_TimeRange 測試真實 xlsx 檔案的時間範圍查詢.
+// 原本寫死 macOS 絕對路徑 `/Users/wilson08/pCloud Drive/...`,
+// 已改走 `EMG_TEST_FIXTURES_DIR` 與 `filepath.Join`,跨平台與 CI 友善。
 func TestANCParser_RealXLSXFile_TimeRange(t *testing.T) {
-	testFilePath := "/Users/wilson08/pCloud Drive/LED/研究所/0論文/1論文實驗/1實驗資料處理/" +
-		"EMG&Motion&Force plate資料分析/SF2/SF2_BTS_4.anc.xlsx"
+	fixturesDir := os.Getenv("EMG_TEST_FIXTURES_DIR")
+	if fixturesDir == "" {
+		t.Skip("EMG_TEST_FIXTURES_DIR not set; skipping real-data integration test")
+	}
+	testFilePath := filepath.Join(fixturesDir, "SF2", "SF2_BTS_4.anc.xlsx")
 
 	if _, err := os.Stat(testFilePath); os.IsNotExist(err) {
 		t.Skipf("Test file not found: %s", testFilePath)

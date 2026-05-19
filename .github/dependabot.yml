@@ -1,0 +1,18 @@
+version: 2
+# P0-1: github-actions ecosystem 啟用後,Dependabot 會自動偵測
+# .github/workflows/*.yml 內 `uses: <owner>/<repo>@<sha> # vX.Y.Z` 的 pin 形式,
+# 在有新版時同步 bump SHA 與 trailing comment — 保留 supply-chain pin 不變式,
+# 又不必每次手動 `gh api repos/.../git/ref/tags/...` 查 SHA。
+#
+# weekly schedule 跟主流 OSS repo (kubernetes / actions/runner) 對齊,避免
+# Dependabot PR 在週末/週一塞爆 reviewer queue。
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # 把所有 actions/* 第一方 action 一起 bump,減少 PR 數量。
+      actions-core:
+        patterns:
+          - "actions/*"

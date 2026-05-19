@@ -30,7 +30,7 @@ func setupMuscleRatioTestApp(t *testing.T) *App {
 	return app
 }
 
-// TestAnalyzeMuscleRatio_LocaleSwitchAffectsMessage 驗證 P3-E Phase 2 i18n 遷移：
+// TestAnalyzeMuscleRatio_LocaleSwitchAffectsMessage 驗證 Phase 2 i18n 遷移：
 // handler L72 fail-path message 經 i18n.T(KeyErrorMuscleRatioHandlerAnalysisFailed)
 // 查表 — 不是 hard-code zh-TW。
 //

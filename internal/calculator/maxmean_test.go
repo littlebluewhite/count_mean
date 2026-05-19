@@ -260,6 +260,33 @@ func TestMaxMeanCalculator_CalculateWithRange(t *testing.T) {
 		require.Contains(t, err.Error(), "數據集無效或窗口大小過大")
 		require.Nil(t, results)
 	})
+
+	// EndRange == 0 是合法上界（時間軸從 0 開始的情境）。原本
+	// resolveDataRange 把 0 當作 "no end" sentinel，導致 CalculateWithRange
+	// (start=-1, end=0) 這類「指定到 0 為止」的查詢被靜默改寫為「到資料末端」。
+	// 新版用 CalculationOptions.HasEndRange 顯式表達意圖。
+	t.Run("EndRangeZero_ExplicitUpperBound", func(t *testing.T) {
+		// scaling factor 10，時間軸用 1e10 為「1 秒」。
+		// 0 / 1e10 / 2e10 三點，windowSize=2，end=0e10 (== 0)。
+		// 期望：只有第一個 window (Time 0..1) 落在 startRange=-1 ~ endRange=0 內 → 失敗，
+		// 因為 0 點之後直到 0 為止只有一筆。
+		// 但 startRange=-1, endRange=0 表示包含 Time<=0 的點 (即 idx 0 only) →
+		// 點數不足 windowSize=2 → 應回 ErrInvalidTimeRange。
+		dataset := &models.EMGDataset{
+			Headers: []string{"Time", "Ch1"},
+			Data: []models.EMGData{
+				{Time: 0.0, Channels: []float64{10.0}},
+				{Time: 1.0e10, Channels: []float64{20.0}},
+				{Time: 2.0e10, Channels: []float64{30.0}},
+			},
+		}
+
+		_, err := calc.CalculateWithRange(context.Background(), dataset, 2, -1.0, 0.0)
+		require.Error(t, err,
+			"endRange=0 with explicit HasEndRange should treat 0 as upper bound, "+
+				"not 'no end' sentinel; only 1 point ≤ 0 → insufficient for window=2")
+		require.Contains(t, err.Error(), "指定時間範圍內的數據不足")
+	})
 }
 
 func TestMaxMeanCalculator_CalculateFromRawDataWithRange(t *testing.T) {
@@ -300,6 +327,9 @@ func TestMaxMeanCalculator_EdgeCases(t *testing.T) {
 	calc := NewMaxMeanCalculator(1) // Different scaling factor
 
 	t.Run("EmptyChannels", func(t *testing.T) {
+		// 0-channel input 改為 fail-fast。原本「0 channel = 空 result」
+		// 是 silent success，但實務上 0 channel 表示上游 parser 沒解出資料 — 應該
+		// 讓 caller 明確處理而非靜默產生空 output。
 		dataset := &models.EMGDataset{
 			Headers: []string{"Time"},
 			Data: []models.EMGData{
@@ -309,8 +339,9 @@ func TestMaxMeanCalculator_EdgeCases(t *testing.T) {
 		}
 
 		results, err := calc.Calculate(context.Background(), dataset, 1)
-		require.NoError(t, err)
-		require.Len(t, results, 0) // No channels to process
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "通道")
+		require.Nil(t, results)
 	})
 
 	t.Run("MultipleChannelsWithDifferentOptimalWindows", func(t *testing.T) {

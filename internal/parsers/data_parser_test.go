@@ -269,7 +269,7 @@ func TestGetScalingFactor(t *testing.T) {
 }
 
 // TestErrInsufficientData_BridgesToAppErrors 防止 parser 的 ErrInsufficientData
-// 與 internal/errors 的同名 sentinel 失去語意連結 — Wave 3 在 internal/parsers
+// 與 internal/errors 的同名 sentinel 失去語意連結
 // 已做 alias，本 commit 補 parser 套件的 wrap 橋接。
 //
 // 用 errors.Is 跨套件比對：上游 caller 只認得 apperrors.ErrInsufficientData，

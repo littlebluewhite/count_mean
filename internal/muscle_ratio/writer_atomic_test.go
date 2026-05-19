@@ -1,6 +1,7 @@
 package muscle_ratio
 
 import (
+	"context"
 	"math"
 	"os"
 	"path/filepath"
@@ -8,28 +9,33 @@ import (
 	"testing"
 )
 
-// TestWriteOutputAll_StaleTmp_FinalPathUntouched 驗證 stale tmp 殘留時 writeOutputAll 不會覆寫 final。
-// 修法依 atomic write plan：tmp+rename 流程的 O_EXCL 開檔會偵測到 stale tmp 並 fail。
-func TestWriteOutputAll_StaleTmp_FinalPathUntouched(t *testing.T) {
+// TestWriteOutputAll_LegacyStaleTmpNoLongerBlocks 取代舊版
+// TestWriteOutputAll_StaleTmp_FinalPathUntouched — 後 csvutil.WriteCSVAtomic
+// 已改用 crypto/rand 後綴的 tmp filename,legacy `path + ".tmp"` 不再撞名,
+// 因此 stale `.tmp` 不再 block writeOutputAll。對應 atomic-write 屬性的釘住改為:
+//   - Final path 仍 atomic 寫成 (random tmp → rename → final)
+//   - Stale legacy tmp 不影響 commit (保留在 dir 中作為 noise,屬已知 trade-off)
+func TestWriteOutputAll_LegacyStaleTmpNoLongerBlocks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "subj_muscle_ratio.csv")
 
-	sentinel := []byte("old,csv\n")
-	if err := os.WriteFile(path, sentinel, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// 預先寫 legacy `.tmp` (模擬上一次 crash 殘留)
 	if err := os.WriteFile(path+".tmp", []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	err := writeOutputAll(path, []float64{0.0, 0.01}, [][]float64{{1.0, 2.0}})
-	if err == nil {
-		t.Fatal("expected err due to stale tmp, got nil")
+	if err != nil {
+		t.Errorf("後 writeOutputAll 應在 legacy `.tmp` 存在下仍成功 (random suffix),got err: %v", err)
 	}
 
+	// final path 必須存在且非 sentinel 內容
 	got, _ := os.ReadFile(path)
-	if string(got) != string(sentinel) {
-		t.Errorf("final path mutated: got %q want %q", got, sentinel)
+	if len(got) == 0 {
+		t.Errorf("final path 未建立")
+	}
+	if strings.Contains(string(got), "old,csv") {
+		t.Errorf("final path 為舊 sentinel 內容,atomic write 失敗")
 	}
 }
 
@@ -37,7 +43,7 @@ func TestWriteOutputAll_StaleTmp_FinalPathUntouched(t *testing.T) {
 // 的 defense-in-depth 早失敗。檢 err 訊息含 "OutputDir" 以區分非 ManifestFile 錯誤。
 func TestAnalyze_BadOutputDir_Rejected(t *testing.T) {
 	a := NewAnalyzer()
-	_, err := a.Analyze(&Params{
+	_, err := a.Analyze(context.Background(), &Params{
 		ManifestFile: "anyfile.csv",
 		DataFolder:   ".",
 		OutputDir:    "../../etc",
@@ -99,15 +105,13 @@ func TestWriteOutputAll_NaNAndInfCellsWrittenAsEmpty(t *testing.T) {
 	}
 }
 
-// TestWriteOutputPhases_StaleTmp_FinalPathUntouched 同 writeOutputPhases 對稱驗證。
-func TestWriteOutputPhases_StaleTmp_FinalPathUntouched(t *testing.T) {
+// TestWriteOutputPhases_LegacyStaleTmpNoLongerBlocks 取代舊版
+// TestWriteOutputPhases_StaleTmp_FinalPathUntouched — 後 random tmp 不再撞名,
+// legacy `.tmp` 不 block。對稱版本見 TestWriteOutputAll_LegacyStaleTmpNoLongerBlocks。
+func TestWriteOutputPhases_LegacyStaleTmpNoLongerBlocks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "subj_muscle_ratio_phases.csv")
 
-	sentinel := []byte("old,csv\n")
-	if err := os.WriteFile(path, sentinel, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(path+".tmp", []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -118,12 +122,12 @@ func TestWriteOutputPhases_StaleTmp_FinalPathUntouched(t *testing.T) {
 		[][]float64{{1.0, 2.0}},
 		[]phasePoint{{name: "P0", time: 0.0}},
 	)
-	if err == nil {
-		t.Fatal("expected err due to stale tmp, got nil")
+	if err != nil {
+		t.Errorf("後 writeOutputPhases 應在 legacy `.tmp` 存在下仍成功 (random suffix),got err: %v", err)
 	}
 
 	got, _ := os.ReadFile(path)
-	if string(got) != string(sentinel) {
-		t.Errorf("final path mutated: got %q want %q", got, sentinel)
+	if len(got) == 0 {
+		t.Errorf("final path 未建立")
 	}
 }

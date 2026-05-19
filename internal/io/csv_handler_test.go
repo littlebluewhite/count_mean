@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -175,10 +176,11 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 		require.Contains(t, err.Error(), "路徑驗證失敗")
 	})
 
-	t.Run("EmptyData", func(t *testing.T) {
+	t.Run("EmptyData_TargetMissing_NoOp", func(t *testing.T) {
+		// (a)：empty data + target 不存在 → 不開檔(no-op 安全)。
+		// 沒有舊資料,caller 預期「空輸入產不出檔案」是合理體驗。
 		tempDir := t.TempDir()
 		cfg := config.DefaultConfig()
-		// Set allowed directories to include temp directory
 		cfg.InputDir = tempDir
 		cfg.OutputDir = tempDir
 		cfg.OperateDir = tempDir
@@ -191,16 +193,90 @@ func TestCSVHandler_WriteCSV(t *testing.T) {
 		err := handler.WriteCSV(csvFile, data)
 		require.NoError(t, err)
 
-		// 檢查文件存在且為空
-		content, err := os.ReadFile(csvFile)
-		require.NoError(t, err)
+		// empty data 不應產出檔案
+		_, statErr := os.Stat(csvFile)
+		require.True(t, os.IsNotExist(statErr),
+			"expected no file for empty data, got stat err=%v", statErr)
+	})
 
-		// 如果啟用BOM，文件應只包含BOM
-		if cfg.BOMEnabled {
-			require.Equal(t, csvutil.BOMBytes(), content)
-		} else {
-			require.Empty(t, content)
+	t.Run("EmptyData_TargetExists_Truncates", func(t *testing.T) {
+		// empty data + target *已存在* → 必須 truncate 成 BOM-only(或 0 byte),
+		// 不能保留前次 run 留下的 stale CSV 內容。否則 caller 以為「這次寫入了空結果」,
+		// 但磁碟上仍是上次完整資料 — patient 可能載入舊結果並誤以為是新分析。
+		//
+		// 採用「BOM-only」策略(若 cfg.BOMEnabled=true)— 保留「這是 UTF-8 CSV」的
+		// 語意 hint;BOM 關閉時則 truncate 到 0 byte。
+		tempDir := t.TempDir()
+		cfg := config.DefaultConfig()
+		cfg.InputDir = tempDir
+		cfg.OutputDir = tempDir
+		cfg.OperateDir = tempDir
+		cfg.BOMEnabled = true
+		handler := NewCSVHandler(cfg)
+
+		csvFile := filepath.Join(tempDir, "stale_data.csv")
+
+		// 先寫入 stale 內容
+		staleData := [][]string{
+			{"Time", "Ch1"},
+			{"1.0", "stale-value"},
+			{"2.0", "another-stale-value"},
 		}
+		require.NoError(t, handler.WriteCSV(csvFile, staleData),
+			"prerequisite: stale data must be writable")
+
+		// 確認 stale 內容真的在磁碟上
+		preContent, err := os.ReadFile(csvFile)
+		require.NoError(t, err)
+		require.Contains(t, string(preContent), "stale-value",
+			"prerequisite: stale content must be present before empty WriteCSV")
+
+		// 用空 data 覆寫 — 必須 truncate stale 內容
+		require.NoError(t, handler.WriteCSV(csvFile, [][]string{}))
+
+		// 檔案應仍存在(我們是 truncate 而非 unlink)但只剩 BOM
+		postContent, err := os.ReadFile(csvFile)
+		require.NoError(t, err, "file should still exist after empty WriteCSV with target present")
+
+		require.NotContains(t, string(postContent), "stale-value",
+			"stale data must NOT survive empty WriteCSV — caller would load stale results thinking they are fresh")
+		require.NotContains(t, string(postContent), "another-stale-value",
+			"all stale rows must be wiped")
+
+		// BOM-only 檔案:長度 == BOM 長度(3 bytes for UTF-8)
+		require.Equal(t, csvutil.BOMBytes(), postContent,
+			"expected BOM-only content (len=%d, got len=%d)", len(csvutil.BOMBytes()), len(postContent))
+	})
+
+	t.Run("EmptyData_TargetExists_NoBOM_Truncates", func(t *testing.T) {
+		// P1-26 (b)補充:BOM 關閉時,empty data + target 存在 → 0 byte file(完全空)。
+		// 不該保留 stale 內容,也不該偷塞 BOM。
+		tempDir := t.TempDir()
+		cfg := config.DefaultConfig()
+		cfg.InputDir = tempDir
+		cfg.OutputDir = tempDir
+		cfg.OperateDir = tempDir
+		cfg.BOMEnabled = false
+		handler := NewCSVHandler(cfg)
+
+		csvFile := filepath.Join(tempDir, "stale_nobom.csv")
+
+		staleData := [][]string{
+			{"Time", "Ch1"},
+			{"1.0", "stale-no-bom"},
+		}
+		require.NoError(t, handler.WriteCSV(csvFile, staleData))
+		preContent, err := os.ReadFile(csvFile)
+		require.NoError(t, err)
+		require.Contains(t, string(preContent), "stale-no-bom")
+
+		require.NoError(t, handler.WriteCSV(csvFile, [][]string{}))
+
+		postContent, err := os.ReadFile(csvFile)
+		require.NoError(t, err)
+		require.Empty(t, postContent,
+			"BOM disabled + empty data → 0-byte truncate, got %d bytes: %q",
+			len(postContent), string(postContent))
 	})
 }
 
@@ -472,3 +548,118 @@ func TestCSVHandler_ReadCSV_StripsLeadingBOM(t *testing.T) {
 	// 資料列不該被誤剝 (BOM 只剝檔頭一次)
 	require.Equal(t, "0.001", records[1][0])
 }
+
+// TestCSVHandler_ReadCSV_StrictCSVDefenses 釘住 csv.NewReader 在 readAndParseCSV
+// 必須跑 strict defaults — FieldsPerRecord 自動鎖定 header 欄位數、LazyQuotes=false
+// 拒絕未配對引號、ReuseRecord=false 不複用 backing array。
+//
+// 此 test 透過三種 attacker-controlled 變形確認 fail-fast：
+//  1. 未配對引號（quote-injection / DoS）：應在 ReadAll 階段直接 error
+//  2. 欄位數不一致（jagged rows）：FieldsPerRecord=0 由 reader 鎖定第一筆，後續錯誤
+//  3. 正常 CSV：strict defaults 不應影響合法輸入
+func TestCSVHandler_ReadCSV_StrictCSVDefenses(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.InputDir = tempDir
+	cfg.OutputDir = tempDir
+	cfg.OperateDir = tempDir
+	handler := NewCSVHandler(cfg)
+
+	t.Run("RejectsUnpairedQuote", func(t *testing.T) {
+		// LazyQuotes=false：未配對引號 fail-fast。
+		path := filepath.Join(tempDir, "unpaired_quote.csv")
+		// 第一個 data field 開頭 " 但永遠不關閉，跨多行直到 EOF
+		csvContent := "Time,Ch1\n1.0,\"never closed\n2.0,123\n3.0,456"
+		require.NoError(t, os.WriteFile(path, []byte(csvContent), fsperm.FilePerm))
+
+		_, err := handler.ReadCSV(path)
+		require.Error(t, err, "未配對引號必須 fail-fast (LazyQuotes=false)")
+	})
+
+	t.Run("RejectsJaggedRows", func(t *testing.T) {
+		// FieldsPerRecord=0：header 鎖 N 欄，data row 欄位數不符直接 error。
+		path := filepath.Join(tempDir, "jagged.csv")
+		csvContent := "Time,Ch1,Ch2\n1.0,100,200\n2.0,300\n" // 第三行只有 2 欄
+		require.NoError(t, os.WriteFile(path, []byte(csvContent), fsperm.FilePerm))
+
+		_, err := handler.ReadCSV(path)
+		require.Error(t, err, "欄位數不一致必須被擋 (FieldsPerRecord=0)")
+	})
+
+	t.Run("AcceptsCleanCSV", func(t *testing.T) {
+		// Strict defaults 不應影響合法輸入。
+		path := filepath.Join(tempDir, "clean.csv")
+		csvContent := "Time,Ch1,Ch2\n1.0,100,200\n2.0,300,400\n"
+		require.NoError(t, os.WriteFile(path, []byte(csvContent), fsperm.FilePerm))
+
+		records, err := handler.ReadCSV(path)
+		require.NoError(t, err, "乾淨 CSV 必須通過 strict defenses")
+		require.Len(t, records, 3)
+	})
+}
+
+
+// TestCSVHandler_WriteCSV_FsyncContract 釘住 WriteCSV 必須在 close
+// 之前呼叫 file.Sync(),否則 OS page cache 內的 bytes 在 power loss /
+// kernel panic 後會失蹤,caller 卻已收到 nil error。
+//
+// 純 Go 無法直接斷言 fsync syscall 已發生(那要 dtruss / strace),退而求
+// 其次用 source-level assertion + happy path round-trip:
+//   1. Happy path: 寫 → 立即 read,內容必須完整 (fsync 失敗會在 caller 拿
+//      到 err,test 用 require.NoError 守);
+//   2. Source assertion: WriteCSV 的源碼必須含 `file.Sync()`,防止未來重構
+//      把 sync 拿掉(brittle 但便宜,符合 trade-off)。
+//
+// macOS dev verify 替代法: `sudo dtruss -t fsync -- go test -run
+// TestCSVHandler_WriteCSV_FsyncContract ./internal/io/...` 應看到 fsync
+// syscall;Linux 用 `strace -e fsync`。CI 通常不便,所以以上兩個 in-Go
+// assertion 是 first line of defense。
+func TestCSVHandler_WriteCSV_FsyncContract(t *testing.T) {
+	t.Run("HappyPathRoundtrip", func(t *testing.T) {
+		tempDir := t.TempDir()
+		cfg := config.DefaultConfig()
+		cfg.InputDir = tempDir
+		cfg.OutputDir = tempDir
+		cfg.OperateDir = tempDir
+		cfg.BOMEnabled = false
+		handler := NewCSVHandler(cfg)
+
+		csvFile := filepath.Join(tempDir, "fsync_roundtrip.csv")
+		data := [][]string{
+			{"Time", "Ch1"},
+			{"1.0", "100"},
+			{"2.0", "200"},
+		}
+
+		require.NoError(t, handler.WriteCSV(csvFile, data),
+			"WriteCSV must return nil on happy path; non-nil indicates fsync or close failed")
+
+		// Immediately read back — fsync ensures content is durable on disk.
+		raw, err := os.ReadFile(csvFile)
+		require.NoError(t, err)
+		require.Contains(t, string(raw), "Time,Ch1",
+			"file content must be readable immediately after WriteCSV returns")
+		require.Contains(t, string(raw), "2.0,200",
+			"all rows must be flushed (not just header) before WriteCSV returns")
+	})
+
+	t.Run("SourceContainsFileSync", func(t *testing.T) {
+		// Brittle but cheap regression guard: WriteCSV 的實作必須含
+		// file.Sync() 呼叫。一旦有人 refactor 把 Sync 拿掉,此 test 立即 fail。
+		// 我們直接讀 csv_handler.go 原始碼 — 不用 reflection 因為 Sync 是
+		// concrete method 不在 interface 上。
+		_, currentFile, _, ok := runtime.Caller(0)
+		require.True(t, ok, "runtime.Caller failed")
+
+		// csv_handler.go 與 csv_handler_test.go 同層目錄
+		srcPath := filepath.Join(filepath.Dir(currentFile), "csv_handler.go")
+		src, err := os.ReadFile(srcPath)
+		require.NoError(t, err, "must be able to read csv_handler.go")
+
+		require.Contains(t, string(src), "file.Sync()",
+			"WriteCSV must invoke file.Sync() before file.Close() for durability "+
+				"(P1-J H25). If you removed it, add it back or migrate caller to "+
+				"csvutil.WriteCSVAtomic (which has built-in fsync).")
+	})
+}
+

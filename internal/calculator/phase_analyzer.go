@@ -170,6 +170,13 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "階段分析器為空")
 	}
 
+	// 顯式 nil dataset 防線 — IsEmpty() 雖對 nil receiver 安全，但下游
+	// collectPhaseData / computePhaseStatistics 使用 dataset.Data / Headers 不會
+	// 自動 nil-handle。在入口顯式拒絕讓 contract 明確。訊息對齊既有測試期望「數據集為空」。
+	if dataset == nil {
+		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "數據集為空")
+	}
+
 	startTime := time.Now()
 
 	if err := p.validateAnalyzeInput(dataset, phases); err != nil {

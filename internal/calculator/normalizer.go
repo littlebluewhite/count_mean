@@ -2,6 +2,7 @@ package calculator
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	calcerrors "count_mean/internal/errors"
@@ -29,7 +30,13 @@ func NewNormalizer(scalingFactor int) *Normalizer {
 	}
 }
 
-// Normalize 標準化數據集（每個值除以參考值）.
+// Normalize 標準化數據集（每個值除以參考值）。
+//
+// **Reference 契約**：reference.Data 必須**恰好一行**（MVC/MAX 模式：每條肌肉
+// 一個 peak）。多行 reference 過去被 Normalize 取 Data[0] 後靜默忽略其餘行，
+// 導致使用者誤以為「reference 全行都被採用」—— 改為 fail-fast，
+// 回傳 ErrReferenceMultipleRows。若 caller 需要逐行掃描最大值再標準化，
+// 請改用 NormalizeByRangeMax（內部處理 PhaseSyncEMGData）。
 func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.EMGDataset, error) {
 	if n == nil {
 		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "標準化器為空")
@@ -43,6 +50,22 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 		n.logger.Error("標準化輸入驗證失敗", err, map[string]interface{}{
 			"dataset_empty":   dataset.IsEmpty(),
 			"reference_empty": reference.IsEmpty(),
+		})
+
+		return nil, err
+	}
+
+	// reference 必須恰好一行（MVC/MAX 單行契約）。多行靜默忽略歷史包袱在此終止。
+	if len(reference.Data) != 1 {
+		err := calcerrors.NewCalculatorErrorWithContext(
+			calcerrors.ErrReferenceMultipleRows,
+			fmt.Sprintf("參考數據集必須恰好一行，實際為 %d 行", len(reference.Data)),
+			map[string]interface{}{
+				"reference_rows": len(reference.Data),
+			},
+		)
+		n.logger.Error("參考數據集行數違反單行契約", err, map[string]interface{}{
+			"reference_rows": len(reference.Data),
 		})
 
 		return nil, err
@@ -72,6 +95,68 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 		return nil, err
 	}
 
+	// Headers vs ChannelCount mismatch fail-fast。
+	//
+	// 規格契約:Headers[0] 為時間欄、Headers[1..] 為各通道名 — 因此
+	// len(Headers)-1 必須等於 ChannelCount()。過去若 caller 構造的 EMGDataset
+	// Headers 與 Data[0].Channels 寬度不一致 (header/data desync — 通常是
+	// upstream parser bug 或測試 fixture 失誤),Normalize 不會擋,直接把錯誤的
+	// Headers 複製到輸出,下游 CSV writer 寫出「欄位數與資料行不一致」的損壞
+	// CSV,Excel/pandas 讀進來時行為各異 (truncate / pad / error)。
+	//
+	// 早期 assert 能讓 ragged dataset 在 boundary 就被擋下,避免污染下游。
+	expectedHeaderCount := dataset.ChannelCount() + 1
+	if len(dataset.Headers) != expectedHeaderCount {
+		err := calcerrors.NewCalculatorErrorWithContext(
+			calcerrors.ErrChannelMismatch,
+			fmt.Sprintf(
+				"數據集 Headers 寬度 %d 與通道數 %d 不一致(期望 Headers 寬度 = 通道數 + 1)",
+				len(dataset.Headers), dataset.ChannelCount(),
+			),
+			map[string]interface{}{
+				"headers_len":      len(dataset.Headers),
+				"channel_count":    dataset.ChannelCount(),
+				"expected_headers": expectedHeaderCount,
+			},
+		)
+		n.logger.Error("Headers/ChannelCount 寬度不一致", err, map[string]interface{}{
+			"headers_len":      len(dataset.Headers),
+			"channel_count":    dataset.ChannelCount(),
+			"expected_headers": expectedHeaderCount,
+		})
+
+		return nil, err
+	}
+
+	// dataset.ChannelCount() 只取 Data[0] 寬度,row 1..N 沒被檢查;
+	// 過去 hot loop 對 wider row 會 `refValues[j]` index-out-of-range panic,
+	// narrower row 則 silent emit ragged dataset 污染下游。改為在進 loop
+	// 之前一次驗證所有 row,讓 fast path 100% 命中、把 fallback alloc 拿掉。
+	expectedChannelCount := reference.ChannelCount()
+	for i, row := range dataset.Data {
+		if len(row.Channels) != expectedChannelCount {
+			err := calcerrors.NewCalculatorErrorWithContext(
+				calcerrors.ErrChannelMismatch,
+				fmt.Sprintf(
+					"數據集第 %d 行通道數 %d 與參考數據集通道數 %d 不匹配",
+					i+1, len(row.Channels), expectedChannelCount,
+				),
+				map[string]interface{}{
+					"row_index":          i + 1,
+					"row_channels":       len(row.Channels),
+					"reference_channels": expectedChannelCount,
+				},
+			)
+			n.logger.Error("數據行通道數不匹配", err, map[string]interface{}{
+				"row_index":          i + 1,
+				"row_channels":       len(row.Channels),
+				"reference_channels": expectedChannelCount,
+			})
+
+			return nil, err
+		}
+	}
+
 	result := &models.EMGDataset{
 		Headers:               make([]string, len(dataset.Headers)),
 		Data:                  make([]models.EMGData, 0, dataset.DataPointCount()),
@@ -87,30 +172,15 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 		"reference_values": refValues,
 	})
 
-	// 檢查是否有除以零的情況
-	for i, refVal := range refValues {
-		if refVal == 0 {
-			err := calcerrors.NewCalculatorErrorWithContext(
-				calcerrors.ErrZeroReference,
-				fmt.Sprintf("參考值在通道 %d 為零，無法進行標準化", i+1),
-				map[string]interface{}{
-					"channel_index":   i + 1,
-					"reference_value": refVal,
-				},
-			)
-			n.logger.Error("參考值為零", err, map[string]interface{}{
-				"channel_index":   i + 1,
-				"reference_value": refVal,
-			})
-
-			return nil, err
-		}
+	if err := n.validateReferenceValues(refValues); err != nil {
+		return nil, err
 	}
 
 	// 預配 totalPoints*channelCount 大小的 buffer，逐 row 切 sub-slice：
 	// 30 萬點 × 16 channel 級別下，per-row make 會產生 30 萬次 allocation；
 	// 改用三索引切片 buf[i:j:j] 限制 cap，未來若有 append(channels, ...) 也只會新配置不會寫穿。
 	// 下游消費者 (csv writer / convertNormalizedDataToArray / chart) 全部僅讀，sub-slice 安全。
+	// 所有 row 已在上方統一驗證寬度,fast path 100% 命中,不再需要 fallback alloc。
 	totalPoints := len(dataset.Data)
 	channelCount := len(refValues)
 
@@ -120,15 +190,9 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 	}
 
 	for i, data := range dataset.Data {
-		var normalizedChannels []float64
-
-		if len(data.Channels) == channelCount && buffer != nil {
-			start := i * channelCount
-			end := start + channelCount
-			normalizedChannels = buffer[start:end:end]
-		} else {
-			normalizedChannels = make([]float64, len(data.Channels))
-		}
+		start := i * channelCount
+		end := start + channelCount
+		normalizedChannels := buffer[start:end:end]
 
 		for j, val := range data.Channels {
 			normalizedChannels[j] = val / refValues[j]
@@ -254,4 +318,57 @@ func (n *Normalizer) parseReferenceData(records [][]string) (*models.EMGDataset,
 	})
 
 	return dataset, nil
+}
+
+// validateReferenceValues 對參考值進行 fail-fast 檢查（P1-A2-1 / P0-4）：
+//   - NaN：val / NaN = NaN，整批 normalize 結果污染為 NaN → ErrNaNReference。
+//   - ±Inf：val / Inf = 0 或 ±Inf，數值都不可用 → ErrInfReference。
+//   - 0：division by zero → ErrZeroReference。
+//
+// 三類錯誤過去都丟同一個 ErrZeroReference,callers 無法 programmatically
+// 分辨「資料品質問題 retry/clean」vs「真實 0 MVC refuse run」;改為三路 dispatch
+// 對齊 range_normalizer.ErrChannelMaxNaN / ErrChannelMaxInf 已有的拆分模式。
+// 錯誤訊息保留通道索引（1-based）方便使用者排查。
+func (n *Normalizer) validateReferenceValues(refValues []float64) error {
+	for i, refVal := range refValues {
+		var (
+			message  string
+			label    string
+			sentinel error
+		)
+
+		switch {
+		case math.IsNaN(refVal):
+			message = fmt.Sprintf("參考值在通道 %d 為 NaN，無法進行標準化", i+1)
+			label = "NaN"
+			sentinel = calcerrors.ErrNaNReference
+		case math.IsInf(refVal, 0):
+			message = fmt.Sprintf("參考值在通道 %d 為 Inf，無法進行標準化", i+1)
+			label = "Inf"
+			sentinel = calcerrors.ErrInfReference
+		case refVal == 0:
+			message = fmt.Sprintf("參考值在通道 %d 為零，無法進行標準化", i+1)
+			label = "Zero"
+			sentinel = calcerrors.ErrZeroReference
+		default:
+			continue
+		}
+
+		err := calcerrors.NewCalculatorErrorWithContext(
+			sentinel,
+			message,
+			map[string]interface{}{
+				"channel_index":   i + 1,
+				"reference_value": label,
+			},
+		)
+		n.logger.Error("參考值無效", err, map[string]interface{}{
+			"channel_index":   i + 1,
+			"reference_value": label,
+		})
+
+		return err
+	}
+
+	return nil
 }

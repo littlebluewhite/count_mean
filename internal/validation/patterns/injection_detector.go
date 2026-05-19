@@ -75,11 +75,33 @@ func (d *InjectionDetectorImpl) DetectScript(content string) (bool, string) {
 }
 
 // DetectCommand checks for command injection patterns.
+//
+// 原本 case-sensitive 比對，與 DetectFormula/DetectSQL/DetectScript 不一致 —
+// `WHOAMI`、`Curl` 等大小寫變體會繞過偵測。改成 case-insensitive 與其他 detector 對齊。
+// 路徑 pattern（`/etc/`、`C:\`）case 在類 Unix 系統有語意意義，但 attacker 控制的
+// 字串依然會被 lowercase 化偵測 — 標準路徑（`/Etc/`、`c:\`）很少出現在 EMG cell content，
+// 一致化的 false positive 風險可忽略。
+//
+// 兩段比對：
+//
+//  1. 先跑 word-boundary 短 token（`id`、`sh`、`at`、`su -`），避免 substring 在
+//     `david`、`subject_id`、`Mid Foot`、`Cash`、`shoulder` 上爆炸誤判。
+//  2. 再跑長 token substring list（`curl `、`whoami`、`netcat `、`/etc/` 等），
+//     這些子串本身已足夠 specific，不會在合法 EMG cell 上誤命中。
 func (d *InjectionDetectorImpl) DetectCommand(content string) (bool, string) {
+	// (1) word-boundary 短 token — 用 regex \btoken\b 避免子字串誤判。
+	for _, re := range CommandInjectionWordTokens() {
+		if loc := re.FindStringIndex(content); loc != nil {
+			return true, content[loc[0]:loc[1]]
+		}
+	}
+
+	// (2) substring patterns — 長度 / specificity 足夠，case-insensitive substring 即可。
+	contentLower := strings.ToLower(content)
 	patterns := d.registry.Get(CommandInjection)
 
 	for _, pattern := range patterns {
-		if strings.Contains(content, pattern) {
+		if strings.Contains(contentLower, strings.ToLower(pattern)) {
 			return true, pattern
 		}
 	}

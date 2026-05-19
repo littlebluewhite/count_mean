@@ -1,6 +1,7 @@
 package cci
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -41,7 +42,7 @@ func TestCCIAnalyzer_ExportToCSV_MaliciousSubject_NoTraversal(t *testing.T) {
 				GaitEndTime:   2,
 			}
 
-			outputPath, err := a.ExportToCSV(result, tempDir)
+			outputPath, err := a.ExportToCSV(context.Background(), result, tempDir)
 			require.NoError(t, err)
 
 			absOutput, err := filepath.Abs(outputPath)
@@ -92,7 +93,7 @@ func TestCCIAnalyzer_ExportToCSV_InvalidGaitDuration(t *testing.T) {
 				GaitEndTime:   tc.endTime,
 			}
 
-			_, err := a.ExportToCSV(result, tempDir)
+			_, err := a.ExportToCSV(context.Background(), result, tempDir)
 			require.Error(t, err, "expected error for invalid gait duration")
 			assert.Contains(t, err.Error(), "步態週期")
 		})
@@ -128,7 +129,7 @@ func TestCCIAnalyzer_ExportToCSV_FiltersNaNAndInfRows(t *testing.T) {
 		},
 	}
 
-	outputPath, err := a.ExportToCSV(result, tempDir)
+	outputPath, err := a.ExportToCSV(context.Background(), result, tempDir)
 	require.NoError(t, err)
 
 	csvBytes, err := os.ReadFile(outputPath)
@@ -171,7 +172,7 @@ func TestCCIAnalyzer_ExportToCSV_PartialNaNRowKeepsOtherPairs(t *testing.T) {
 		},
 	}
 
-	outputPath, err := a.ExportToCSV(result, tempDir)
+	outputPath, err := a.ExportToCSV(context.Background(), result, tempDir)
 	require.NoError(t, err)
 
 	csvBytes, err := os.ReadFile(outputPath)
@@ -225,7 +226,7 @@ func TestCCIAnalyzer_AnalyzeCCI_AcceptsLiteralPercentInEMGFilename(t *testing.T)
 	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o600))
 
 	a := NewCCIAnalyzer()
-	_, err := a.AnalyzeCCI(&CCIParams{
+	_, err := a.AnalyzeCCI(context.Background(), &CCIParams{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		SubjectIndex: 0,
@@ -245,7 +246,7 @@ func TestCCIAnalyzer_AnalyzeCCI_AcceptsLiteralPercentInEMGFilename(t *testing.T)
 }
 
 // TestCCIAnalyzer_ConcurrentCallsNoRace 釘住與 muscle_ratio 對稱的並發守門。
-// P2-C 後 EMGParser 改 stateless，但 Wails 並行 RPC 仍可能在未來 refactor 引入新 shared
+// 後 EMGParser 改 stateless，但 Wails 並行 RPC 仍可能在未來 refactor 引入新 shared
 // mutable state — 此 test 用 race detector 守門。
 //
 // 本 test 必須在 `go test -race` 下跑才會觸發 race detector。
@@ -282,7 +283,7 @@ func TestCCIAnalyzer_ConcurrentCallsNoRace(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, err := a.AnalyzeCCI(&CCIParams{
+				_, err := a.AnalyzeCCI(context.Background(), &CCIParams{
 					ManifestFile: manifestPath,
 					DataFolder:   dataDir,
 					SubjectIndex: 0,

@@ -158,11 +158,131 @@ invalid_time	0.1	0.2
 	}
 }
 
+// ANC text parser 必須 strip UTF-8 BOM。Excel 匯出帶 BOM 的 ANC 檔
+// 若不剝除，第一行 `File_Type:` 比對失敗、channel name 多前綴 → silent miscalc。
+func TestANCParser_StripsBOM(t *testing.T) {
+	const bom = "\xEF\xBB\xBF"
+	content := bom + `1	File_Type:	AMTI_FORCE_PLATE	Generation#:	4
+2	Board_Type:	OR6-5-1000
+3	Trial_Name:	TEST	Trial#:	1	Duration(Sec.):	1.000	#Channels:	2
+4	BitDepth:	16	PreciseRate:	1000.000
+5
+6
+7
+8
+9	Name	Fx	Fy
+10	Rate	1000	1000
+11	Range	2000	2000
+12	Units	N	N
+0.000	0.1	0.2
+0.001	0.2	0.3`
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "test_bom_*.anc")
+	require.NoError(t, err)
+	_, err = tmpFile.WriteString(content)
+	require.NoError(t, err)
+	tmpFile.Close()
+
+	parser := NewANCParser()
+	data, err := parser.ParseFile(tmpFile.Name())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	assert.Equal(t, []string{"Fx", "Fy"}, data.Headers,
+		"channel names should not be prefixed with BOM")
+}
+
 func TestANCParser_ParseFile_FileNotFound(t *testing.T) {
 	parser := NewANCParser()
 	_, err := parser.ParseFile("nonexistent_file.anc")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "無法開啟 ANC 檔案")
+}
+
+// leading blank line 必須不會讓 handler map 偏移。
+// 原本 parseHeader 對 leading blank line 仍 `lineNum++`,後續每一行的 dispatch
+// key 整個錯位 1 — File_Type 被當 Board_Type 處理、ChannelNames 被當 Rates...
+// 修法後:lineNum 在 blank-skip 之前不遞增,且若 parts[0] 為 ANC 顯式行號則用該
+// parsedLine 當 dispatch key(雙重保險)。
+func TestANCParser_ParseHeader_LeadingBlankLine_NoMisalignment(t *testing.T) {
+	// 第一行刻意留空,以模擬 ANC 匯出時頭部換行的 edge case。
+	const content = `
+1	File_Type:	AMTI_FORCE_PLATE	Generation#:	4
+2	Board_Type:	OR6-5-1000
+3	Trial_Name:	TEST	Trial#:	1	Duration(Sec.):	1.000	#Channels:	2
+4	BitDepth:	16	PreciseRate:	1000.000
+5
+6
+7
+8
+9	Name	Fx	Fy
+10	Rate	1000	1000
+11	Range	2000	2000
+12	Units	N	N
+0.000	0.1	0.2
+0.001	0.2	0.3
+`
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "test_leading_blank_*.anc")
+	require.NoError(t, err)
+	_, err = tmpFile.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	parser := NewANCParser()
+	data, err := parser.ParseFile(tmpFile.Name())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	// 核心斷言:即使第一行是 blank,所有 header 欄位仍能正確對齊解出。
+	assert.Equal(t, []string{"Fx", "Fy"}, data.Headers,
+		"ChannelNames 必須正確解出 — 不能因 leading blank 偏移到 Rates handler")
+	assert.Len(t, data.Time, 2, "資料行必須仍可正常解析")
+	assert.InDelta(t, 0.001, parser.GetSampleInterval(), 1e-9,
+		"PreciseRate=1000Hz 必須仍能解出(handler map 沒有偏移)")
+}
+
+// channel name 含空格不能被 Fields 拆兩列。
+// `strings.Fields("Name\tLeft Quad\tFx")` 切空白 → 4 字串,把 "Left Quad" 拆成兩列;
+// 改用 `strings.Split(content, "\t")` 後對齊 line 491 handleFirstLine 的 tab 行為。
+// Rate / Range 同病也修。
+func TestANCParser_ChannelName_ContainsSpace_NotSplit(t *testing.T) {
+	// 通道名稱含空格("Left Quad"、"Right Glute"),且 Rate/Range 行也驗證對齊。
+	const content = `1	File_Type:	AMTI_FORCE_PLATE	Generation#:	4
+2	Board_Type:	OR6-5-1000
+3	Trial_Name:	TEST	Trial#:	1	Duration(Sec.):	1.000	#Channels:	3
+4	BitDepth:	16	PreciseRate:	1000.000
+5
+6
+7
+8
+9	Name	Left Quad	Right Glute	Mid Hamstring
+10	Rate	1000	1000	1000
+11	Range	2000	2000	2000
+12	Units	N	N	N
+0.000	0.1	0.2	0.3
+0.001	0.2	0.3	0.4
+`
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "test_space_channel_*.anc")
+	require.NoError(t, err)
+	_, err = tmpFile.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	parser := NewANCParser()
+	data, err := parser.ParseFile(tmpFile.Name())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	// 核心斷言:NumChannels 必須對齊 ChannelNames 長度(各為 3,不能被拆成 6)。
+	assert.Equal(t, []string{"Left Quad", "Right Glute", "Mid Hamstring"}, data.Headers,
+		"含空格的 channel name 必須保留為單一通道,不能被 Fields 拆兩列")
+	assert.Len(t, data.Headers, 3, "通道數必須對齊 #Channels:3")
+
+	// 資料對應也驗一下,確保通道分欄與資料欄對齊(不是 silent miscalc)。
+	assert.InDelta(t, 0.1, data.Forces["Left Quad"][0], 1e-9)
+	assert.InDelta(t, 0.2, data.Forces["Right Glute"][0], 1e-9)
+	assert.InDelta(t, 0.3, data.Forces["Mid Hamstring"][0], 1e-9)
 }
 
 func TestANCParser_GetDataInTimeRange(t *testing.T) {
@@ -387,31 +507,108 @@ func TestANCParser_extractValue(t *testing.T) {
 			label:    "Label:",
 			expected: "",
 		},
+		{
+			// extractValue must preserve `:` inside the value (e.g. a
+			// timestamp HH:MM:SS or a URL-style label). The pre-fix code used
+			// strings.Split(part, ":") which trimmed everything after the first
+			// `:` and only returned the middle segment — silently corrupting
+			// any header value that contains a colon.
+			name:     "value contains colon (timestamp)",
+			content:  "Trial_Name:08:30:45",
+			label:    "Trial_Name:",
+			expected: "08:30:45",
+		},
+		{
+			// Tab-separated 也常見：label 與 value 之間用 tab 分開，value 內含 ":"。
+			name:     "tab-separated value containing colon",
+			content:  "Board_Type:\tAMTI:OR6-5",
+			label:    "Board_Type:",
+			expected: "AMTI:OR6-5",
+		},
+		{
+			// HasPrefix word-boundary。同列出現 `Foo_Trial#:5\tTrial#:1`，
+			// 找 `Trial#:` 不該被前一個 cell 的 `Foo_Trial#:5` 誤命中而回 `5`，
+			// 必須走到後面真正開頭是 `Trial#:` 的 cell 取 `1`。原本用 Contains 會
+			// 把 `Foo_Trial#:5` 當命中（substring collision），現在 HasPrefix 過濾掉。
+			name:     "M12 prefix match avoids substring collision (suffix-only matches must skip)",
+			content:  "Foo_Trial#:5\tTrial#:1",
+			label:    "Trial#:",
+			expected: "1",
+		},
+		{
+			// cell 中段含 label 但非 prefix。`abcTrial#:9` 不該被 `Trial#:`
+			// 命中（label 必須出現在 trimmed cell 的開頭）。
+			name:     "M12 label embedded in middle is not matched",
+			content:  "abcTrial#:9",
+			label:    "Trial#:",
+			expected: "",
+		},
+		{
+			// cell 含值且 value 本身含 `:`，HasPrefix + 直接切 prefix 後
+			// rest 應保留全部 `:`（取代原本 SplitN 行為，行為一致）。
+			name:     "M12 prefix-strip preserves colons in value",
+			content:  "Trial_Name:09:15:00",
+			label:    "Trial_Name:",
+			expected: "09:15:00",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// 使用反射或其他方式測試私有方法，這裡我們通過間接方式測試
-			// 由於 extractValue 是私有方法，我們通過解析包含該值的頭部來測試
-			result := extractValueTestHelper(parser, tt.content, tt.label)
+			// 直接呼叫真正的 extractValue 私有方法 — 用同 package test 來繞過
+			// 介面限制，避免 helper 與 production code 走向不同步（重現的
+			// 問題正是 helper 把 bug 抄了一份）。
+			result := parser.extractValue(tt.content, tt.label)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
-// 這裡創建一個精確模擬 ANC 解析器 extractValue 方法的版本.
-func extractValueTestHelper(_ *ANCParser, content, label string) string {
-	parts := strings.Split(content, "\t")
-	for _, part := range parts {
-		if strings.Contains(part, label) {
-			valueParts := strings.Split(part, ":")
-			if len(valueParts) >= 2 {
-				return strings.TrimSpace(valueParts[1])
-			}
-		}
-	}
+// TestANCParser_FileType_ColonInValue 是 的回歸測試 —
+// handleFileTypeLine 原本用 `strings.Split(part, ":")[1]` 抓 File_Type value,
+// 若 value 自身含 `:`(例如 timestamp `08:30:45`)會被截到第一個 `:` 之前
+// 只剩 `"08"`。改用 SplitN(part, ":", 2) + len check 之後,整個 value 必須保留。
+//
+// 與 P1-A3-5(extractValue)同 class 的 sibling bug,V5 PoC 重現 fixture:
+// `File_Type:08:30:45` → 修前回 `"08"`、修後回 `"08:30:45"`。
+func TestANCParser_FileType_ColonInValue(t *testing.T) {
+	// fixture:第 1 行 File_Type 為同 cell 寫法且 value 含 `:`(timestamp 形)。
+	// 注意是 `File_Type:08:30:45`(無 tab 分隔),完全踩到 sibling antipattern
+	// 的觸發條件 — value 含至少一個 `:`,Split 後第 [1] 段只剩前面的截斷值。
+	const content = `1	File_Type:08:30:45	Generation#:	4
+2	Board_Type:	OR6-5-1000
+3	Trial_Name:	TEST	Trial#:	1	Duration(Sec.):	1.000	#Channels:	2
+4	BitDepth:	16	PreciseRate:	1000.000
+5
+6
+7
+8
+9	Name	Fx	Fy
+10	Rate	1000	1000
+11	Range	2000	2000
+12	Units	N	N
+0.000	0.1	0.2
+0.001	0.2	0.3
+`
 
-	return ""
+	tmpFile, err := os.CreateTemp(t.TempDir(), "test_filetype_colon_*.anc")
+	require.NoError(t, err)
+	_, err = tmpFile.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	parser := NewANCParser()
+	data, err := parser.ParseFile(tmpFile.Name())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	// 核心斷言:value 必須完整保留 — 修前會回 `"08"`(被首個 `:` 截斷),修後
+	// 必須是完整 `"08:30:45"`。透過直接呼叫 handleFileTypeLine 確認 sibling
+	// 修法 真的生效(避免 caller 邊路徑遮蔽 fail)。
+	header := &ANCHeader{}
+	handleFileTypeLine(nil, header, "File_Type:08:30:45	Generation#:	4")
+	assert.Equal(t, "08:30:45", header.FileType,
+		"handleFileTypeLine 必須保留 value 內的所有 `:` — 不能在第一個 `:` 截斷")
 }
 
 func TestANCParser_Integration(t *testing.T) {
@@ -730,6 +927,147 @@ func TestANCParser_ParseXLSXFile_Validation(t *testing.T) {
 		assert.Equal(t, 0.5, rangeData.Time[0])
 		assert.Equal(t, 1.5, rangeData.Time[2])
 	})
+}
+
+// TestANCParser_XLSX_RowIndexContract 釘住 xlsx row index 必須與
+// excelize 1-based row number 對齊（內部用 0-based slice index）。任何人未來
+// 動 parseSimpleXLSX / parseANCFormatXLSX 的 startRowIdx 都會破壞這個 mapping。
+//
+// 契約：
+//   - simple xlsx：xlsx row 1 = header，xlsx row 2+ = data。內部 rows[0] 是
+//     header，rows[1] 是第一筆數據（startRowIdx=1）。
+//   - ANC-format xlsx：xlsx row 9 = channel names（內部 rows[8]）；xlsx row 12+
+//     = data（內部 startRowIdx=ANCHeaderRows=11）。
+//
+// 為了「lockdown」契約而非僅 happy-path，本 test 用每行唯一值（row i 的 Fx
+// 數值 = i），讓任何 off-by-one 都會在 assertion 上立刻失敗。
+func TestANCParser_XLSX_RowIndexContract(t *testing.T) {
+	t.Parallel()
+
+	t.Run("simple_xlsx_row1_header_row2_first_data", func(t *testing.T) {
+		t.Parallel()
+
+		// xlsx row 1 (1-based) = header "Time, Fx, Fy"
+		// xlsx row 2 = first data: time=0.000, Fx=2.0, Fy=20.0 (row number encoded into value)
+		// xlsx row 3 = second data: time=0.001, Fx=3.0, Fy=30.0
+		// xlsx row 4 = third data:  time=0.002, Fx=4.0, Fy=40.0
+		headers := []string{"Time", "Fx", "Fy"}
+		data := [][]string{
+			{"0.000", "2.0", "20.0"}, // xlsx row 2 → internal Time/Fx/Fy index 0
+			{"0.001", "3.0", "30.0"}, // xlsx row 3 → internal index 1
+			{"0.002", "4.0", "40.0"}, // xlsx row 4 → internal index 2
+		}
+
+		xlsxPath := createTestXLSXFile(t, headers, data)
+		t.Cleanup(func() { _ = os.Remove(xlsxPath) })
+
+		parser := NewANCParser()
+		forceData, err := parser.ParseFile(xlsxPath)
+		require.NoError(t, err)
+		require.NotNil(t, forceData)
+
+		// Header row (xlsx row 1) must NOT appear as data.
+		require.Len(t, forceData.Time, 3,
+			"expected exactly 3 data rows (xlsx rows 2-4); header (xlsx row 1) must not be data")
+
+		// First data row corresponds to xlsx row 2 (encoded Fx=2.0).
+		assert.Equal(t, 0.000, forceData.Time[0],
+			"forceData.Time[0] must be xlsx row 2 time value (0.000)")
+		assert.Equal(t, 2.0, forceData.Forces["Fx"][0],
+			"forceData.Forces[Fx][0] must equal xlsx row 2 Fx (2.0); off-by-one would skip row 2")
+		assert.Equal(t, 20.0, forceData.Forces["Fy"][0])
+
+		// Second data row corresponds to xlsx row 3.
+		assert.Equal(t, 0.001, forceData.Time[1])
+		assert.Equal(t, 3.0, forceData.Forces["Fx"][1])
+
+		// Third data row corresponds to xlsx row 4.
+		assert.Equal(t, 0.002, forceData.Time[2])
+		assert.Equal(t, 4.0, forceData.Forces["Fx"][2])
+
+		// "Time" must be excluded from channel names (only data columns are channels).
+		assert.Equal(t, []string{"Fx", "Fy"}, forceData.Headers,
+			"channel names must exclude the leading 'Time' column from header row")
+		assert.NotContains(t, forceData.Forces, "Time",
+			"'Time' must not be a channel; it's the time axis")
+	})
+
+	t.Run("anc_format_xlsx_row9_names_row12_first_data", func(t *testing.T) {
+		t.Parallel()
+
+		// Build an ANC-format xlsx:
+		//   row 1: File_Type:AMTI_FORCE_PLATE (triggers isANCFormat detection)
+		//   row 2-8: filler
+		//   row 9: Name Fx Fy Fz  (channel names; internal rows[8])
+		//   row 10: Rate 1000 1000 1000
+		//   row 11: Range 2000 2000 5000
+		//   row 12: 0.000 1.1 2.2 3.3   (first data row; internal rows[11], startRowIdx=11)
+		//   row 13: 0.001 4.4 5.5 6.6
+		//   row 14: 0.002 7.7 8.8 9.9
+		xlsxPath := buildANCFormatXLSX(t)
+		t.Cleanup(func() { _ = os.Remove(xlsxPath) })
+
+		parser := NewANCParser()
+		forceData, err := parser.ParseFile(xlsxPath)
+		require.NoError(t, err)
+		require.NotNil(t, forceData)
+
+		// Channel names must come from xlsx row 9 (internal rows[8]).
+		assert.Equal(t, []string{"Fx", "Fy", "Fz"}, forceData.Headers,
+			"channels must read from xlsx row 9 (internal rows[8])")
+
+		// Data must start at xlsx row 12 (internal rows[11]).
+		// If anyone changes startRowIdx from ANCHeaderRows(11) → 10 or 12, the
+		// first time value would be from "Rate" or "0.001" — both fail this assert.
+		require.Len(t, forceData.Time, 3,
+			"expected exactly 3 data rows (xlsx rows 12-14)")
+		assert.Equal(t, 0.000, forceData.Time[0],
+			"forceData.Time[0] must equal xlsx row 12 time (0.000); off-by-one points to row 11 (Range) or row 13")
+		assert.Equal(t, 1.1, forceData.Forces["Fx"][0])
+		assert.Equal(t, 0.001, forceData.Time[1])
+		assert.Equal(t, 0.002, forceData.Time[2])
+		assert.Equal(t, 9.9, forceData.Forces["Fz"][2])
+	})
+}
+
+// buildANCFormatXLSX 建立完整 ANC-format xlsx：rows 1-11 為頭部、row 9 為通道名稱、
+// row 12+ 為資料；返回臨時檔案路徑。提供 row-index lockdown 使用。
+func buildANCFormatXLSX(t *testing.T) string {
+	t.Helper()
+
+	f := excelize.NewFile()
+	sheetName := f.GetSheetName(0)
+
+	setCell := func(row int, vals ...string) {
+		for col, v := range vals {
+			cell, err := excelize.CoordinatesToCellName(col+1, row)
+			require.NoError(t, err)
+			require.NoError(t, f.SetCellValue(sheetName, cell, v))
+		}
+	}
+
+	setCell(1, "File_Type:", "AMTI_FORCE_PLATE")
+	setCell(2, "Board_Type:", "OR6-5-1000")
+	setCell(3, "Trial_Name:", "TEST")
+	setCell(4, "BitDepth:", "16")
+	setCell(5, "")
+	setCell(6, "")
+	setCell(7, "")
+	setCell(8, "")
+	setCell(9, "Name", "Fx", "Fy", "Fz") // row 9 → internal rows[8]
+	setCell(10, "Rate", "1000", "1000", "1000")
+	setCell(11, "Range", "2000", "2000", "5000")
+	setCell(12, "0.000", "1.1", "2.2", "3.3") // row 12 → internal rows[11]; first data
+	setCell(13, "0.001", "4.4", "5.5", "6.6")
+	setCell(14, "0.002", "7.7", "8.8", "9.9")
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "test_anc_format_*.xlsx")
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+	require.NoError(t, f.SaveAs(tmpFile.Name()))
+	require.NoError(t, f.Close())
+
+	return tmpFile.Name()
 }
 
 // formatFloat 將浮點數格式化為字符串.

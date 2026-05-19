@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"count_mean/internal/models"
+	"count_mean/internal/musclemap"
 )
 
 // MuscleRatio defines one ratio column: numerator/denominator by short muscle name.
@@ -98,7 +99,12 @@ func BuildRightSideChannelMap(headers []string) (map[string]string, error) {
 			continue
 		}
 
-		channelMap[short] = header
+		// 偵測重複 short name 即 error,避免「兩個 R.RA: ...」silent
+		// overwrite 造成下游用錯通道。改用 musclemap.AssignShort 共用 helper —
+		// 與 cci.BuildChannelMap 對稱,行為由單一實作保證。
+		if err := musclemap.AssignShort(channelMap, short, header); err != nil {
+			return nil, err
+		}
 	}
 
 	for _, name := range requiredMuscles {

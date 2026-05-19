@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,22 @@ import (
 	"count_mean/internal/io"
 	"count_mean/internal/security/fsperm"
 )
+
+// relTol 是 phase analysis 比對的相對誤差,1e-9 對 float64 (mantissa ~15 位 digit)
+// 留出寬鬆 margin,同時收緊到「ULP 累積誤差仍會 fail」。
+// 過去直接用 require.Equal 比 1e+12/5e+11 等大數,ULP 累積誤差會踩。
+const phaseAnalysisRelTol = 1e-9
+
+// assertFloatEqual 比較兩個 float64 是否在 phaseAnalysisRelTol 相對誤差內相等。
+// want=0 退化為絕對 epsilon=phaseAnalysisRelTol。
+func assertFloatEqual(t *testing.T, want, got float64, msgAndArgs ...interface{}) {
+	t.Helper()
+	tol := math.Abs(want) * phaseAnalysisRelTol
+	if tol == 0 {
+		tol = phaseAnalysisRelTol
+	}
+	require.InDelta(t, want, got, tol, msgAndArgs...)
+}
 
 // TestFullWorkflow_MaxMeanCalculation 測試完整的最大平均值計算流程.
 func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
@@ -104,9 +121,9 @@ func TestFullWorkflow_DataNormalization(t *testing.T) {
 	err := os.WriteFile(mainFile, []byte(mainData), fsperm.FilePerm)
 	require.NoError(t, err)
 
-	// 參考數據文件
+	// 參考數據文件（H21：MVC/MAX 參考一律單行；過去多行會被靜默忽略 Data[1:]）
 	refFile := filepath.Join(tempDir, "ref_data.csv")
-	refData := "Time,Ch1,Ch2\n0.1,100,50\n0.2,100,50\n"
+	refData := "Time,Ch1,Ch2\nMVC,100,50\n"
 	err = os.WriteFile(refFile, []byte(refData), fsperm.FilePerm)
 	require.NoError(t, err)
 
@@ -183,24 +200,25 @@ func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 	require.Len(t, result.PhaseResults, 4)
 
 	// 驗證第一階段（0.0-1.0秒，包含0.5秒的數據）
+	// 改 InDelta 相對誤差比對,避免 ULP 累積讓 ==1e+12 在不同編譯/CPU fail。
 	phase1 := result.PhaseResults[0]
 	require.Equal(t, "Phase1", phase1.PhaseName)
-	require.Equal(t, 1e+12, phase1.MaxValues[0])  // Ch1最大值
-	require.Equal(t, 5e+11, phase1.MaxValues[1])  // Ch2最大值
-	require.Equal(t, 1e+12, phase1.MeanValues[0]) // Ch1平均值
-	require.Equal(t, 5e+11, phase1.MeanValues[1]) // Ch2平均值
+	assertFloatEqual(t, 1e+12, phase1.MaxValues[0], "Ch1最大值")
+	assertFloatEqual(t, 5e+11, phase1.MaxValues[1], "Ch2最大值")
+	assertFloatEqual(t, 1e+12, phase1.MeanValues[0], "Ch1平均值")
+	assertFloatEqual(t, 5e+11, phase1.MeanValues[1], "Ch2平均值")
 
 	// 驗證第二階段（1.0-2.0秒，包含1.5秒的數據）
 	phase2 := result.PhaseResults[1]
 	require.Equal(t, "Phase2", phase2.PhaseName)
-	require.Equal(t, 2e+12, phase2.MaxValues[0]) // Ch1最大值
-	require.Equal(t, 1e+12, phase2.MaxValues[1]) // Ch2最大值
+	assertFloatEqual(t, 2e+12, phase2.MaxValues[0], "Ch1最大值")
+	assertFloatEqual(t, 1e+12, phase2.MaxValues[1], "Ch2最大值")
 
 	// 驗證第三階段（2.0-3.0秒，包含2.5秒的數據）
 	phase3 := result.PhaseResults[2]
 	require.Equal(t, "Phase3", phase3.PhaseName)
-	require.Equal(t, 1.5e+12, phase3.MaxValues[0]) // Ch1最大值
-	require.Equal(t, 7.5e+11, phase3.MaxValues[1]) // Ch2最大值
+	assertFloatEqual(t, 1.5e+12, phase3.MaxValues[0], "Ch1最大值")
+	assertFloatEqual(t, 7.5e+11, phase3.MaxValues[1], "Ch2最大值")
 
 	// 第四階段應該沒有數據（在我們的測試數據範圍外）
 	phase4 := result.PhaseResults[3]

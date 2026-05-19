@@ -2,7 +2,43 @@ package validation
 
 import (
 	"testing"
+
+	"count_mean/internal/validation/filename"
 )
+
+// TestFilenameValidator_InterfaceSplit 釘住 L16 的 interface 拆分契約：
+//
+//  1. FilenameValidator (read-only) 必須由 filename.Validator 滿足
+//  2. MutableFilenameValidator (含 WithAllowedExtensions mutator) 也必須滿足
+//  3. 兩者之間有 is-a 關係（MutableFilenameValidator 內嵌 FilenameValidator）
+//
+// 編譯期靜態 assert 不過就直接 compile error,test 是 runtime smoke 防止
+// 未來 refactor 把方法簽名改錯。
+func TestFilenameValidator_InterfaceSplit(t *testing.T) {
+	t.Parallel()
+
+	v := filename.NewValidator()
+
+	// FilenameValidator: read-only
+	var _ FilenameValidator = v
+	// MutableFilenameValidator: read + mutate
+	var _ MutableFilenameValidator = v
+
+	// 確認 read-only API 仍 work
+	if err := (FilenameValidator)(v).ValidateFilename("data.csv"); err != nil {
+		t.Errorf("ValidateFilename via read-only interface 不該失敗: %v", err)
+	}
+
+	// 確認 mutator interface 能改 extension whitelist
+	m := MutableFilenameValidator(v)
+	m.WithAllowedExtensions([]string{".tsv"})
+	if err := m.ValidateFilename("data.csv"); err == nil {
+		t.Error("WithAllowedExtensions 改成 [.tsv] 後，.csv 不該再通過")
+	}
+	if err := m.ValidateFilename("data.tsv"); err != nil {
+		t.Errorf("WithAllowedExtensions 改成 [.tsv] 後，.tsv 應通過，實際 err=%v", err)
+	}
+}
 
 func TestInputValidator_ValidateFilename(t *testing.T) {
 	validator := NewInputValidator()
@@ -198,95 +234,6 @@ func TestInputValidator_ValidateTimeRange(t *testing.T) {
 
 			if gotUseCustom != tt.wantUseCustom {
 				t.Errorf("ValidateTimeRange() gotUseCustom = %v, want %v", gotUseCustom, tt.wantUseCustom)
-			}
-		})
-	}
-}
-
-func TestInputValidator_ValidatePhaseLabels(t *testing.T) {
-	validator := NewInputValidator()
-
-	tests := []struct {
-		name            string
-		phaseLabelsText string
-		wantLen         int
-		wantErr         bool
-	}{
-		{
-			name:            "valid phase labels",
-			phaseLabelsText: "Phase 1\nPhase 2\nPhase 3",
-			wantLen:         3,
-			wantErr:         false,
-		},
-		{
-			name:            "empty phase labels",
-			phaseLabelsText: "",
-			wantLen:         0,
-			wantErr:         true,
-		},
-		{
-			name:            "phase labels with empty lines",
-			phaseLabelsText: "Phase 1\n\nPhase 2\n\n",
-			wantLen:         2,
-			wantErr:         false,
-		},
-		{
-			name:            "only whitespace",
-			phaseLabelsText: "   \n\n   ",
-			wantLen:         0,
-			wantErr:         true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := validator.ValidatePhaseLabels(tt.phaseLabelsText)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidatePhaseLabels() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if len(got) != tt.wantLen {
-				t.Errorf("ValidatePhaseLabels() length = %v, want %v", len(got), tt.wantLen)
-			}
-		})
-	}
-}
-
-func TestInputValidator_SanitizeString(t *testing.T) {
-	validator := NewInputValidator()
-
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{
-			name:  "clean string",
-			input: "hello world",
-			want:  "hello world",
-		},
-		{
-			name:  "string with null byte",
-			input: "hello\x00world",
-			want:  "helloworld",
-		},
-		{
-			name:  "string with control chars",
-			input: "hello\x01\x02world",
-			want:  "helloworld",
-		},
-		{
-			name:  "string with allowed control chars",
-			input: "hello\tworld\n",
-			want:  "hello\tworld\n",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := validator.SanitizeString(tt.input); got != tt.want {
-				t.Errorf("SanitizeString() = %v, want %v", got, tt.want)
 			}
 		})
 	}

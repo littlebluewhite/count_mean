@@ -6,14 +6,11 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/config"
 	"count_mean/internal/io"
-	"count_mean/internal/security/fsperm"
 )
 
 // CSV benchmark constants.
@@ -30,10 +27,18 @@ type CSVBenchmarks struct {
 }
 
 // NewCSVBenchmarks 創建 CSV 性能測試器.
+//
+// 改用 os.MkdirTemp 取代手動拼 `tempdir + unix-second`。
+// 舊 path 有兩個問題:
+//  1. 同一秒內兩次呼叫會撞 dir name → MkdirAll 接受已存在 dir 卻不告知,後續測試
+//     可能誤跑在前一輪未清的 fixture 上。
+//  2. unix-second 不夠唯一,連續 CI run 偶發產生 orphan dir + panic。
+//
+// MkdirTemp 內部用 random suffix,保證每次呼叫都拿到全新 dir,collision-free。
+// 同時自動繼承 system temp 的 0700 權限,不必再手動 chmod。
 func NewCSVBenchmarks(cfg *config.AppConfig) (*CSVBenchmarks, error) {
-	tempDir := filepath.Join(os.TempDir(), "emg_benchmark_"+strconv.FormatInt(time.Now().Unix(), 10))
-
-	if err := os.MkdirAll(tempDir, fsperm.DirPerm); err != nil {
+	tempDir, err := os.MkdirTemp("", "emg_benchmark_*")
+	if err != nil {
 		return nil, fmt.Errorf("無法創建臨時目錄: %w", err)
 	}
 
@@ -198,17 +203,31 @@ func (cb *CSVBenchmarks) BenchmarkNormalization() {
 			continue
 		}
 
+		// reference 必須單行（MVC/MAX 模式）。取 data[0]=header + data[1]=首筆樣本。
+		reference := singleRowReference(data)
+
 		cb.benchmarker.BenchmarkWithData(
 			fmt.Sprintf("數據正規化_%s", tc.name),
 			fileSize,
 			func() error {
 				normalizer := calculator.NewNormalizer(cb.config.ScalingFactor)
-				_, normErr := normalizer.NormalizeFromRawData(data, data)
+				_, normErr := normalizer.NormalizeFromRawData(data, reference)
 
 				return normErr //nolint:wrapcheck // benchmark errors don't need wrapping
 			},
 		)
 	}
+}
+
+// singleRowReference 從 CSV records 提取「標頭 + 首行樣本」作為單行 MVC reference，
+// 用於 benchmark 場景。若 records 不足兩行則回傳 nil（caller 應自行處理 NormalizeFromRawData
+// 的 ErrInvalidReferenceData）。
+func singleRowReference(records [][]string) [][]string {
+	if len(records) < 2 {
+		return nil
+	}
+
+	return [][]string{records[0], records[1]}
 }
 
 // BenchmarkLargeFileProcessing 測試大文件處理性能.
@@ -355,7 +374,7 @@ func (cb *CSVBenchmarks) BenchmarkMemoryUsage() {
 				}
 
 				normalizer := calculator.NewNormalizer(cb.config.ScalingFactor)
-				_, normErr := normalizer.NormalizeFromRawData(data, data)
+				_, normErr := normalizer.NormalizeFromRawData(data, singleRowReference(data))
 
 				return normErr //nolint:wrapcheck // benchmark errors don't need wrapping
 			},

@@ -217,6 +217,50 @@ func TestAnalyzeNormalizedPhaseSync_StatsZeroDurationRejected(t *testing.T) {
 		"錯誤訊息應反映 ValidatePhaseOrder 的根本原因")
 }
 
+// TestAnalyzeNormalizedPhaseSync_RejectsInvalidExternalPath 釘住 (b):
+// 兩條 CSV 輸出路徑(normalizedEMGPath / phaseSyncCSVPath)由 outputDir +
+// subject 拼出來,subject 雖經 SanitizeFileName 仍可能拼出意外路徑。對齊
+// CCI / muscle_ratio 的 boundary validation 模式 — 用 validateExternalPathInputs
+// 在寫檔前 reject 落入系統敏感目錄的路徑。
+//
+// 此 test 透過注入 OutputDir = "/etc/..."(系統敏感前綴)強迫 boundary check
+// 觸發。修法前:handler 沒做 boundary validation;只靠 ExportPhaseSyncDataToCSV
+// 內部 OS perm/ENOENT 失敗 — 錯誤訊息洩漏完整 absolute path 給 patient。
+// 修法後:result.Message 應含明確的「路徑驗證失敗」標誌(來自
+// validateExternalPathInputs)而非 OS-level error。
+func TestAnalyzeNormalizedPhaseSync_RejectsInvalidExternalPath(t *testing.T) {
+	app := setupNormalizedPhaseSyncTestApp(t)
+
+	// 把 OutputDir 改成 /etc 子目錄(系統敏感前綴,security.ValidateExternalPath
+	// 必擋),強迫 boundary 觸發。/etc 的子目錄即使 ENOENT 也應該被 path
+	// validator 提早 reject,不該交給 OS 寫到一半才 fail。
+	app.state.Store(&appState{config: &config.AppConfig{OutputDir: "/etc/normalized_phase_sync_invalid"}})
+
+	manifestPath, dataFolder := setupNormalizedPhaseSyncFixture(t)
+
+	params := NormalizedPhaseSyncParams{
+		ManifestFile:    manifestPath,
+		DataFolder:      dataFolder,
+		SubjectIndex:    0,
+		NormStartPhase:  "P0",
+		NormEndPhase:    "P2",
+		StatsStartPhase: "P0",
+		StatsEndPhase:   "P2",
+	}
+
+	result, err := app.AnalyzeNormalizedPhaseSync(params)
+	require.NoError(t, err, "預期失敗走 result.Success=false 路徑,Go err 應為 nil")
+	require.NotNil(t, result)
+	assert.False(t, result.Success,
+		"OutputDir 落在 /etc 系統敏感目錄,應在寫檔前被 boundary validate 攔下")
+
+	// boundary validation 觸發後 message 含「路徑驗證失敗」(validateExternalPathInputs
+	// 的 wrap pattern);若 fix 未生效,訊息會帶 OS-level error 字面如
+	// "open /etc/...: no such file or directory",含完整 absolute path PII。
+	assert.Contains(t, result.Message, "路徑驗證失敗",
+		"boundary path validation 應在 OS write 前 reject,error message 應走 validateExternalPathInputs 的 wrap 格式")
+}
+
 // TestAnalyzeNormalizedPhaseSync_NormPhaseNotFound 驗證標準化區間 endPhase 不存在
 // 於 manifest 時，handler 回 Success=false 且錯誤訊息明確指出不存在的 phase 名稱。
 //

@@ -1,7 +1,12 @@
+//go:build integration_realdata
+
+// 本檔依賴私有 fixtures (EMG_TEST_FIXTURES_DIR),
+// 透過 build tag `integration_realdata` 明確 opt-in,避免預設 test 假覆蓋。
 package integration
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,8 +16,13 @@ import (
 )
 
 func TestMotionParser_RealNSF2Data(t *testing.T) {
-	// 使用真實的 NSF2 Motion 檔案進行整合測試
-	filePath := "/Users/wilson08/IdeaProjects/count_mean/input/TEAT_NSF2_20250716/NSF2_BTS_4_ok_20250419.data.csv"
+	// fixtures 路徑改走 env var + filepath.Join,
+	// CI 與其他 dev 機器可選擇性提供;build tag 已過濾預設 test 路徑。
+	fixturesDir := os.Getenv("EMG_TEST_FIXTURES_DIR")
+	if fixturesDir == "" {
+		t.Skip("EMG_TEST_FIXTURES_DIR not set; skipping real-data integration test")
+	}
+	filePath := filepath.Join(fixturesDir, "TEAT_NSF2_20250716", "NSF2_BTS_4_ok_20250419.data.csv")
 
 	// 檢查檔案是否存在
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {

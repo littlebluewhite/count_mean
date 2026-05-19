@@ -389,3 +389,57 @@ func TestLargeFileHandler_ProcessLargeFileInChunks_StripsBOM(t *testing.T) {
 	require.Equal(t, "RA", result.Headers[1])
 	require.Equal(t, "LA", result.Headers[2])
 }
+
+// TestLargeFileHandler_ProcessLargeFileInChunks_RejectsFormulaInjection 釘住 
+// streaming 大檔路徑必須跑 cell-level ValidateCSVRow，formula injection cell（=cmd|/c calc）
+// 在 streaming 過程中被擋而非靜默通過下游分析。
+//
+// 修法前：executeStreamingLoop 只檢查 column count，不檢查 cell 內容；攻擊者可塞
+// `=cmd|/c calc!A1` 進通道值，整檔通過 streaming 後輸出仍可能挾帶 formula 內容
+// （取決於下游 sanitizer 是否齊備）。
+// 修法後：ValidateCSVRow 在 row enters processor 之前過守門，惡意 cell 直接 fail-fast。
+func TestLargeFileHandler_ProcessLargeFileInChunks_RejectsFormulaInjection(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ScalingFactor = 1
+	testDir := t.TempDir()
+	cfg.InputDir = testDir
+	handler := NewLargeFileHandler(cfg)
+
+	testFile := filepath.Join(testDir, "stream_inject.csv")
+	// 第 5 列含 formula injection
+	content := "Time,RA,LA\n" +
+		"0.001,1,2\n" +
+		"0.002,3,4\n" +
+		"0.003,5,6\n" +
+		"=cmd|/c calc!A1,7,8\n" + // ← injection cell
+		"0.005,9,10\n"
+	require.NoError(t, os.WriteFile(testFile, []byte(content), fsperm.FilePerm))
+
+	_, err := handler.ProcessLargeFileInChunks(testFile, 3, nil)
+	require.Error(t, err, "formula injection cell 必須擋下")
+	require.Contains(t, err.Error(), "驗證失敗",
+		"err 應來自 ValidateCSVRow 守門，實際 err=%v", err)
+}
+
+// TestLargeFileHandler_ProcessLargeFileInChunks_RejectsHeaderInjection 釘住 
+// header row 同樣會被 cell-level 守門 — Excel formula injection 在 header 同樣有效。
+func TestLargeFileHandler_ProcessLargeFileInChunks_RejectsHeaderInjection(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ScalingFactor = 1
+	testDir := t.TempDir()
+	cfg.InputDir = testDir
+	handler := NewLargeFileHandler(cfg)
+
+	testFile := filepath.Join(testDir, "stream_header_inject.csv")
+	// header 第二欄是 formula injection
+	content := "Time,=cmd|/c calc,LA\n" +
+		"0.001,1,2\n" +
+		"0.002,3,4\n" +
+		"0.003,5,6\n"
+	require.NoError(t, os.WriteFile(testFile, []byte(content), fsperm.FilePerm))
+
+	_, err := handler.ProcessLargeFileInChunks(testFile, 3, nil)
+	require.Error(t, err, "header 含 formula injection cell 必須擋下")
+	require.Contains(t, err.Error(), "標題行驗證失敗",
+		"err 應來自 header cell 守門，實際 err=%v", err)
+}

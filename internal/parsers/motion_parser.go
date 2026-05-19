@@ -9,17 +9,19 @@ import (
 	"strings"
 
 	"count_mean/internal/csvutil"
+	"count_mean/internal/logging"
 	"count_mean/internal/models"
 	"count_mean/internal/security/fsperm"
 )
 
 // MotionParser Motion檔案解析器.
 type MotionParser struct {
-	frequency   float64 // 採樣頻率 Hz
-	categoryRow int     // 類別行（從0開始）- 如 "Trunk Angle"
-	subcatRow   int     // 子類別行（從0開始）- 如 "Trunk Flexion / Extension..."
-	headerRow   int     // 標題所在行（從0開始）- 如 "Series"
-	dataRow     int     // 數據開始行（從0開始）
+	frequency   float64         // 採樣頻率 Hz
+	categoryRow int             // 類別行（從0開始）- 如 "Trunk Angle"
+	subcatRow   int             // 子類別行（從0開始）- 如 "Trunk Flexion / Extension..."
+	headerRow   int             // 標題所在行（從0開始）- 如 "Series"
+	dataRow     int             // 數據開始行（從0開始）
+	logger      *logging.Logger // 用於記錄 skip 警告（含 row number / cell 值）
 }
 
 // NewMotionParser 創建新的 Motion 解析器.
@@ -30,6 +32,27 @@ func NewMotionParser() *MotionParser {
 		subcatRow:   MotionSubcatRow,
 		headerRow:   MotionHeaderRow,
 		dataRow:     MotionDataRow,
+		logger:      logging.GetLogger("motion_parser"),
+	}
+}
+
+// NewMotionParserWithLogger 創建帶自訂 logger 的 Motion 解析器。
+// 若 logger 為 nil 則 fallback 到 default logger。
+//
+// 主要用途：測試時注入 bytes.Buffer-backed logger 捕捉 row-skip 警告，
+// 或上層 caller 想要把 motion parsing 警告路由到自家 module logger。
+func NewMotionParserWithLogger(logger *logging.Logger) *MotionParser {
+	if logger == nil {
+		logger = logging.GetLogger("motion_parser")
+	}
+
+	return &MotionParser{
+		frequency:   FrequencyMotion,
+		categoryRow: MotionCategoryRow,
+		subcatRow:   MotionSubcatRow,
+		headerRow:   MotionHeaderRow,
+		dataRow:     MotionDataRow,
+		logger:      logger,
 	}
 }
 
@@ -117,16 +140,45 @@ func (p *MotionParser) initializeMotionData(headers []string, capacity int) *mod
 	return motionData
 }
 
-// parseDataRecord 解析單一數據行.
+// parseDataRecord 解析單一數據行。
 //
-//nolint:revive // unused-receiver: keep consistent API
-func (p *MotionParser) parseDataRecord(record, headers []string, motionData *models.MotionData) bool {
-	if len(record) == 0 || strings.TrimSpace(record[0]) == "" || len(record) < len(headers) {
+// rowNumber 為 1-based 絕對 CSV 行號（含 metadata / header rows），用於 skip 警告。
+// 任何 silent skip 情境都會發 Warn level log（含 row_number + offending cell），
+// 方便操作員之後在原始 CSV 找到問題行（cross-compare 避免 silent miscount）。
+//
+// L10:空字串 / 空 record 的 skip 改 Info-level log。trailing newline 等正常結尾
+// 情境也會走這裡(實務上常見:Excel 匯出末尾有空行),嘈雜的 Warn 會掩蓋真正的
+// malformed row;改 Info 既保留 audit trail 又不會在正常檔案干擾預設 log level。
+func (p *MotionParser) parseDataRecord(
+	record, headers []string, motionData *models.MotionData, rowNumber int,
+) bool {
+	if len(record) == 0 || strings.TrimSpace(record[0]) == "" {
+		// L10:Info-level 而非 Warn,因為 trailing blank line 常見且無害。
+		// 仍記 row_number 讓操作員若需追查 silent miscount 時能對齊 CSV。
+		p.logger.Info("Motion CSV 空行已跳過", map[string]interface{}{
+			"row_number": rowNumber,
+			"reason":     emptyRowSkipReason(record),
+		})
+		return false
+	}
+
+	if len(record) < len(headers) {
+		p.logger.Warn("Motion CSV 行欄位數不足，已跳過", map[string]interface{}{
+			"row_number":  rowNumber,
+			"got_fields":  len(record),
+			"want_fields": len(headers),
+			"first_cell":  record[0],
+		})
 		return false
 	}
 
 	indexValue, err := strconv.Atoi(strings.TrimSpace(record[0]))
 	if err != nil {
+		p.logger.Warn("Motion CSV 第 1 欄非整數，已跳過", map[string]interface{}{
+			"row_number": rowNumber,
+			"first_cell": record[0],
+			"error":      err.Error(),
+		})
 		return false
 	}
 
@@ -181,7 +233,9 @@ func (p *MotionParser) ParseFile(filepath string) (*models.MotionData, error) {
 	motionData := p.initializeMotionData(headers, len(records)-p.dataRow)
 
 	for i := p.dataRow; i < len(records); i++ {
-		p.parseDataRecord(records[i], headers, motionData)
+		// rowNumber 採 1-based 絕對 CSV 行號（i 為 0-based）讓警告與使用者眼中的
+		// "第幾行" 對齊。
+		p.parseDataRecord(records[i], headers, motionData, i+1)
 	}
 
 	if err := p.validateDataIntegrity(motionData); err != nil {
@@ -189,6 +243,16 @@ func (p *MotionParser) ParseFile(filepath string) (*models.MotionData, error) {
 	}
 
 	return motionData, nil
+}
+
+// emptyRowSkipReason (L10) 用於 parseDataRecord 空行 skip 的 log,把「為什麼這行
+// 被認定為空」明確標出來,方便對照原始 CSV 推斷 trailing newline / leading 空
+// cell / mid-file blank。
+func emptyRowSkipReason(record []string) string {
+	if len(record) == 0 {
+		return "empty record (no fields)"
+	}
+	return "first cell is blank after trim"
 }
 
 // getNameFromRow 從指定行中獲取名稱.

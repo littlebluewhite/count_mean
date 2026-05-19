@@ -1,6 +1,7 @@
 package cci
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-echarts/go-echarts/v2/opts"
 
 	"count_mean/internal/chart"
+	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
 )
 
@@ -17,18 +19,78 @@ import (
 // 30 萬點原始資料壓到 5000 點，視覺上 zoom-in 仍夠細，前端渲染壓力降一個量級。
 const cciChartDownsampleThreshold = 5000
 
+// cciChartCtxCheckInterval 控制 chart pipeline 在 hot loop 每幾筆檢查一次 ctx.Done()。
+// 1024 對齊 calculator.sliding_window 的 4096 cadence (chart 點數規模小,更密的 cadence
+// 提高 cancel-latency 敏感度);hot-loop overhead 約 0.1% (千次 +1 select)。
+const cciChartCtxCheckInterval = 1024
+
 // GenerateCCIInteractiveChart renders an interactive CCI chart as HTML.
-func GenerateCCIInteractiveChart(result *CCIAnalysisResult, w io.Writer) error {
+//
+// 入口先 fail-fast 校驗：
+//   - duration > 0 (對齊 analyzer.go:464-468 CSV 出口；違反 → ErrInvalidGaitCycle)
+//   - 每個 pair.Values 長度 == TimeValues 長度（CCI invariant；違反 →
+//     ErrPairLengthMismatch）
+//
+// 兩個 invariant 都是 caller 應該保證的；違反時不寫出半成品 HTML，避免下游
+// 覆蓋既有正常檔。
+//
+// ctx 為第一個參數,讓 caller (例 GUI Wails lifecycle ctx) 可在大 dataset
+// render 中斷流程。hot loop (downsample / label 建構) 每 cciChartCtxCheckInterval
+// 點檢查一次 ctx.Done(),pre-cancel 直接 return ctx.Err。
+func GenerateCCIInteractiveChart(ctx context.Context, result *CCIAnalysisResult, w io.Writer) error {
 	logger := logging.GetLogger("cci_chart")
 	logger.Info("開始生成 CCI 互動式圖表", nil)
 
-	line := buildCCILine(result)
+	// Fast pre-cancel:已 cancel 的 ctx 直接拒絕 render,避免動到 w 寫入半成品 HTML。
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if err := validateCCIResultForChart(result); err != nil {
+		return err
+	}
+
+	line, err := buildCCILine(ctx, result)
+	if err != nil {
+		return err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if err := line.Render(w); err != nil {
-		return fmt.Errorf("渲染 CCI 圖表失敗: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIRenderChartFailed), err)
 	}
 
 	logger.Info("CCI 互動式圖表生成完成", nil)
+
+	return nil
+}
+
+// validateCCIResultForChart 校驗 chart pipeline 共用的兩個 invariant：
+// duration > 0、所有 pair.Values 長度與 TimeValues 對齊。
+//
+// 對齊 analyzer.go writeCSVFile 的 duration guard，使用同一個 ErrInvalidGaitCycle
+// sentinel；pair 長度不符回傳 ErrPairLengthMismatch（新 sentinel，detail
+// 在 analyzer.go doc）。
+func validateCCIResultForChart(result *CCIAnalysisResult) error {
+	if result == nil {
+		return nil
+	}
+
+	if d := result.GaitEndTime - result.GaitStartTime; d <= 0 {
+		return fmt.Errorf("%w: start=%v end=%v",
+			ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
+	}
+
+	timeLen := len(result.TimeValues)
+	for i, pr := range result.PairResults {
+		if len(pr.Values) != timeLen {
+			return fmt.Errorf("%w: pair[%d] %q values=%d, time=%d",
+				ErrPairLengthMismatch, i, pr.PairName, len(pr.Values), timeLen)
+		}
+	}
 
 	return nil
 }
@@ -37,21 +99,39 @@ func GenerateCCIInteractiveChart(result *CCIAnalysisResult, w io.Writer) error {
 // LTTB 降採樣在 setCCIGlobalOptions 之後、X 軸建立之前套用：
 // 12 配對共享同一組索引，TimeValues / Values / PhaseTimes 同步壓縮，
 // 維持所有 series 對齊 shared category X-axis。
-func buildCCILine(result *CCIAnalysisResult) *charts.Line {
-	result = downsampleCCIResult(result, cciChartDownsampleThreshold)
+//
+// 回傳 error 用於 propagate downsampleCCIResult 的對齊校驗失敗。
+// GenerateCCIInteractiveChart 入口已先做一次同樣校驗，正常路徑下
+// downsample 不會再 reject — 這層 error 是 defense-in-depth，避免未來
+// 有其他 caller 直接 build line 時繞過 entry guard。
+func buildCCILine(ctx context.Context, result *CCIAnalysisResult) (*charts.Line, error) {
+	downsampled, err := downsampleCCIResult(result, cciChartDownsampleThreshold)
+	if err != nil {
+		return nil, err
+	}
+
+	// downsample 後檢查 ctx,避免後續 series 建構在 cancel 後仍跑完。
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	line := charts.NewLine()
 
-	setCCIGlobalOptions(line, result)
+	setCCIGlobalOptions(line, downsampled)
 
 	// Set primary X-axis data (actual time labels)
-	timeLabels := buildTimeAxisLabels(result.TimeValues)
+	timeLabels, err := buildTimeAxisLabels(ctx, downsampled.TimeValues)
+	if err != nil {
+		return nil, err
+	}
 	line.SetXAxis(toInterfaceSlice(timeLabels))
 
-	addCCIMeanSeries(line, result)
+	if err := addCCIMeanSeries(ctx, line, downsampled); err != nil {
+		return nil, err
+	}
 	addCCICustomJS(line)
 
-	return line
+	return line, nil
 }
 
 // downsampleCCIResult 對每個 pair 獨立跑 LTTB，再 union 各組保留索引、排序後
@@ -65,14 +145,31 @@ func buildCCILine(result *CCIAnalysisResult) *charts.Line {
 //
 // MeanCurves / PhasePercents / PhaseTimes / GaitStartTime / GaitEndTime 不動：
 // 那些是 phase-domain 元資料（已 normalize 到 0-100% 或單純時間值），不是時序樣本。
-func downsampleCCIResult(result *CCIAnalysisResult, threshold int) *CCIAnalysisResult {
-	if result == nil || len(result.TimeValues) <= threshold || len(result.PairResults) == 0 {
-		return result
+//
+// 嚴格契約：所有 PairResults[i].Values 長度必須等於 TimeValues 長度，
+// 否則回傳 ErrPairLengthMismatch。舊版「silent passthrough」會讓部分 pair 不
+// 被壓縮、X 軸 drift；CCI invariant 是 spec 的一部分，違反應 fail-fast 而非
+// 在 renderer 端 paper over。
+func downsampleCCIResult(result *CCIAnalysisResult, threshold int) (*CCIAnalysisResult, error) {
+	if result == nil {
+		return result, nil
+	}
+
+	timeLen := len(result.TimeValues)
+	for i, pr := range result.PairResults {
+		if len(pr.Values) != timeLen {
+			return nil, fmt.Errorf("%w: pair[%d] %q values=%d, time=%d",
+				ErrPairLengthMismatch, i, pr.PairName, len(pr.Values), timeLen)
+		}
+	}
+
+	if timeLen <= threshold || len(result.PairResults) == 0 {
+		return result, nil
 	}
 
 	indices := unionLTTBIndices(result, threshold)
 	if len(indices) == 0 {
-		return result
+		return result, nil
 	}
 
 	downsampledTime := make([]float64, len(indices))
@@ -83,12 +180,6 @@ func downsampleCCIResult(result *CCIAnalysisResult, threshold int) *CCIAnalysisR
 	downsampledPairs := make([]CCIResult, len(result.PairResults))
 
 	for i, pr := range result.PairResults {
-		if len(pr.Values) != len(result.TimeValues) {
-			downsampledPairs[i] = pr
-
-			continue
-		}
-
 		newVals := make([]float64, len(indices))
 		for j, idx := range indices {
 			newVals[j] = pr.Values[idx]
@@ -106,7 +197,7 @@ func downsampleCCIResult(result *CCIAnalysisResult, threshold int) *CCIAnalysisR
 		MeanCurves:    result.MeanCurves,
 		GaitStartTime: result.GaitStartTime,
 		GaitEndTime:   result.GaitEndTime,
-	}
+	}, nil
 }
 
 // cciChartMaxRenderPoints 是 union 後的 hard cap，避免 12 對 union 最壞情況灌出
@@ -126,14 +217,14 @@ const cciChartMaxRenderPoints = cciChartDownsampleThreshold * 2
 // 首尾索引維持 zoom 範圍正確。stride decimation 雖然無法完全消除 category 軸 jitter，
 // 但限制最大點數 + 平均化間距能緩解視覺失真；徹底解需切到 value axis 的 [time, value]
 // 資料形式，列入 backlog（變更面比較大、含次要 percent 軸對齊）。
+//
+// Caller invariant: downsampleCCIResult 已校驗所有 pair.Values 與 TimeValues
+// 等長 (嚴格契約)，因此這裡不再 defensively skip — 違反會在 caller
+// 端就 reject。保持 unionLTTBIndices 為 unexported 也防止外部繞過。
 func unionLTTBIndices(result *CCIAnalysisResult, threshold int) []int {
 	seen := make(map[int]struct{}, threshold)
 
 	for _, pr := range result.PairResults {
-		if len(pr.Values) != len(result.TimeValues) {
-			continue
-		}
-
 		idx := chart.LTTBDownsample(result.TimeValues, pr.Values, threshold)
 		for _, i := range idx {
 			seen[i] = struct{}{}
@@ -187,15 +278,28 @@ func capUnionIndices(indices []int, limit int) []int {
 }
 
 // setCCIGlobalOptions configures all global chart options.
+//
+// 安全契約（H3）：subtitle 內嵌 user-controlled `result.Subject`，
+// go-echarts 以 SetEscapeHTML(false) 序列化 JSON 注入 <script> 區塊；若 Subject
+// 含 `</script><script>...</script>` 序列會逸出 script context，在 Wails
+// WebView 等同 RPC 任意執行。所有來源於 manifest CSV 的 user-controlled 字串
+// （Subject、未來可能新增的 channel / label）都必須過 chart.SanitizeChartString，
+// 把 `</` rewrite 為 `<\/`、剝除 control char、cap 長度 1024。
+// Title 本身是常數但仍走 sanitize 以保持單一策略。
 func setCCIGlobalOptions(line *charts.Line, result *CCIAnalysisResult) {
+	// 先 sanitize user-controlled Subject 個別欄位，再用安全的格式拼進
+	// subtitle。避免「先 format 後 sanitize」對固定前綴 "Subject: " 再做一次
+	// `</` rewrite — 雖然冪等但語意混淆。Title 是 hard-coded 常數，也走
+	// sanitize 維持單一策略（成本可忽略）。
+	safeSubject := chart.SanitizeChartString(result.Subject)
 	line.SetGlobalOptions(
 		charts.WithInitializationOpts(opts.Initialization{
 			Width:  "100%",
 			Height: "550px",
 		}),
 		charts.WithTitleOpts(opts.Title{
-			Title:    "CCI: Rudolph",
-			Subtitle: fmt.Sprintf("Subject: %s", result.Subject),
+			Title:    chart.SanitizeChartString("CCI: Rudolph"),
+			Subtitle: fmt.Sprintf("Subject: %s", safeSubject),
 		}),
 		createCCITooltipOpt(),
 		createCCILegendOpt(),
@@ -278,16 +382,30 @@ func createCCIDataZoomOpts() charts.GlobalOpts {
 }
 
 // buildTimeAxisLabels creates time labels from actual data time values.
-func buildTimeAxisLabels(timeValues []float64) []string {
+//
+// 每 cciChartCtxCheckInterval 點檢查一次 ctx.Done(),
+// 避免大 timeValues 在 cancel 後仍跑完整個格式化迴圈。
+func buildTimeAxisLabels(ctx context.Context, timeValues []float64) ([]string, error) {
 	labels := make([]string, len(timeValues))
 	for i, t := range timeValues {
+		if i > 0 && i%cciChartCtxCheckInterval == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+		}
 		labels[i] = fmt.Sprintf("%.3f", t)
 	}
 
-	return labels
+	return labels, nil
 }
 
 // buildPercentAxisLabels creates percentage labels from actual time values.
+//
+// Caller invariant: GenerateCCIInteractiveChart 在 entry 已校驗 duration > 0
+// (fail-fast, 對齊 analyzer.go:464-468)，因此這裡可以放心除以 duration。
+// 違反契約會在 caller 端就 ErrInvalidGaitCycle，不會走到這個 label builder。
 func buildPercentAxisLabels(result *CCIAnalysisResult) []string {
 	duration := result.GaitEndTime - result.GaitStartTime
 	labels := make([]string, len(result.TimeValues))
@@ -326,17 +444,33 @@ func createCCIToolboxOpts() opts.Toolbox {
 
 // addCCIMeanSeries adds the 12 CCI mean curve series.
 // Colors are managed by ECharts default palette to match legend/tooltip dots.
+//
+// 每 pair 內每 cciChartCtxCheckInterval 點檢查一次 ctx.Done(),caller
+// cancel 後立即回 ctx.Err。pair 之間也檢查一次 (pair 數通常 12,額外 overhead 可忽略)。
 func addCCIMeanSeries(
-	line *charts.Line, result *CCIAnalysisResult,
-) {
+	ctx context.Context, line *charts.Line, result *CCIAnalysisResult,
+) error {
 	// NaN / ±Inf → echarts null (line gap), aligned with CSV exporter's
 	// NaN-row dropping. CalculateCCIRudolph returns math.NaN() for invalid
 	// inputs (negative / NaN / Inf EMG samples); without this filter
 	// go-echarts emits an empty option block on NaN-bearing series, producing
 	// a blank chart that silently looks "successful". Codex Wave 7 finding.
 	for _, pr := range result.PairResults {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		lineData := make([]opts.LineData, len(pr.Values))
 		for j, v := range pr.Values {
+			if j > 0 && j%cciChartCtxCheckInterval == 0 {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+			}
 			if math.IsNaN(v) || math.IsInf(v, 0) {
 				lineData[j] = opts.LineData{Value: nil}
 			} else {
@@ -356,12 +490,55 @@ func addCCIMeanSeries(
 				}),
 			)
 	}
+
+	return nil
 }
 
+// wailsParentOrigins enumerates the legitimate parent-window origins for the
+// Wails v2 WebView (per platform). The CCI chart HTML is embedded into the
+// frontend via `iframe.srcdoc`, which gives the iframe a "null" origin — it
+// cannot read `window.parent.location.origin` due to cross-origin restrictions.
+//
+// postMessage 的 targetOrigin 從 "*" 改為平台 origin allowlist。
+// "*" 表示「任何 embedding context 都收得到」，在純 Wails WebView 場景下
+// 是 over-permissive — 即使現在沒人 embed Wails app 進其他頁，contract 上
+// 保留這個面就等於將來在 webview-shared / browser-preview / iframe-debug 情境
+// 下洩漏 UI 事件。改成 allowlist 後：
+//   - parent origin 命中（macOS/Linux/Windows 三者其中之一）→ message 正常送達
+//   - parent origin 是其他（攻擊或意外）→ 瀏覽器 silently 丟棄，不到 listener
+//
+// 此 const 嵌入產生的 JS 內，runtime 在 iframe 中逐一呼叫 postMessage；非匹配
+// 的 origin 不會引發錯誤、只會被 user-agent 忽略，所以 3 個 origin 都呼叫一次
+// 是安全且 zero-coupling 的策略（不需偵測 platform）。
+//
+// Wails v2 origin 來源（v2.12.0）：
+//   - internal/frontend/desktop/darwin/frontend.go:40   const startURL = "wails://wails/"
+//   - internal/frontend/desktop/linux/frontend.go:116   const startURL = "wails://wails/"
+//   - internal/frontend/desktop/windows/frontend.go:40  const startURL = "http://wails.localhost/"
+//
+// 若未來升級 Wails 版本改變 URL scheme，回頭更新此 list；無前後相容問題，
+// allowlist 過嚴只會讓 phase-line 重畫事件「不到」前端，UX degrade 但不會 crash
+// （chart 仍正常顯示）。
+const wailsParentOrigins = `["wails://wails","http://wails.localhost","https://wails.localhost"]`
+
 // addCCICustomJS adds resize handler, keyboard shortcuts, and restore listener.
+// postMessage targetOrigin 走 wailsParentOrigins allowlist，避免 "*"
+// over-permissive — 詳細理由見 wailsParentOrigins doc。
 func addCCICustomJS(line *charts.Line) {
 	customJS := `
 		let myChart = %MY_ECHARTS%;
+		const wailsParentOrigins = ` + wailsParentOrigins + `;
+		function postToParent(msg) {
+			for (let i = 0; i < wailsParentOrigins.length; i++) {
+				try {
+					window.parent.postMessage(msg, wailsParentOrigins[i]);
+				} catch (e) {
+					// 非匹配 origin 不會 throw（user-agent 靜默丟棄），但保留 try/catch
+					// 防 future browser API surprise（postMessage 在 detached iframe 等
+					// edge case 可能 throw）。Swallow 以免重畫事件 path 中斷後續呼叫。
+				}
+			}
+		}
 		if (myChart) {
 			document.addEventListener('keydown', function(e) {
 				if (e.key === 'r' || e.key === 'R') {
@@ -372,10 +549,10 @@ func addCCICustomJS(line *charts.Line) {
 				myChart.resize();
 			});
 			myChart.on('restore', function() {
-				window.parent.postMessage('cci-chart-restored', '*');
+				postToParent('cci-chart-restored');
 			});
 			myChart.on('legendselectchanged', function() {
-				window.parent.postMessage('cci-chart-legend-changed', '*');
+				postToParent('cci-chart-legend-changed');
 			});
 		}
 	`

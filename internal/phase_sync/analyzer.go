@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/models"
@@ -32,6 +33,10 @@ var (
 	ErrPhasePointOutOfRange = errors.New("phase point out of data range")
 	// ErrEMGTimeOutOfRange indicates EMG time is out of data range.
 	ErrEMGTimeOutOfRange = errors.New("EMG time out of data range")
+	// ErrBaseFolderNotFound 指 DataFolder 不存在；修補：原本 baseFolder
+	// 不存在會穿透 EvalSymlinks 回到原始字串，後續 PathValidator 才以一個不存在
+	// 的 base 比較，錯誤訊息含糊。此 sentinel 讓 caller 一眼看出設定錯誤。
+	ErrBaseFolderNotFound = errors.New("base folder not found")
 )
 
 // PhaseSyncAnalyzer 分期同步分析器.
@@ -117,8 +122,21 @@ func validatePhaseOrder(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 // validateEMGFilePath 驗證 EMG 檔案路徑.
 // 第一個用到 PathValidator 的步驟負責 lazily 建立 request-scoped instance；
 // 後續 validateMotionFile / validateForceFile 共用 ctx.pathValidator。
+//
+// 先 Stat baseFolder 確認存在，否則 EvalSymlinks 失敗會 silently 落回
+// 原始字串，再下游 PathValidator.GetSafePath 才以一個不存在的 base 失敗，錯誤
+// 訊息對使用者沒有直接幫助。顯式擋下，配合 ErrBaseFolderNotFound 給明確訊息。
 func validateEMGFilePath(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 	baseFolder := ctx.params.DataFolder
+	if info, err := os.Stat(baseFolder); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("資料夾不存在 (%s): %w", baseFolder, ErrBaseFolderNotFound)
+		}
+		return fmt.Errorf("資料夾狀態檢查失敗 (%s): %w", baseFolder, err)
+	} else if !info.IsDir() {
+		return fmt.Errorf("資料夾路徑非目錄 (%s): %w", baseFolder, ErrBaseFolderNotFound)
+	}
+
 	if resolvedBase, err := filepath.EvalSymlinks(baseFolder); err == nil {
 		baseFolder = resolvedBase
 	}
@@ -235,6 +253,10 @@ func validateForceFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) erro
 // 只檢 force-time phase（!IsMotionIndex()），motion-index 的 D 與 O 由
 // validateMotionPhasePoints 另行驗證。用 PhasePoint.IsMotionIndex() 集中
 // domain invariant，避免逐項硬編碼 "P0"/"P1"/.../"L"。
+//
+// Batch T：用 OptFloat.Get() 判斷「是否標定」，t=0 不再被誤判為未提供。
+// 仍要求 value > maxForceTime 才回 out-of-range —— 負值（合法的「校準前偏移」）
+// 不會 trigger out-of-range，與 NOT IMPLEMENTED 註解一致。
 func validateForcePhasePoints(manifest *models.PhaseManifest, maxForceTime float64) error {
 	for _, phase := range models.AllPhases() {
 		if phase.IsMotionIndex() {
@@ -243,8 +265,12 @@ func validateForcePhasePoints(manifest *models.PhaseManifest, maxForceTime float
 
 		// GetPhaseValue 對 10 個合法 PhasePoint 都 return nil error；allPhases 已涵蓋
 		// 全部，error path 不可達。
-		value, _, _ := parsers.GetPhaseValue(&manifest.PhasePoints, phase) //nolint:errcheck // unreachable error path
-		if value > 0 && value > maxForceTime {
+		opt, _, _ := parsers.GetPhaseValue(&manifest.PhasePoints, phase) //nolint:errcheck // unreachable error path
+		value, ok := opt.Get()
+		if !ok {
+			continue
+		}
+		if value > maxForceTime {
 			return fmt.Errorf("%s 分期點時間 %.3f 超出 Force Plate 數據範圍 (最大: %.3f): %w",
 				phase, value, maxForceTime, ErrPhasePointOutOfRange)
 		}
@@ -284,6 +310,44 @@ type LoadedPhaseSyncContext struct {
 	PhaseTimeRange *models.PhaseTimeRange
 }
 
+// parseEMGFileFunc 是 EMG 檔案解析 test hook 的函式型別 alias。
+// 用 named type 讓 atomic.Pointer 的型別參數可讀。
+type parseEMGFileFunc func(filepath string) (*models.PhaseSyncEMGData, float64, error)
+
+// parseEMGFileFnPtr 是 EMG 檔案解析的 test hook (P2-H24, P2-25)。
+//
+// Production 預設為 nil pointer → Load() 用 analyzer.emgParser.ParseFile;test 可
+// override (用 setParseEMGFileFnForTest) 注入 fake parser,讓 in-flight cancel
+// test 可以「卡住 ParseFile 直到 cancel 被觸發」確定性化測試 cancel path。
+//
+// 從裸 package-level var 改 atomic.Pointer 以提供讀寫同步。第一個
+// t.Parallel() test 會踩到 data race — atomic.Pointer.Load/Store 提供 happens-before
+// 保證,讓 race detector 通過。
+//
+// 為何維持 package-level (而非 struct field DI):
+//   - struct field 改型別 (從 *parsers.EMGParser → interface) 屬於 invasive change,
+//     違反 surgical changes 原則。
+//   - package-level atomic hook 對 test 是 zero-cost,production 行為完全不變。
+//   - test 用 t.Cleanup 還原成 nil pointer,避免污染其他 test。
+//
+//nolint:gochecknoglobals // test hook by design; nil pointer in production
+var parseEMGFileFnPtr atomic.Pointer[parseEMGFileFunc]
+
+// SetParseEMGFileFnForTest 注入 EMG 解析 test hook,並回傳 cleanup 函式還原 hook。
+// caller (test) 應該用 t.Cleanup 註冊 cleanup,避免污染其他 test。
+//
+// fn 為 nil 表示「不注入 fake,使用 production parser」;Production code path 也是
+// nil pointer。
+func SetParseEMGFileFnForTest(fn parseEMGFileFunc) (cleanup func()) {
+	previous := parseEMGFileFnPtr.Load()
+	if fn == nil {
+		parseEMGFileFnPtr.Store(nil)
+	} else {
+		parseEMGFileFnPtr.Store(&fn)
+	}
+	return func() { parseEMGFileFnPtr.Store(previous) }
+}
+
 // Load 執行分期同步分析的前置載入流程：路徑驗證、manifest 解析、EMG 檔案解析。
 // 不計算任何分期時間範圍（PhaseTimeRange 為 nil），供需要對同一份載入資料解析多組
 // 不同分期區間的工作流共用（例如標準化分期同步分析需要分別解析 normalize 範圍與
@@ -291,6 +355,9 @@ type LoadedPhaseSyncContext struct {
 //
 // validateEMGFilePath 內部會 lazily 建立 request-scoped PathValidator 存入 ctx，
 // 不再對 analyzer-level singleton 做 SetAllowedBasePaths。
+//
+// 走 parseEMGFileFn test hook 取得 parser (production 預設 nil → 走
+// analyzer.emgParser.ParseFile)。
 func (analyzer *PhaseSyncAnalyzer) Load(
 	params *models.AnalysisParams,
 ) (*LoadedPhaseSyncContext, error) {
@@ -299,7 +366,12 @@ func (analyzer *PhaseSyncAnalyzer) Load(
 		return nil, err
 	}
 
-	emgData, _, err := analyzer.emgParser.ParseFile(ctx.emgFilePath)
+	parseFn := analyzer.emgParser.ParseFile
+	if hook := parseEMGFileFnPtr.Load(); hook != nil {
+		parseFn = *hook
+	}
+
+	emgData, _, err := parseFn(ctx.emgFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
 	}
@@ -313,6 +385,17 @@ func (analyzer *PhaseSyncAnalyzer) Load(
 	}, nil
 }
 
+// ErrNegativePhaseTime 表示請求的 phase point force-time 為負,phase_sync 拒絕用負時間
+// 做 `time * frequency` 取 index 的計算(可能 silently 撞 motion-index < 1 boundary
+// 或下游 sliding window panic)。在 ResolvePhaseRange 入口顯式 reject。
+//
+// 注意:這只 reject 對應到 force-time 的 phase point(P0/P1/P2/S/C/T0/T/L);
+// motion-index 型 phase point(D/O)是 frame number,非時間,負值已由 ValidatePhaseManifest
+// 在 validateMotionIndexOrder 攔下。負時間在 parseFloat 階段是合法的(機械校準前
+// 偏移,見 muscle_ratio TestAnalyze_NegativeTime_Handled),但只能存活到 batch
+// 時間序列 dump(Output 1);phase_sync 真正取 time-range 才必須擋。
+var ErrNegativePhaseTime = errors.New("phase point force-time 為負值,phase_sync 不接受")
+
 // ResolvePhaseRange 從已 Load 的 context 解析指定的一對分期點為時間範圍，
 // 並驗證該範圍落在 EMG 資料時間範圍內。同一個 LoadedPhaseSyncContext 可重複呼叫
 // 此函式以取得多組不同分期區間。
@@ -323,12 +406,24 @@ func (analyzer *PhaseSyncAnalyzer) Load(
 // 退化情形會穿透到 GetPhaseTimeRange，產生 zero-duration 區間。對「走
 // LoadAndExtractRange」的呼叫端則與 Load 內 pipeline 的 validatePhaseOrder
 // 形成冗餘檢查（無害）。
+//
+// 在計算 PhaseTimeRange 之前先 reject「對應到 force-time 的負 phase point」。
+// 參考 muscle_ratio TestAnalyze_NegativeTime_Handled 的設計取捨 — 負時間在
+// manifest parse / muscle_ratio batch 是合法輸入,但 phase_sync 用「time × frequency」
+// 算 motion-index 對負時間沒有有效意義,fail-fast 比 silently 計算錯誤 index 安全。
 func (analyzer *PhaseSyncAnalyzer) ResolvePhaseRange(
 	loaded *LoadedPhaseSyncContext,
 	startPhase, endPhase models.PhasePoint,
 ) (*models.PhaseTimeRange, error) {
 	if err := analyzer.phaseCalculator.ValidatePhaseOrder(startPhase, endPhase); err != nil {
 		return nil, fmt.Errorf("分期點順序驗證失敗: %w", err)
+	}
+
+	if err := rejectNegativeForceTime(&loaded.Manifest.PhasePoints, startPhase); err != nil {
+		return nil, err
+	}
+	if err := rejectNegativeForceTime(&loaded.Manifest.PhasePoints, endPhase); err != nil {
+		return nil, err
 	}
 
 	phaseTimeRange, err := analyzer.phaseCalculator.GetPhaseTimeRange(
@@ -346,6 +441,28 @@ func (analyzer *PhaseSyncAnalyzer) ResolvePhaseRange(
 	}
 
 	return phaseTimeRange, nil
+}
+
+// rejectNegativeForceTime 對單一 phase point 做「force-time 不可為負」防線。
+// motion-index 型 phase point(D/O)直接 pass — 它們是 frame number 不是時間,
+// 由 ValidatePhaseManifest 的 validateMotionIndexOrder 把關;未設定(Set=false)
+// 也直接 pass — 由下游 GetPhaseTimeRange 回 ErrPhaseValueZero。
+func rejectNegativeForceTime(points *models.PhasePoints, phase models.PhasePoint) error {
+	opt, isMotionIndex, err := parsers.GetPhaseValue(points, phase)
+	if err != nil {
+		return fmt.Errorf("解析分期點 %s 失敗: %w", phase, err)
+	}
+	if isMotionIndex {
+		return nil
+	}
+	v, ok := opt.Get()
+	if !ok {
+		return nil
+	}
+	if v < 0 {
+		return fmt.Errorf("%w: %s = %v", ErrNegativePhaseTime, phase, v)
+	}
+	return nil
 }
 
 // LoadAndExtractRange 為 Load + ResolvePhaseRange 的薄包裝，保留給只需要單一

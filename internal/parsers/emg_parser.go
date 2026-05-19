@@ -98,6 +98,23 @@ func (p *EMGParser) ParseFile(filepath string) (*models.PhaseSyncEMGData, float6
 		return nil, 0, fmt.Errorf("無法開啟 EMG 檔案 %s: %w", filepath, err)
 	}
 
+	// acknowledgement：ReadCSVDirect 走 jagged-row 容忍模式
+	// （FieldsPerRecord=-1, LazyQuotes=true），無法靠 csv.Reader 本身擋 formula
+	// injection / script / SQL / command injection。理想是進入 EMG 語意層前用
+	// ValidateCSVRow 對每筆 cell 過 cell-level injection 守門。
+	//
+	// 既定限制：目前 validation/patterns.go 對 CommandInjection 用 substring 比對，
+	// "invalid_time" 之類的合法 EMG row（含子字串 "id"）會被誤判為 command injection
+	// 而拒。`TestEMGParser_ParseFile/EMG_file_with_invalid_time_values` 即 pin 住「invalid
+	// time 應被 skip 而非整檔 reject」的契約。在不犧牲此契約的前提下，EMG layer 仍仰賴
+	// 下游 util.Str2Number（嚴格 strconv.ParseFloat）作為 numeric cell 的隱式守門：
+	// formula `=cmd|/c calc!A1` 等惡意 cell 解析必失敗、被 skip。
+	//
+	// streaming 大檔路徑（large_file_handler.executeStreamingLoop）有實裝 cell-level
+	// 守門 — 該路徑無「missing-data row tolerated」契約，文件規模也更大、injection 風險
+	// 更高。EMG phase-sync / muscle ratio path 因 false-positive 包袱待 patterns
+	// substring-match 收緊（後續 Wave）後再加上 ValidateCSVRow。
+
 	headers, err := p.validateEMGRecords(records)
 	if err != nil {
 		return nil, 0, err
@@ -149,6 +166,12 @@ type EMGTimeRangeResult struct {
 func GetEMGDataInTimeRange(
 	data *models.PhaseSyncEMGData, startTime, endTime float64,
 ) (*EMGTimeRangeResult, error) {
+	// validator path 已有此 guard，extractor path 需對稱保護避免 data.Time
+	// 索引存取造成 nil-deref panic。空 Time slice 也視為空資料一併 reject。
+	if data == nil || len(data.Time) == 0 {
+		return nil, fmt.Errorf("EMG 數據為空: %w", ErrNilData)
+	}
+
 	if startTime > endTime {
 		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", startTime, endTime)
 	}

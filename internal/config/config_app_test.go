@@ -291,12 +291,15 @@ func TestLoadConfig(t *testing.T) {
 		tempDir := t.TempDir()
 		configFile := filepath.Join(tempDir, "invalid_values_config.json")
 
+		// 升級：原本 snake_case key 不會被 camelCase JSON tag 解析，靠
+		// var-zero-value 偶然 fail validate。改用正確 camelCase key + 真實 invalid
+		// 值（scalingFactor=-1）測 Validate 邏輯。
 		invalidConfig := `{
-			"scaling_factor": -1,
-			"phase_labels": [],
+			"scalingFactor": -1,
+			"phaseLabels": [],
 			"precision": 5,
-			"output_format": "csv",
-			"bom_enabled": true
+			"outputFormat": "csv",
+			"bomEnabled": true
 		}`
 
 		err := os.WriteFile(configFile, []byte(invalidConfig), fsperm.FilePerm)

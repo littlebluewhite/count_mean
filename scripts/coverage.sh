@@ -29,32 +29,33 @@ cd "$COVERAGE_DIR"
 # Clean previous coverage files
 rm -f "$COVERAGE_FILE" "$COVERAGE_HTML"
 
-echo -e "${YELLOW}Running unit tests with coverage...${NC}"
-~/sdk/go/bin/go test -coverprofile="$COVERAGE_FILE" -covermode=atomic ../internal/... ../gui/...
-
-echo -e "${YELLOW}Running integration tests with coverage...${NC}"
-~/sdk/go/bin/go test -coverprofile=integration_coverage.out -covermode=atomic ../test/integration/...
-
-echo -e "${YELLOW}Running benchmark tests with coverage...${NC}"
-~/sdk/go/bin/go test -coverprofile=benchmark_coverage.out -covermode=atomic ../test/benchmark/...
-
-echo -e "${YELLOW}Merging coverage profiles...${NC}"
-# Merge all coverage profiles
-{
-    echo "mode: atomic"
-    tail -n +2 "$COVERAGE_FILE" 2>/dev/null || true
-    tail -n +2 integration_coverage.out 2>/dev/null || true
-    tail -n +2 benchmark_coverage.out 2>/dev/null || true
-} > merged_coverage.out
-
-# Use merged coverage as the main coverage file
-mv merged_coverage.out "$COVERAGE_FILE"
+echo -e "${YELLOW}Running all tests with unified coverage (-coverpkg)...${NC}"
+# P1-H18:原本分三次跑(unit / integration / benchmark)再用
+# `{ echo "mode: atomic"; tail -n +2 ...; }` 純文字 concat。這個合併方式
+# 在 cover profile 規範下並不合法(同一 source 行可能在多個 profile 重複
+# 出現,Go cover tool 對 atomic mode 預期已聚合過的計數,而非重複行),
+# 會造成:
+#   (a) `go tool cover -func` 報出超過 100% 或被低估的 coverage
+#   (b) HTML 報表片段缺漏
+# 改用單次 `-coverpkg` 統一蒐集:由 `./internal/... ./gui/...` 定義
+# 「要被計入分母的程式碼集合」,而由 `./...` 提供「要跑的測試集合」
+# (test/integration、test/benchmark、test/unit、test/phase_sync_test、
+# internal/* 本身的同 package test 全都會跑)。Go cover tool 內建合法合併,
+# 不需外部 gocovmerge,也避免 third-party 依賴。
+#
+# 排除 main package 與 frontend embed wrapper:`./...` 含 root,但 cover
+# 統計只看 -coverpkg 列表,所以 main.go 不會混入。
+go test \
+    -coverprofile="$COVERAGE_FILE" \
+    -covermode=atomic \
+    -coverpkg=count_mean/internal/...,count_mean/gui/... \
+    ../...
 
 echo -e "${YELLOW}Generating HTML coverage report...${NC}"
-~/sdk/go/bin/go tool cover -html="$COVERAGE_FILE" -o "$COVERAGE_HTML"
+go tool cover -html="$COVERAGE_FILE" -o "$COVERAGE_HTML"
 
 echo -e "${YELLOW}Calculating coverage percentage...${NC}"
-COVERAGE_PERCENT=$(~/sdk/go/bin/go tool cover -func="$COVERAGE_FILE" | grep total | awk '{print $3}' | sed 's/%//')
+COVERAGE_PERCENT=$(go tool cover -func="$COVERAGE_FILE" | grep total | awk '{print $3}' | sed 's/%//')
 
 echo ""
 echo -e "${BLUE}=== Coverage Report ===${NC}"
@@ -65,11 +66,11 @@ echo ""
 
 # Detailed coverage by package
 echo -e "${BLUE}=== Coverage by Package ===${NC}"
-~/sdk/go/bin/go tool cover -func="$COVERAGE_FILE" | grep -v "total:" | sort -k3 -nr | head -20
+go tool cover -func="$COVERAGE_FILE" | grep -v "total:" | sort -k3 -nr | head -20
 
 echo ""
 echo -e "${BLUE}=== Low Coverage Files (< 85%) ===${NC}"
-~/sdk/go/bin/go tool cover -func="$COVERAGE_FILE" | grep -v "total:" | awk -F: '{
+go tool cover -func="$COVERAGE_FILE" | grep -v "total:" | awk -F: '{
     split($2, parts, " ");
     coverage = parts[length(parts)];
     gsub(/%/, "", coverage);

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/csvutil"
+	"count_mean/internal/logging"
 	"count_mean/internal/models"
 )
 
@@ -767,4 +768,104 @@ Index,X,Y,Z
 		assert.Falsef(t, bytes.Contains([]byte(key), csvutil.BOMBytes()),
 			"data key %q must not contain UTF-8 BOM", key)
 	}
+}
+
+// TestMotionParser_LogsInfoOnEmptyRowSkip (L10) 鎖定:當 record[0] 為空字串
+// (例如 leading-comma row `",X,Y"`)被 silent skip 時必須 emit Info-level log,
+// 含 row_number 以便追查 silent miscount。
+//
+// 注意:Go encoding/csv 已自動 collapse 純空行(整列只有 newline),這些不會
+// 抵達 parseDataRecord;此 test 涵蓋的是 csv reader 看得到、但 first-cell-empty
+// 的 row(leading comma / 連串 whitespace 之類)。
+//
+// 行為契約:
+//   - 解析仍成功(不該因為 first-cell-empty fail);
+//   - 跳過的 row 數 = leading-comma 行數;
+//   - 對每個 skip 都 emit 一筆 Info log,訊息含 "Motion CSV 空行已跳過" 與 row_number。
+func TestMotionParser_LogsInfoOnEmptyRowSkip(t *testing.T) {
+	// CSV 行 layout (1-based):
+	//   1: Line 1
+	//   2: Line 2
+	//   3: Line 3
+	//   4: Index,X,Y
+	//   5: 1,10.5,20.3
+	//   6: ,2.0,3.0    <-- record[0]="" → skip + log row 6
+	//   7: 2,11.2,21.7
+	//   8: ,4.0,5.0    <-- record[0]="" → skip + log row 8
+	//   9: 3,9.8,19.1
+	csvContent := `Line 1
+Line 2
+Line 3
+Index,X,Y
+1,10.5,20.3
+,2.0,3.0
+2,11.2,21.7
+,4.0,5.0
+3,9.8,19.1
+`
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "motion_blank.csv")
+	require.NoError(t, os.WriteFile(path, []byte(csvContent), 0o600)) //nolint:gosec // t.TempDir owned
+
+	var buf bytes.Buffer
+	logger := logging.NewLogger(logging.LevelInfo, &buf, true) // JSON 方便穩定 assert
+	parser := NewMotionParserWithLogger(logger)
+
+	data, err := parser.ParseFile(path)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	// 兩個 first-cell-empty 行被 skip,合法資料維持 3 筆。
+	assert.Equal(t, []int{1, 2, 3}, data.Indices,
+		"first-cell-empty 行 skip 後 indices 仍為 1/2/3")
+
+	out := buf.String()
+	assert.Contains(t, out, "Motion CSV 空行已跳過",
+		"L10:空行 skip 必須 emit Info log 訊息")
+	assert.Contains(t, out, `"row_number":"6"`, "L10:空行 log 必須帶 row_number=6")
+	assert.Contains(t, out, `"row_number":"8"`, "L10:空行 log 必須帶 row_number=8")
+}
+
+// TestMotionParser_WarnsOnNonIntFirstColumn pins when parseDataRecord
+// silently skips a row because record[0] is not parseable as int, we must emit
+// a warning carrying the absolute row number so operators investigating
+// "missing samples" complaints can locate the offending row in their input.
+// Without this, the parser quietly drops rows and downstream calculators see
+// fewer samples than the user expected — silent miscount.
+func TestMotionParser_WarnsOnNonIntFirstColumn(t *testing.T) {
+	csvContent := `Line 1
+Line 2
+Line 3
+Index,X,Y
+1,10.5,20.3
+not_an_int,11.2,21.7
+3,9.8,19.1
+`
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "motion_warn.csv")
+	require.NoError(t, os.WriteFile(path, []byte(csvContent), 0o600)) //nolint:gosec // tmpDir is t.TempDir()
+
+	var buf bytes.Buffer
+	logger := logging.NewLogger(logging.LevelWarn, &buf, true) // JSON for stable assertion
+	parser := NewMotionParserWithLogger(logger)
+
+	data, err := parser.ParseFile(path)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	assert.Equal(t, []int{1, 3}, data.Indices, "malformed row must still be skipped")
+
+	out := buf.String()
+	assert.Contains(t, out, "not_an_int",
+		"warning must include the offending cell value for diagnosability")
+	// 必須帶 row number (1-based 絕對 CSV 行索引)，方便比對原始 CSV 行。
+	// CSV 行佈局 (1-based):
+	//   1: Line 1   2: Line 2   3: Line 3
+	//   4: Index,X,Y
+	//   5: 1,10.5,20.3
+	//   6: not_an_int,11.2,21.7  ← 預期 row number
+	//   7: 3,9.8,19.1
+	// JSON 序列化經 sanitizeContextValue 走 fmt.Sprintf("%v") 把 int 變字串。
+	assert.Contains(t, out, `"row_number":"6"`,
+		"warning must include absolute row number (1-based) so operators can locate it")
 }
