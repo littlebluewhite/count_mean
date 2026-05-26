@@ -150,8 +150,7 @@ func TestFsperm_WindowsCallerSideEvalSymlinksPattern(t *testing.T) {
 		// If a future Windows defense-in-depth lands (e.g.,
 		// FILE_FLAG_OPEN_REPARSE_POINT wiring) this branch should activate
 		// and we can tighten the contract. For now we document the gap.
-		var pathErr *os.PathError
-		if errors.As(err, &pathErr) {
+		if _, ok := errors.AsType[*os.PathError](err); ok {
 			t.Logf("OpenFile through reparse point failed (newly safe?): %v", err)
 		}
 		return

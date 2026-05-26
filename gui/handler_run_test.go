@@ -108,8 +108,7 @@ func TestHandlerRun_PanicReturnsChainWrapper(t *testing.T) {
 		t.Errorf("expected ErrInternalPanic in chain, got %v", err)
 	}
 
-	var chainErr *panicErrWithChain
-	if !errors.As(err, &chainErr) {
+	if _, ok := errors.AsType[*panicErrWithChain](err); !ok {
 		t.Errorf("expected err to wrap *panicErrWithChain (dual-chain wrapper preserved), got %T: %v",
 			err, err)
 	}

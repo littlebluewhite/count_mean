@@ -526,8 +526,7 @@ func TestValidatePhaseManifest(t *testing.T) {
 			if tt.wantErr {
 				assert.Error(t, err)
 
-				var validationErr models.PhaseSyncValidationError
-				if errors.As(err, &validationErr) {
+				if validationErr, ok := errors.AsType[models.PhaseSyncValidationError](err); ok {
 					assert.Equal(t, tt.errField, validationErr.Field)
 					assert.Contains(t, validationErr.Message, tt.errMsg)
 				} else {

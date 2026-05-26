@@ -92,13 +92,13 @@ func TestRecoverHandlerPanic_TypedCallerErr_ErrorsAsWorks(t *testing.T) {
 		panic("oops")
 	}()
 
-	// errors.As 應可從 chain 撈出 *customCallerErr
-	var got *customCallerErr
-	if !errors.As(err, &got) {
-		t.Fatalf("errors.As 應可走訪到 *customCallerErr,實際 err=%v", err)
+	// errors.AsType 應可從 chain 撈出 *customCallerErr (Go 1.26+ 泛型 API)
+	got, ok := errors.AsType[*customCallerErr](err)
+	if !ok {
+		t.Fatalf("errors.AsType 應可走訪到 *customCallerErr,實際 err=%v", err)
 	}
 	if got.Code != "EBOUNDS" {
-		t.Errorf("errors.As 撈到的 *customCallerErr.Code 應為 EBOUNDS,實際=%q", got.Code)
+		t.Errorf("errors.AsType 撈到的 *customCallerErr.Code 應為 EBOUNDS,實際=%q", got.Code)
 	}
 
 	// 同時 ErrInternalPanic 仍在 chain 內

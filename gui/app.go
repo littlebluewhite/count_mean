@@ -1224,8 +1224,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 	stats, outputPath, runErr := handler.Run(a.context(), analysisParams)
 	if runErr != nil {
 		// 1) Validate gate err → 走 err channel (path_validation_test 期待 (nil, err))。
-		var gateErr *phaseSyncValidateGateErr
-		if errors.As(runErr, &gateErr) {
+		if gateErr, ok := errors.AsType[*phaseSyncValidateGateErr](runErr); ok {
 			return nil, gateErr.inner
 		}
 

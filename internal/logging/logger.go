@@ -427,9 +427,7 @@ func (l *Logger) addErrorInfo(entry *LogEntry, err error) {
 
 	entry.Error = l.sanitizeMessage(err.Error())
 
-	var appErr *errors.AppError
-
-	if stderrors.As(err, &appErr) {
+	if appErr, ok := stderrors.AsType[*errors.AppError](err); ok {
 		entry.Context["error_code"] = appErr.Code
 		entry.Context["recoverable"] = appErr.Recoverable
 
