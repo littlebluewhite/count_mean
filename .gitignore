@@ -16,3 +16,6 @@
 
 # macOS Finder metadata — appears in any directory the user browses in Finder.
 .DS_Store
+
+# Security scanner output — gosec/CodeQL produce these on every run, no value in versioning.
+*.sarif
