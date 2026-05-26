@@ -91,8 +91,8 @@ func TestAnalyzeCCI_InFlightCancelReturnsQuickly(t *testing.T) {
 
 	select {
 	case result := <-done:
-		assert.Less(t, result.elapsed, 2*time.Second,
-			"in-flight cancel 應在 2 秒內回傳（實測 %v）", result.elapsed)
+		assert.Less(t, result.elapsed, cancellationBudget,
+			"in-flight cancel 應在 %v 內回傳（實測 %v）", cancellationBudget, result.elapsed)
 
 		if result.err == nil {
 			// 分析在 cancel 抵達 step 邊界 / hot-loop check 前已完成 — 在快速硬體上合法，但 test 變成

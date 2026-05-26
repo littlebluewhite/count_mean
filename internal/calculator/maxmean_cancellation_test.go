@@ -163,8 +163,8 @@ func TestCalculate_MidFlightCancel_LargeDataset(t *testing.T) {
 	assert.True(t,
 		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled),
 		"expected DeadlineExceeded or Canceled, got %v", err)
-	assert.Less(t, elapsed, 1*time.Second,
-		"large-dataset Calculate with 50ms timeout must return within 1s (got %v)",
-		elapsed)
+	assert.Less(t, elapsed, cancellationBudget,
+		"large-dataset Calculate with 50ms timeout must return within %v (got %v)",
+		cancellationBudget, elapsed)
 	assert.Nil(t, results, "cancelled Calculate must return nil results")
 }

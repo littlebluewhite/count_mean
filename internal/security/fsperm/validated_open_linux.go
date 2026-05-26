@@ -96,7 +96,7 @@ func openValidated(resolvedPath, hitBase string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open dirfd(%s): %w", hitBase, err)
 	}
-	defer func() { _ = unix.Close(dirfd) }()
+	defer func() { _ = unix.Close(dirfd) }() //nolint:errcheck // cleanup-only Close;error 無 actionable 處理
 
 	how := &unix.OpenHow{
 		// O_CLOEXEC:openat2 是 raw syscall,與 os.OpenFile 不同 — 不會自動帶
@@ -121,7 +121,7 @@ func openValidated(resolvedPath, hitBase string) (*os.File, error) {
 		// 已 EvalSymlinks 校驗。警告 operator kernel 路徑已降級。
 		if errors.Is(err, unix.ENOSYS) {
 			emitOpenat2FallbackWarning()
-			return os.OpenFile(resolvedPath, WriteFlags, FilePerm) //nolint:gosec // resolvedPath 已校驗
+			return os.OpenFile(resolvedPath, WriteFlags, FilePerm) //nolint:gosec,wrapcheck // resolvedPath 已校驗;fallback 透出原始 *PathError 利 caller 偵測 OS 錯誤
 		}
 		// EXDEV:RESOLVE_BENEATH 違反 (路徑逃出 dirfd 範圍)。
 		// ELOOP:RESOLVE_NO_MAGICLINKS 違反或 O_NOFOLLOW 觸發。
@@ -152,7 +152,7 @@ func openReadValidated(resolvedPath, hitBase string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open dirfd(%s): %w", hitBase, err)
 	}
-	defer func() { _ = unix.Close(dirfd) }()
+	defer func() { _ = unix.Close(dirfd) }() //nolint:errcheck // cleanup-only Close;error 無 actionable 處理
 
 	how := &unix.OpenHow{
 		// O_CLOEXEC:與 openValidated 對稱 — openat2 raw syscall 不會像 os.OpenFile
@@ -167,7 +167,7 @@ func openReadValidated(resolvedPath, hitBase string) (*os.File, error) {
 	if err != nil {
 		if errors.Is(err, unix.ENOSYS) {
 			emitOpenat2FallbackWarning()
-			return os.OpenFile(resolvedPath, ReadFlags, 0) //nolint:gosec // resolvedPath 已校驗
+			return os.OpenFile(resolvedPath, ReadFlags, 0) //nolint:gosec,wrapcheck // resolvedPath 已校驗;fallback 透出原始 *PathError 利 caller 偵測 OS 錯誤
 		}
 		if errors.Is(err, unix.EXDEV) || errors.Is(err, unix.ELOOP) {
 			return nil, fmt.Errorf("%w: openat2(%s under %s, read) rejected: %w",

@@ -108,6 +108,16 @@ jobs:
     - name: Install gosec (pinned v2.26.1 via go install)
       run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
 
+    # main.go:42 `//go:embed all:frontend/dist` 要求目錄存在且至少一個檔案,
+    # 否則 gosec 在解析 root package 時就會 "pattern all:frontend/dist: no matching files found"
+    # (5 errors / 2 warnings)。其他 quality job (lint/coverage/integration/build) 都有
+    # 同形態的 stub step;security job 之前漏補,7682042 CI 強化遺漏收尾。
+    # 實際 frontend 由 `wails build` 產生;CI gate 階段只需 placeholder 讓 embed 滿足。
+    - name: Stub frontend/dist
+      run: |
+        mkdir -p frontend/dist
+        touch frontend/dist/.gitkeep
+
     # P1-H16:gosec 改 strict mode(makefile security target 已加 -severity=high
     # -confidence=high)。HIGH/HIGH finding 會讓 step 失敗、擋 PR;LOW/MEDIUM
     # 仍會在 log 印出但不擋 build,符合 CI quality gate 期望。
