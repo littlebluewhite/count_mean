@@ -87,7 +87,10 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 				// PathError 用 %w wrap 傳上來),前端不該看到
 				// /Volumes/patient_xx/... 之類 PII。走 redact.RedactForMessage
 				// 先處理再塞 result.Message。
-				return nil, fmt.Errorf("分析失敗: %s", redact.RedactForMessage(analyzeErr))
+				// UIError 包裝:Error() 仍回中文訊息(維持 result.Message 契約),
+				// sentinel 對接 errors.Is(err, ErrCCIAnalysisFailed)。
+				return nil, newUIError(ErrCCIAnalysisFailed,
+					fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(analyzeErr)))
 			}
 			return analysisResult, nil
 		},
@@ -101,7 +104,10 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 			// 取消;closure 內走 a.context() 與 Execute 一致。
 			csvPath, exportErr := a.cciAnalyzer.ExportToCSV(a.context(), analysisResult, outputDir)
 			if exportErr != nil {
-				return "", fmt.Errorf("CSV 導出失敗: %s", redact.RedactForMessage(exportErr))
+				// UIError 包裝:Error() 仍回中文訊息(維持 result.Message 契約),
+				// sentinel 對接 errors.Is(err, ErrCCICSVExportFailed)。
+				return "", newUIError(ErrCCICSVExportFailed,
+					fmt.Sprintf("CSV 導出失敗: %s", redact.RedactForMessage(exportErr)))
 			}
 			return csvPath, nil
 		},

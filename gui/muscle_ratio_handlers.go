@@ -103,7 +103,10 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 				// 砍掉,並走 i18n.T 取得 locale 化的「分析失敗」prefix(對齊
 				// TestAnalyzeMuscleRatio_LocaleSwitchAffectsMessage 對 zh-TW /
 				// zh-CN / en-US / ja-JP 各 locale 的 catalog 翻譯期望)。
-				return nil, errors.New(i18n.T(i18n.KeyErrorMuscleRatioHandlerAnalysisFailed, redact.RedactForMessage(analyzeErr)))
+				// UIError 包裝:Error() 仍回 i18n 翻譯訊息(維持 result.Message
+				// 契約),sentinel 對接 errors.Is(err, ErrMuscleRatioAnalysisFailed)。
+				return nil, newUIError(ErrMuscleRatioAnalysisFailed,
+					i18n.T(i18n.KeyErrorMuscleRatioHandlerAnalysisFailed, redact.RedactForMessage(analyzeErr)))
 			}
 			return subjectResults, nil
 		},
