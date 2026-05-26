@@ -38,12 +38,16 @@ _Avoid_: structured write, typed write, formatted output.
 _Avoid_: write options, write spec, csv request.
 
 **Analysis pipeline family**
-四個形狀相近的 GUI handler 家族：`AnalyzePhases`、`AnalyzePhaseSync`、未來的 `AnalyzeCCI`、未來的 `AnalyzeMuscleRatio`。共同形狀為「validate → execute（含 manifest/dataset load）→ CSV write via csvHandler」三步管線，輸入為 manifest 或 dataset、輸出為 result + outputPath。
-_Not included_: `CalculateMaxMean`（batch loop + file discovery）、`NormalizeData`（雙 input file）── 形狀不同，不屬此家族。
+四個形狀相近的 GUI handler 家族：`AnalyzePhases`、`AnalyzePhaseSync`、`AnalyzeCCI`、`AnalyzeMuscleRatio`。共同形狀為「validate → execute（含 manifest/dataset load）→ CSV write via csvHandler」三步管線，輸入為 manifest 或 dataset、輸出為 result + outputPath。`AnalyzeMuscleRatio` 是 batch 變體，CSV write 暫時摺進 execute 內（per-subject），對應 [[AnalysisHandler[P, R]]] 的 WriteCSV closure 設為 nil；候選 2 推進時可把 write 上移、closure 從 nil 補回實作。
+_Not included_: `CalculateMaxMean`（batch loop + file discovery）、`NormalizeData`（雙 input file）、`AnalyzeNormalizedPhaseSync`（multi-step：load → resolve×2 → normalize → write1 → range → stats → write2，雙 output、跨 step ctx 檢查）── 形狀不同，不屬此家族；這些 handler 直接走 [[HandlerRun]]，繞過 Tier 2 樣板。
 _Avoid_: GUI handler, analysis function, analyzer.
 
+**HandlerRun**
+所有 Wails GUI handler 共吃的 cross-cutting wrapper：吸收 `recoverHandlerPanic`（panic safety via named-return）+ logger entry/exit（「開始 X」/「X 完成」）+ 純 (R, error) 透傳。Contract-neutral —— body 回什麼就傳什麼，不強制 single-channel。Signature：`HandlerRun[R any](logger, name string, body func() (R, error)) (R, error)`。不注入 ctx；body 自己 close over `a.context()`。是 [[AnalysisHandler[P, R]]] 的底層；不在 [[Analysis pipeline family]] 的 handler（例如 `AnalyzeNormalizedPhaseSync`）直接呼叫此 wrapper。
+_Avoid_: HandlerWrapper, HandlerBoilerplate, RunWithRecover.
+
 **AnalysisHandler[P, R]**
-[[Analysis pipeline family]] 的泛型樣板，以 generic struct + Run method 形式存在。承載 `csvHandler`、`logger` 依賴，接收三個 closure（validate、execute、write CSV）注入差異。Run body 內建 `recoverHandlerPanic`、logger entry/exit、generic error wrapping；不負責 `state.Load`、result transform、i18n，這三項由 caller 在 Run 外處理。
+[[Analysis pipeline family]] 的泛型樣板，以 generic struct + Run method 形式存在。承載三個 field（`Name`、`Logger`、`CSV *io.CSVHandler`）與三個 closure：`Validate(P) error`（required）、`Execute(ctx, P) (R, error)`（required；樣板注入 ctx 給 Execute）、`WriteCSV(*io.CSVHandler, R) (outputPath, error)`（**optional**；nil 時 skip，對應 [[Analysis pipeline family]] batch 變體把 write 摺進 execute 的情況）。Run signature：`Run(ctx, params) (result R, outputPath string, err error)`。內部委派給 [[HandlerRun]] 拿 panic recovery + logger entry/exit；不負責 `state.Load`、result transform、i18n，這三項由 caller 在 Run 外處理。
 _Avoid_: AnalysisRunner, GenericHandler, AnalyzerWrapper.
 
 ## Example dialogue

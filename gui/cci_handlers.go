@@ -2,12 +2,15 @@ package gui
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/cci"
+	"count_mean/internal/io"
 	"count_mean/internal/security/fsperm"
 	"count_mean/internal/security/redact"
 )
@@ -48,55 +51,87 @@ type CCIDownloadParams struct {
 //	（不可預期錯誤）。如此前端可以單一路徑檢查 `result.success`/`result.message`，
 //	不必同時 try/catch + 檢 result.success（之前的雙通道設計）。
 func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
-	defer recoverHandlerPanic("AnalyzeCCI", a.logger, &err)
+	a.logger.Info("CCI 分析參數", map[string]interface{}{"params": params})
 
-	a.logger.Info("開始 CCI 分析", map[string]interface{}{"params": params})
-
-	if validationErr := validateCCIParams(params); validationErr != nil {
-		return failedCCIResult(validationErr.Error()), nil
-	}
-
-	// 邊界路徑驗證 — 在 analyzer 內部 defense-in-depth 之前先擋 traversal /
-	// 系統敏感目錄。downstream cci.Analyzer 仍會二次擋，但 GUI 邊界提早 reject 對
-	// 前端 UX 與 audit 較友善（不會等中途某個 reader 才失敗）。
-	if pathErr := validateExternalPathInputs(
-		"分期總檔案", params.ManifestFile,
-		"資料夾", params.DataFolder,
-	); pathErr != nil {
-		return failedCCIResult(pathErr.Error()), nil
-	}
-
-	analysisParams := &cci.CCIParams{
-		ManifestFile: params.ManifestFile,
-		DataFolder:   params.DataFolder,
-		SubjectIndex: params.SubjectIndex,
-	}
-
-	// 用 a.context() 帶 Wails 注入的 lifecycle ctx，支援 Shutdown / 使用者中止取消
-	// 長 CCI 計算（12 個 pair × N 點的並行 hot loop）。
-	analysisResult, analyzeErr := a.cciAnalyzer.AnalyzeCCI(a.context(), analysisParams)
-	if analyzeErr != nil {
-		// error message 內可能含 absolute path(downstream parser 把
-		// PathError 用 %w wrap 傳上來),前端不該看到 /Volumes/patient_xx/...
-		// 之類 PII。走 redact.RedactForMessage 先處理再塞 result.Message。
-		return failedCCIResult(fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(analyzeErr))), nil
-	}
-
-	// Export CSV
 	s := a.state.Load()
-	// 帶 ctx 讓大 dataset CSV 匯出也能配合 Wails Shutdown / 使用者中止取消。
-	csvPath, exportErr := a.cciAnalyzer.ExportToCSV(a.context(), analysisResult, s.config.OutputDir)
-	if exportErr != nil {
-		return failedCCIResult(fmt.Sprintf("CSV 導出失敗: %s", redact.RedactForMessage(exportErr))), nil
+	outputDir := s.config.OutputDir
+
+	handler := &AnalysisHandler[CCIParams, *cci.CCIAnalysisResult]{
+		Name:   "CCI 分析",
+		Logger: a.logger,
+		CSV:    s.csvHandler,
+		Validate: func(p CCIParams) error {
+			if validationErr := validateCCIParams(p); validationErr != nil {
+				return validationErr
+			}
+			// 邊界路徑驗證 — 在 analyzer 內部 defense-in-depth 之前先擋
+			// traversal / 系統敏感目錄。downstream cci.Analyzer 仍會二次擋，
+			// 但 GUI 邊界提早 reject 對前端 UX 與 audit 較友善（不會等中途
+			// 某個 reader 才失敗）。
+			return validateExternalPathInputs(
+				"分期總檔案", p.ManifestFile,
+				"資料夾", p.DataFolder,
+			)
+		},
+		Execute: func(ctx context.Context, p CCIParams) (*cci.CCIAnalysisResult, error) {
+			analysisParams := &cci.CCIParams{
+				ManifestFile: p.ManifestFile,
+				DataFolder:   p.DataFolder,
+				SubjectIndex: p.SubjectIndex,
+			}
+			// ctx 由樣板注入,沿用原 a.context() 行為:支援 Shutdown / 使用者
+			// 中止取消長 CCI 計算（12 個 pair × N 點的並行 hot loop）。
+			analysisResult, analyzeErr := a.cciAnalyzer.AnalyzeCCI(ctx, analysisParams)
+			if analyzeErr != nil {
+				// error message 內可能含 absolute path(downstream parser 把
+				// PathError 用 %w wrap 傳上來),前端不該看到
+				// /Volumes/patient_xx/... 之類 PII。走 redact.RedactForMessage
+				// 先處理再塞 result.Message。
+				return nil, fmt.Errorf("分析失敗: %s", redact.RedactForMessage(analyzeErr))
+			}
+			return analysisResult, nil
+		},
+		// WriteCSV 暫保留 cciAnalyzer.ExportToCSV — Candidate 2 推進時把 closure
+		// 內容換成 csvHandler.WriteCCIResult(...) 即可，handler 本身不再動。
+		// `*io.CSVHandler` 參數此版本還用不到（走 cciAnalyzer 內部 export），
+		// 是 Candidate 2 前的暫保留設計。outputDir 透過 closure capture caller
+		// 端的 local var（state.Load 已在 Run 外做）。
+		WriteCSV: func(_ *io.CSVHandler, analysisResult *cci.CCIAnalysisResult) (string, error) {
+			// 帶 ctx 讓大 dataset CSV 匯出也能配合 Wails Shutdown / 使用者中止
+			// 取消;closure 內走 a.context() 與 Execute 一致。
+			csvPath, exportErr := a.cciAnalyzer.ExportToCSV(a.context(), analysisResult, outputDir)
+			if exportErr != nil {
+				return "", fmt.Errorf("CSV 導出失敗: %s", redact.RedactForMessage(exportErr))
+			}
+			return csvPath, nil
+		},
 	}
 
-	// Generate interactive chart HTML
-	// 帶 ctx 讓大 dataset render 也能配合 Wails Shutdown / 使用者中止取消。
+	analysisResult, csvPath, runErr := handler.Run(a.context(), params)
+	if runErr != nil {
+		// panic 路徑:HandlerRun 的 recoverHandlerPanic 已將 panic 包成
+		// ErrInternalPanic chain；err 走 named return 上拋，result=nil（對齊
+		// 原 single-channel 契約對 panic 的處理）。
+		if errors.Is(runErr, ErrInternalPanic) {
+			return nil, runErr
+		}
+		// expected err（Validate / Execute / WriteCSV 任一回的 err）走
+		// single-channel envelope:failedCCIResult(message) + nil err。
+		// Execute / WriteCSV closure 內已自行加 prefix + redact，Validate
+		// 失敗則回原 sentinel（對齊既有 unified-channel 測試契約）。
+		return failedCCIResult(runErr.Error()), nil
+	}
+
+	// Generate interactive chart HTML — Run 外:Execute 維持單一語意，render
+	// 不擠進 closure。帶 ctx 讓大 dataset render 也能配合 Wails Shutdown /
+	// 使用者中止取消。
 	var buf bytes.Buffer
 	if chartErr := cci.GenerateCCIInteractiveChart(a.context(), analysisResult, &buf); chartErr != nil {
 		return failedCCIResult(fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(chartErr))), nil
 	}
 
+	// Result transform — Run 外:PairResults → PairNames slice、Report 字串
+	// 各自留在 caller code 維持可讀性。
 	pairNames := make([]string, len(analysisResult.PairResults))
 	for i, pr := range analysisResult.PairResults {
 		pairNames[i] = pr.PairName
@@ -116,7 +151,7 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 		Message:       "分析完成",
 	}
 
-	a.logger.Info("CCI 分析完成", map[string]interface{}{"csv": csvPath})
+	a.logger.Info("CCI 分析輸出", map[string]interface{}{"csv": csvPath})
 
 	return result, nil
 }

@@ -301,10 +301,22 @@ func countWithDefer(methods []appMethodInfo) int {
 // 過去 knownGap 含 GetTranslations / SetLanguage / GetAvailablePhases 三個
 // i18n 與 synchronizer dispatch shim,本輪已補 defer recoverHandlerPanic*,從清單
 // 移除。剩下兩個 lifecycle hook 不在 Wails RPC bindings,不需要 defer。
+//
+// PRD #7 (wave-6) 後新增 5 個 entry:5 個 analysis handler 改走 [[HandlerRun]] /
+// [[AnalysisHandler[P, R]]].Run 拿 panic safety,body 內不再直接 `defer
+// recoverHandlerPanic` — 樣板把 panic recovery 從 5 處 boilerplate 收斂到 1 處
+// (HandlerRun)。AST test 守的 invariant 換軌:從「method body 第一行 defer」
+// 變成「method 透過樣板取得 panic safety」。樣板自身的 panic safety 契約由
+// gui/handler_run_test.go 與 gui/analysis_handler_test.go 守住。
 func knownGapEntries() map[string]string {
 	return map[string]string{
-		"Startup":  "Wails lifecycle hook (OnStartup),非 RPC binding",
-		"Shutdown": "Wails lifecycle hook (OnShutdown),非 RPC binding",
+		"Startup":                    "Wails lifecycle hook (OnStartup),非 RPC binding",
+		"Shutdown":                   "Wails lifecycle hook (OnShutdown),非 RPC binding",
+		"AnalyzePhases":              "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
+		"AnalyzePhaseSync":           "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
+		"AnalyzeCCI":                 "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
+		"AnalyzeMuscleRatio":         "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
+		"AnalyzeNormalizedPhaseSync": "panic safety via HandlerRun (Tier 1, PRD #7 / wave-6)",
 	}
 }
 
