@@ -91,8 +91,8 @@ func TestAnalyzeCCI_InFlightCancelReturnsQuickly(t *testing.T) {
 
 	select {
 	case result := <-done:
-		assert.Less(t, result.elapsed, 2*time.Second,
-			"in-flight cancel 應在 2 秒內回傳（實測 %v）", result.elapsed)
+		assert.Less(t, result.elapsed, cancellationBudget,
+			"in-flight cancel 應在 %v 內回傳（實測 %v）", cancellationBudget, result.elapsed)
 
 		if result.err == nil {
 			// 分析在 cancel 抵達 step 邊界 / hot-loop check 前已完成 — 在快速硬體上合法，但 test 變成
@@ -102,10 +102,10 @@ func TestAnalyzeCCI_InFlightCancelReturnsQuickly(t *testing.T) {
 			assert.ErrorIs(t, result.err, context.Canceled,
 				"non-nil 錯誤必須是 context.Canceled（避免 cancel 被誤分類成其他失敗）: got %v", result.err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(cancellationBudget):
 		cancel() // 確保 goroutine 收到 cancel，避免 leak
 		<-done   // 等 goroutine 收尾
-		t.Fatal("AnalyzeCCI 在 cancel 後 3 秒仍未回傳 — context plumbing 失效")
+		t.Fatalf("AnalyzeCCI 在 cancel 後 %v 仍未回傳 — context plumbing 失效", cancellationBudget)
 	}
 
 	// 驗證 goroutine leak：給 runtime 一點時間做 cleanup，再比對。
@@ -256,8 +256,8 @@ func TestComputeAllPairs_CancelStopsSlotWrites(t *testing.T) {
 
 	select {
 	case r := <-done:
-		assert.Less(t, r.dt, 1*time.Second,
-			"computeAllPairs 在 cancel 後應 bounded time 回 (got %v)", r.dt)
+		assert.Less(t, r.dt, cancellationBudget,
+			"computeAllPairs 在 cancel 後應 bounded time 回 (budget=%v, got %v)", cancellationBudget, r.dt)
 		if r.err == nil {
 			// 在極快機器上 fixture 跑完 < 5ms,fix 仍未走到 cancel 路徑 — 退化為
 			// 「正常完成」測試,寬鬆通過並 log。
@@ -269,10 +269,10 @@ func TestComputeAllPairs_CancelStopsSlotWrites(t *testing.T) {
 				"cancel error 應 wrap context.Canceled,got %v", r.err)
 			assert.Nil(t, r.result, "cancel 後 computeAllPairs 不可回 partial result")
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(cancellationBudget):
 		cancel()
 		<-done
-		t.Fatal("computeAllPairs 在 cancel 後 3 秒未回 — slot-write ctx-check 失效或 goroutine 卡死")
+		t.Fatalf("computeAllPairs 在 cancel 後 %v 未回 — slot-write ctx-check 失效或 goroutine 卡死", cancellationBudget)
 	}
 
 	// 驗證 的次要契約:cancel 後 worker 全部回收。errgroup.Wait 已保證,

@@ -1063,3 +1063,91 @@ func FuzzSanitizePath(f *testing.F) {
 		}
 	})
 }
+
+// TestPerformBasicSecurityChecks_AppDataPolicy_CrossPlatform 鎖死 Windows
+// `\AppData\` 的 carve-out 策略:
+//
+//   - **預設擋** 整個 `\AppData\` (含 Roaming / LocalLow / Local\Microsoft\Credentials 等
+//     真實 credential / persistence 入口)
+//   - **唯一例外**:`\AppData\Local\Temp\` 子樹放行 (Windows runner t.TempDir() 落點,
+//     等同 macOS /private/var/folders/,合法 test fixture + GUI 暫存)
+//
+// 對應 doc:performBasicSecurityChecks 註解中的設計權衡。
+//
+// 本 test 故意餵 hardcoded Windows-style 字串樣本,讓 macOS/Linux CI 也能驗到
+// 此策略 — 利用 normalizePath 把 `\` 轉 `/` 後雙端正規化的設計(見
+// pathvalidator.go 內 normalizePath 註解)。沒有此 test,fix 只有 Windows CI
+// 能 catch regression,違反 7682042→PR #5 學到的「跨平台 test 必須在所有 OS 跑」教訓。
+func TestPerformBasicSecurityChecks_AppDataPolicy_CrossPlatform(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		path      string
+		wantBlock bool // true: 應被擋(ErrSensitiveDirectory),false: 應通過
+	}{
+		// **通過** — \AppData\Local\Temp\ 是 Windows runner t.TempDir() 落點,
+		// 等同 macOS /private/var/folders/,合法 test fixture + GUI 暫存。
+		{
+			name:      "AppData_Local_Temp_runner_TempDir_allowed",
+			path:      `C:\Users\RUNNER~1\AppData\Local\Temp\TestXxx\001\data.csv`,
+			wantBlock: false,
+		},
+		// **通過** — Temp 子樹下任意深度的合法 fixture 都該放行。
+		{
+			name:      "AppData_Local_Temp_deep_subdir_allowed",
+			path:      `C:\Users\wilson\AppData\Local\Temp\TestFoo\Bar\Baz\data.csv`,
+			wantBlock: false,
+		},
+		// **擋** — \AppData\Local\Microsoft\ 下的 Credentials / Vault 才是真敏感區。
+		{
+			name:      "AppData_Local_Microsoft_Credentials_blocked",
+			path:      `C:\Users\wilson\AppData\Local\Microsoft\Credentials\stored_token`,
+			wantBlock: true,
+		},
+		// **擋** — \AppData\Roaming\ 是漫遊應用程式設定,malware persistence 入口。
+		{
+			name:      "AppData_Roaming_blocked",
+			path:      `C:\Users\wilson\AppData\Roaming\Evil\persist.exe`,
+			wantBlock: true,
+		},
+		// **擋** — \AppData\LocalLow\ 是 low-integrity sandbox 區(IE/Edge protected mode)。
+		{
+			name:      "AppData_LocalLow_blocked",
+			path:      `C:\Users\wilson\AppData\LocalLow\Sandbox\leak.dat`,
+			wantBlock: true,
+		},
+		// **擋** — 非 C: drive 的 Roaming(VM / 多 drive 配置)。
+		{
+			name:      "AppData_Roaming_non_C_drive_blocked",
+			path:      `D:\Users\wilson\AppData\Roaming\Evil\persist.exe`,
+			wantBlock: true,
+		},
+		// **擋** — 大小寫混用 + forward-slash 變體(對齊 normalizePath 的 ToLower + ToSlash)。
+		{
+			name:      "AppData_Roaming_case_and_slash_variant_blocked",
+			path:      `c:/users/victim/AppData/Roaming/secret`,
+			wantBlock: true,
+		},
+		// **通過** — forward-slash 變體的 Temp 子樹仍放行。
+		{
+			name:      "AppData_Local_Temp_forward_slash_allowed",
+			path:      `C:/Users/runner/AppData/Local/Temp/test001/data.csv`,
+			wantBlock: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := performBasicSecurityChecks(tc.path)
+			gotBlock := err != nil && errors.Is(err, ErrSensitiveDirectory)
+			if tc.wantBlock && !gotBlock {
+				t.Errorf("path %q 應被 ErrSensitiveDirectory 擋,實際 err=%v", tc.path, err)
+			}
+			if !tc.wantBlock && err != nil {
+				t.Errorf("path %q 應通過,實際被擋:err=%v", tc.path, err)
+			}
+		})
+	}
+}

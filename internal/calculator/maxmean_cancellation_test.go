@@ -113,8 +113,8 @@ func TestCalculate_CtxCancel_NoGoroutineLeak(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Calculate 沒在 cancel 後 2s 內返回,worker 可能在 results send 上 deadlock")
+	case <-time.After(cancellationBudget):
+		t.Fatalf("Calculate 沒在 cancel 後 %v 內返回,worker 可能在 results send 上 deadlock", cancellationBudget)
 	}
 
 	// 給 worker / cleanup goroutine 一點時間退出
@@ -163,8 +163,8 @@ func TestCalculate_MidFlightCancel_LargeDataset(t *testing.T) {
 	assert.True(t,
 		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled),
 		"expected DeadlineExceeded or Canceled, got %v", err)
-	assert.Less(t, elapsed, 1*time.Second,
-		"large-dataset Calculate with 50ms timeout must return within 1s (got %v)",
-		elapsed)
+	assert.Less(t, elapsed, cancellationBudget,
+		"large-dataset Calculate with 50ms timeout must return within %v (got %v)",
+		cancellationBudget, elapsed)
 	assert.Nil(t, results, "cancelled Calculate must return nil results")
 }
