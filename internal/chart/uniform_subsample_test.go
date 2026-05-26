@@ -96,7 +96,7 @@ func TestUniformSubsample_LastIndexComparison_NotTimeFloat(t *testing.T) {
 	}
 }
 
-// TestUniformSubsample_Rate2Branch_RespectsCap 守護 
+// TestUniformSubsample_Rate2Branch_RespectsCap 守護
 //
 // past rate <= 1 branch 在 dataset > cap 時會放大 rate 把輸出壓回 cap,但
 // rate >= 2 branch 卻完全沒這層守門 — 對 1M 點資料,caller 傳 rate=2 會噴

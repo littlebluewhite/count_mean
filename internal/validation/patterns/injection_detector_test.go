@@ -179,7 +179,7 @@ func TestDetectCommand_LongPatternsStillWork(t *testing.T) {
 		"curl http://evil",
 		"wget evil.sh",
 		"whoami",
-		"WHOAMI",     // case-insensitive 契約
+		"WHOAMI", // case-insensitive 契約
 		"netcat -lvp",
 		"; ls /etc/passwd",
 		"cat /etc/shadow",

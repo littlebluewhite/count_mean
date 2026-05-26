@@ -139,7 +139,7 @@ type StreamingResult struct {
 
 // GetFileInfo 執行基本安全檢查（路徑遍歷攻擊防護），支援任意路徑的檔案.
 func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
-	h.logger.Debug("開始獲取文件信息", map[string]interface{}{
+	h.logger.Debug("開始獲取文件信息", map[string]any{
 		"filename": filename,
 	})
 
@@ -205,7 +205,7 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 	// 回傳 skippedRows，這裡若 > 0 就 log warning，避免 silently dropped row
 	// 在下游分析結果中造成 missing data 卻無人察覺。
 	if skippedRows > 0 {
-		h.logger.Warn("掃描檔案時跳過 malformed 行", map[string]interface{}{
+		h.logger.Warn("掃描檔案時跳過 malformed 行", map[string]any{
 			"file_size":     info.Size,
 			"line_count":    lineCount,
 			"skipped_rows":  skippedRows,
@@ -214,7 +214,7 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 		})
 	}
 
-	h.logger.Info("文件信息獲取完成", map[string]interface{}{
+	h.logger.Info("文件信息獲取完成", map[string]any{
 		"file_size":    info.Size,
 		"line_count":   info.LineCount,
 		"column_count": info.ColumnCount,
@@ -242,7 +242,7 @@ func (h *LargeFileHandler) scanFileStructure(filename string) (int64, int64, int
 
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			h.logger.Warn("關閉文件時發生錯誤", map[string]interface{}{
+			h.logger.Warn("關閉文件時發生錯誤", map[string]any{
 				"file":  filename,
 				"error": closeErr.Error(),
 			})
@@ -297,7 +297,7 @@ func (h *LargeFileHandler) scanFileStructure(filename string) (int64, int64, int
 		if err != nil {
 			skippedRows++
 			if skippedRows <= scanWarnSampleLimit {
-				h.logger.Warn("掃描文件時遇到錯誤，繼續處理", map[string]interface{}{
+				h.logger.Warn("掃描文件時遇到錯誤，繼續處理", map[string]any{
 					"error":         err.Error(),
 					"line":          lineCount + skippedRows,
 					"skipped_total": skippedRows,
@@ -311,7 +311,7 @@ func (h *LargeFileHandler) scanFileStructure(filename string) (int64, int64, int
 	}
 
 	if skippedRows > scanWarnSampleLimit {
-		h.logger.Warn("malformed 行 sample 已達上限,後續逐筆 warn 已 suppress", map[string]interface{}{
+		h.logger.Warn("malformed 行 sample 已達上限,後續逐筆 warn 已 suppress", map[string]any{
 			"file":               filename,
 			"skipped_total":      skippedRows,
 			"warn_sample_limit":  scanWarnSampleLimit,
@@ -454,7 +454,7 @@ func (h *LargeFileHandler) processStreamingFile(
 		result.Results = make([]models.MaxMeanResult, 0)
 	}
 
-	h.logger.Info("流式處理完成", map[string]interface{}{
+	h.logger.Info("流式處理完成", map[string]any{
 		"processed_lines": streamCtx.processedLines,
 		"duration_ms":     result.Duration.Milliseconds(),
 		"memory_used_mb":  result.MemoryUsed / 1024 / 1024,
@@ -482,7 +482,7 @@ func (h *LargeFileHandler) executeStreamingLoop(ctx *streamingContext, processor
 		}
 
 		if err != nil {
-			h.logger.Warn("讀取行時發生錯誤，跳過", map[string]interface{}{
+			h.logger.Warn("讀取行時發生錯誤，跳過", map[string]any{
 				"error": err.Error(),
 				"line":  ctx.processedLines + 1,
 			})
@@ -494,7 +494,7 @@ func (h *LargeFileHandler) executeStreamingLoop(ctx *streamingContext, processor
 
 		// 驗證數據行
 		if len(record) != len(ctx.headers) {
-			h.logger.Warn("行列數不匹配，跳過", map[string]interface{}{
+			h.logger.Warn("行列數不匹配，跳過", map[string]any{
 				"expected_columns": len(ctx.headers),
 				"actual_columns":   len(record),
 				"line":             ctx.processedLines + 1,
@@ -562,7 +562,7 @@ func (h *LargeFileHandler) reportProgressIfNeeded(ctx *streamingContext) error {
 
 	// 記錄緩衝區池統計
 	poolStats := h.bufferPool.Load().GetStats()
-	h.logger.Debug("緩衝區池統計", map[string]interface{}{
+	h.logger.Debug("緩衝區池統計", map[string]any{
 		"reuse_ratio":       poolStats.ReuseRatio,
 		"string_array_gets": poolStats.StringArrayGets,
 		"string_array_puts": poolStats.StringArrayPuts,
@@ -601,7 +601,7 @@ func (*LargeFileHandler) reportFinalProgress(ctx *streamingContext) {
 // closeFileWithLog 關閉文件並記錄錯誤.
 func (h *LargeFileHandler) closeFileWithLog(file *os.File, path string) {
 	if closeErr := file.Close(); closeErr != nil {
-		h.logger.Warn("關閉文件時發生錯誤", map[string]interface{}{
+		h.logger.Warn("關閉文件時發生錯誤", map[string]any{
 			"file":  path,
 			"error": closeErr.Error(),
 		})
@@ -672,7 +672,7 @@ func (h *LargeFileHandler) ProcessLargeFileInChunksWithContext(
 	windowSize int,
 	callback ProgressCallback,
 ) (*StreamingResult, error) {
-	h.logger.Info("開始分塊處理大文件", map[string]interface{}{
+	h.logger.Info("開始分塊處理大文件", map[string]any{
 		"filename":    filename,
 		"window_size": windowSize,
 		"chunk_size":  h.chunkSize,
@@ -698,7 +698,7 @@ func (h *LargeFileHandler) ProcessLargeFileInChunksWithContext(
 
 	// 若有 channel-count 不一致而被丟棄的 row，提醒 operator 資料可能受損。
 	if state.droppedRowCount > 0 {
-		h.logger.Warn("streaming 過程中丟棄通道數不符的 row", map[string]interface{}{
+		h.logger.Warn("streaming 過程中丟棄通道數不符的 row", map[string]any{
 			"filename":          filename,
 			"dropped_row_count": state.droppedRowCount,
 			"expected_channels": len(state.windowSums),
@@ -920,7 +920,7 @@ func (h *LargeFileHandler) processSlidingWindowRecord(
 ) error {
 	emgData, err := h.parseDataRow(record, state.scalingFactor)
 	if err != nil {
-		h.logger.Debug("解析數據行失敗，跳過", map[string]interface{}{
+		h.logger.Debug("解析數據行失敗，跳過", map[string]any{
 			"error": err.Error(),
 			"line":  ctx.processedLines + 1,
 		})
@@ -954,7 +954,7 @@ func (h *LargeFileHandler) buildSlidingWindowResults(state *slidingWindowState) 
 	results := make([]models.MaxMeanResult, 0, len(state.channelMaxMeans))
 	for i := range state.channelMaxMeans {
 		if math.IsInf(state.channelMaxMeans[i], -1) {
-			h.logger.Warn("通道未產生完整滑動視窗，跳過結果", map[string]interface{}{
+			h.logger.Warn("通道未產生完整滑動視窗，跳過結果", map[string]any{
 				"channel_index": i + 1,
 				"records_seen":  state.recordsSeen,
 				"window_size":   state.windowSize,
@@ -979,7 +979,7 @@ func (h *LargeFileHandler) logFinalStats(result *StreamingResult) {
 	finalPoolStats := h.bufferPool.Load().GetStats()
 	finalMemStats := h.getDetailedMemoryStats()
 
-	h.logger.Info("分塊處理統計", map[string]interface{}{
+	h.logger.Info("分塊處理統計", map[string]any{
 		"results_count":            len(result.Results),
 		"buffer_reuse_ratio":       finalPoolStats.ReuseRatio,
 		"buffer_gets":              finalPoolStats.StringArrayGets + finalPoolStats.EMGDataGets + finalPoolStats.Float64Gets,

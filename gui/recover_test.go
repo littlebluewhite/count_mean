@@ -275,8 +275,8 @@ func TestRecoverHandlerPanic_StackRedactedAtDebugLevel(t *testing.T) {
 // prefix 時不會被誤判。
 func TestRedactPathsInStack_HandlesSystemPathVariants(t *testing.T) {
 	cases := []struct {
-		name      string
-		input     string
+		name       string
+		input      string
 		mustRedact []string // 必須在 output 消失的 path prefix
 	}{
 		{

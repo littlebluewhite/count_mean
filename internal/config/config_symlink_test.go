@@ -63,7 +63,7 @@ func TestLoadConfig_RejectsLeafSymlink(t *testing.T) {
 	require.Nil(t, cfg, "fail-fast: 攻擊路徑不應產生 config 物件")
 }
 
-// TestLoadConfig_RejectsAllLeafSymlinks_IncludingInternalAlias 釘住 
+// TestLoadConfig_RejectsAllLeafSymlinks_IncludingInternalAlias 釘住
 // LoadConfig 對所有 leaf symlink (含內部 alias 指向同 dir 下另一檔) 均 reject —
 // 不細分「指向 base 內」「指向 base 外」。Lstat-based 判斷比 EvalSymlinks-then-
 // matchAnyBase 簡單可靠,trade-off 是用戶若需要 alias 必須直接傳真實檔名。
@@ -128,4 +128,3 @@ func TestLoadConfig_NonExistentFile_StillReturnsDefault(t *testing.T) {
 	require.NotNil(t, cfg)
 	require.Equal(t, DefaultConfig().ScalingFactor, cfg.ScalingFactor)
 }
-

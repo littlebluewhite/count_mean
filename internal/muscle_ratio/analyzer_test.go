@@ -730,7 +730,7 @@ func TestAnalyze_CaseOnlySubjectCollision_FailFast(t *testing.T) {
 	}
 }
 
-// TestAnalyze_NFCvsNFDSubjectCollision_FailFast 釘住 
+// TestAnalyze_NFCvsNFDSubjectCollision_FailFast 釘住
 // macOS APFS/HFS+ 對 "café" (NFC, U+00E9) 與 "café" (NFD, e+U+0301) hash 同 on-disk name，
 // 但 strings.ToLower 視為相異。若不 NFC normalize，會放行兩筆 manifest 然後第二筆覆寫前者。
 // 修法：collision key 用 norm.NFC.String 包裹 strings.ToLower。

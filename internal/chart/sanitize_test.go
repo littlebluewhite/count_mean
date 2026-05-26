@@ -67,7 +67,7 @@ func TestSanitizeChartString_LengthCap(t *testing.T) {
 	}
 }
 
-// TestSanitizeChartString_CJKTruncation_NoMojibake 釘住 
+// TestSanitizeChartString_CJKTruncation_NoMojibake 釘住
 // 1024-byte 硬切在 CJK rune 中段 (中=E4 B8 AD 共 3 bytes) 會留下不完整序列;
 // Go range loop 把 invalid byte 解成 U+FFFD (replacement char "�"),導致 user
 // 看到圖表 title 結尾出現 mojibake。修法是切完後過 strings.ToValidUTF8(s, "")
@@ -302,9 +302,9 @@ func FuzzSanitizeChartString(f *testing.F) {
 		"mix<!-- </script> -->",
 		"\x00\x1b control smuggle",
 		"\xff\xfe invalid utf8 sequence",
-		strings.Repeat("a", 2048),                 // length cap exercise
+		strings.Repeat("a", 2048),                // length cap exercise
 		"中文 Title with 全形 = 符號",                  // multilingual baseline
-		"\"quote\" and \\backslash",               // JSON-significant chars
+		"\"quote\" and \\backslash",              // JSON-significant chars
 		"<\\/already escaped<\\!already escaped", // double-pass idempotence
 	}
 	for _, s := range seeds {

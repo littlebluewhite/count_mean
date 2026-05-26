@@ -100,7 +100,7 @@ func getSystemInfo() SystemInfo {
 
 // Benchmark 執行性能測試.
 func (b *Benchmarker) Benchmark(name string, fn func() error) *Metrics {
-	b.logger.Info("開始性能測試", map[string]interface{}{"test": name})
+	b.logger.Info("開始性能測試", map[string]any{"test": name})
 
 	// 強制垃圾回收以獲得準確的記憶體測量
 	runtime.GC()
@@ -131,9 +131,9 @@ func (b *Benchmarker) Benchmark(name string, fn func() error) *Metrics {
 
 	if err != nil {
 		metrics.Error = err.Error()
-		b.logger.Error("性能測試失敗", err, map[string]interface{}{"test": name})
+		b.logger.Error("性能測試失敗", err, map[string]any{"test": name})
 	} else {
-		b.logger.Info("性能測試完成", map[string]interface{}{
+		b.logger.Info("性能測試完成", map[string]any{
 			"test":     name,
 			"duration": duration,
 			"memory":   metrics.MemoryUsage,
@@ -154,7 +154,7 @@ func (b *Benchmarker) BenchmarkWithData(name string, dataSize int64, fn func() e
 		dataSizeMB := float64(dataSize) / bytesPerMB
 		metrics.ThroughputData = dataSizeMB / metrics.Duration.Seconds()
 
-		b.logger.Info("數據吞吐量測試完成", map[string]interface{}{
+		b.logger.Info("數據吞吐量測試完成", map[string]any{
 			"test":            name,
 			"data_size_mb":    dataSizeMB,
 			"throughput_mbps": metrics.ThroughputData,
@@ -172,7 +172,7 @@ func (b *Benchmarker) BenchmarkOperations(name string, operationCount int, fn fu
 		// 計算操作吞吐量
 		metrics.ThroughputOps = float64(operationCount) / metrics.Duration.Seconds()
 
-		b.logger.Info("操作吞吐量測試完成", map[string]interface{}{
+		b.logger.Info("操作吞吐量測試完成", map[string]any{
 			"test":            name,
 			"operation_count": operationCount,
 			"throughput_ops":  metrics.ThroughputOps,
@@ -278,7 +278,7 @@ func (b *Benchmarker) SaveReportToFile(report *Result, filename string) error {
 			fmt.Sprintf("無法寫入報告文件: %s", filename))
 	}
 
-	b.logger.Info("性能報告已保存", map[string]interface{}{"file": filename})
+	b.logger.Info("性能報告已保存", map[string]any{"file": filename})
 
 	return nil
 }

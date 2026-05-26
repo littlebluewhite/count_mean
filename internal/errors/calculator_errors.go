@@ -74,9 +74,9 @@ var (
 
 // CalculatorError wraps a sentinel error with additional context.
 type CalculatorError struct {
-	Sentinel error                  // The underlying sentinel error for errors.Is() matching
-	Message  string                 // Localized/contextual message
-	Context  map[string]interface{} // Additional context information
+	Sentinel error          // The underlying sentinel error for errors.Is() matching
+	Message  string         // Localized/contextual message
+	Context  map[string]any // Additional context information
 }
 
 // Error implements the error interface.
@@ -107,7 +107,7 @@ func NewCalculatorError(sentinel error, message string) *CalculatorError {
 }
 
 // NewCalculatorErrorWithContext creates a new CalculatorError with context.
-func NewCalculatorErrorWithContext(sentinel error, message string, context map[string]interface{}) *CalculatorError {
+func NewCalculatorErrorWithContext(sentinel error, message string, context map[string]any) *CalculatorError {
 	return &CalculatorError{
 		Sentinel: sentinel,
 		Message:  message,

@@ -470,11 +470,11 @@ func TestSanitizePath_RejectsDangerousInputs(t *testing.T) {
 		"././/etc/passwd",
 		"....\\\\corge.csv",
 		"./../.././grault.csv",
-		"./foo.csv",            // 含 `./` ref
-		"foo\x00//bar.csv",     // 含 NUL
-		"//report..v2.csv",     // 起首 //
-		".\\windows.csv",       // Windows 端 `.\` ref
-		"foo\r\nbar.csv",       // 含 CRLF
+		"./foo.csv",        // 含 `./` ref
+		"foo\x00//bar.csv", // 含 NUL
+		"//report..v2.csv", // 起首 //
+		".\\windows.csv",   // Windows 端 `.\` ref
+		"foo\r\nbar.csv",   // 含 CRLF
 	}
 
 	for _, input := range rejected {

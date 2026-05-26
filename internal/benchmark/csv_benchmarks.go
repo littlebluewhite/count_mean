@@ -395,7 +395,7 @@ func (cb *CSVBenchmarks) RunAllBenchmarks() *Result {
 
 	report := cb.benchmarker.GenerateReport("CSV處理性能測試")
 
-	cb.benchmarker.logger.Info("CSV 性能基準測試完成", map[string]interface{}{
+	cb.benchmarker.logger.Info("CSV 性能基準測試完成", map[string]any{
 		"total_tests":  report.Summary.TotalTests,
 		"passed_tests": report.Summary.PassedTests,
 		"failed_tests": report.Summary.FailedTests,
@@ -413,7 +413,7 @@ func (cb *CSVBenchmarks) Cleanup() error {
 		return fmt.Errorf("failed to cleanup temp directory: %w", err)
 	}
 
-	cb.benchmarker.logger.Info("臨時文件已清理", map[string]interface{}{"temp_dir": cb.tempDir})
+	cb.benchmarker.logger.Info("臨時文件已清理", map[string]any{"temp_dir": cb.tempDir})
 
 	return nil
 }

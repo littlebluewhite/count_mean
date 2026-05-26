@@ -186,7 +186,7 @@ func TestBuildChannelMap_LeftAndRightPriority(t *testing.T) {
 	}
 }
 
-// TestBuildChannelMap_DuplicateChannelFailFast 守護 
+// TestBuildChannelMap_DuplicateChannelFailFast 守護
 // 同份 EMG 出現兩個 R.RA (例如資料採集失誤、檔案合併出 bug) 必須 fail-fast,
 // 不再 silent overwrite (last-wins by header order)。與 muscle_ratio 行為對稱,
 // 兩個 caller 共用 musclemap.AssignShort helper。

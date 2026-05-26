@@ -561,8 +561,8 @@ func addCCICustomJS(line *charts.Line) {
 }
 
 // toInterfaceSlice converts []string to []interface{} for go-echarts.
-func toInterfaceSlice(ss []string) []interface{} {
-	result := make([]interface{}, len(ss))
+func toInterfaceSlice(ss []string) []any {
+	result := make([]any, len(ss))
 	for i, s := range ss {
 		result[i] = s
 	}

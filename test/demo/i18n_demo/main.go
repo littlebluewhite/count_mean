@@ -147,7 +147,7 @@ func main() {
 	fmt.Println("✓ 線程安全的翻譯操作")
 	fmt.Println("✓ 統一的全局翻譯接口")
 
-	logger.Info("國際化功能示範完成", map[string]interface{}{
+	logger.Info("國際化功能示範完成", map[string]any{
 		"supported_locales": len(locales),
 		"detected_locale":   detectedLocale,
 		"translations_dir":  cfg.TranslationsDir,

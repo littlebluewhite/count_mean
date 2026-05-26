@@ -80,7 +80,7 @@ func TestBackpressureController_GetStats_DerivedFieldsComputed(t *testing.T) {
 	}
 }
 
-// TestNewBackpressureController_ZeroValueSweep 守護 
+// TestNewBackpressureController_ZeroValueSweep 守護
 // zero-value config 必須 normalize 所有可能除 0 / 進入死循環的欄位,並透過
 // backpressureLogger 寫 warn 讓使用者知道走 fallback (而非靜默)。
 //
@@ -151,10 +151,10 @@ func TestNewBackpressureController_PartialZeroValue(t *testing.T) {
 	defer restore()
 
 	cfg := &BackpressureConfig{
-		MaxMemoryMB:       2048,    // caller 設值,不該被改
-		MaxWorkers:        0,       // zero-value,該被 normalize
-		MemoryThreshold:   0.7,     // caller 設值
-		ThrottleThreshold: 0.85,    // caller 設值
+		MaxMemoryMB:       2048, // caller 設值,不該被改
+		MaxWorkers:        0,    // zero-value,該被 normalize
+		MemoryThreshold:   0.7,  // caller 設值
+		ThrottleThreshold: 0.85, // caller 設值
 		CheckInterval:     200 * time.Millisecond,
 	}
 

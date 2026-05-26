@@ -117,7 +117,7 @@ func TestRangeNormalizer_NormalizeByRangeMax_ZeroMaxReturnsError(t *testing.T) {
 	require.Contains(t, err.Error(), "最大值為 0")
 }
 
-// TestRangeNormalizer_NormalizeByRangeMax_MissingChannelReturnsDistinctError 守護 
+// TestRangeNormalizer_NormalizeByRangeMax_MissingChannelReturnsDistinctError 守護
 // 「通道在 Headers 但不在 Channels map」必須回 ErrMissingChannelInRange,
 // 不再與「通道存在但實測全為 0」(ErrZeroChannelMax) 共用同一個錯誤型別。
 // 前端可區分「資料缺失需查 parser」vs「實測為 0 需檢查設備」兩種診斷流程。
@@ -316,7 +316,7 @@ func TestBuildNormalizedDataset_MissingChannelData(t *testing.T) {
 	require.Nil(t, got)
 }
 
-// TestComputeChannelMaxes_NaNInMiddle 驗證 
+// TestComputeChannelMaxes_NaNInMiddle 驗證
 // util.ArrayMax 用 `>` 比較對 NaN 不安全 — NaN 在中間 / 尾端時會被 silent skip，
 // 最大值會落在 non-NaN 元素上，下游 buildNormalizedDataset 完全偵測不到 NaN，
 // 結果 NaN sample 會以「除以 non-NaN max」流入 normalized output。

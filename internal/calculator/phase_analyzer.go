@@ -51,7 +51,7 @@ type phaseDataCollector struct {
 func (p *PhaseAnalyzer) validateAnalyzeInput(dataset *models.EMGDataset, phases []models.TimeRange) error {
 	if dataset.IsEmpty() {
 		err := calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "數據集為空")
-		p.logger.Error("階段分析輸入驗證失敗", err, map[string]interface{}{"dataset_empty": true})
+		p.logger.Error("階段分析輸入驗證失敗", err, map[string]any{"dataset_empty": true})
 
 		return err
 	}
@@ -60,9 +60,9 @@ func (p *PhaseAnalyzer) validateAnalyzeInput(dataset *models.EMGDataset, phases 
 		err := calcerrors.NewCalculatorErrorWithContext(
 			calcerrors.ErrPhaseMismatch,
 			"階段數量與標籤數量不匹配",
-			map[string]interface{}{"phase_count": len(phases), "label_count": len(p.phaseLabels)},
+			map[string]any{"phase_count": len(phases), "label_count": len(p.phaseLabels)},
 		)
-		p.logger.Error("階段配置不匹配", err, map[string]interface{}{"phase_count": len(phases), "label_count": len(p.phaseLabels)})
+		p.logger.Error("階段配置不匹配", err, map[string]any{"phase_count": len(phases), "label_count": len(p.phaseLabels)})
 
 		return err
 	}
@@ -183,7 +183,7 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 		return nil, err
 	}
 
-	p.logger.Info("開始階段分析", map[string]interface{}{
+	p.logger.Info("開始階段分析", map[string]any{
 		"phase_count":    len(phases),
 		"data_points":    dataset.DataPointCount(),
 		"channel_count":  dataset.ChannelCount(),
@@ -196,7 +196,7 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 	maxTimeIndex := p.computeMaxTimeIndex(collector.allData, collector.timeData, channelCount)
 
 	duration := time.Since(startTime)
-	p.logger.Info("階段分析完成", map[string]interface{}{
+	p.logger.Info("階段分析完成", map[string]any{
 		"duration_ms":   duration.Milliseconds(),
 		"phase_count":   len(results),
 		"channel_count": channelCount,
@@ -214,7 +214,7 @@ func (p *PhaseAnalyzer) AnalyzeFromRawData(records [][]string, phaseStrings []st
 		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "階段分析器為空")
 	}
 
-	p.logger.Info("開始從原始數據進行階段分析", map[string]interface{}{
+	p.logger.Info("開始從原始數據進行階段分析", map[string]any{
 		"record_count":  len(records),
 		"phase_strings": phaseStrings,
 	})
@@ -240,7 +240,7 @@ func (p *PhaseAnalyzer) parsePhases(phaseStrings []string) ([]models.TimeRange, 
 		return nil, calcerrors.NewCalculatorErrorWithContext(
 			calcerrors.ErrInsufficientData,
 			"需要至少 5 個時間點來定義 4 個階段",
-			map[string]interface{}{
+			map[string]any{
 				"provided_points": len(phaseStrings),
 				"required_points": MinTimePointsForPhases,
 			},
@@ -265,7 +265,7 @@ func (p *PhaseAnalyzer) parsePhases(phaseStrings []string) ([]models.TimeRange, 
 		return nil, calcerrors.NewCalculatorErrorWithContext(
 			calcerrors.ErrInsufficientData,
 			fmt.Sprintf("需要至少 %d 個時間點來定義 %d 個階段", requiredTimePoints, len(p.phaseLabels)),
-			map[string]interface{}{
+			map[string]any{
 				"provided_points": len(timePoints),
 				"required_points": requiredTimePoints,
 				"phase_count":     len(p.phaseLabels),

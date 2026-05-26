@@ -177,7 +177,6 @@ func computeChannelMaxes(
 // buildNormalizedDataset 以 channelMaxes 對 data 做標準化，產生新物件。
 // 時間序列與標頭直接複製；通道值逐項除以該通道的最大值。
 //
-// 
 //   - 以 data.Headers 為迭代主軸（保留順序、避免 map 迭代隨機性）。
 //   - channelMaxes 缺鍵時回明確錯誤（過去靜默用零值除法產生 NaN/Inf）。
 //   - data.Channels 缺鍵時同樣回錯（過去產生長度 0 的 normalized channel）。

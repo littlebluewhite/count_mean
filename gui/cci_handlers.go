@@ -51,7 +51,7 @@ type CCIDownloadParams struct {
 //	（不可預期錯誤）。如此前端可以單一路徑檢查 `result.success`/`result.message`，
 //	不必同時 try/catch + 檢 result.success（之前的雙通道設計）。
 func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
-	a.logger.Info("CCI 分析參數", map[string]interface{}{"params": params})
+	a.logger.Info("CCI 分析參數", map[string]any{"params": params})
 
 	s := a.state.Load()
 	outputDir := s.config.OutputDir
@@ -151,7 +151,7 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 		Message:       "分析完成",
 	}
 
-	a.logger.Info("CCI 分析輸出", map[string]interface{}{"csv": csvPath})
+	a.logger.Info("CCI 分析輸出", map[string]any{"csv": csvPath})
 
 	return result, nil
 }
@@ -210,7 +210,7 @@ func (a *App) DownloadCCIChart(params CCIDownloadParams) (result *ChartResult, e
 		return nil, fmt.Errorf("保存圖片失敗: %w", err)
 	}
 
-	a.logger.Info("CCI 圖表下載完成", map[string]interface{}{
+	a.logger.Info("CCI 圖表下載完成", map[string]any{
 		"output": outputPath,
 	})
 

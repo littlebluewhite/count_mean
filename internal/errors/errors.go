@@ -49,12 +49,12 @@ const (
 
 // AppError represents a structured application error.
 type AppError struct {
-	Code        ErrorCode              `json:"code"`
-	Message     string                 `json:"message"`
-	Details     string                 `json:"details,omitempty"`
-	Cause       error                  `json:"-"`
-	Context     map[string]interface{} `json:"context,omitempty"`
-	Recoverable bool                   `json:"recoverable"`
+	Code        ErrorCode      `json:"code"`
+	Message     string         `json:"message"`
+	Details     string         `json:"details,omitempty"`
+	Cause       error          `json:"-"`
+	Context     map[string]any `json:"context,omitempty"`
+	Recoverable bool           `json:"recoverable"`
 }
 
 // Error implements the error interface.
@@ -97,9 +97,9 @@ func (e *AppError) Is(target error) bool {
 }
 
 // WithContext adds context information to the error.
-func (e *AppError) WithContext(key string, value interface{}) *AppError {
+func (e *AppError) WithContext(key string, value any) *AppError {
 	if e.Context == nil {
-		e.Context = make(map[string]interface{})
+		e.Context = make(map[string]any)
 	}
 
 	e.Context[key] = value
@@ -154,18 +154,18 @@ func IsRecoverable(code ErrorCode) bool {
 // ValidationError represents input validation errors.
 type ValidationError struct {
 	*AppError
-	Field string      `json:"field,omitempty"`
-	Value interface{} `json:"value,omitempty"`
+	Field string `json:"field,omitempty"`
+	Value any    `json:"value,omitempty"`
 }
 
 // NewValidationError creates a new validation error.
-func NewValidationError(field string, value interface{}, message string) *ValidationError {
+func NewValidationError(field string, value any, message string) *ValidationError {
 	return &ValidationError{
 		AppError: &AppError{
 			Code:        ErrCodeDataValidation,
 			Message:     message,
 			Recoverable: true,
-			Context: map[string]interface{}{
+			Context: map[string]any{
 				"field": field,
 				"value": value,
 			},

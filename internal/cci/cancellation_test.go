@@ -168,7 +168,9 @@ func writeLargeCCIEMGFile(t *testing.T, path string, rowCount int) {
 // result writes」的契約。
 //
 // 過去實作:`g.Go(func() error { cciValues, err := computeSinglePair(...);
-//          if err != nil { return err }; slots[i] = CCIResult{...} })`
+//
+//	if err != nil { return err }; slots[i] = CCIResult{...} })`
+//
 // 若 ctx 在 `computeSinglePair` 剛回 (因 race 在 cancel 信號邊界,CalculateCCITimeSeries
 // 完整跑完且回 nil err) 之後但「slots[i] = ...」之前被 cancel,該 goroutine 仍會寫入 slots。
 // 即使 errgroup.Wait 最終回 ctx.Err(),slots 中已混入 partial result;雖然 caller

@@ -372,13 +372,13 @@ func TestFloatCell_RoundTrip(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name         string
-		input        string // 原始 cell 字面
-		wantV        float64
-		wantMissing  bool
-		wantFormatV  string // 第一次 format 結果
-		isNaNFamily  bool   // wantV 是 NaN（含 missing），比較需走 IsNaN
-		precision    int
+		name        string
+		input       string // 原始 cell 字面
+		wantV       float64
+		wantMissing bool
+		wantFormatV string // 第一次 format 結果
+		isNaNFamily bool   // wantV 是 NaN（含 missing），比較需走 IsNaN
+		precision   int
 	}{
 		{
 			name:        "missing_empty_cell_round_trip_stable",

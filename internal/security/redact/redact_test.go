@@ -1,8 +1,8 @@
 // Package redact 的測試守護:
 //
-// 1) Paths 行為與 gui/recover.go::redactPathsInStack 完全對齊(等於是把舊測試
-//    在新位址重新跑一遍 — 守 migration 等價)。
-// 2) RedactForMessage 對 error 文字做相同 redact 處理,並對 nil error 回空字串。
+//  1. Paths 行為與 gui/recover.go::redactPathsInStack 完全對齊(等於是把舊測試
+//     在新位址重新跑一遍 — 守 migration 等價)。
+//  2. RedactForMessage 對 error 文字做相同 redact 處理,並對 nil error 回空字串。
 //
 // 把 redactPathsInStack 從 gui/recover.go 抽到 internal/security/redact 作為
 // process-wide 共用 helper。新位址要先有 test 才落實 helper(TDD),

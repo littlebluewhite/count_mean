@@ -9,7 +9,7 @@ import (
 	"count_mean/internal/models"
 )
 
-// TestGetAvailableColumns_EmptyHeaders 釘住 
+// TestGetAvailableColumns_EmptyHeaders 釘住
 //
 // 修補前 chart_statistics.go:60 `make([]ColumnInfo, 0, len(dataset.Headers)-1)`,
 // 當 Headers 為空 slice 時 cap 算出 -1,runtime.makeslice 噴
@@ -46,7 +46,7 @@ func TestGetAvailableColumns_EmptyHeaders(t *testing.T) {
 	}
 }
 
-// TestChart_NilDataset 釘住 
+// TestChart_NilDataset 釘住
 //
 // 6 個 function 在收到 nil *EMGDataset 時必須 no-op,不能 panic。修補前每一個
 // 都會在第一行 deref 處 (`len(dataset.X)` 或 `range dataset.Data`) 噴

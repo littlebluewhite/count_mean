@@ -89,7 +89,7 @@ func testGenerateInteractiveChart(t *testing.T) {
 	}
 }
 
-// TestApplyChartOptions_XYAxisLabelRetained 釘住 
+// TestApplyChartOptions_XYAxisLabelRetained 釘住
 // applySimpleChartOptions (RenderChartToWriter 路徑) 與 setComparisonChartOptions
 // (GenerateComparisonChart 路徑) 原本 silently drop XAxisLabel / YAxisLabel —
 // caller config 帶了 axis label 但 chart HTML 不會渲染出來。修法是把 config 的
@@ -425,7 +425,7 @@ func testGetChartStatistics(t *testing.T) {
 	}
 
 	// 檢查欄位統計
-	columnStats, ok := stats["column_statistics"].([]map[string]interface{})
+	columnStats, ok := stats["column_statistics"].([]map[string]any)
 	if !ok {
 		t.Error("GetChartStatistics() column_statistics is not the expected type")
 	}

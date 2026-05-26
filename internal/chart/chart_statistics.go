@@ -115,12 +115,12 @@ func GetAvailableColumns(dataset *models.EMGDataset) []ColumnInfo {
 func GetChartStatistics(
 	dataset *models.EMGDataset,
 	selectedColumns []int,
-) map[string]interface{} {
+) map[string]any {
 	// guard: nil dataset → 回傳 canonical zero map (避免 dereference panic)。
 	// 公開 API 保持 no-error 簽章; production caller path 走 chart-generator method
 	// 並由 validateDataset 回傳 ErrDatasetNil。
 	if dataset == nil {
-		return map[string]interface{}{
+		return map[string]any{
 			"total_points":      0,
 			"selected_columns":  len(selectedColumns),
 			"statistics_source": "full_dataset",
@@ -128,7 +128,7 @@ func GetChartStatistics(
 		}
 	}
 
-	stats := make(map[string]interface{})
+	stats := make(map[string]any)
 
 	stats["total_points"] = len(dataset.Data)
 	stats["selected_columns"] = len(selectedColumns)
@@ -142,7 +142,7 @@ func GetChartStatistics(
 }
 
 // populateTimeStatistics 填充時間相關統計信息.
-func populateTimeStatistics(stats map[string]interface{}, dataset *models.EMGDataset) {
+func populateTimeStatistics(stats map[string]any, dataset *models.EMGDataset) {
 	if len(dataset.Data) == 0 {
 		return
 	}
@@ -174,11 +174,11 @@ func populateTimeStatistics(stats map[string]interface{}, dataset *models.EMGDat
 
 // populateColumnStatistics 填充欄位統計信息.
 func populateColumnStatistics(
-	stats map[string]interface{},
+	stats map[string]any,
 	dataset *models.EMGDataset,
 	selectedColumns []int,
 ) {
-	columnStats := make([]map[string]interface{}, 0, len(selectedColumns))
+	columnStats := make([]map[string]any, 0, len(selectedColumns))
 
 	for _, colIdx := range selectedColumns {
 		if colIdx <= 0 || colIdx >= len(dataset.Headers) {
@@ -190,7 +190,7 @@ func populateColumnStatistics(
 
 		// 同 ColumnInfo 流程 — Headers 來自 caller-controlled CSV,
 		// XSS payload 必須在離開 chart package 前過 sanitizeChartString。
-		colStat := map[string]interface{}{
+		colStat := map[string]any{
 			"name":  sanitizeChartString(dataset.Headers[colIdx]),
 			"index": colIdx,
 		}

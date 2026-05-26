@@ -155,7 +155,7 @@ func runGUI() error {
 		logging.Info(loadRes.Reason)
 	case configLoadFallback:
 		// 檔案存在但壞掉 — warn 級別 + 原始 error,使用者可看到「為什麼」走 default
-		logging.Warn(loadRes.Reason, map[string]interface{}{
+		logging.Warn(loadRes.Reason, map[string]any{
 			"error": loadRes.Err.Error(),
 		})
 	}
@@ -212,7 +212,7 @@ func runGUI() error {
 		},
 		OnStartup:  app.Startup,
 		OnShutdown: app.Shutdown,
-		Bind: []interface{}{
+		Bind: []any{
 			app,
 		},
 		DragAndDrop: &options.DragAndDrop{

@@ -82,7 +82,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 	// write2」多 step 流程與跨 step ctx.Err() 檢查切點;single-channel 錯誤通道
 	// 契約(永遠回 (result, nil),失敗包成 result.Success=false + result.Message)
 	// 也由 body 自行維護。
-	a.logger.Info("標準化分期同步分析參數", map[string]interface{}{"params": params})
+	a.logger.Info("標準化分期同步分析參數", map[string]any{"params": params})
 	return HandlerRun(a.logger, "標準化分期同步分析", func() (*NormalizedPhaseSyncResult, error) {
 		outputDir := a.state.Load().config.OutputDir
 
@@ -116,7 +116,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 
 		loaded, loadErr := a.phaseSyncAnalyzer.Load(baseParams)
 		if loadErr != nil {
-			a.logger.Error("載入分期同步資料失敗", loadErr, map[string]interface{}{})
+			a.logger.Error("載入分期同步資料失敗", loadErr, map[string]any{})
 			// 同 CCI handler — error 字面可能含 absolute path,過 redact 才塞 message。
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("載入資料失敗: %s", redact.RedactForMessage(loadErr))), nil
 		}
@@ -124,13 +124,13 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		// 2. 分別解析標準化視窗與統計視窗（兩組獨立、不互相驗證）
 		normRange, normRangeErr := a.phaseSyncAnalyzer.ResolvePhaseRange(loaded, params.NormStartPhase, params.NormEndPhase)
 		if normRangeErr != nil {
-			a.logger.Error("標準化區間解析失敗", normRangeErr, map[string]interface{}{})
+			a.logger.Error("標準化區間解析失敗", normRangeErr, map[string]any{})
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("標準化區間: %s", redact.RedactForMessage(normRangeErr))), nil
 		}
 
 		statsRange, statsRangeErr := a.phaseSyncAnalyzer.ResolvePhaseRange(loaded, params.StatsStartPhase, params.StatsEndPhase)
 		if statsRangeErr != nil {
-			a.logger.Error("統計區間解析失敗", statsRangeErr, map[string]interface{}{})
+			a.logger.Error("統計區間解析失敗", statsRangeErr, map[string]any{})
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("統計區間: %s", redact.RedactForMessage(statsRangeErr))), nil
 		}
 
@@ -143,7 +143,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 			normRange.EndTime,
 		)
 		if normErr != nil {
-			a.logger.Error("區間最大值標準化失敗", normErr, map[string]interface{}{})
+			a.logger.Error("區間最大值標準化失敗", normErr, map[string]any{})
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("標準化失敗: %s", redact.RedactForMessage(normErr))), nil
 		}
 
@@ -174,7 +174,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		}
 
 		if csvWriteErr := parsers.ExportPhaseSyncDataToCSV(normalizedData, normalizedEMGPath, normalizedPhaseSyncPrecision); csvWriteErr != nil {
-			a.logger.Error("寫入標準化 EMG 失敗", csvWriteErr, map[string]interface{}{"path": normalizedEMGPath})
+			a.logger.Error("寫入標準化 EMG 失敗", csvWriteErr, map[string]any{"path": normalizedEMGPath})
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("寫入標準化 EMG 失敗: %s", redact.RedactForMessage(csvWriteErr))), nil
 		}
 
@@ -185,7 +185,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 			statsRange.EndTime,
 		)
 		if rangeErr != nil {
-			a.logger.Error("擷取標準化資料統計區間失敗", rangeErr, map[string]interface{}{})
+			a.logger.Error("擷取標準化資料統計區間失敗", rangeErr, map[string]any{})
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("擷取統計區間失敗: %s", redact.RedactForMessage(rangeErr))), nil
 		}
 
@@ -202,7 +202,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 			},
 		)
 		if statsErr != nil {
-			a.logger.Error("計算標準化統計失敗", statsErr, map[string]interface{}{})
+			a.logger.Error("計算標準化統計失敗", statsErr, map[string]any{})
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("計算統計失敗: %s", redact.RedactForMessage(statsErr))), nil
 		}
 
@@ -229,11 +229,11 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		}
 
 		if statsWriteErr := statsCalc.ExportToCSV(stats, phaseSyncCSVPath); statsWriteErr != nil {
-			a.logger.Error("寫入標準化統計 CSV 失敗", statsWriteErr, map[string]interface{}{"path": phaseSyncCSVPath})
+			a.logger.Error("寫入標準化統計 CSV 失敗", statsWriteErr, map[string]any{"path": phaseSyncCSVPath})
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("寫入統計失敗: %s", redact.RedactForMessage(statsWriteErr))), nil
 		}
 
-		a.logger.Info("標準化分期同步分析輸出", map[string]interface{}{
+		a.logger.Info("標準化分期同步分析輸出", map[string]any{
 			"normalizedEMG": normalizedEMGPath,
 			"phaseSyncCSV":  phaseSyncCSVPath,
 		})

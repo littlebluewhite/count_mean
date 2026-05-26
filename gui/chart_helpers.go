@@ -150,7 +150,7 @@ func (a *App) savePNGFromBase64(params ChartParams) (result *ChartResult, err er
 		return nil, fmt.Errorf("保存圖片失敗: %w", writeErr)
 	}
 
-	a.logger.Info("圖表下載完成", map[string]interface{}{
+	a.logger.Info("圖表下載完成", map[string]any{
 		"output_file": outputPath,
 		"file_size":   len(pngData),
 	})

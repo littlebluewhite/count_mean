@@ -165,7 +165,7 @@ func SanitizeAllRows(rows [][]string) [][]string {
 			if logger == nil {
 				logger = logging.GetLogger("csvutil_sanitize")
 			}
-			logger.Warn("nil row dropped at index", map[string]interface{}{
+			logger.Warn("nil row dropped at index", map[string]any{
 				"index": i,
 				"total": len(rows),
 			})

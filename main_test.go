@@ -175,7 +175,7 @@ func TestParseArgs_IsolatedFromGlobalFlags(t *testing.T) {
 	// 走到這裡表示沒 panic — 隔離契約成立
 }
 
-// TestParseArgs_PositionalArgsErrorMatchesSentinel 守護 
+// TestParseArgs_PositionalArgsErrorMatchesSentinel 守護
 // extra positional args 必須回 ErrUnexpectedPositional sentinel,讓 caller 用
 // errors.Is 判斷而非 string-match。
 func TestParseArgs_PositionalArgsErrorMatchesSentinel(t *testing.T) {
@@ -195,7 +195,7 @@ func TestResolveDefaultConfigPath_NonEmpty(t *testing.T) {
 	assert.Contains(t, got, "config.json", "結果必須指向 config.json")
 }
 
-// TestResolveDefaultConfigPath_UsesUserConfigDir 釘住 
+// TestResolveDefaultConfigPath_UsesUserConfigDir 釘住
 //
 // 過去 defaultConfigPath = "./config.json" 在 macOS 走 Finder 雙擊 .app
 // 時 CWD = "/"(launchd 預設行為),永遠 stat 不到 → 使用者編輯的 config.json

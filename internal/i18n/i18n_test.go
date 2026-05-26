@@ -252,15 +252,15 @@ func TestT_MuscleRatioKeysVerbCompat(t *testing.T) {
 	cases := []struct {
 		name string
 		key  string
-		args []interface{}
+		args []any
 		want string
 	}{
 		// zh-TW colon style 統一為「:%v」(無空格,Asian convention)
-		{"%v with error (subject.parse_emg_failed)", KeyErrorMuscleRatioSubjectParseEMGFailed, []interface{}{innerErr}, "解析 EMG 檔案失敗:boom"},
-		{"%v with error (subject.write_output1_failed)", KeyErrorMuscleRatioSubjectWriteOutput1Failed, []interface{}{innerErr}, "寫入 Output 1 失敗:boom"},
-		{"%v with error (subject.write_output2_failed)", KeyErrorMuscleRatioSubjectWriteOutput2Failed, []interface{}{innerErr}, "寫入 Output 2 失敗（Output 1 已產出）:boom"},
-		{"%v with error (handler.analysis_failed)", KeyErrorMuscleRatioHandlerAnalysisFailed, []interface{}{innerErr}, "分析失敗:boom"},
-		{"%d with int (status.processed_count)", KeyStatusMuscleRatioProcessedCount, []interface{}{5}, "已處理 5 個主題"},
+		{"%v with error (subject.parse_emg_failed)", KeyErrorMuscleRatioSubjectParseEMGFailed, []any{innerErr}, "解析 EMG 檔案失敗:boom"},
+		{"%v with error (subject.write_output1_failed)", KeyErrorMuscleRatioSubjectWriteOutput1Failed, []any{innerErr}, "寫入 Output 1 失敗:boom"},
+		{"%v with error (subject.write_output2_failed)", KeyErrorMuscleRatioSubjectWriteOutput2Failed, []any{innerErr}, "寫入 Output 2 失敗（Output 1 已產出）:boom"},
+		{"%v with error (handler.analysis_failed)", KeyErrorMuscleRatioHandlerAnalysisFailed, []any{innerErr}, "分析失敗:boom"},
+		{"%d with int (status.processed_count)", KeyStatusMuscleRatioProcessedCount, []any{5}, "已處理 5 個主題"},
 	}
 
 	for _, tc := range cases {

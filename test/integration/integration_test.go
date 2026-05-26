@@ -25,7 +25,7 @@ const phaseAnalysisRelTol = 1e-9
 
 // assertFloatEqual 比較兩個 float64 是否在 phaseAnalysisRelTol 相對誤差內相等。
 // want=0 退化為絕對 epsilon=phaseAnalysisRelTol。
-func assertFloatEqual(t *testing.T, want, got float64, msgAndArgs ...interface{}) {
+func assertFloatEqual(t *testing.T, want, got float64, msgAndArgs ...any) {
 	t.Helper()
 	tol := math.Abs(want) * phaseAnalysisRelTol
 	if tol == 0 {

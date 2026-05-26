@@ -294,7 +294,7 @@ func TestNormalizer_parseRawData(t *testing.T) {
 	})
 }
 
-// TestNormalizer_Normalize_NaNInfReference 驗證 
+// TestNormalizer_Normalize_NaNInfReference 驗證
 // 參考值含 NaN/Inf 必須 fail-fast，不能進入後續 dataset / maxVal 運算，
 // 否則整批 normalized data 都會被污染為 NaN/Inf。
 func TestNormalizer_Normalize_NaNInfReference(t *testing.T) {
@@ -349,7 +349,7 @@ func TestNormalizer_Normalize_NaNInfReference(t *testing.T) {
 	})
 }
 
-// TestNormalizer_Normalize_MultiRowReferenceRejected 驗證 
+// TestNormalizer_Normalize_MultiRowReferenceRejected 驗證
 // reference EMGDataset 只允許含一行 MVC/MAX 參考值（domain semantics —
 // 一條肌肉一個 peak）。多行 reference 過去會被 Normalize 取 Data[0] 後
 // 靜默忽略其餘行，導致使用者誤以為「reference 全行有效」但結果只用第一行。
@@ -416,7 +416,7 @@ func TestNormalizer_NormalizeFromRawData_MultiRowReferenceRejected(t *testing.T)
 	})
 }
 
-// TestNormalize_RaggedRow_Rejected 驗證 
+// TestNormalize_RaggedRow_Rejected 驗證
 // dataset.ChannelCount() 只看 Data[0]，row 0 之外的 ragged row（更寬會 panic、
 // 更窄會 silent 錯誤輸出）必須在進 hot loop 前 fail-fast。
 //
@@ -479,7 +479,7 @@ func TestNormalize_RaggedRow_Rejected(t *testing.T) {
 	})
 }
 
-// TestValidateReference_Sentinels 驗證 
+// TestValidateReference_Sentinels 驗證
 // validateReferenceValues 必須三路 dispatch 不同 sentinel —
 // NaN / Inf / Zero 各自走 ErrNaNReference / ErrInfReference / ErrZeroReference。
 // 對齊 range_normalizer 的 ErrChannelMaxNaN / ErrChannelMaxInf 拆分模式，

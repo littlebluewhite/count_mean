@@ -173,13 +173,13 @@ type readOptions struct {
 func (h *CSVHandler) checkFileSizeAndFormat(filename string, opts readOptions) (string, error) {
 	fileInfo, err := h.largeFileHandler.GetFileInfo(filename)
 	if err != nil {
-		h.logger.Error(opts.logPrefix+"檔案路徑驗證失敗", err, map[string]interface{}{"filename": filename})
+		h.logger.Error(opts.logPrefix+"檔案路徑驗證失敗", err, map[string]any{"filename": filename})
 
 		return "", err
 	}
 
 	if fileInfo.IsLarge {
-		h.logger.Info("檢測到大文件，使用流式讀取", map[string]interface{}{
+		h.logger.Info("檢測到大文件，使用流式讀取", map[string]any{
 			"filename": filename, "file_size": fileInfo.Size, "line_count": fileInfo.LineCount,
 		})
 
@@ -196,7 +196,7 @@ func (h *CSVHandler) checkFileSizeAndFormat(filename string, opts readOptions) (
 			errors.ErrCodeFileFormat, "檔案格式無效",
 			fmt.Sprintf("檔案 '%s' 不是有效的 CSV 檔案", cleanPath),
 		)
-		h.logger.Error("檔案格式驗證失敗", err, map[string]interface{}{"path": cleanPath})
+		h.logger.Error("檔案格式驗證失敗", err, map[string]any{"path": cleanPath})
 
 		return "", err
 	}
@@ -214,14 +214,14 @@ func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
 	file, err := os.OpenFile(cleanPath, fsperm.ReadFlags, 0) //nolint:gosec // cleanPath sanitized and validated; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with WriteFlags)
 	if err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟檔案")
-		h.logger.Error("檔案開啟失敗", appErr, map[string]interface{}{"path": cleanPath})
+		h.logger.Error("檔案開啟失敗", appErr, map[string]any{"path": cleanPath})
 
 		return nil, appErr
 	}
 
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			h.logger.Warn("關閉檔案時發生錯誤", map[string]interface{}{
+			h.logger.Warn("關閉檔案時發生錯誤", map[string]any{
 				"file": file.Name(), "error": closeErr.Error(),
 			})
 		}
@@ -237,7 +237,7 @@ func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
 	bufReader := bufio.NewReaderSize(file, csvReaderBufSize)
 	if _, err := csvutil.PeekBOM(bufReader); err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "BOM 偵測失敗")
-		h.logger.Error("BOM 偵測失敗", appErr, map[string]interface{}{"path": cleanPath})
+		h.logger.Error("BOM 偵測失敗", appErr, map[string]any{"path": cleanPath})
 
 		return nil, appErr
 	}
@@ -259,7 +259,7 @@ func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
 	records, err := reader.ReadAll()
 	if err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "無法讀取 CSV 資料")
-		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]interface{}{"path": cleanPath})
+		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]any{"path": cleanPath})
 
 		return nil, appErr
 	}
@@ -273,7 +273,7 @@ func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) er
 		err := errors.NewAppErrorWithDetails(
 			errors.ErrCodeInsufficientData, "資料不足", "檔案至少需要包含標題行和一行數據",
 		)
-		h.logger.Error("CSV 資料驗證失敗", err, map[string]interface{}{
+		h.logger.Error("CSV 資料驗證失敗", err, map[string]any{
 			"path": cleanPath, "record_count": len(records),
 		})
 
@@ -281,7 +281,7 @@ func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) er
 	}
 
 	if err := h.validator.ValidateCSVData(records, cleanPath); err != nil {
-		h.logger.Error("CSV 資料結構驗證失敗", err, map[string]interface{}{"path": cleanPath})
+		h.logger.Error("CSV 資料結構驗證失敗", err, map[string]any{"path": cleanPath})
 
 		return fmt.Errorf("CSV 資料驗證失敗: %w", err)
 	}
@@ -291,20 +291,20 @@ func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) er
 
 // readCSVCore is the internal method that handles CSV reading logic.
 func (h *CSVHandler) readCSVCore(filename string, opts readOptions) ([][]string, error) {
-	h.logger.Debug("開始讀取"+opts.logPrefix+" CSV 檔案", map[string]interface{}{"filename": filename})
+	h.logger.Debug("開始讀取"+opts.logPrefix+" CSV 檔案", map[string]any{"filename": filename})
 
 	// 路徑驗證：external 走 lenient，預設走嚴格白名單。
 	// 之前 readCSVCore 完全不驗證路徑，導致 GetCSVHeaders 可透過 raw absolute
 	// path 讀任意檔（multi-agent code review 確認的漏洞）。
 	if opts.external {
 		if err := h.pathValidator.ValidateExternalPath(filename); err != nil {
-			h.logger.Error(opts.logPrefix+"外部路徑驗證失敗", err, map[string]interface{}{"filename": filename})
+			h.logger.Error(opts.logPrefix+"外部路徑驗證失敗", err, map[string]any{"filename": filename})
 
 			return nil, fmt.Errorf("路徑驗證失敗: %w", err)
 		}
 	} else {
 		if err := h.pathValidator.ValidateFilePath(filename); err != nil {
-			h.logger.Error(opts.logPrefix+"路徑驗證失敗", err, map[string]interface{}{"filename": filename})
+			h.logger.Error(opts.logPrefix+"路徑驗證失敗", err, map[string]any{"filename": filename})
 
 			return nil, fmt.Errorf("路徑驗證失敗: %w", err)
 		}
@@ -324,7 +324,7 @@ func (h *CSVHandler) readCSVCore(filename string, opts readOptions) ([][]string,
 		return nil, err
 	}
 
-	h.logger.Info(opts.logPrefix+"CSV 檔案讀取成功", map[string]interface{}{
+	h.logger.Info(opts.logPrefix+"CSV 檔案讀取成功", map[string]any{
 		"path": cleanPath, "record_count": len(records), "column_count": len(records[0]),
 	})
 
@@ -378,7 +378,7 @@ func (h *CSVHandler) WriteCSVToOutput(filename string, data [][]string) error {
 // Caller 替代方案:如需更強保證(crash-safe rename + tmp 清理),改走
 // csvutil.WriteCSVAtomic — 它已內建 fsync + atomic rename。
 func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
-	h.logger.Debug("開始寫入 CSV 檔案", map[string]interface{}{
+	h.logger.Debug("開始寫入 CSV 檔案", map[string]any{
 		"filename":    filename,
 		"row_count":   len(data),
 		"bom_enabled": h.config.BOMEnabled,
@@ -386,14 +386,14 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 
 	sanitizedPath, sanitizeErr := h.pathValidator.SanitizePath(filename)
 	if sanitizeErr != nil {
-		h.logger.Error("寫入路徑淨化失敗", sanitizeErr, map[string]interface{}{
+		h.logger.Error("寫入路徑淨化失敗", sanitizeErr, map[string]any{
 			"original_path": filename,
 		})
 
 		return fmt.Errorf("路徑驗證失敗: %w", sanitizeErr)
 	}
 	if err := h.pathValidator.ValidateFilePath(sanitizedPath); err != nil {
-		h.logger.Error("寫入路徑驗證失敗", err, map[string]interface{}{
+		h.logger.Error("寫入路徑驗證失敗", err, map[string]any{
 			"original_path":  filename,
 			"sanitized_path": sanitizedPath,
 		})
@@ -403,7 +403,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 
 	if !h.pathValidator.IsCSVFile(sanitizedPath) {
 		err := fmt.Errorf("檔案 '%s': %w", sanitizedPath, errInvalidCSVFile)
-		h.logger.Error("檔案格式驗證失敗", err, map[string]interface{}{
+		h.logger.Error("檔案格式驗證失敗", err, map[string]any{
 			"path": sanitizedPath,
 		})
 
@@ -439,7 +439,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 	// 並發呼叫安全。
 	file, err := fsperm.OpenWriteValidated(sanitizedPath, h.pathValidator.GetAllowedBasePaths())
 	if err != nil {
-		h.logger.Error("無法建立輸出檔案", err, map[string]interface{}{
+		h.logger.Error("無法建立輸出檔案", err, map[string]any{
 			"path": sanitizedPath,
 		})
 
@@ -454,7 +454,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 	// payload write 失敗的根因 err)。
 	defer func() {
 		if syncErr := file.Sync(); syncErr != nil {
-			h.logger.Warn("fsync 輸出檔案時發生錯誤", map[string]interface{}{
+			h.logger.Warn("fsync 輸出檔案時發生錯誤", map[string]any{
 				"file":  file.Name(),
 				"error": syncErr.Error(),
 			})
@@ -463,7 +463,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 			}
 		}
 		if closeErr := file.Close(); closeErr != nil {
-			h.logger.Warn("關閉輸出檔案時發生錯誤", map[string]interface{}{
+			h.logger.Warn("關閉輸出檔案時發生錯誤", map[string]any{
 				"file":  file.Name(),
 				"error": closeErr.Error(),
 			})
@@ -474,7 +474,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 	}()
 
 	if err := writeCSVPayload(file, data, h.config.BOMEnabled); err != nil {
-		h.logger.Error("CSV 資料寫入失敗", err, map[string]interface{}{
+		h.logger.Error("CSV 資料寫入失敗", err, map[string]any{
 			"path":     sanitizedPath,
 			"filename": filename,
 		})
@@ -482,7 +482,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 		return fmt.Errorf("無法寫入資料到 %s: %w", filename, err)
 	}
 
-	h.logger.Info("CSV 檔案寫入成功", map[string]interface{}{
+	h.logger.Info("CSV 檔案寫入成功", map[string]any{
 		"path":      sanitizedPath,
 		"row_count": len(data),
 		"bom_used":  h.config.BOMEnabled,
@@ -502,14 +502,14 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string) (err error) {
 	if _, statErr := os.Stat(sanitizedPath); statErr != nil {
 		if os.IsNotExist(statErr) {
-			h.logger.Warn("WriteCSV 收到空 data，目標不存在,跳過建檔", map[string]interface{}{
+			h.logger.Warn("WriteCSV 收到空 data，目標不存在,跳過建檔", map[string]any{
 				"filename": originalFilename,
 			})
 			return nil
 		}
 		// 其他 stat 錯誤(permission denied、I/O error 等)— 不該當成 not-exist
 		// 處理(會 silently skip truncate),回傳錯誤讓 caller 知道。
-		h.logger.Error("WriteCSV 空 data 路徑探測失敗", statErr, map[string]interface{}{
+		h.logger.Error("WriteCSV 空 data 路徑探測失敗", statErr, map[string]any{
 			"path": sanitizedPath,
 		})
 		return fmt.Errorf("空 data 探測目標檔案失敗: %w", statErr)
@@ -520,7 +520,7 @@ func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string
 	// 重新 open 等同 truncate。
 	file, err := fsperm.OpenWriteValidated(sanitizedPath, h.pathValidator.GetAllowedBasePaths())
 	if err != nil {
-		h.logger.Error("無法 truncate stale 檔案", err, map[string]interface{}{
+		h.logger.Error("無法 truncate stale 檔案", err, map[string]any{
 			"path": sanitizedPath,
 		})
 		return fmt.Errorf("無法 truncate %s: %w", sanitizedPath, err)
@@ -529,7 +529,7 @@ func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string
 	// 兩段式收尾(同 WriteCSV main path):先 Sync 再 Close。
 	defer func() {
 		if syncErr := file.Sync(); syncErr != nil {
-			h.logger.Warn("fsync truncated 檔案時發生錯誤", map[string]interface{}{
+			h.logger.Warn("fsync truncated 檔案時發生錯誤", map[string]any{
 				"file":  file.Name(),
 				"error": syncErr.Error(),
 			})
@@ -538,7 +538,7 @@ func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string
 			}
 		}
 		if closeErr := file.Close(); closeErr != nil {
-			h.logger.Warn("關閉 truncated 檔案時發生錯誤", map[string]interface{}{
+			h.logger.Warn("關閉 truncated 檔案時發生錯誤", map[string]any{
 				"file":  file.Name(),
 				"error": closeErr.Error(),
 			})
@@ -555,7 +555,7 @@ func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string
 	}
 	// BOMEnabled=false 時不寫任何 byte,truncate 後檔案長度為 0。
 
-	h.logger.Info("WriteCSV 空 data + 既有目標檔案: 已 truncate", map[string]interface{}{
+	h.logger.Info("WriteCSV 空 data + 既有目標檔案: 已 truncate", map[string]any{
 		"path":     sanitizedPath,
 		"bom_used": h.config.BOMEnabled,
 	})
@@ -609,7 +609,7 @@ func (h *CSVHandler) ProcessLargeFile(
 	windowSize int,
 	callback ProgressCallback,
 ) (*StreamingResult, error) {
-	h.logger.Info("開始處理大文件", map[string]interface{}{
+	h.logger.Info("開始處理大文件", map[string]any{
 		"filename":    filename,
 		"window_size": windowSize,
 	})

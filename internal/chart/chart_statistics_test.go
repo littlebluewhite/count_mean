@@ -70,7 +70,7 @@ func TestGetChartStatistics_NegativeDuration_NoInfSamplingRate(t *testing.T) {
 	}
 }
 
-// TestChartStatistics_SanitizesHeaders 守護 
+// TestChartStatistics_SanitizesHeaders 守護
 //
 // dataset.Headers 是 caller-controlled (來自 CSV 第一行) 內容,可能含
 // `</script>` / `<!--` / U+2028 / 控制字元等 XSS payload。即使目前 chart
@@ -112,7 +112,7 @@ func TestChartStatistics_SanitizesHeaders(t *testing.T) {
 
 	t.Run("GetChartStatistics_ColumnStatsSanitizesName", func(t *testing.T) {
 		stats := GetChartStatistics(dataset, []int{1})
-		colStats, ok := stats["column_statistics"].([]map[string]interface{})
+		colStats, ok := stats["column_statistics"].([]map[string]any)
 		if !ok {
 			t.Fatalf("column_statistics 型別錯誤: %T", stats["column_statistics"])
 		}

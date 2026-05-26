@@ -62,7 +62,7 @@ func TestExportToCSV_BadOutputDir_Rejected(t *testing.T) {
 	}
 }
 
-// TestExportToCSV_ReturnsEmptyPathOnError 守護 
+// TestExportToCSV_ReturnsEmptyPathOnError 守護
 //
 // 過去版本對 writeCSVFile error 仍回 outputPath — caller 看到 "(non-empty path, err)"
 // 容易誤把 path 當「寫進去了但有 warn」處理 (例如 logging path 給 user 顯示)。

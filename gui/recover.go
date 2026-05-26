@@ -209,7 +209,7 @@ func newPanicUUID() string {
 func logPanic(
 	logger *logging.Logger,
 	label, handlerName, panicUUID string,
-	recovered interface{},
+	recovered any,
 	redactedOriginalErr string,
 ) {
 	if logger == nil {
@@ -218,7 +218,7 @@ func logPanic(
 
 	// Error level:不含 stack,只含 handler + uuid + recovered value + (可選)
 	// redacted original err。
-	errCtx := map[string]interface{}{
+	errCtx := map[string]any{
 		"handler":    handlerName,
 		"panic_uuid": panicUUID,
 	}
@@ -238,7 +238,7 @@ func logPanic(
 	// 但 production Info level 不會輸出,避免 PII path leak。
 	redactedStack := redactPathsInStack(string(debug.Stack()))
 	logger.Debug("panic stack (redacted)",
-		map[string]interface{}{
+		map[string]any{
 			"handler":    handlerName,
 			"panic_uuid": panicUUID,
 			"stack":      redactedStack,

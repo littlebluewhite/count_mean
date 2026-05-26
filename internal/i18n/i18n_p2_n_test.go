@@ -20,10 +20,10 @@ import (
 //   - 修補:staging map + 全部成功才 commit,任一失敗 i.messages 完全不變
 //
 // 測試手法:
-//   1. 第一次 load good dir → snapshot state(builtin only,合法狀態)
-//   2. 構造 mixed dir(zh-TW 有效 JSON,en-US 注入 verb mismatch error)
-//   3. 第二次 load 該 dir → 應 return err
-//   4. assert i.messages 沒有殘留 zh-TW 的新 override —— 仍是 step 1 的 state
+//  1. 第一次 load good dir → snapshot state(builtin only,合法狀態)
+//  2. 構造 mixed dir(zh-TW 有效 JSON,en-US 注入 verb mismatch error)
+//  3. 第二次 load 該 dir → 應 return err
+//  4. assert i.messages 沒有殘留 zh-TW 的新 override —— 仍是 step 1 的 state
 func TestLoadTranslations_AtomicFailureLeavesNoPartialState(t *testing.T) {
 	t.Parallel()
 

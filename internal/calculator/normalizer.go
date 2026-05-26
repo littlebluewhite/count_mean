@@ -47,7 +47,7 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 	// 使用 IsEmpty() 統一檢查 nil 和空數據
 	if dataset.IsEmpty() || reference.IsEmpty() {
 		err := calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "數據集或參考數據集為空")
-		n.logger.Error("標準化輸入驗證失敗", err, map[string]interface{}{
+		n.logger.Error("標準化輸入驗證失敗", err, map[string]any{
 			"dataset_empty":   dataset.IsEmpty(),
 			"reference_empty": reference.IsEmpty(),
 		})
@@ -60,18 +60,18 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 		err := calcerrors.NewCalculatorErrorWithContext(
 			calcerrors.ErrReferenceMultipleRows,
 			fmt.Sprintf("參考數據集必須恰好一行，實際為 %d 行", len(reference.Data)),
-			map[string]interface{}{
+			map[string]any{
 				"reference_rows": len(reference.Data),
 			},
 		)
-		n.logger.Error("參考數據集行數違反單行契約", err, map[string]interface{}{
+		n.logger.Error("參考數據集行數違反單行契約", err, map[string]any{
 			"reference_rows": len(reference.Data),
 		})
 
 		return nil, err
 	}
 
-	n.logger.Info("開始數據標準化", map[string]interface{}{
+	n.logger.Info("開始數據標準化", map[string]any{
 		"dataset_points":   dataset.DataPointCount(),
 		"reference_points": reference.DataPointCount(),
 		"scaling_factor":   n.scalingFactor,
@@ -82,12 +82,12 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 		err := calcerrors.NewCalculatorErrorWithContext(
 			calcerrors.ErrChannelMismatch,
 			"數據集和參考數據集的通道數不匹配",
-			map[string]interface{}{
+			map[string]any{
 				"dataset_channels":   dataset.ChannelCount(),
 				"reference_channels": reference.ChannelCount(),
 			},
 		)
-		n.logger.Error("通道數不匹配", err, map[string]interface{}{
+		n.logger.Error("通道數不匹配", err, map[string]any{
 			"dataset_channels":   dataset.ChannelCount(),
 			"reference_channels": reference.ChannelCount(),
 		})
@@ -113,13 +113,13 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 				"數據集 Headers 寬度 %d 與通道數 %d 不一致(期望 Headers 寬度 = 通道數 + 1)",
 				len(dataset.Headers), dataset.ChannelCount(),
 			),
-			map[string]interface{}{
+			map[string]any{
 				"headers_len":      len(dataset.Headers),
 				"channel_count":    dataset.ChannelCount(),
 				"expected_headers": expectedHeaderCount,
 			},
 		)
-		n.logger.Error("Headers/ChannelCount 寬度不一致", err, map[string]interface{}{
+		n.logger.Error("Headers/ChannelCount 寬度不一致", err, map[string]any{
 			"headers_len":      len(dataset.Headers),
 			"channel_count":    dataset.ChannelCount(),
 			"expected_headers": expectedHeaderCount,
@@ -141,13 +141,13 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 					"數據集第 %d 行通道數 %d 與參考數據集通道數 %d 不匹配",
 					i+1, len(row.Channels), expectedChannelCount,
 				),
-				map[string]interface{}{
+				map[string]any{
 					"row_index":          i + 1,
 					"row_channels":       len(row.Channels),
 					"reference_channels": expectedChannelCount,
 				},
 			)
-			n.logger.Error("數據行通道數不匹配", err, map[string]interface{}{
+			n.logger.Error("數據行通道數不匹配", err, map[string]any{
 				"row_index":          i + 1,
 				"row_channels":       len(row.Channels),
 				"reference_channels": expectedChannelCount,
@@ -168,7 +168,7 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 
 	// 獲取參考值（使用第一行數據）
 	refValues := reference.Data[0].Channels
-	n.logger.Debug("使用參考值", map[string]interface{}{
+	n.logger.Debug("使用參考值", map[string]any{
 		"reference_values": refValues,
 	})
 
@@ -207,7 +207,7 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 	}
 
 	duration := time.Since(startTime)
-	n.logger.Info("數據標準化完成", map[string]interface{}{
+	n.logger.Info("數據標準化完成", map[string]any{
 		"duration_ms":      duration.Milliseconds(),
 		"processed_points": result.DataPointCount(),
 		"channel_count":    result.ChannelCount(),
@@ -222,7 +222,7 @@ func (n *Normalizer) NormalizeFromRawData(records, reference [][]string) (*model
 		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "標準化器為空")
 	}
 
-	n.logger.Info("開始從原始數據進行標準化", map[string]interface{}{
+	n.logger.Info("開始從原始數據進行標準化", map[string]any{
 		"main_records":      len(records),
 		"reference_records": len(reference),
 	})
@@ -247,7 +247,7 @@ func (n *Normalizer) NormalizeFromRawData(records, reference [][]string) (*model
 
 // parseReferenceData 解析參考數據（特殊格式，第一列是標籤而非時間）.
 func (n *Normalizer) parseReferenceData(records [][]string) (*models.EMGDataset, error) {
-	n.logger.Debug("開始解析參考數據", map[string]interface{}{
+	n.logger.Debug("開始解析參考數據", map[string]any{
 		"record_count": len(records),
 	})
 
@@ -255,11 +255,11 @@ func (n *Normalizer) parseReferenceData(records [][]string) (*models.EMGDataset,
 		err := calcerrors.NewCalculatorErrorWithContext(
 			calcerrors.ErrInvalidReferenceData,
 			"參考數據至少需要包含標題行和一行數據",
-			map[string]interface{}{
+			map[string]any{
 				"record_count": len(records),
 			},
 		)
-		n.logger.Error("參考數據結構驗證失敗", err, map[string]interface{}{
+		n.logger.Error("參考數據結構驗證失敗", err, map[string]any{
 			"record_count": len(records),
 		})
 
@@ -291,7 +291,7 @@ func (n *Normalizer) parseReferenceData(records [][]string) (*models.EMGDataset,
 		for j := 1; j < len(row); j++ {
 			val, err := util.Str2Number[float64, int](row[j], n.scalingFactor)
 			if err != nil {
-				n.logger.Error("參考數據通道值解析失敗", err, map[string]interface{}{
+				n.logger.Error("參考數據通道值解析失敗", err, map[string]any{
 					"row_number":    i + 1,
 					"column_number": j + 1,
 					"value":         row[j],
@@ -311,7 +311,7 @@ func (n *Normalizer) parseReferenceData(records [][]string) (*models.EMGDataset,
 		return nil, calcerrors.NewCalculatorError(calcerrors.ErrInvalidReferenceData, "參考數據解析後為空")
 	}
 
-	n.logger.Debug("參考數據解析完成", map[string]interface{}{
+	n.logger.Debug("參考數據解析完成", map[string]any{
 		"parsed_records": dataset.DataPointCount(),
 		"channel_count":  dataset.ChannelCount(),
 		"header_count":   len(dataset.Headers),
@@ -357,12 +357,12 @@ func (n *Normalizer) validateReferenceValues(refValues []float64) error {
 		err := calcerrors.NewCalculatorErrorWithContext(
 			sentinel,
 			message,
-			map[string]interface{}{
+			map[string]any{
 				"channel_index":   i + 1,
 				"reference_value": label,
 			},
 		)
-		n.logger.Error("參考值無效", err, map[string]interface{}{
+		n.logger.Error("參考值無效", err, map[string]any{
 			"channel_index":   i + 1,
 			"reference_value": label,
 		})

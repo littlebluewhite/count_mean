@@ -229,9 +229,9 @@ func TestPhasePercentClampWarn_BypassPath(t *testing.T) {
 	logger := logging.NewLogger(logging.LevelDebug, &buf, false)
 
 	// 模擬 P2-G (b) 修法觸發的 audit warn message 格式
-	logger.Warn("phase percent 被 clamp 至 [0,100] 範圍 (phase 落在 gait cycle 外,請檢查 manifest 或 sync offset)", map[string]interface{}{
-		"phase":      "P_test",
-		"raw_pct":    150.0,
+	logger.Warn("phase percent 被 clamp 至 [0,100] 範圍 (phase 落在 gait cycle 外,請檢查 manifest 或 sync offset)", map[string]any{
+		"phase":       "P_test",
+		"raw_pct":     150.0,
 		"clamped_pct": 100.0,
 	})
 

@@ -29,11 +29,11 @@
 //  1. 統一改用 resolvedPath 開檔(close validate-vs-use mismatch)
 //  2. 平台原子化:
 //     - Linux:openat2(RESOLVE_BENEATH) — kernel-level enforcement
-//       (見 validated_open_linux.go)
+//     (見 validated_open_linux.go)
 //     - Darwin:O_NOFOLLOW_ANY — 任一 component symlink reject
-//       (見 validated_open_darwin.go)
+//     (見 validated_open_darwin.go)
 //     - Windows / 其他 Unix:os.OpenFile(resolvedPath, WriteFlags, ...)
-//       倚賴 O_NOFOLLOW (Unix) 與 caller-side EvalSymlinks (Windows)
+//     倚賴 O_NOFOLLOW (Unix) 與 caller-side EvalSymlinks (Windows)
 //
 // # Caller 遷移計畫
 //

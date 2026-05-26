@@ -109,7 +109,7 @@ func (e *EChartsGenerator) GenerateInteractiveChart(
 		return fmt.Errorf("生成互動式圖表失敗: %w", err)
 	}
 
-	e.logger.Info("開始生成互動式圖表", map[string]interface{}{
+	e.logger.Info("開始生成互動式圖表", map[string]any{
 		"title":            config.Title,
 		"selected_columns": config.SelectedColumns,
 		"output_path":      outputPath,
@@ -133,7 +133,7 @@ func (e *EChartsGenerator) GenerateInteractiveChart(
 		return err
 	}
 
-	e.logger.Info("互動式圖表生成完成", map[string]interface{}{
+	e.logger.Info("互動式圖表生成完成", map[string]any{
 		"output_path": outputPath,
 		"columns":     len(columnsToShow),
 	})

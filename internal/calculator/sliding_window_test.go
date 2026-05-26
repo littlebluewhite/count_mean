@@ -43,7 +43,7 @@ func (s *slowProvider) GetValue(dataIdx, _ int) float64 {
 func (s *slowProvider) Length() int { return s.length }
 
 // TestSlidingWindow_CalculateMaxMean_PreCancelledCtx pins the new contract
-//: SlidingWindow.CalculateMaxMean accepts a context and aborts
+// : SlidingWindow.CalculateMaxMean accepts a context and aborts
 // when ctx is already cancelled before the first ctx check fires. Note that
 // the periodic check happens every 4096 iterations, so the loop may run up
 // to that many windows before observing cancel — but it must still return

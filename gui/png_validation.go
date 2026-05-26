@@ -7,10 +7,10 @@
 // payload(decode bomb)讓 image library 配記憶體炸 process。
 //
 // 本檔提供三層守門:
-//   1. base64 encoded length cap(在 decode 之前算 decoded length 上界)
-//   2. PNG magic signature 檢查(decode 後 first 8 bytes 必須是 89 50 4E 47
-//      0D 0A 1A 0A)
-//   3. IHDR width / height 上限(width * height < pixelLimit)
+//  1. base64 encoded length cap(在 decode 之前算 decoded length 上界)
+//  2. PNG magic signature 檢查(decode 後 first 8 bytes 必須是 89 50 4E 47
+//     0D 0A 1A 0A)
+//  3. IHDR width / height 上限(width * height < pixelLimit)
 //
 // 三層都是 cheap O(1) check,在 alloc 大塊 buffer 之前生效。
 package gui

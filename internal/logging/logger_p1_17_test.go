@@ -24,10 +24,10 @@ import (
 // 被 redact 但 non-sensitive 部分保留。
 func TestSanitizeMessage_P1_17_Patterns(t *testing.T) {
 	cases := []struct {
-		name           string
-		input          string
-		mustNotLeak    []string
-		mustPreserve   []string
+		name         string
+		input        string
+		mustNotLeak  []string
+		mustPreserve []string
 	}{
 		{
 			name:  "ipv6_address",

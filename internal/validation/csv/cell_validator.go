@@ -123,7 +123,7 @@ func checkCellLength(cell string, ctx *CellContext) error {
 	// 32KB per cell limit to prevent DoS attacks
 	if len(cell) > 32768 { //nolint:mnd // 32768 is 32KB, standard cell size limit
 		return errors.NewValidationError("csv_cell",
-			map[string]interface{}{
+			map[string]any{
 				"row":      ctx.Row,
 				"col":      ctx.Col,
 				"filename": ctx.Filename,
@@ -138,7 +138,7 @@ func checkCellLength(cell string, ctx *CellContext) error {
 func checkUTF8(cell string, ctx *CellContext) error {
 	if !utf8.ValidString(cell) {
 		return errors.NewValidationError("csv_cell",
-			map[string]interface{}{
+			map[string]any{
 				"row":      ctx.Row,
 				"col":      ctx.Col,
 				"filename": ctx.Filename,
@@ -155,7 +155,7 @@ func checkFormulaInjection(cell string, ctx *CellContext) error {
 	for _, starter := range formulaStarters {
 		if strings.HasPrefix(cell, starter) {
 			return errors.NewValidationError("csv_cell",
-				map[string]interface{}{
+				map[string]any{
 					"row":      ctx.Row,
 					"col":      ctx.Col,
 					"filename": ctx.Filename,
@@ -170,7 +170,7 @@ func checkFormulaInjection(cell string, ctx *CellContext) error {
 		if _, err := strconv.ParseFloat(cell, 64); err != nil {
 			if strings.ContainsAny(cell, "=@|!") {
 				return errors.NewValidationError("csv_cell",
-					map[string]interface{}{
+					map[string]any{
 						"row":      ctx.Row,
 						"col":      ctx.Col,
 						"filename": ctx.Filename,
@@ -189,7 +189,7 @@ func (v *CellValidator) checkDangerousFunctions(cell string, ctx *CellContext) e
 		// Only report if it's a dangerous function (not a formula starter)
 		if !strings.HasPrefix(cell, fn) {
 			return errors.NewValidationError("csv_cell",
-				map[string]interface{}{
+				map[string]any{
 					"row":      ctx.Row,
 					"col":      ctx.Col,
 					"filename": ctx.Filename,
@@ -205,7 +205,7 @@ func (v *CellValidator) checkDangerousFunctions(cell string, ctx *CellContext) e
 func (v *CellValidator) checkScriptInjection(cell string, ctx *CellContext) error {
 	if detected, pattern := v.detector.DetectScript(cell); detected {
 		return errors.NewValidationError("csv_cell",
-			map[string]interface{}{
+			map[string]any{
 				"row":      ctx.Row,
 				"col":      ctx.Col,
 				"filename": ctx.Filename,
@@ -220,7 +220,7 @@ func (v *CellValidator) checkScriptInjection(cell string, ctx *CellContext) erro
 func (v *CellValidator) checkSQLInjection(cell string, ctx *CellContext) error {
 	if detected, pattern := v.detector.DetectSQL(cell); detected {
 		return errors.NewValidationError("csv_cell",
-			map[string]interface{}{
+			map[string]any{
 				"row":      ctx.Row,
 				"col":      ctx.Col,
 				"filename": ctx.Filename,
@@ -235,7 +235,7 @@ func (v *CellValidator) checkSQLInjection(cell string, ctx *CellContext) error {
 func (v *CellValidator) checkCommandInjection(cell string, ctx *CellContext) error {
 	if detected, pattern := v.detector.DetectCommand(cell); detected {
 		return errors.NewValidationError("csv_cell",
-			map[string]interface{}{
+			map[string]any{
 				"row":      ctx.Row,
 				"col":      ctx.Col,
 				"filename": ctx.Filename,
@@ -251,7 +251,7 @@ func checkControlChars(cell string, ctx *CellContext) error {
 	for _, r := range cell {
 		if r == 0 {
 			return errors.NewValidationError("csv_cell",
-				map[string]interface{}{
+				map[string]any{
 					"row":      ctx.Row,
 					"col":      ctx.Col,
 					"filename": ctx.Filename,
@@ -261,7 +261,7 @@ func checkControlChars(cell string, ctx *CellContext) error {
 
 		if unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r' {
 			return errors.NewValidationError("csv_cell",
-				map[string]interface{}{
+				map[string]any{
 					"row":      ctx.Row,
 					"col":      ctx.Col,
 					"filename": ctx.Filename,
@@ -277,7 +277,7 @@ func checkControlChars(cell string, ctx *CellContext) error {
 func (v *CellValidator) checkSuspiciousExtensions(cell string, ctx *CellContext) error {
 	if detected, ext := v.detector.DetectSuspiciousExtension(cell); detected {
 		return errors.NewValidationError("csv_cell",
-			map[string]interface{}{
+			map[string]any{
 				"row":       ctx.Row,
 				"col":       ctx.Col,
 				"filename":  ctx.Filename,

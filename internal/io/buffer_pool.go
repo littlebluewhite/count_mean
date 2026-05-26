@@ -100,20 +100,20 @@ func NewBufferPool() *BufferPool {
 	bp := &BufferPool{}
 
 	// slice pools — New 預配置 wrapper + 初始容量 buf。
-	bp.stringArrayPool.New = func() interface{} {
+	bp.stringArrayPool.New = func() any {
 		return &stringArrayWrapper{buf: make([][]string, 0, stringArrayPoolCapacity)}
 	}
-	bp.emgDataPool.New = func() interface{} {
+	bp.emgDataPool.New = func() any {
 		return &emgDataWrapper{buf: make([]models.EMGData, 0, emgDataPoolCapacity)}
 	}
-	bp.float64Pool.New = func() interface{} {
+	bp.float64Pool.New = func() any {
 		return &float64Wrapper{buf: make([]float64, 0, float64PoolCapacity)}
 	}
 
 	// wrapper pools — New 配置空 wrapper（buf=nil），Put 時填入 caller 歸還的 slice。
-	bp.stringArrayWrapperPool.New = func() interface{} { return &stringArrayWrapper{} }
-	bp.emgDataWrapperPool.New = func() interface{} { return &emgDataWrapper{} }
-	bp.float64WrapperPool.New = func() interface{} { return &float64Wrapper{} }
+	bp.stringArrayWrapperPool.New = func() any { return &stringArrayWrapper{} }
+	bp.emgDataWrapperPool.New = func() any { return &emgDataWrapper{} }
+	bp.float64WrapperPool.New = func() any { return &float64Wrapper{} }
 
 	return bp
 }

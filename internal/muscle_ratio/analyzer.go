@@ -125,7 +125,7 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 	for i := range manifests {
 		select {
 		case <-ctx.Done():
-			a.logger.Warn("肌肉比值批次被中止", map[string]interface{}{
+			a.logger.Warn("肌肉比值批次被中止", map[string]any{
 				"completed": len(results),
 				"total":     len(manifests),
 				"reason":    ctx.Err(),
@@ -137,7 +137,7 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 		results = append(results, a.analyzeSubject(m, params.DataFolder, params.OutputDir))
 	}
 
-	a.logger.Info("肌肉比值批次分析完成", map[string]interface{}{
+	a.logger.Info("肌肉比值批次分析完成", map[string]any{
 		"manifest": params.ManifestFile,
 		"subjects": len(results),
 	})
@@ -292,7 +292,7 @@ func (a *Analyzer) collectPhasePoints(
 			// (≤ 0 是 sentinel "未提供",理論上 OptFloat.Set=true 不該帶 0,但
 			// 防呆)。命中邊界外 → skip 該 phase + log warn,不 propagate(整批仍走)。
 			if v <= 0 || v > float64(parsers.MaxReasonableMotionIndex) {
-				a.logger.Warn("motion-index 分期點越界,跳過", map[string]interface{}{
+				a.logger.Warn("motion-index 分期點越界,跳過", map[string]any{
 					"subject": m.Subject,
 					"phase":   string(p),
 					"value":   v,

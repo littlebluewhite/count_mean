@@ -394,7 +394,7 @@ func TestValidateExternalPathInputs_SymlinkBoundary(t *testing.T) {
 		"指向 sensitive prefix 的 symlink path 必須在 boundary EvalSymlinks layer 2 擋下: %q", maliciousPath)
 }
 
-// TestValidateExternalPathInputs_OddArityReturnsError 釘住 
+// TestValidateExternalPathInputs_OddArityReturnsError 釘住
 // 過去 odd-arity caller bug 走 panic — production 路徑(handlers →
 // recoverHandlerPanic → ErrInternalPanic)會誤判為「系統等級事故」,blast radius
 // 過大且 audit log 留 panic stack trace。改為 return structured error,讓 caller

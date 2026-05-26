@@ -60,7 +60,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 			t.Error("執行時間應該大於0")
 		}
 
-		logger.Info("基本性能測試完成", map[string]interface{}{
+		logger.Info("基本性能測試完成", map[string]any{
 			"duration": metrics.Duration,
 			"memory":   metrics.MemoryUsage,
 		})
@@ -94,7 +94,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 			t.Error("數據吞吐量應該大於0")
 		}
 
-		logger.Info("數據吞吐量測試完成", map[string]interface{}{
+		logger.Info("數據吞吐量測試完成", map[string]any{
 			"throughput": metrics.ThroughputData,
 		})
 	})
@@ -120,7 +120,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 			t.Error("操作吞吐量應該大於0")
 		}
 
-		logger.Info("操作吞吐量測試完成", map[string]interface{}{
+		logger.Info("操作吞吐量測試完成", map[string]any{
 			"throughput_ops": metrics.ThroughputOps,
 		})
 	})
@@ -171,7 +171,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 			t.Error("報告文件未創建")
 		}
 
-		logger.Info("測試報告生成完成", map[string]interface{}{
+		logger.Info("測試報告生成完成", map[string]any{
 			"report_file": reportFile,
 		})
 	})
@@ -215,7 +215,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 			t.Error("文件大小應該大於0")
 		}
 
-		logger.Info("CSV性能測試器測試完成", map[string]interface{}{
+		logger.Info("CSV性能測試器測試完成", map[string]any{
 			"file_size": info.Size(),
 		})
 	})
@@ -242,7 +242,7 @@ func TestBenchmarkIntegration(t *testing.T) {
 			t.Error("Go 版本資訊不應為空")
 		}
 
-		logger.Info("系統資訊測試完成", map[string]interface{}{
+		logger.Info("系統資訊測試完成", map[string]any{
 			"os":           env.OS,
 			"arch":         env.Arch,
 			"cpus":         env.CPUs,

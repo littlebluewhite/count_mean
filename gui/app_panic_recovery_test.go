@@ -104,10 +104,10 @@ func TestApp_AllMethodsHaveDefer_StaticGuarantee(t *testing.T) {
 
 	// 編譯期型別檢查:這些 method 簽名若被改回 anonymous return,以下宣告會編譯失敗。
 	var (
-		_ = func() *config.AppConfig { return app.GetConfig() }    //nolint:unused // type guard
-		_ = func() *config.AppConfig { return app.ResetConfig() }  //nolint:unused // type guard
-		_ = func() string { return app.GetVersion() }              //nolint:unused // type guard
-		_ = func() error { return app.SaveConfig(nil) }            //nolint:unused // type guard
+		_ = func() *config.AppConfig { return app.GetConfig() }           //nolint:unused // type guard
+		_ = func() *config.AppConfig { return app.ResetConfig() }         //nolint:unused // type guard
+		_ = func() string { return app.GetVersion() }                     //nolint:unused // type guard
+		_ = func() error { return app.SaveConfig(nil) }                   //nolint:unused // type guard
 		_ = func() (string, error) { return app.SelectFile("", nil, "") } //nolint:unused // type guard
 		_ = func() (string, error) { return app.SelectDirectory("") }     //nolint:unused // type guard
 	)

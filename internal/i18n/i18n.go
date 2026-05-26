@@ -747,7 +747,7 @@ func (i *I18n) GetTranslationMap(locale Locale) map[string]string {
 }
 
 // T translates a message key.
-func (i *I18n) T(key string, args ...interface{}) string {
+func (i *I18n) T(key string, args ...any) string {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
 
@@ -779,7 +779,7 @@ func (i *I18n) getMessage(locale Locale, key string) string {
 }
 
 // formatMessage formats a message with args if present.
-func (*I18n) formatMessage(message string, args []interface{}) string {
+func (*I18n) formatMessage(message string, args []any) string {
 	if len(args) > 0 {
 		return fmt.Sprintf(message, args...)
 	}
@@ -788,7 +788,7 @@ func (*I18n) formatMessage(message string, args []interface{}) string {
 }
 
 // formatKeyWithArgs formats a key with args as fallback.
-func (*I18n) formatKeyWithArgs(key string, args []interface{}) string {
+func (*I18n) formatKeyWithArgs(key string, args []any) string {
 	if len(args) > 0 {
 		return fmt.Sprintf("%s: %v", key, args)
 	}
@@ -931,7 +931,7 @@ func InitI18n(translationsDir string) error {
 }
 
 // T translates a message key using the global i18n instance.
-func T(key string, args ...interface{}) string {
+func T(key string, args ...any) string {
 	inst := globalI18n.Load()
 	if inst == nil {
 		return key

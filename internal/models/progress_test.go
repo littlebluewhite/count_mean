@@ -77,7 +77,7 @@ func TestProgressTracker_UpdateBufferThrottles(t *testing.T) {
 // 「分析已開始」訊號,使用者誤以為按鈕沒回應。
 func TestProgressTracker_StartEmitsInitialFrame(t *testing.T) {
 	var (
-		seenSteps   []int
+		seenSteps    []int
 		seenStatuses []string
 	)
 	tracker := NewProgressTracker(10, func(info ProgressInfo) {

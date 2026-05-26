@@ -24,7 +24,7 @@ func main() {
 	}
 
 	logger := logging.GetLogger("demo")
-	logger.Info("結構化日誌示範開始", map[string]interface{}{
+	logger.Info("結構化日誌示範開始", map[string]any{
 		"demo_version": "1.0",
 		"format":       "json",
 	})
@@ -50,7 +50,7 @@ func main() {
 		{"0.5", "125.6", "56.9"},
 	}
 
-	logger.Info("創建測試數據", map[string]interface{}{
+	logger.Info("創建測試數據", map[string]any{
 		"rows":     len(testData),
 		"channels": len(testData[0]) - 1,
 	})
@@ -73,7 +73,7 @@ func main() {
 		return
 	}
 
-	logger.Info("計算完成", map[string]interface{}{
+	logger.Info("計算完成", map[string]any{
 		"result_count": len(results),
 		"results":      results,
 	})
@@ -88,7 +88,7 @@ func main() {
 	}
 	outputFile := filepath.Join(cfg.OutputDir, "demo_results.csv")
 
-	logger.Info("結構化日誌示範完成", map[string]interface{}{
+	logger.Info("結構化日誌示範完成", map[string]any{
 		"input_file":  testFile,
 		"output_file": outputFile,
 		"success":     true,

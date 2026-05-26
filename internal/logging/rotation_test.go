@@ -99,7 +99,7 @@ func TestSizeRotatingWriter_AppendsToExisting(t *testing.T) {
 	}
 }
 
-// TestSizeRotatingWriter_RejectsSameProcessReopen 守護 
+// TestSizeRotatingWriter_RejectsSameProcessReopen 守護
 // 同個 process 內對同個 logPath 第二次 NewSizeRotatingWriter 必須 reject。
 // 過去 doc 只說「同 logPath 只允許單 process」但沒 enforce,兩個 writer 同時
 // 跑 rotation 會互相覆蓋彼此的 .1 → .2 → ... rename 序列,造成 log 內容交錯。
@@ -239,8 +239,8 @@ func TestRotation_WriteAfterClose_ReturnsSentinel(t *testing.T) {
 // TestRotation_WriteAfterFailedRotate_NoPanic 守護 rotateLocked 失敗時
 // 不可 nil-deref。docstring 承諾「fallback 為繼續寫到原檔」— 強制 rename 失敗
 // (將 parent dir 改成 read-only),驗證:
-//   1. Write 回到的 error 非 nil 或為 nil(實作選擇),都不可 panic
-//   2. w.file 不可保持 nil — 後續 Write 必須能繼續(reopen 原檔)
+//  1. Write 回到的 error 非 nil 或為 nil(實作選擇),都不可 panic
+//  2. w.file 不可保持 nil — 後續 Write 必須能繼續(reopen 原檔)
 //
 // 在 unix 用 chmod 0o500 parent dir 強迫 os.Rename(basePath, basePath+".1") fail
 // (Linux/macOS 上 rename 需要 dir 的 write 權限)。Windows / root skip。
@@ -438,7 +438,7 @@ func fileSizeIfExists(t *testing.T, path string) (int64, bool) {
 	return stat.Size(), true
 }
 
-// TestRotation_MaxBackupsDecrease_OldFilesDeleted 守護 
+// TestRotation_MaxBackupsDecrease_OldFilesDeleted 守護
 //
 // **Scenario**: 使用者上一輪用 maxBackups=10 跑出 .1 ~ .10 backup;這輪改 config
 // 把 maxBackups 降到 3。 過去 rotateLocked 只負責「刪除 base + maxBackups 編號」
@@ -498,7 +498,7 @@ func TestRotation_MaxBackupsDecrease_OldFilesDeleted(t *testing.T) {
 	}
 }
 
-// TestRotation_AbsPathStoredAtConstruction 守護 
+// TestRotation_AbsPathStoredAtConstruction 守護
 //
 // **Scenario**: NewSizeRotatingWriter 用 relative path 建立(eg "./logs/x.log");
 // 之後 process 用 os.Chdir 切到別的 dir,Close 才被呼叫。 過去 Close 用

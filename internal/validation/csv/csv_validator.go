@@ -88,16 +88,16 @@ func validateHeaderUniqueness(header []string) error {
 		normalized := strings.ToLower(strings.TrimSpace(cell))
 		if normalized == "" {
 			return errors.NewValidationError("csv_data",
-				map[string]interface{}{"column_index": i + 1, "value": cell},
+				map[string]any{"column_index": i + 1, "value": cell},
 				fmt.Sprintf("CSV 第 %d 欄標題為空或純空白", i+1))
 		}
 		if prev, exists := seen[normalized]; exists {
 			return errors.NewValidationError("csv_data",
-				map[string]interface{}{
-					"column_index":      i + 1,
-					"value":             cell,
-					"duplicate_of_col":  prev + 1,
-					"normalized_value":  normalized,
+				map[string]any{
+					"column_index":     i + 1,
+					"value":            cell,
+					"duplicate_of_col": prev + 1,
+					"normalized_value": normalized,
 				},
 				fmt.Sprintf("CSV 第 %d 欄標題 %q 與第 %d 欄重複（normalize 後相同）",
 					i+1, cell, prev+1))
@@ -145,7 +145,7 @@ func (v *Validator) validateRowInternal(record []string, row, expectedColumns in
 	filename string, isHeader bool) error {
 	if expectedColumns >= 0 && len(record) != expectedColumns {
 		return errors.NewValidationError("csv_data",
-			map[string]interface{}{
+			map[string]any{
 				"row":           row,
 				"expected_cols": expectedColumns,
 				"actual_cols":   len(record),

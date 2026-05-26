@@ -122,7 +122,7 @@ func safeUint64ToInt64(value uint64) int64 {
 // 修法：只在 stats.IsOverLimit==true 時 return error；95% 改純 log，不中斷。
 func evaluateMemoryThresholds(stats *MemoryStats, limit int64, logger *logging.Logger) error {
 	if stats.IsOverLimit {
-		logger.Warn("記憶體使用超過限制", map[string]interface{}{
+		logger.Warn("記憶體使用超過限制", map[string]any{
 			"current_mb":  stats.Alloc / 1024 / 1024,
 			"limit_mb":    limit / 1024 / 1024,
 			"usage_ratio": stats.UsageRatio,
@@ -136,7 +136,7 @@ func evaluateMemoryThresholds(stats *MemoryStats, limit int64, logger *logging.L
 	}
 
 	if stats.UsageRatio > memoryWarningThreshold {
-		logger.Warn("記憶體使用接近限制", map[string]interface{}{
+		logger.Warn("記憶體使用接近限制", map[string]any{
 			"current_mb":  stats.Alloc / 1024 / 1024,
 			"limit_mb":    limit / 1024 / 1024,
 			"usage_ratio": stats.UsageRatio,
@@ -150,7 +150,7 @@ func evaluateMemoryThresholds(stats *MemoryStats, limit int64, logger *logging.L
 	if stats.HeapSys > 0 {
 		heapEfficiency := float64(stats.HeapInuse) / float64(stats.HeapSys)
 		if heapEfficiency < heapEfficiencyThreshold {
-			logger.Warn("堆記憶體效率低", map[string]interface{}{
+			logger.Warn("堆記憶體效率低", map[string]any{
 				"heap_efficiency": heapEfficiency,
 				"heap_inuse_mb":   stats.HeapInuse / 1024 / 1024,
 				"heap_sys_mb":     stats.HeapSys / 1024 / 1024,
@@ -167,7 +167,7 @@ func (h *LargeFileHandler) checkMemoryUsage() error {
 	stats := h.getDetailedMemoryStats()
 
 	// 記錄詳細的記憶體信息
-	h.logger.Debug("記憶體使用統計", map[string]interface{}{
+	h.logger.Debug("記憶體使用統計", map[string]any{
 		"alloc_mb":        stats.Alloc / 1024 / 1024,
 		"total_alloc_mb":  stats.TotalAlloc / 1024 / 1024,
 		"sys_mb":          stats.Sys / 1024 / 1024,

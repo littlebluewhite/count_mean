@@ -71,7 +71,7 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 		return nil, err
 	}
 
-	a.logger.Info("開始 CCI Rudolph 分析", map[string]interface{}{
+	a.logger.Info("開始 CCI Rudolph 分析", map[string]any{
 		"manifest": params.ManifestFile,
 		"folder":   params.DataFolder,
 		"subject":  params.SubjectIndex,
@@ -124,7 +124,7 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 	result.GaitStartTime = gaitStart
 	result.GaitEndTime = gaitEnd
 
-	a.logger.Info("CCI 分析完成", map[string]interface{}{"subject": manifest.Subject})
+	a.logger.Info("CCI 分析完成", map[string]any{"subject": manifest.Subject})
 
 	return result, nil
 }
@@ -229,7 +229,7 @@ func (a *CCIAnalyzer) calculateGaitCycle(
 			// MaxReasonableMotionIndex (1e9) 是 parseInt cap 邊界,OptFloat
 			// 路徑同樣 enforce 此 cap 防止下游 hot loop OOM / wrap-around。
 			if v <= 0 || v > float64(parsers.MaxReasonableMotionIndex) {
-				a.logger.Warn("motion-index 分期點越界,跳過", map[string]interface{}{
+				a.logger.Warn("motion-index 分期點越界,跳過", map[string]any{
 					"subject": manifest.Subject,
 					"phase":   pt.name,
 					"value":   v,
@@ -291,13 +291,13 @@ func (a *CCIAnalyzer) calculateGaitCycle(
 	for name, t := range emgTimes {
 		pct := (t - gaitStart) / duration * 100
 		if a.logger != nil && (pct < -clampWarnEpsilon || pct > 100+clampWarnEpsilon) {
-			a.logger.Warn("phase percent 被 clamp 至 [0,100] 範圍 (phase 落在 gait cycle 外,請檢查 manifest 或 sync offset)", map[string]interface{}{
-				"phase":             name,
-				"phase_emg_time":    t,
-				"gait_start":        gaitStart,
-				"gait_end":          gaitEnd,
-				"raw_pct":           pct,
-				"clamped_pct":       math.Max(0, math.Min(100, pct)),
+			a.logger.Warn("phase percent 被 clamp 至 [0,100] 範圍 (phase 落在 gait cycle 外,請檢查 manifest 或 sync offset)", map[string]any{
+				"phase":              name,
+				"phase_emg_time":     t,
+				"gait_start":         gaitStart,
+				"gait_end":           gaitEnd,
+				"raw_pct":            pct,
+				"clamped_pct":        math.Max(0, math.Min(100, pct)),
 				"clamp_warn_epsilon": clampWarnEpsilon,
 			})
 		}
@@ -324,7 +324,7 @@ func estimateSampleInterval(times []float64, logger *logging.Logger) float64 {
 	const defaultInterval = 0.001
 	if len(times) < 2 {
 		if logger != nil {
-			logger.Warn("estimateSampleInterval:資料不足 2 筆,fallback 至預設 sample interval", map[string]interface{}{
+			logger.Warn("estimateSampleInterval:資料不足 2 筆,fallback 至預設 sample interval", map[string]any{
 				"len":              len(times),
 				"default_interval": defaultInterval,
 			})
@@ -334,7 +334,7 @@ func estimateSampleInterval(times []float64, logger *logging.Logger) float64 {
 	dt := times[1] - times[0]
 	if dt <= 0 {
 		if logger != nil {
-			logger.Warn("estimateSampleInterval:前兩筆時間差非正 (時間戳異常),fallback 至預設 sample interval", map[string]interface{}{
+			logger.Warn("estimateSampleInterval:前兩筆時間差非正 (時間戳異常),fallback 至預設 sample interval", map[string]any{
 				"t0":               times[0],
 				"t1":               times[1],
 				"dt":               dt,
@@ -502,7 +502,7 @@ func (a *CCIAnalyzer) computeSinglePair(
 	header2, ok2 := channelMap[pair.Muscle2]
 
 	if !ok1 || !ok2 {
-		a.logger.Warn("跳過肌肉配對（缺少通道）", map[string]interface{}{
+		a.logger.Warn("跳過肌肉配對（缺少通道）", map[string]any{
 			"pair": pair.Name,
 		})
 
@@ -519,7 +519,7 @@ func (a *CCIAnalyzer) computeSinglePair(
 			return nil, err
 		}
 
-		a.logger.Warn("CCI 計算失敗", map[string]interface{}{
+		a.logger.Warn("CCI 計算失敗", map[string]any{
 			"pair":  pair.Name,
 			"error": err.Error(),
 		})
@@ -651,7 +651,7 @@ func writeCSVFile(ctx context.Context, outputPath string, result *CCIAnalysisRes
 	}
 
 	if droppedRowCount > 0 && logger != nil {
-		logger.Warn("CCI 匯出 CSV 時跳過全 NaN/Inf 的 row", map[string]interface{}{
+		logger.Warn("CCI 匯出 CSV 時跳過全 NaN/Inf 的 row", map[string]any{
 			"dropped_rows": droppedRowCount,
 			"total_rows":   numPoints,
 			"output_path":  outputPath,

@@ -131,7 +131,7 @@ func TestCheckANCTotalAllocation(t *testing.T) {
 	}
 }
 
-// TestANCParser_ParseFile_RejectsMaliciousTotalCapacity 端對端釘住 
+// TestANCParser_ParseFile_RejectsMaliciousTotalCapacity 端對端釘住
 // 即便每通道 Duration × PreciseRate 在 maxANCSampleCapacity 範圍內，只要
 // 通道數膨脹到讓總配置 > 2 GiB，parser 必須回 error 而非靜默吞下。
 // 64 channels × ~5M samples/ch（5000s × 1kHz）= 320M float64 ≈ 2.56 GiB > ceiling.

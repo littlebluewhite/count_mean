@@ -68,7 +68,7 @@ type MuscleRatioResult struct {
 //   - 單一 subject 失敗（檔案不存在、缺通道、phase 時間越界等）→ 包進對應的 SubjectDTO.Error，
 //     不阻斷其他 subject 處理；前端依 Subjects[i].Success 判斷是否該行成功
 func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioResult, err error) {
-	a.logger.Info("肌肉比值分析參數", map[string]interface{}{"params": params})
+	a.logger.Info("肌肉比值分析參數", map[string]any{"params": params})
 
 	s := a.state.Load()
 	outputDir := s.config.OutputDir
@@ -158,7 +158,7 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 		message += i18n.T(i18n.KeyStatusMuscleRatioPartialWarning)
 	}
 
-	a.logger.Info("肌肉比值分析輸出", map[string]interface{}{
+	a.logger.Info("肌肉比值分析輸出", map[string]any{
 		"subjects": len(subjects),
 		"success":  allSuccess,
 	})

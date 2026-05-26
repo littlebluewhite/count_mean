@@ -60,15 +60,15 @@ func (l LogLevel) String() string {
 
 // LogEntry represents a structured log entry.
 type LogEntry struct {
-	Timestamp time.Time              `json:"timestamp"`
-	Level     string                 `json:"level"`
-	Message   string                 `json:"message"`
-	Module    string                 `json:"module,omitempty"`
-	Function  string                 `json:"function,omitempty"`
-	File      string                 `json:"file,omitempty"`
-	Line      int                    `json:"line,omitempty"`
-	Error     string                 `json:"error,omitempty"`
-	Context   map[string]interface{} `json:"context,omitempty"`
+	Timestamp time.Time      `json:"timestamp"`
+	Level     string         `json:"level"`
+	Message   string         `json:"message"`
+	Module    string         `json:"module,omitempty"`
+	Function  string         `json:"function,omitempty"`
+	File      string         `json:"file,omitempty"`
+	Line      int            `json:"line,omitempty"`
+	Error     string         `json:"error,omitempty"`
+	Context   map[string]any `json:"context,omitempty"`
 }
 
 // Logger provides structured logging functionality.
@@ -77,7 +77,7 @@ type Logger struct {
 	output            io.Writer
 	jsonFormat        bool
 	module            string
-	contextData       map[string]interface{}
+	contextData       map[string]any
 	sensitivePatterns []*regexp.Regexp
 }
 
@@ -87,7 +87,7 @@ func NewLogger(level LogLevel, output io.Writer, jsonFormat bool) *Logger {
 		level:             level,
 		output:            output,
 		jsonFormat:        jsonFormat,
-		contextData:       make(map[string]interface{}),
+		contextData:       make(map[string]any),
 		sensitivePatterns: initSensitivePatterns(),
 	}
 }
@@ -161,7 +161,7 @@ func (l *Logger) Close() error {
 func (l *Logger) WithModule(module string) *Logger {
 	newLogger := *l
 	newLogger.module = module
-	newLogger.contextData = make(map[string]interface{})
+	newLogger.contextData = make(map[string]any)
 
 	for k, v := range l.contextData {
 		newLogger.contextData[k] = v
@@ -176,9 +176,9 @@ func (l *Logger) WithModule(module string) *Logger {
 //
 // 見 WithModule 的 COW 註解 — sensitivePatterns 同樣以 shallow copy
 // 隔離 parent / child。
-func (l *Logger) WithContext(key string, value interface{}) *Logger {
+func (l *Logger) WithContext(key string, value any) *Logger {
 	newLogger := *l
-	newLogger.contextData = make(map[string]interface{})
+	newLogger.contextData = make(map[string]any)
 
 	for k, v := range l.contextData {
 		newLogger.contextData[k] = v
@@ -312,7 +312,7 @@ func (l *Logger) sanitizeMessage(message string) string {
 }
 
 // sanitizeContextValue removes sensitive information from context values.
-func (l *Logger) sanitizeContextValue(value interface{}) interface{} {
+func (l *Logger) sanitizeContextValue(value any) any {
 	if value == nil {
 		return nil
 	}
@@ -320,15 +320,15 @@ func (l *Logger) sanitizeContextValue(value interface{}) interface{} {
 	switch v := value.(type) {
 	case string:
 		return l.sanitizeMessage(v)
-	case map[string]interface{}:
-		sanitized := make(map[string]interface{})
+	case map[string]any:
+		sanitized := make(map[string]any)
 		for k, val := range v {
 			sanitized[k] = l.sanitizeContextValue(val)
 		}
 
 		return sanitized
-	case []interface{}:
-		sanitized := make([]interface{}, len(v))
+	case []any:
+		sanitized := make([]any, len(v))
 		for i, val := range v {
 			sanitized[i] = l.sanitizeContextValue(val)
 		}
@@ -374,7 +374,7 @@ func (l *Logger) WithError(err error) *Logger {
 }
 
 // log writes a log entry.
-func (l *Logger) log(level LogLevel, message string, err error, context map[string]interface{}) {
+func (l *Logger) log(level LogLevel, message string, err error, context map[string]any) {
 	if level < l.level {
 		return
 	}
@@ -384,7 +384,7 @@ func (l *Logger) log(level LogLevel, message string, err error, context map[stri
 		Level:     level.String(),
 		Message:   l.sanitizeMessage(message),
 		Module:    l.module,
-		Context:   make(map[string]interface{}),
+		Context:   make(map[string]any),
 	}
 
 	addCallerInfo(&entry)
@@ -502,7 +502,7 @@ func (l *Logger) writeJSON(entry *LogEntry) {
 //
 //nolint:gochecknoglobals // immutable pool reused across logger instances
 var writeTextBuilderPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		b := &strings.Builder{}
 		b.Grow(256) // typical log line size — avoid first-write expand
 		return b
@@ -579,8 +579,8 @@ func (l *Logger) writeText(entry *LogEntry) {
 }
 
 // Debug logs a debug message.
-func (l *Logger) Debug(message string, context ...map[string]interface{}) {
-	var ctx map[string]interface{}
+func (l *Logger) Debug(message string, context ...map[string]any) {
+	var ctx map[string]any
 	if len(context) > 0 {
 		ctx = context[0]
 	}
@@ -589,8 +589,8 @@ func (l *Logger) Debug(message string, context ...map[string]interface{}) {
 }
 
 // Info logs an info message.
-func (l *Logger) Info(message string, context ...map[string]interface{}) {
-	var ctx map[string]interface{}
+func (l *Logger) Info(message string, context ...map[string]any) {
+	var ctx map[string]any
 	if len(context) > 0 {
 		ctx = context[0]
 	}
@@ -599,8 +599,8 @@ func (l *Logger) Info(message string, context ...map[string]interface{}) {
 }
 
 // Warn logs a warning message.
-func (l *Logger) Warn(message string, context ...map[string]interface{}) {
-	var ctx map[string]interface{}
+func (l *Logger) Warn(message string, context ...map[string]any) {
+	var ctx map[string]any
 	if len(context) > 0 {
 		ctx = context[0]
 	}
@@ -609,8 +609,8 @@ func (l *Logger) Warn(message string, context ...map[string]interface{}) {
 }
 
 // Error logs an error message.
-func (l *Logger) Error(message string, err error, context ...map[string]interface{}) {
-	var ctx map[string]interface{}
+func (l *Logger) Error(message string, err error, context ...map[string]any) {
+	var ctx map[string]any
 	if len(context) > 0 {
 		ctx = context[0]
 	}
@@ -661,8 +661,8 @@ type flusher interface {
 // MultiWriter / nopCloser 等不實作 syncer/flusher 的 output 是 no-op fallback,
 // 對它們 sync 也沒實際意義(stdout / stderr 由 OS 在 process exit 自己 flush)。
 // Sync/Flush 任何失敗都 ignore — Fatal 必須抵達 exit,不能因 IO 失敗 hang。
-func (l *Logger) Fatal(message string, err error, context ...map[string]interface{}) {
-	var ctx map[string]interface{}
+func (l *Logger) Fatal(message string, err error, context ...map[string]any) {
+	var ctx map[string]any
 	if len(context) > 0 {
 		ctx = context[0]
 	}
@@ -840,26 +840,26 @@ func GetLogger(module ...string) *Logger {
 }
 
 // Debug logs a debug message using the default logger.
-func Debug(message string, context ...map[string]interface{}) {
+func Debug(message string, context ...map[string]any) {
 	GetLogger().Debug(message, context...)
 }
 
 // Info logs an info message using the default logger.
-func Info(message string, context ...map[string]interface{}) {
+func Info(message string, context ...map[string]any) {
 	GetLogger().Info(message, context...)
 }
 
 // Warn logs a warning message using the default logger.
-func Warn(message string, context ...map[string]interface{}) {
+func Warn(message string, context ...map[string]any) {
 	GetLogger().Warn(message, context...)
 }
 
 // Error logs an error message using the default logger.
-func Error(message string, err error, context ...map[string]interface{}) {
+func Error(message string, err error, context ...map[string]any) {
 	GetLogger().Error(message, err, context...)
 }
 
 // Fatal logs a fatal message using the default logger and exits.
-func Fatal(message string, err error, context ...map[string]interface{}) {
+func Fatal(message string, err error, context ...map[string]any) {
 	GetLogger().Fatal(message, err, context...)
 }

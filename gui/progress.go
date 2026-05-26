@@ -118,7 +118,7 @@ func wailsProgressEmitter(ctxFn func() context.Context) progressEmitter {
 				log.Error("EventsEmit panicked",
 					//nolint:err113 // dynamic recovered value
 					fmt.Errorf("%v", r),
-					map[string]interface{}{
+					map[string]any{
 						"percentage": info.Percentage,
 						"status":     info.Status,
 					})
@@ -127,7 +127,7 @@ func wailsProgressEmitter(ctxFn func() context.Context) progressEmitter {
 
 		ctx := ctxFn()
 		if !hasWailsEventsHandler(ctx) {
-			log.Debug("跳過進度事件:Wails ctx 尚未就緒", map[string]interface{}{
+			log.Debug("跳過進度事件:Wails ctx 尚未就緒", map[string]any{
 				"percentage": info.Percentage,
 				"status":     info.Status,
 			})
@@ -252,7 +252,7 @@ func (pm *ProgressManager) UpdateProgress(info models.ProgressInfo) {
 	}
 
 	emit(info)
-	pm.logger.Debug("進度事件已發送", map[string]interface{}{
+	pm.logger.Debug("進度事件已發送", map[string]any{
 		"percentage":    info.Percentage,
 		"status":        info.Status,
 		"channel_index": info.ChannelIndex,

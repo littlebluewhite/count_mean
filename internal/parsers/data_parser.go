@@ -76,7 +76,7 @@ func (p *DataParser) validateRecords(records [][]string) error {
 
 	if len(records) < 2 {
 		err := fmt.Errorf("數據至少需要包含標題行和一行數據: %w", apperrors.ErrInsufficientData)
-		p.logger.Error("原始數據結構驗證失敗", err, map[string]interface{}{"record_count": len(records)})
+		p.logger.Error("原始數據結構驗證失敗", err, map[string]any{"record_count": len(records)})
 
 		return err
 	}
@@ -95,7 +95,7 @@ func (p *DataParser) initializeDataset(records [][]string, opts ParseOptions) *m
 
 	if opts.DetectTimePrecision {
 		dataset.OriginalTimePrecision = util.DetectTimePrecision(records)
-		p.logger.Debug("檢測到時間精度", map[string]interface{}{"detected_precision": dataset.OriginalTimePrecision})
+		p.logger.Debug("檢測到時間精度", map[string]any{"detected_precision": dataset.OriginalTimePrecision})
 	}
 
 	return dataset
@@ -108,7 +108,7 @@ func (p *DataParser) parseChannels(row []string, rowNumber int) ([]float64, erro
 	for j := 1; j < len(row); j++ {
 		val, err := util.Str2Number[float64, int](row[j], p.scalingFactor)
 		if err != nil {
-			p.logger.Error("通道數據解析失敗", err, map[string]interface{}{
+			p.logger.Error("通道數據解析失敗", err, map[string]any{
 				"row_number": rowNumber, "column_number": j + 1, "value": row[j],
 			})
 
@@ -132,7 +132,7 @@ func (p *DataParser) parseDataRow(row []string, rowNumber int, opts ParseOptions
 	// 經過上面 guard，len(row) 至少是 1。只剩兩條 skip 條件：單欄列（無 channel 值）或空白時間。
 	if len(row) == 1 || row[0] == "" {
 		if opts.LogVerbose && row[0] == "" {
-			p.logger.Debug("跳過空白時間行", map[string]interface{}{"row_number": rowNumber})
+			p.logger.Debug("跳過空白時間行", map[string]any{"row_number": rowNumber})
 		}
 
 		return nil, ErrSkipRow
@@ -141,7 +141,7 @@ func (p *DataParser) parseDataRow(row []string, rowNumber int, opts ParseOptions
 	timeVal, err := util.Str2Number[float64, int](row[0], p.scalingFactor)
 	if err != nil {
 		if opts.LogVerbose {
-			p.logger.Warn("時間值解析失敗，跳過此行", map[string]interface{}{
+			p.logger.Warn("時間值解析失敗，跳過此行", map[string]any{
 				"row_number": rowNumber, "time_value": row[0], "error": err.Error(),
 			})
 		}
@@ -164,7 +164,7 @@ func (p *DataParser) ParseRawDataWithOptions(records [][]string, opts ParseOptio
 	}
 
 	if opts.LogVerbose {
-		p.logger.Debug("開始解析原始數據", map[string]interface{}{
+		p.logger.Debug("開始解析原始數據", map[string]any{
 			"record_count": len(records), "scaling_factor": p.scalingFactor,
 		})
 	}
@@ -185,13 +185,13 @@ func (p *DataParser) ParseRawDataWithOptions(records [][]string, opts ParseOptio
 	}
 
 	if len(dataset.Data) == 0 {
-		p.logger.Error("原始數據解析失敗", ErrEmptyDataset, map[string]interface{}{"header_count": len(dataset.Headers)})
+		p.logger.Error("原始數據解析失敗", ErrEmptyDataset, map[string]any{"header_count": len(dataset.Headers)})
 
 		return nil, ErrEmptyDataset
 	}
 
 	if opts.LogVerbose {
-		p.logger.Info("原始數據解析完成", map[string]interface{}{
+		p.logger.Info("原始數據解析完成", map[string]any{
 			"parsed_records": len(dataset.Data),
 			"channel_count":  len(dataset.Data[0].Channels),
 			"header_count":   len(dataset.Headers),

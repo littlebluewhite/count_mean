@@ -259,7 +259,7 @@ func TestCalculatorError_Message(t *testing.T) {
 }
 
 func TestCalculatorError_WithContext(t *testing.T) {
-	ctx := map[string]interface{}{
+	ctx := map[string]any{
 		"data_length": 0,
 		"window_size": 100,
 	}

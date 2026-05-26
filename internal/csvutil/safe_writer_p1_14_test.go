@@ -13,9 +13,9 @@ import (
 // failAfter bytes 後所有 Write 都返回 errInjected,但保留 nWritten 計數讓 test
 // 驗證 的 mid-write 探測有觸發。
 type midWriteFailingWriter struct {
-	inner      io.Writer
-	written    int
-	failAfter  int
+	inner       io.Writer
+	written     int
+	failAfter   int
 	errInjected error
 }
 
@@ -53,9 +53,9 @@ func (w *midWriteFailingWriter) Write(p []byte) (int, error) {
 // fix 後:第 1024 row 處 Flush+Error 探測到 error,立即 return + defer 刪 tmp。
 //
 // 主要 assertion:
-//   1. WriteCSVAtomic 返回 non-nil error,且 error 是 mid-write 引發
-//   2. final path 不存在(沒成功 rename)
-//   3. tmp file 不殘留(defer cleanup 成功)
+//  1. WriteCSVAtomic 返回 non-nil error,且 error 是 mid-write 引發
+//  2. final path 不存在(沒成功 rename)
+//  3. tmp file 不殘留(defer cleanup 成功)
 func TestWriteCSVAtomic_AbortsOnMidWriteError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.csv")

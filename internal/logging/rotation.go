@@ -73,9 +73,9 @@ var (
 //   - **Same-process**: NewSizeRotatingWriter 對同個 logPath 第二次開啟會回
 //     ErrLogPathAlreadyOpen。Close 時自動 unregister。
 type SizeRotatingWriter struct {
-	mu           sync.Mutex
-	file         *os.File
-	basePath     string
+	mu       sync.Mutex
+	file     *os.File
+	basePath string
 	// absPath 在 construction 時凍結 — Close / future-cleanup 必須用 stored 值,
 	// 不能再次 filepath.Abs(basePath)。 若 caller 在 writer 生命週期內
 	// os.Chdir,重算 abs 會用「當下 cwd」得到錯誤 key,registry delete 變 no-op,
@@ -423,9 +423,10 @@ var backupSuffixRegexp = regexp.MustCompile(`^(\d+)$`)
 //
 // best-effort:scan / delete 任一步失敗都不致命 — caller 仍取得 functional writer,
 // 失敗訊息走 stderr。 不在 mu 下執行,因為:
-//   (1) Open 時 caller 還沒拿到 w reference,沒有並發 Write 來爭 mu
-//   (2) pruneExcessBackups 只動 .N (N > maxBackups) 的舊檔,跟 hot rotation
-//       (.1 ~ .maxBackups) 無交集
+//
+//	(1) Open 時 caller 還沒拿到 w reference,沒有並發 Write 來爭 mu
+//	(2) pruneExcessBackups 只動 .N (N > maxBackups) 的舊檔,跟 hot rotation
+//	    (.1 ~ .maxBackups) 無交集
 //
 // 不對 .N (N ≤ maxBackups) 動手 — 那些是 valid backup,rotateLocked 自己會推進。
 //

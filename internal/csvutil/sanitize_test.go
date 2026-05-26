@@ -57,13 +57,13 @@ func TestSanitizeCellForWrite(t *testing.T) {
 
 		// Wave 7 security: Unicode whitespace / Unicode operator bypass — 攻擊者
 		// 用 NBSP / 零寬空格 / 全形等號 / Unicode minus 等繞過 ASCII-only 偵測。
-		{"nbsp_equals", " =BAD()", "' =BAD()"},                     // U+00A0 NBSP
+		{"nbsp_equals", " =BAD()", "' =BAD()"},                       // U+00A0 NBSP
 		{"zero_width_space_equals", "\u200b=BAD()", "'\u200b=BAD()"}, // U+200B
-		{"ideographic_space_equals", "　=BAD()", "'　=BAD()"},        // U+3000 全形空格
-		{"fullwidth_equals", "＝SUM(1+1)", "'＝SUM(1+1)"},            // U+FF1D 全形等號
-		{"fullwidth_equals_with_space", " ＝BAD()", "' ＝BAD()"},     // 空白 + 全形等號
-		{"unicode_minus_alpha", "−HYPERLINK(x)", "'−HYPERLINK(x)"}, // U+2212 + 非數字
-		{"unicode_minus_number_escaped", "−1", "'−1"},              // U+2212 + 數字（ParseFloat 不過 → escape，trade-off）
+		{"ideographic_space_equals", "　=BAD()", "'　=BAD()"},          // U+3000 全形空格
+		{"fullwidth_equals", "＝SUM(1+1)", "'＝SUM(1+1)"},              // U+FF1D 全形等號
+		{"fullwidth_equals_with_space", " ＝BAD()", "' ＝BAD()"},       // 空白 + 全形等號
+		{"unicode_minus_alpha", "−HYPERLINK(x)", "'−HYPERLINK(x)"},   // U+2212 + 非數字
+		{"unicode_minus_number_escaped", "−1", "'−1"},                // U+2212 + 數字（ParseFloat 不過 → escape，trade-off）
 
 		// 確認 ASCII 數字仍然 round-trip（防止 unicode minus 邏輯誤傷）
 		{"ascii_minus_number_pass", "-1", "-1"},

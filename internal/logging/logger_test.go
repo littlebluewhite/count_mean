@@ -211,7 +211,7 @@ func TestLogger_JSONFormat(t *testing.T) {
 	var buf bytes.Buffer
 	logger := NewLogger(LevelInfo, &buf, true).WithModule("test")
 
-	logger.Info("test message", map[string]interface{}{
+	logger.Info("test message", map[string]any{
 		"key": "value",
 	})
 
@@ -436,7 +436,7 @@ func TestLogger_SensitiveDataFiltering(t *testing.T) {
 	buf.Reset()
 
 	// Test context value filtering
-	logger.Info("Processing request", map[string]interface{}{
+	logger.Info("Processing request", map[string]any{
 		"user_id": "12345",
 		"token":   "bearer_token_abc123",
 	})
@@ -776,7 +776,7 @@ func TestWriteText_NewlineEscaped(t *testing.T) {
 		jsonFmt bool
 		message string
 		err     error
-		ctx     map[string]interface{}
+		ctx     map[string]any
 	}{
 		{
 			name:    "text mode message with newline",
@@ -798,7 +798,7 @@ func TestWriteText_NewlineEscaped(t *testing.T) {
 			name:    "text mode newline in context value",
 			jsonFmt: false,
 			message: "request ok",
-			ctx: map[string]interface{}{
+			ctx: map[string]any{
 				"filename": "report.csv\n2026-01-01 00:00:00 [ERROR] forged",
 			},
 		},
@@ -867,7 +867,7 @@ func TestSanitizeMessage_StripsNewlines(t *testing.T) {
 	}
 }
 
-// TestInitLogger_Reinit_ClosesOldHandle 守護 
+// TestInitLogger_Reinit_ClosesOldHandle 守護
 //
 // **Scenario**: caller 連續呼叫兩次 InitLogger (eg GUI 內 settings 改 logDir
 // 觸發 re-init),過去第二次只 overwrite defaultLogger / defaultFileLogger,
@@ -965,7 +965,7 @@ func (nanMarshaler) MarshalJSON() ([]byte, error) {
 	return []byte("NaN"), nil
 }
 
-// TestWriteJSON_FallbackOnNaNCustomMarshaler 守護 
+// TestWriteJSON_FallbackOnNaNCustomMarshaler 守護
 //
 // 雖然 sanitizeContextValue 對 float64 NaN/Inf 已過 fmt.Sprintf 轉成 string,
 // 但 custom Marshaler 仍可在 Marshal 階段 inject invalid JSON value
@@ -990,7 +990,7 @@ func TestWriteJSON_FallbackOnNaNCustomMarshaler(t *testing.T) {
 		Level:     "info",
 		Message:   "trigger marshal failure",
 		Module:    "p2d_test",
-		Context: map[string]interface{}{
+		Context: map[string]any{
 			// custom marshaler 故意輸出 NaN 字面 — encoding/json 會包成 UnsupportedValueError
 			"poisoned": nanMarshaler{},
 		},
@@ -1014,14 +1014,14 @@ func TestWriteJSON_FallbackOnNaNCustomMarshaler(t *testing.T) {
 		if line == "" {
 			continue
 		}
-		var parsed map[string]interface{}
+		var parsed map[string]any
 		if err := json.Unmarshal([]byte(line), &parsed); err != nil {
 			t.Errorf("line %d 必須是合法 JSON (sentinel fallback 契約): %q, parse err=%v", i, line, err)
 		}
 	}
 
 	// 驗證 sentinel 結構:level=error + msg=<encode-failed> + 非空 reason
-	var sentinel map[string]interface{}
+	var sentinel map[string]any
 	if err := json.Unmarshal([]byte(lines[0]), &sentinel); err != nil {
 		t.Fatalf("第一行 sentinel 必須是合法 JSON: %v", err)
 	}

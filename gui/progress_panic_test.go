@@ -13,7 +13,7 @@ import (
 	"count_mean/internal/models"
 )
 
-// TestWailsProgressEmitter_RecoversFromHandlerPanic 釘住 
+// TestWailsProgressEmitter_RecoversFromHandlerPanic 釘住
 //
 // 過去 wailsProgressEmitter 直接呼叫 runtime.EventsEmit,若 Wails 內部 dispatch
 // 鏈 / frontend handler / JSON encoder 任一處 panic(典型情境:應用程式 binding

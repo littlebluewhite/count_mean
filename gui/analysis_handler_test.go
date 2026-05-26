@@ -191,8 +191,8 @@ func TestAnalysisHandler_WriteCSVFails_ReturnsResultEmptyPathAndErr(t *testing.T
 	wantErr := errors.New("csv write failed")
 
 	h := &AnalysisHandler[testParams, testResult]{
-		Name:   "TestHandler",
-		Logger: logger,
+		Name:     "TestHandler",
+		Logger:   logger,
 		Validate: func(_ testParams) error { return nil },
 		Execute: func(_ context.Context, _ testParams) (testResult, error) {
 			return testResult{value: 13}, nil
@@ -227,8 +227,8 @@ func TestAnalysisHandler_ContextIdentity_ExecuteReceivesCallerCtx(t *testing.T) 
 	var seenCtx context.Context
 
 	h := &AnalysisHandler[testParams, testResult]{
-		Name:   "TestHandler",
-		Logger: logger,
+		Name:     "TestHandler",
+		Logger:   logger,
 		Validate: func(_ testParams) error { return nil },
 		Execute: func(ctx context.Context, _ testParams) (testResult, error) {
 			seenCtx = ctx
@@ -257,8 +257,8 @@ func TestAnalysisHandler_ExecutePanics_CaughtAsInternalPanic(t *testing.T) {
 	logger, _ := newTestLogger()
 
 	h := &AnalysisHandler[testParams, testResult]{
-		Name:   "PanicHandler",
-		Logger: logger,
+		Name:     "PanicHandler",
+		Logger:   logger,
 		Validate: func(_ testParams) error { return nil },
 		Execute: func(_ context.Context, _ testParams) (testResult, error) {
 			panic("simulated panic in execute")

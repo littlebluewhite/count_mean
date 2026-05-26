@@ -390,7 +390,7 @@ func TestLargeFileHandler_ProcessLargeFileInChunks_StripsBOM(t *testing.T) {
 	require.Equal(t, "LA", result.Headers[2])
 }
 
-// TestLargeFileHandler_ProcessLargeFileInChunks_RejectsFormulaInjection 釘住 
+// TestLargeFileHandler_ProcessLargeFileInChunks_RejectsFormulaInjection 釘住
 // streaming 大檔路徑必須跑 cell-level ValidateCSVRow，formula injection cell（=cmd|/c calc）
 // 在 streaming 過程中被擋而非靜默通過下游分析。
 //
@@ -421,7 +421,7 @@ func TestLargeFileHandler_ProcessLargeFileInChunks_RejectsFormulaInjection(t *te
 		"err 應來自 ValidateCSVRow 守門，實際 err=%v", err)
 }
 
-// TestLargeFileHandler_ProcessLargeFileInChunks_RejectsHeaderInjection 釘住 
+// TestLargeFileHandler_ProcessLargeFileInChunks_RejectsHeaderInjection 釘住
 // header row 同樣會被 cell-level 守門 — Excel formula injection 在 header 同樣有效。
 func TestLargeFileHandler_ProcessLargeFileInChunks_RejectsHeaderInjection(t *testing.T) {
 	cfg := config.DefaultConfig()

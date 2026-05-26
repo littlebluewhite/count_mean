@@ -155,7 +155,7 @@ func (p *MotionParser) parseDataRecord(
 	if len(record) == 0 || strings.TrimSpace(record[0]) == "" {
 		// L10:Info-level 而非 Warn,因為 trailing blank line 常見且無害。
 		// 仍記 row_number 讓操作員若需追查 silent miscount 時能對齊 CSV。
-		p.logger.Info("Motion CSV 空行已跳過", map[string]interface{}{
+		p.logger.Info("Motion CSV 空行已跳過", map[string]any{
 			"row_number": rowNumber,
 			"reason":     emptyRowSkipReason(record),
 		})
@@ -163,7 +163,7 @@ func (p *MotionParser) parseDataRecord(
 	}
 
 	if len(record) < len(headers) {
-		p.logger.Warn("Motion CSV 行欄位數不足，已跳過", map[string]interface{}{
+		p.logger.Warn("Motion CSV 行欄位數不足，已跳過", map[string]any{
 			"row_number":  rowNumber,
 			"got_fields":  len(record),
 			"want_fields": len(headers),
@@ -174,7 +174,7 @@ func (p *MotionParser) parseDataRecord(
 
 	indexValue, err := strconv.Atoi(strings.TrimSpace(record[0]))
 	if err != nil {
-		p.logger.Warn("Motion CSV 第 1 欄非整數，已跳過", map[string]interface{}{
+		p.logger.Warn("Motion CSV 第 1 欄非整數，已跳過", map[string]any{
 			"row_number": rowNumber,
 			"first_cell": record[0],
 			"error":      err.Error(),

@@ -76,7 +76,7 @@ func TestProcessJob_PanicResetsActiveJobs(t *testing.T) {
 		"deferred RecordJobComplete must restore activeJobs to zero after panic")
 }
 
-// TestCalculate_HasStartRange_ZeroIsExplicit 守護 
+// TestCalculate_HasStartRange_ZeroIsExplicit 守護
 // StartRange=0 + HasStartRange=true 必須視為「顯式下界 = 0」而非「未設」。
 // 過去用 `StartRange != 0` sentinel,StartRange=0 會被誤判,結果區間從資料起點開始,
 // 對 time-axis 從負值開始的資料 (例:預備動作 t=-1s ~ t=2s) 會把 -1 ~ 0 區間包進來。

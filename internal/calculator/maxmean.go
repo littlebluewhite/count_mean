@@ -132,7 +132,7 @@ func (c *MaxMeanCalculator) GetBackpressureStats() models.BackpressureStats {
 }
 
 // getMemoryUsageInfo 獲取記憶體使用信息（委託給 BackpressureController）.
-func (c *MaxMeanCalculator) getMemoryUsageInfo() map[string]interface{} {
+func (c *MaxMeanCalculator) getMemoryUsageInfo() map[string]any {
 	if c.backpressureController != nil {
 		return c.backpressureController.GetMemoryUsageInfo()
 	}
@@ -141,7 +141,7 @@ func (c *MaxMeanCalculator) getMemoryUsageInfo() map[string]interface{} {
 
 	runtime.ReadMemStats(&memStats)
 
-	return map[string]interface{}{
+	return map[string]any{
 		"alloc_mb":       memStats.Alloc / 1024 / 1024,
 		"total_alloc_mb": memStats.TotalAlloc / 1024 / 1024,
 		"sys_mb":         memStats.Sys / 1024 / 1024,
@@ -216,7 +216,7 @@ func (c *MaxMeanCalculator) validateInput(dataset *models.EMGDataset, windowSize
 			dataLength = len(dataset.Data)
 		}
 
-		c.logger.Error("計算參數驗證失敗", err, map[string]interface{}{
+		c.logger.Error("計算參數驗證失敗", err, map[string]any{
 			"dataset_nil": dataset == nil,
 			"data_length": dataLength,
 		})
@@ -226,7 +226,7 @@ func (c *MaxMeanCalculator) validateInput(dataset *models.EMGDataset, windowSize
 
 	if windowSize < 1 {
 		err := calcerrors.NewCalculatorError(calcerrors.ErrInvalidWindowSize, "窗口大小必須大於 0")
-		c.logger.Error("窗口大小驗證失敗", err, map[string]interface{}{
+		c.logger.Error("窗口大小驗證失敗", err, map[string]any{
 			"window_size": windowSize,
 		})
 
@@ -235,7 +235,7 @@ func (c *MaxMeanCalculator) validateInput(dataset *models.EMGDataset, windowSize
 
 	if len(dataset.Data) < windowSize {
 		err := calcerrors.NewCalculatorError(calcerrors.ErrWindowTooLarge, "數據集無效或窗口大小過大")
-		c.logger.Error("窗口大小驗證失敗", err, map[string]interface{}{
+		c.logger.Error("窗口大小驗證失敗", err, map[string]any{
 			"data_length": len(dataset.Data),
 			"window_size": windowSize,
 		})
@@ -247,7 +247,7 @@ func (c *MaxMeanCalculator) validateInput(dataset *models.EMGDataset, windowSize
 	// 迴圈，channel count 0 會回空 result map（看起來「正常」）但 user 期望會出錯。
 	if len(dataset.Data[0].Channels) == 0 {
 		err := calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "數據集沒有任何通道")
-		c.logger.Error("通道數量驗證失敗", err, map[string]interface{}{
+		c.logger.Error("通道數量驗證失敗", err, map[string]any{
 			"data_length": len(dataset.Data),
 		})
 
@@ -274,13 +274,13 @@ func (c *MaxMeanCalculator) validateInput(dataset *models.EMGDataset, windowSize
 					"第 %d 列通道數 %d 與首列通道數 %d 不一致",
 					rowIdx+1, len(row.Channels), expectedChannels,
 				),
-				map[string]interface{}{
+				map[string]any{
 					"row_index":         rowIdx + 1,
 					"row_channels":      len(row.Channels),
 					"expected_channels": expectedChannels,
 				},
 			)
-			c.logger.Error("資料列通道數不一致", err, map[string]interface{}{
+			c.logger.Error("資料列通道數不一致", err, map[string]any{
 				"row_index":         rowIdx + 1,
 				"row_channels":      len(row.Channels),
 				"expected_channels": expectedChannels,
@@ -316,12 +316,12 @@ func (c *MaxMeanCalculator) validateChannelValues(dataset *models.EMGDataset) er
 				err := calcerrors.NewCalculatorErrorWithContext(
 					calcerrors.ErrNaNInChannel,
 					fmt.Sprintf("通道 %d 在第 %d 列含 NaN,無法計算最大平均值", chIdx+1, rowIdx+1),
-					map[string]interface{}{
+					map[string]any{
 						"row_index":     rowIdx,
 						"channel_index": chIdx + 1,
 					},
 				)
-				c.logger.Error("通道資料含 NaN", err, map[string]interface{}{
+				c.logger.Error("通道資料含 NaN", err, map[string]any{
 					"row_index":     rowIdx,
 					"channel_index": chIdx + 1,
 				})
@@ -333,13 +333,13 @@ func (c *MaxMeanCalculator) validateChannelValues(dataset *models.EMGDataset) er
 				err := calcerrors.NewCalculatorErrorWithContext(
 					calcerrors.ErrInfInChannel,
 					fmt.Sprintf("通道 %d 在第 %d 列含 Inf,無法計算最大平均值", chIdx+1, rowIdx+1),
-					map[string]interface{}{
+					map[string]any{
 						"row_index":     rowIdx,
 						"channel_index": chIdx + 1,
 						"sign":          infSign(v),
 					},
 				)
-				c.logger.Error("通道資料含 Inf", err, map[string]interface{}{
+				c.logger.Error("通道資料含 Inf", err, map[string]any{
 					"row_index":     rowIdx,
 					"channel_index": chIdx + 1,
 					"sign":          infSign(v),
@@ -416,7 +416,7 @@ func (c *MaxMeanCalculator) logCalculationStart(
 	opts CalculationOptions,
 	isRanged bool,
 ) {
-	logCtx := map[string]interface{}{
+	logCtx := map[string]any{
 		"window_size":   windowSize,
 		"data_points":   len(dataset.Data),
 		"channel_count": len(dataset.Data[0].Channels),
@@ -500,7 +500,7 @@ func (c *MaxMeanCalculator) resolveDataRange(
 
 	if startIdx == -1 || endIdx == -1 || endIdx-startIdx+1 < windowSize {
 		err := calcerrors.NewCalculatorError(calcerrors.ErrInvalidTimeRange, "指定時間範圍內的數據不足以進行窗口分析")
-		c.logger.Error("時間範圍內數據不足", err, map[string]interface{}{
+		c.logger.Error("時間範圍內數據不足", err, map[string]any{
 			"start_idx":        startIdx,
 			"end_idx":          endIdx,
 			"available_points": endIdx - startIdx + 1,
@@ -512,7 +512,7 @@ func (c *MaxMeanCalculator) resolveDataRange(
 		return 0, 0, err
 	}
 
-	c.logger.Debug("時間範圍分析完成", map[string]interface{}{
+	c.logger.Debug("時間範圍分析完成", map[string]any{
 		"start_idx":        startIdx,
 		"end_idx":          endIdx,
 		"available_points": endIdx - startIdx + 1,
@@ -574,7 +574,7 @@ func (o *orchestrator) execute(ctx context.Context) ([]models.MaxMeanResult, err
 		initStatus = "初始化範圍並行計算"
 	}
 
-	o.calc.logger.Info("開始並行處理通道計算", map[string]interface{}{
+	o.calc.logger.Info("開始並行處理通道計算", map[string]any{
 		"worker_count":        o.calc.workerCount,
 		"actual_worker_count": actualWorkerCount,
 		"channel_count":       o.channelCount,
@@ -689,7 +689,7 @@ func (o *orchestrator) processJob(ctx context.Context, job calculationJob) chann
 	}
 
 	// 日誌記錄
-	logContext := map[string]interface{}{
+	logContext := map[string]any{
 		"channel_index": job.channelIdx + 1,
 		"memory_usage":  o.calc.getMemoryUsageInfo(),
 	}
@@ -747,7 +747,7 @@ func (o *orchestrator) collectResults(
 					errMsg = "通道範圍計算失敗"
 				}
 
-				o.calc.logger.Error(errMsg, result.err, map[string]interface{}{
+				o.calc.logger.Error(errMsg, result.err, map[string]any{
 					"channel_index": result.channelIdx + 1,
 					"start_idx":     o.startIdx,
 					"end_idx":       o.endIdx,
@@ -774,7 +774,7 @@ func (o *orchestrator) collectResults(
 				o.progressTracker.UpdateProgress(processedCount, status, result.channelIdx+1, channelName)
 			}
 
-			o.calc.logger.Debug("通道計算完成", map[string]interface{}{
+			o.calc.logger.Debug("通道計算完成", map[string]any{
 				"channel_index": result.channelIdx + 1,
 				"progress":      fmt.Sprintf("%d/%d", processedCount, o.channelCount),
 			})
@@ -795,7 +795,7 @@ func (o *orchestrator) finalize(results []models.MaxMeanResult) {
 	}
 
 	// 記錄完成日誌
-	logCtx := map[string]interface{}{
+	logCtx := map[string]any{
 		"channel_count": len(results),
 		"window_size":   o.windowSize,
 	}
@@ -817,7 +817,7 @@ func (o *orchestrator) finalize(results []models.MaxMeanResult) {
 	if o.calc.backpressureController != nil {
 		stats := o.calc.backpressureController.GetStats()
 
-		statsLogCtx := map[string]interface{}{
+		statsLogCtx := map[string]any{
 			"processing_time_ms":  stats.TotalProcessingTime.Milliseconds(),
 			"throughput_jobs_sec": stats.ThroughputJobsPerSec,
 		}
@@ -836,7 +836,7 @@ func (c *MaxMeanCalculator) CalculateFromRawData(
 	records [][]string,
 	windowSize int,
 ) ([]models.MaxMeanResult, error) {
-	c.logger.Info("開始從原始數據計算最大平均值", map[string]interface{}{
+	c.logger.Info("開始從原始數據計算最大平均值", map[string]any{
 		"record_count": len(records),
 		"window_size":  windowSize,
 	})
@@ -857,7 +857,7 @@ func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(
 	windowSize int,
 	startRange, endRange float64,
 ) ([]models.MaxMeanResult, error) {
-	c.logger.Info("開始從原始數據計算指定範圍內的最大平均值", map[string]interface{}{
+	c.logger.Info("開始從原始數據計算指定範圍內的最大平均值", map[string]any{
 		"record_count": len(records),
 		"window_size":  windowSize,
 		"start_range":  startRange,

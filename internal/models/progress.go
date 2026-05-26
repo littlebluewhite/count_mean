@@ -63,7 +63,7 @@ func NewProgressTracker(totalSteps int, callback ProgressCallback) *ProgressTrac
 		callback:     callback,
 		totalSteps:   totalSteps,
 		currentStep:  0,
-		lastUpdateAt: time.Time{}, // 不能初始為 time.Now(),否則首筆被抑制
+		lastUpdateAt: time.Time{},            // 不能初始為 time.Now(),否則首筆被抑制
 		updateBuffer: 100 * time.Millisecond, // 默認100ms更新間隔
 	}
 }

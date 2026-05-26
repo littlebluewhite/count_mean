@@ -89,6 +89,7 @@ type BackpressureController struct {
 //   - MemoryThreshold=0 → isThrottled 永遠 true,GetMemoryUsageInfo 觀察值失真;
 //   - ThrottleThreshold=0 → WaitForCapacity 第一句 `< 0` 直接 false,進入 ticker
 //     loop 卡 100ms 才檢查一次,整體 throughput 大跌。
+//
 // 一併 sweep 並透過 backpressureLogger() 寫入 warn,讓使用者知道走 fallback。
 // (註解過去說「log warn」但實作沒做,L17 修補)。
 func NewBackpressureController(config *BackpressureConfig) *BackpressureController {
@@ -99,7 +100,7 @@ func NewBackpressureController(config *BackpressureConfig) *BackpressureControll
 	logger := backpressureLogger()
 
 	if config.CheckInterval <= 0 {
-		logger.Warn("BackpressureConfig.CheckInterval <= 0,fallback 100ms 預設值", map[string]interface{}{
+		logger.Warn("BackpressureConfig.CheckInterval <= 0,fallback 100ms 預設值", map[string]any{
 			"original": config.CheckInterval.String(),
 		})
 		config.CheckInterval = 100 * time.Millisecond
@@ -109,7 +110,7 @@ func NewBackpressureController(config *BackpressureConfig) *BackpressureControll
 	// WaitForCapacity 永遠 "超過記憶體上限" → 死鎖。退回 default 1GB 並 log warn。
 	if config.MaxMemoryMB == 0 {
 		logger.Warn("BackpressureConfig.MaxMemoryMB == 0,fallback default 1GB",
-			map[string]interface{}{"fallback_mb": defaultMaxMemoryMB})
+			map[string]any{"fallback_mb": defaultMaxMemoryMB})
 		config.MaxMemoryMB = defaultMaxMemoryMB
 	}
 
@@ -117,13 +118,13 @@ func NewBackpressureController(config *BackpressureConfig) *BackpressureControll
 	if config.MaxWorkers <= 0 {
 		fallback := runtime.NumCPU()
 		logger.Warn("BackpressureConfig.MaxWorkers <= 0,fallback runtime.NumCPU()",
-			map[string]interface{}{"original": config.MaxWorkers, "fallback": fallback})
+			map[string]any{"original": config.MaxWorkers, "fallback": fallback})
 		config.MaxWorkers = fallback
 	}
 
 	if config.MemoryThreshold <= 0 {
 		logger.Warn("BackpressureConfig.MemoryThreshold <= 0,fallback default",
-			map[string]interface{}{
+			map[string]any{
 				"original": config.MemoryThreshold,
 				"fallback": defaultMemoryThreshold,
 			})
@@ -132,7 +133,7 @@ func NewBackpressureController(config *BackpressureConfig) *BackpressureControll
 
 	if config.ThrottleThreshold <= 0 {
 		logger.Warn("BackpressureConfig.ThrottleThreshold <= 0,fallback default",
-			map[string]interface{}{
+			map[string]any{
 				"original": config.ThrottleThreshold,
 				"fallback": defaultThrottleThreshold,
 			})
@@ -221,12 +222,13 @@ func (bc *BackpressureController) GetOptimalWorkerCount() int {
 // 進場」。memory 何時實際降下來,取決於 in-flight job 各自完成的時間。
 //
 // 不改名為 TryReserveCapacity / AdmitNewJob 等更精確的名字,是因為:
-//   (1) WaitForCapacity 是 public API,改名會讓既有 caller (cci / muscle_ratio /
-//       calculator worker pool) 全部需要 migration
-//   (2) 行為契約已透過此 docstring 釘住,reader 在 code review 時看到此處
-//       即可理解;Rename 的 net benefit 不夠 cover blast radius。
-//   (3) 既有測試 (backpressure_test.go) 已 lock 「ctx 取消立即回 err」「memory
-//       降到 threshold 後 return nil」兩條主契約,行為不變。
+//
+//	(1) WaitForCapacity 是 public API,改名會讓既有 caller (cci / muscle_ratio /
+//	    calculator worker pool) 全部需要 migration
+//	(2) 行為契約已透過此 docstring 釘住,reader 在 code review 時看到此處
+//	    即可理解;Rename 的 net benefit 不夠 cover blast radius。
+//	(3) 既有測試 (backpressure_test.go) 已 lock 「ctx 取消立即回 err」「memory
+//	    降到 threshold 後 return nil」兩條主契約,行為不變。
 //
 // 若未來新增 caller 看到「WaitForCapacity」字面預期 stronger pause semantics,
 // 此 docstring 是 single source of truth — 與 caller 對齊用此處說明。
@@ -296,12 +298,12 @@ func (bc *BackpressureController) GetStats() BackpressureStats {
 }
 
 // GetMemoryUsageInfo 獲取記憶體使用信息（用於日誌記錄）.
-func (bc *BackpressureController) GetMemoryUsageInfo() map[string]interface{} {
+func (bc *BackpressureController) GetMemoryUsageInfo() map[string]any {
 	var memStats runtime.MemStats
 
 	runtime.ReadMemStats(&memStats)
 
-	info := map[string]interface{}{
+	info := map[string]any{
 		"alloc_mb":       memStats.Alloc / 1024 / 1024,
 		"total_alloc_mb": memStats.TotalAlloc / 1024 / 1024,
 		"sys_mb":         memStats.Sys / 1024 / 1024,

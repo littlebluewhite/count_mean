@@ -14,7 +14,7 @@ import (
 	"count_mean/internal/security/fsperm"
 )
 
-// TestLargeFileHandler_ScanFileStructure_CountsSkippedRows 鎖定 
+// TestLargeFileHandler_ScanFileStructure_CountsSkippedRows 鎖定
 // scanFileStructure 對 malformed CSV row（field count 與 header 不符）使用 continue
 // 跳過，但原本只回 (lineCount, columnCount, error) — operator 無法察覺檔案
 // 含 silently skipped data，下游分析結果可能因「missing rows」而偏誤。

@@ -320,7 +320,7 @@ func (a *App) SelectFile(title string, filters []runtime.FileFilter, buttonType 
 
 	var defaultDir string
 
-	a.logger.Debug("選擇文件對話框", map[string]interface{}{"buttonType": buttonType})
+	a.logger.Debug("選擇文件對話框", map[string]any{"buttonType": buttonType})
 
 	switch buttonType {
 	case FileTypeInput:
@@ -331,7 +331,7 @@ func (a *App) SelectFile(title string, filters []runtime.FileFilter, buttonType 
 		defaultDir = cfg.OperateDir
 	}
 
-	a.logger.Debug("預設目錄", map[string]interface{}{"defaultDir": defaultDir})
+	a.logger.Debug("預設目錄", map[string]any{"defaultDir": defaultDir})
 
 	options := runtime.OpenDialogOptions{
 		Title:            title,
@@ -381,13 +381,13 @@ func (a *App) SelectDirectory(title string) (path string, err error) {
 func (a *App) CalculateMaxMean(params MaxMeanParams) (result *MaxMeanResult, err error) {
 	defer recoverHandlerPanic("CalculateMaxMean", a.logger, &err)
 
-	a.logger.Info("開始最大平均值計算", map[string]interface{}{
+	a.logger.Info("開始最大平均值計算", map[string]any{
 		"input_path":  params.InputPath,
 		"window_size": params.WindowSize,
 		"is_batch":    params.IsBatch,
 	})
 
-	a.logger.Debug("計算參數", map[string]interface{}{"params": params})
+	a.logger.Debug("計算參數", map[string]any{"params": params})
 
 	// 批次處理模式
 	if params.IsBatch {
@@ -526,7 +526,7 @@ func (a *App) executeBatchLoop(
 		if err != nil {
 			failCount++
 
-			a.logger.Error("讀取檔案失敗", err, map[string]interface{}{"file": entry.displayName})
+			a.logger.Error("讀取檔案失敗", err, map[string]any{"file": entry.displayName})
 
 			continue
 		}
@@ -535,7 +535,7 @@ func (a *App) executeBatchLoop(
 		if err != nil {
 			failCount++
 
-			a.logger.Error("處理檔案失敗", err, map[string]interface{}{"file": entry.displayName})
+			a.logger.Error("處理檔案失敗", err, map[string]any{"file": entry.displayName})
 
 			continue
 		}
@@ -547,7 +547,7 @@ func (a *App) executeBatchLoop(
 		allResults = append(allResults, result.results...)
 		successCount++
 
-		a.logger.Info("檔案處理成功", map[string]interface{}{
+		a.logger.Info("檔案處理成功", map[string]any{
 			"file":          entry.displayName,
 			"results_count": len(result.results),
 		})
@@ -685,7 +685,7 @@ func (a *App) NormalizeData(params NormalizeParams) (result *NormalizeResult, er
 
 	s := a.state.Load()
 
-	a.logger.Info("開始資料標準化", map[string]interface{}{
+	a.logger.Info("開始資料標準化", map[string]any{
 		"main_file":      params.MainFile,
 		"reference_file": params.ReferenceFile,
 		"output_path":    params.OutputPath,
@@ -732,7 +732,7 @@ func (a *App) NormalizeData(params NormalizeParams) (result *NormalizeResult, er
 	outputPath := filepath.Join(s.config.OutputDir, outputName)
 	data := convertNormalizedDataToArray(normalizedData)
 
-	a.logger.Info("資料標準化完成", map[string]interface{}{
+	a.logger.Info("資料標準化完成", map[string]any{
 		"output_file":   outputPath,
 		"data_points":   len(data),
 		"channel_count": len(normalizedData.Headers) - 1,
@@ -828,7 +828,7 @@ type phaseRunData struct {
 func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error) {
 	s := a.state.Load()
 
-	a.logger.Info("階段分析參數", map[string]interface{}{
+	a.logger.Info("階段分析參數", map[string]any{
 		"input_file":   params.InputFile,
 		"phase_labels": params.PhaseLabels,
 		"output_path":  params.OutputPath,
@@ -899,7 +899,7 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 		results = append(results, convertPhaseResultToAnalysis(&phaseResult, channelCount))
 	}
 
-	a.logger.Info("階段分析輸出", map[string]interface{}{
+	a.logger.Info("階段分析輸出", map[string]any{
 		"output_file":   outputPath,
 		"phase_count":   len(results),
 		"channel_count": channelCount,
@@ -1092,7 +1092,7 @@ type PhaseSyncResult struct {
 func (a *App) LoadPhaseManifest(manifestPath string) (subjects []string, err error) {
 	defer recoverHandlerPanic("LoadPhaseManifest", a.logger, &err)
 
-	a.logger.Info("載入分期總檔案", map[string]interface{}{"path": manifestPath})
+	a.logger.Info("載入分期總檔案", map[string]any{"path": manifestPath})
 
 	// 邊界路徑驗證,擋掉 "../etc/passwd" 之類的 traversal / 系統敏感目錄。
 	if err := validateExternalPathInputs("分期總檔案", manifestPath); err != nil {
@@ -1101,11 +1101,11 @@ func (a *App) LoadPhaseManifest(manifestPath string) (subjects []string, err err
 
 	subjects, err = a.phaseSyncAnalyzer.LoadManifestSubjects(manifestPath)
 	if err != nil {
-		a.logger.Error("載入分期總檔案失敗", err, map[string]interface{}{})
+		a.logger.Error("載入分期總檔案失敗", err, map[string]any{})
 		return nil, fmt.Errorf("載入分期總檔案失敗: %w", err)
 	}
 
-	a.logger.Info("成功載入分期總檔案", map[string]interface{}{"subjects": len(subjects)})
+	a.logger.Info("成功載入分期總檔案", map[string]any{"subjects": len(subjects)})
 
 	return subjects, nil
 }
@@ -1164,7 +1164,7 @@ func (e *phaseSyncValidateGateErr) Unwrap() error { return e.inner }
 // 三者由 phaseSyncValidateGateErr sentinel + ErrInternalPanic + stats nil-ness 分流。
 func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult, err error) {
 	s := a.state.Load()
-	a.logger.Info("分期同步分析參數", map[string]interface{}{"params": params})
+	a.logger.Info("分期同步分析參數", map[string]any{"params": params})
 
 	// 創建分析參數 — Validate / Execute 都吃這個指標,提前到 Run 外組裝
 	// (PhaseSyncParams → *models.AnalysisParams 是純複製,不涉及 validation)。
@@ -1236,7 +1236,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 
 		// 3) WriteCSV 失敗:樣板會把 stats (Execute 已成功的結果) 一併透出。
 		if stats != nil {
-			a.logger.Error("導出結果失敗", runErr, map[string]interface{}{})
+			a.logger.Error("導出結果失敗", runErr, map[string]any{})
 
 			return &PhaseSyncResult{
 				Success: false,
@@ -1245,7 +1245,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 		}
 
 		// 4) Execute 失敗:stats == nil 且不是 Validate / panic → analyzer 失敗。
-		a.logger.Error("分期同步分析失敗", runErr, map[string]interface{}{})
+		a.logger.Error("分期同步分析失敗", runErr, map[string]any{})
 
 		return &PhaseSyncResult{
 			Success: false,
@@ -1272,7 +1272,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 		Message:      "分析完成",
 	}
 
-	a.logger.Info("分期同步分析輸出", map[string]interface{}{"outputPath": outputPath})
+	a.logger.Info("分期同步分析輸出", map[string]any{"outputPath": outputPath})
 
 	return result, nil
 }

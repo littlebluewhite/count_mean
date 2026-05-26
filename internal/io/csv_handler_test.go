@@ -598,17 +598,16 @@ func TestCSVHandler_ReadCSV_StrictCSVDefenses(t *testing.T) {
 	})
 }
 
-
 // TestCSVHandler_WriteCSV_FsyncContract 釘住 WriteCSV 必須在 close
 // 之前呼叫 file.Sync(),否則 OS page cache 內的 bytes 在 power loss /
 // kernel panic 後會失蹤,caller 卻已收到 nil error。
 //
 // 純 Go 無法直接斷言 fsync syscall 已發生(那要 dtruss / strace),退而求
 // 其次用 source-level assertion + happy path round-trip:
-//   1. Happy path: 寫 → 立即 read,內容必須完整 (fsync 失敗會在 caller 拿
-//      到 err,test 用 require.NoError 守);
-//   2. Source assertion: WriteCSV 的源碼必須含 `file.Sync()`,防止未來重構
-//      把 sync 拿掉(brittle 但便宜,符合 trade-off)。
+//  1. Happy path: 寫 → 立即 read,內容必須完整 (fsync 失敗會在 caller 拿
+//     到 err,test 用 require.NoError 守);
+//  2. Source assertion: WriteCSV 的源碼必須含 `file.Sync()`,防止未來重構
+//     把 sync 拿掉(brittle 但便宜,符合 trade-off)。
 //
 // macOS dev verify 替代法: `sudo dtruss -t fsync -- go test -run
 // TestCSVHandler_WriteCSV_FsyncContract ./internal/io/...` 應看到 fsync
@@ -662,4 +661,3 @@ func TestCSVHandler_WriteCSV_FsyncContract(t *testing.T) {
 				"csvutil.WriteCSVAtomic (which has built-in fsync).")
 	})
 }
-

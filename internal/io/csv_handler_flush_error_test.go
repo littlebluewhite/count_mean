@@ -22,7 +22,7 @@ func (f *failingWriter) Write(_ []byte) (int, error) {
 	return 0, io.ErrShortWrite
 }
 
-// TestWriteCSVPayload_PropagatesFlushError 鎖定 
+// TestWriteCSVPayload_PropagatesFlushError 鎖定
 // csv.Writer 的 Flush 錯誤先前依賴 named-return + defer 邏輯處理，缺少
 // 顯式 writer.Error() check 容易在未來修改時被誤刪。此 test 透過 failingWriter
 // 強制 Flush 失敗，驗證 writeCSVPayload 確實傳回該錯誤。

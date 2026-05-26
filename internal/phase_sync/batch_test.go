@@ -19,7 +19,6 @@ import (
 // calculator.GenerateOutputFileName -> SanitizeFileName 同一份過濾規則,
 // migrate 前後行為對等。
 
-
 // TestValidateEMGFilePath_NonExistentBaseFolder 釘住 當 baseFolder 不
 // 存在時，EvalSymlinks 會回傳 *PathError；舊版只 silently 落回原始字串（baseFolder
 // 不變），然後 PathValidator 才用一個不存在的 base 做 isPathWithinBase 比較，得到

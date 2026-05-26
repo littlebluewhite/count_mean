@@ -77,7 +77,7 @@ func TestSanitizeFileName_EmptyAndUnicode(t *testing.T) {
 	})
 }
 
-// TestSanitizeFileName_ReservedNameWithExtension 守護 
+// TestSanitizeFileName_ReservedNameWithExtension 守護
 // Windows reserved name 規則是「stem (first dot 前) 匹配」,不是「整個 filename 匹配」。
 // "CON.csv" / "CON.tar.gz" / "PRN.log" 在 Windows 上會被 OS 當成 reserved device
 // 開啟,過去只擋 "CON" alone 是不夠的。
@@ -110,7 +110,7 @@ func TestSanitizeFileName_ReservedNameWithExtension(t *testing.T) {
 	}
 }
 
-// TestSanitizeFileName_RuneBoundaryTruncation 守護 
+// TestSanitizeFileName_RuneBoundaryTruncation 守護
 // 200 byte 截斷必須在 valid UTF-8 rune 邊界,不能切到 multi-byte rune 中間。
 // 過去用 `cleaned[:maxLen]` 可能切到 3-byte 中文中間,產生 invalid UTF-8。
 func TestSanitizeFileName_RuneBoundaryTruncation(t *testing.T) {
@@ -167,7 +167,7 @@ func TestSanitizeFileName_RuneBoundaryTruncation(t *testing.T) {
 	})
 }
 
-// TestSanitizeFileName_LeadingDotReservedName 守護 
+// TestSanitizeFileName_LeadingDotReservedName 守護
 //
 // past stem 取法 `SplitN(name, ".", 2)[0]` 對 ".CON.csv" 會回 ""
 // → 空 stem 跑進 reserved-name switch 永遠不命中 → leading-dot 變形完全
