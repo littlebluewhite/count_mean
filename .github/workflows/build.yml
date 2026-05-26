@@ -165,7 +165,7 @@ jobs:
     # `-race` 與 `-coverpkg` 限定分母(見 Makefile patch),避免 race-only path 不被
     # 算入分母(false-positive)與 `./test/integration/...` real-data 檔案被算入
     # 分母卻 t.Skip(false-negative)。
-    - name: Run coverage gate (90% threshold, -race + -coverpkg)
+    - name: Run coverage gate (78% threshold, -race + -coverpkg)
       run: make coverage-check
 
   integration:
