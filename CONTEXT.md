@@ -37,6 +37,15 @@ _Avoid_: structured write, typed write, formatted output.
 所有 format-aware write 共用的請求外殼，欄位有 Filename（檔名）、SubDir（可選的 OutputDir 子目錄，空字串 = 寫到 OutputDir 根）、Headers、Data（generic payload）。
 _Avoid_: write options, write spec, csv request.
 
+**Analysis pipeline family**
+四個形狀相近的 GUI handler 家族：`AnalyzePhases`、`AnalyzePhaseSync`、未來的 `AnalyzeCCI`、未來的 `AnalyzeMuscleRatio`。共同形狀為「validate → execute（含 manifest/dataset load）→ CSV write via csvHandler」三步管線，輸入為 manifest 或 dataset、輸出為 result + outputPath。
+_Not included_: `CalculateMaxMean`（batch loop + file discovery）、`NormalizeData`（雙 input file）── 形狀不同，不屬此家族。
+_Avoid_: GUI handler, analysis function, analyzer.
+
+**AnalysisHandler[P, R]**
+[[Analysis pipeline family]] 的泛型樣板，以 generic struct + Run method 形式存在。承載 `csvHandler`、`logger` 依賴，接收三個 closure（validate、execute、write CSV）注入差異。Run body 內建 `recoverHandlerPanic`、logger entry/exit、generic error wrapping；不負責 `state.Load`、result transform、i18n，這三項由 caller 在 Run 外處理。
+_Avoid_: AnalysisRunner, GenericHandler, AnalyzerWrapper.
+
 ## Example dialogue
 
 Dev:「Phase analysis 寫 CSV 為什麼要在 caller 端 skip 前 3 row？」
