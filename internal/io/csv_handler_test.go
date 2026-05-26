@@ -297,7 +297,7 @@ func TestCSVHandler_ConvertMaxMeanResultsToCSV(t *testing.T) {
 			{ColumnIndex: 2, StartTime: 1.5, EndTime: 2.5, MaxMean: 2000.0},
 		}
 
-		data := handler.ConvertMaxMeanResultsToCSV(headers, results, 0.5, 3.0)
+		data := handler.converter.ConvertMaxMeanResults(headers, results, 0.5, 3.0)
 		require.Len(t, data, 6) // 標題 + 5行結果
 
 		// 檢查標題
@@ -333,7 +333,7 @@ func TestCSVHandler_ConvertMaxMeanResultsToCSV(t *testing.T) {
 		headers := []string{"Time", "Ch1"}
 		results := []models.MaxMeanResult{}
 
-		data := handler.ConvertMaxMeanResultsToCSV(headers, results, 0.0, 10.0)
+		data := handler.converter.ConvertMaxMeanResults(headers, results, 0.0, 10.0)
 		require.Len(t, data, 6) // 標題 + 5行（只有標籤）
 		require.Equal(t, headers, data[0])
 		require.Equal(t, []string{"開始範圍秒數"}, data[1])
@@ -356,7 +356,7 @@ func TestCSVHandler_ConvertMaxMeanResultsToCSV(t *testing.T) {
 			{ColumnIndex: 1, StartTime: 1.123456, EndTime: 2.987654, MaxMean: 123456.0},
 		}
 
-		data := handler.ConvertMaxMeanResultsToCSV(headers, results, 0.5, 4.0)
+		data := handler.converter.ConvertMaxMeanResults(headers, results, 0.5, 4.0)
 		require.Equal(t, "0.5000", data[1][1]) // 開始範圍 (precision 4)
 		require.Equal(t, "4.0000", data[2][1]) // 結束範圍 (precision 4)
 		require.Equal(t, "0.0000", data[3][1]) // 開始計算時間: 1.123456/10^6 = 0.000001123456 with precision 4 becomes "0.0000"
@@ -381,7 +381,7 @@ func TestCSVHandler_ConvertNormalizedDataToCSV(t *testing.T) {
 			},
 		}
 
-		data := handler.ConvertNormalizedDataToCSV(dataset)
+		data := handler.converter.ConvertNormalizedData(dataset)
 		require.Len(t, data, 3) // 標題 + 2行數據
 
 		// 檢查標題
@@ -404,7 +404,7 @@ func TestCSVHandler_ConvertNormalizedDataToCSV(t *testing.T) {
 			Data:    []models.EMGData{},
 		}
 
-		data := handler.ConvertNormalizedDataToCSV(dataset)
+		data := handler.converter.ConvertNormalizedData(dataset)
 		require.Len(t, data, 1) // 只有標題
 		require.Equal(t, dataset.Headers, data[0])
 	})
@@ -435,7 +435,7 @@ func TestCSVHandler_ConvertPhaseAnalysisToCSV(t *testing.T) {
 			1: 2.75, // Ch2 最大值時間
 		}
 
-		data := handler.ConvertPhaseAnalysisToCSV(headers, result, maxTimeIndex)
+		data := handler.converter.ConvertPhaseAnalysis(headers, result, maxTimeIndex)
 		require.Len(t, data, 4) // 標題 + 最大值行 + 平均值行 + 時間行
 
 		// 檢查標題
@@ -474,7 +474,7 @@ func TestCSVHandler_ConvertPhaseAnalysisToCSV(t *testing.T) {
 			0: 1.25, // 只有Ch1
 		}
 
-		data := handler.ConvertPhaseAnalysisToCSV(headers, result, maxTimeIndex)
+		data := handler.converter.ConvertPhaseAnalysis(headers, result, maxTimeIndex)
 		require.Len(t, data, 4)
 
 		// 檢查最大值行
@@ -502,7 +502,7 @@ func TestCSVHandler_ConvertPhaseAnalysisToCSV(t *testing.T) {
 		}
 		maxTimeIndex := map[int]float64{} // 空的時間索引
 
-		data := handler.ConvertPhaseAnalysisToCSV(headers, result, maxTimeIndex)
+		data := handler.converter.ConvertPhaseAnalysis(headers, result, maxTimeIndex)
 		require.Len(t, data, 3) // 沒有時間行
 		require.Equal(t, "測試階段 最大值", data[1][0])
 		require.Equal(t, "測試階段 平均值", data[2][0])

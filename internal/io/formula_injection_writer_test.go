@@ -18,7 +18,7 @@ func TestCSVConverter_SanitizesMaliciousHeaders(t *testing.T) {
 	maliciousHeaders := []string{"Time", "=cmd|/c calc!A1", "@SUM(1+1)", "+1|cmd"}
 	expectedPrefixes := []string{"Time", "'=", "'@", "'+"}
 
-	c := NewCSVConverter(1.0, 6)
+	c := newCSVConverter(1.0, 6)
 
 	cases := []struct {
 		name string

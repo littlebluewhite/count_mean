@@ -84,13 +84,15 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 			assert.Greater(t, result.EndTime, result.StartTime)
 		}
 
-		// Test output generation
-		outputData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, 0.1, 0.5)
-		outputPath := filepath.Join(outputDir, "test_results.csv")
-		err = csvHandler.WriteCSV(outputPath, outputData)
+		// Test output generation via format-aware write (WriteMaxMean 透過 cfg.OutputDir 解析)
+		err = csvHandler.WriteMaxMean(
+			io.WriteRequest{Filename: "test_results.csv"},
+			records[0], results, 0.1, 0.5,
+		)
 		require.NoError(t, err)
 
 		// Verify output file exists and is readable
+		outputPath := filepath.Join(outputDir, "test_results.csv")
 		_, err = csvHandler.ReadCSV(outputPath)
 		require.NoError(t, err)
 	})

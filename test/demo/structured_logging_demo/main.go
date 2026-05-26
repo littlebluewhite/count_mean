@@ -78,17 +78,15 @@ func main() {
 		"results":      results,
 	})
 
-	// 寫入結果
-	outputData := csvHandler.ConvertMaxMeanResultsToCSV(testData[0], results, 0.1, 0.5)
-	outputFile := filepath.Join(cfg.OutputDir, "demo_results.csv")
-	if err := os.MkdirAll(cfg.OutputDir, fsperm.DirPerm); err != nil {
-		logger.Fatal("無法創建輸出目錄", err)
-	}
-
-	if err := csvHandler.WriteCSV(outputFile, outputData); err != nil {
+	// 寫入結果 — WriteMaxMean 內部會 MkdirAll(cfg.OutputDir) 並走 BOM/sanitize/fsync 完整路徑
+	if err := csvHandler.WriteMaxMean(
+		io.WriteRequest{Filename: "demo_results.csv"},
+		testData[0], results, 0.1, 0.5,
+	); err != nil {
 		logger.Error("寫入結果失敗", err)
 		return
 	}
+	outputFile := filepath.Join(cfg.OutputDir, "demo_results.csv")
 
 	logger.Info("結構化日誌示範完成", map[string]interface{}{
 		"input_file":  testFile,

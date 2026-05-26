@@ -12,22 +12,22 @@ const (
 	maxMeanResultRowCount = 6 // Number of rows for max mean results (header + 5 data rows)
 )
 
-// CSVConverter handles conversion of data structures to CSV format.
-type CSVConverter struct {
+// csvConverter handles conversion of data structures to CSV format.
+type csvConverter struct {
 	scalingMultiplier float64
 	precision         int
 }
 
-// NewCSVConverter creates a new CSVConverter instance.
-func NewCSVConverter(scalingMultiplier float64, precision int) *CSVConverter {
-	return &CSVConverter{
+// newCSVConverter creates a new csvConverter instance.
+func newCSVConverter(scalingMultiplier float64, precision int) *csvConverter {
+	return &csvConverter{
 		scalingMultiplier: scalingMultiplier,
 		precision:         precision,
 	}
 }
 
 // ConvertMaxMeanResults converts MaxMeanResult slice to CSV format.
-func (c *CSVConverter) ConvertMaxMeanResults(
+func (c *csvConverter) ConvertMaxMeanResults(
 	headers []string,
 	results []models.MaxMeanResult,
 	startRange, endRange float64,
@@ -59,7 +59,7 @@ func (c *CSVConverter) ConvertMaxMeanResults(
 }
 
 // ConvertNormalizedData converts EMGDataset to CSV format.
-func (c *CSVConverter) ConvertNormalizedData(dataset *models.EMGDataset) [][]string {
+func (c *csvConverter) ConvertNormalizedData(dataset *models.EMGDataset) [][]string {
 	data := make([][]string, 0, len(dataset.Data)+1)
 
 	// Add headers (sanitize against CSV formula injection on write)
@@ -87,7 +87,7 @@ func (c *CSVConverter) ConvertNormalizedData(dataset *models.EMGDataset) [][]str
 }
 
 // ConvertPhaseAnalysis converts PhaseAnalysisResult to CSV format.
-func (c *CSVConverter) ConvertPhaseAnalysis(
+func (c *csvConverter) ConvertPhaseAnalysis(
 	headers []string,
 	result *models.PhaseAnalysisResult,
 	maxTimeIndex map[int]float64,
@@ -145,17 +145,17 @@ func (c *CSVConverter) ConvertPhaseAnalysis(
 }
 
 // formatPrecision formats a float value with the configured precision.
-func (c *CSVConverter) formatPrecision(value float64) string {
+func (c *csvConverter) formatPrecision(value float64) string {
 	return fmt.Sprintf(fmt.Sprintf("%%.%df", c.precision), value)
 }
 
 // scaleValue scales a value by the scaling multiplier.
-func (c *CSVConverter) scaleValue(value float64) float64 {
+func (c *csvConverter) scaleValue(value float64) float64 {
 	return value / c.scalingMultiplier
 }
 
 // buildRow creates a new row with the given label and capacity.
-func (*CSVConverter) buildRow(label string, capacity int) []string {
+func (*csvConverter) buildRow(label string, capacity int) []string {
 	row := make([]string, 1, capacity)
 	row[0] = label
 

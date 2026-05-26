@@ -423,10 +423,12 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	}
 
 	// 輸出結果
-	outputData := s.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, startRange, endRange)
 	outputFile := buildOutputFilename(originalFileName, SuffixMaxMean)
 
-	if err := s.csvHandler.WriteCSVToOutput(outputFile, outputData); err != nil {
+	if err := s.csvHandler.WriteMaxMean(
+		io.WriteRequest{Filename: outputFile},
+		records[0], results, startRange, endRange,
+	); err != nil {
 		return nil, fmt.Errorf("寫入輸出檔案失敗: %w", err)
 	}
 
@@ -577,10 +579,12 @@ func (a *App) processSingleBatchFile(
 		return nil, err
 	}
 
-	outputData := s.csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, startRange, endRange)
 	outputFile := buildOutputFilename(fileBaseName, SuffixMaxMean)
 
-	if writeErr := s.csvHandler.WriteCSVToOutputDirectory(ctx.outputDirName, outputFile, outputData); writeErr != nil {
+	if writeErr := s.csvHandler.WriteMaxMean(
+		io.WriteRequest{Filename: outputFile, SubDir: ctx.outputDirName},
+		records[0], results, startRange, endRange,
+	); writeErr != nil {
 		return nil, fmt.Errorf("寫入CSV輸出失敗: %w", writeErr)
 	}
 
@@ -717,9 +721,10 @@ func (a *App) NormalizeData(params NormalizeParams) (result *NormalizeResult, er
 	// 生成輸出檔名並保存結果
 	mainBaseName := TrimCSVExtension(filepath.Base(params.MainFile))
 	outputName := resolveOutputName(params.OutputPath, mainBaseName, SuffixNormalized)
-	outputData := s.csvHandler.ConvertNormalizedDataToCSV(normalizedData)
 
-	if err = s.csvHandler.WriteCSVToOutput(outputName, outputData); err != nil {
+	if err = s.csvHandler.WriteNormalized(
+		io.WriteRequest{Filename: outputName}, normalizedData,
+	); err != nil {
 		return nil, fmt.Errorf("保存結果失敗: %w", err)
 	}
 
@@ -832,47 +837,14 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 		return nil, fmt.Errorf("階段分析失敗: %w", err)
 	}
 
-	// 生成輸出檔名並保存結果。
-	// 此前只用 PhaseResults[0] → 其餘 phase 資料完全丟失。
-	// 改為迴圈合併所有 phase 的 rows 進同一個 CSV，結構：
-	//   row 0:       header
-	//   row 1-2N:    每個 phase 的「最大值 / 平均值」（共 2 行 × len(PhaseResults)）
-	//   row last:    「整個階段最大值出現在_秒」（whole-phase 全域資料，只放一次）
-	//
-	// 注意：ConvertPhaseAnalysisToCSV 的 maxTimeIndex 參數會讓它在尾端加 time row。
-	// 對每個 phase 都附這一行會造成重複（codex review 指出的問題）。
-	// 處理方式：先把 phase rows 全部不帶 maxTimeIndex 收集，最後再單獨加一次。
+	// 生成輸出檔名並寫入。Multi-phase merge 與 time-index dedup 由 CSVHandler.WritePhaseAnalysis
+	// 吸進 io 套件 — 此前 caller 需要自己 phaseRows[1:] skip header 與 fullRows[3:] dedup
+	// time row, 那層 row layout leakage 已經消失。
 	outputName := generatePhaseOutputName(params.InputFile, params.OutputPath)
 
-	var outputData [][]string
-
-	for i := range analysisResult.PhaseResults {
-		phaseRows := s.csvHandler.ConvertPhaseAnalysisToCSV(
-			records[0], &analysisResult.PhaseResults[i], nil, // nil → 不在每 phase 後附 time row
-		)
-
-		if i == 0 {
-			outputData = phaseRows // 含 header
-			continue
-		}
-
-		// 後續 phase 跳過 header row（phaseRows[0]），只附加 max/mean 兩行
-		if len(phaseRows) > 1 {
-			outputData = append(outputData, phaseRows[1:]...)
-		}
-	}
-
-	// 全域 time-index row：所有 phase 都加完後，只附加一次
-	if len(analysisResult.MaxTimeIndex) > 0 && len(analysisResult.PhaseResults) > 0 {
-		fullRows := s.csvHandler.ConvertPhaseAnalysisToCSV(
-			records[0], &analysisResult.PhaseResults[0], analysisResult.MaxTimeIndex,
-		)
-		if len(fullRows) > 3 {
-			outputData = append(outputData, fullRows[3:]...)
-		}
-	}
-
-	if err = s.csvHandler.WriteCSVToOutput(outputName, outputData); err != nil {
+	if err = s.csvHandler.WritePhaseAnalysis(
+		io.WriteRequest{Filename: outputName}, records[0], analysisResult,
+	); err != nil {
 		return nil, fmt.Errorf("保存結果失敗: %w", err)
 	}
 

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"count_mean/internal/calculator"
 	"count_mean/internal/config"
 	"count_mean/internal/csvutil"
 	"count_mean/internal/errors"
@@ -39,7 +40,7 @@ type CSVHandler struct {
 	logger           *logging.Logger
 	largeFileHandler *LargeFileHandler
 	pathBuilder      *FilePathBuilder
-	converter        *CSVConverter
+	converter        *csvConverter
 }
 
 // NewCSVHandler 創建新的 CSV 處理器.
@@ -61,7 +62,7 @@ func NewCSVHandler(cfg *config.AppConfig) *CSVHandler {
 		logger:           logging.GetLogger("csv_handler"),
 		largeFileHandler: NewLargeFileHandler(cfg),
 		pathBuilder:      NewFilePathBuilder(cfg, pathValidator),
-		converter:        NewCSVConverter(scalingMultiplier, cfg.Precision),
+		converter:        newCSVConverter(scalingMultiplier, cfg.Precision),
 	}
 }
 
@@ -597,29 +598,6 @@ func writeCSVPayload(w stdio.Writer, data [][]string, bomEnabled bool) error {
 	return nil
 }
 
-// ConvertMaxMeanResultsToCSV 將最大平均值結果轉換為 CSV 格式.
-func (h *CSVHandler) ConvertMaxMeanResultsToCSV(
-	headers []string,
-	results []models.MaxMeanResult,
-	startRange, endRange float64,
-) [][]string {
-	return h.converter.ConvertMaxMeanResults(headers, results, startRange, endRange)
-}
-
-// ConvertNormalizedDataToCSV 將標準化數據轉換為 CSV 格式.
-func (h *CSVHandler) ConvertNormalizedDataToCSV(dataset *models.EMGDataset) [][]string {
-	return h.converter.ConvertNormalizedData(dataset)
-}
-
-// ConvertPhaseAnalysisToCSV 將階段分析結果轉換為 CSV 格式.
-func (h *CSVHandler) ConvertPhaseAnalysisToCSV(
-	headers []string,
-	result *models.PhaseAnalysisResult,
-	maxTimeIndex map[int]float64,
-) [][]string {
-	return h.converter.ConvertPhaseAnalysis(headers, result, maxTimeIndex)
-}
-
 // GetFileInfo 獲取文件信息.
 func (h *CSVHandler) GetFileInfo(filename string) (*FileInfo, error) {
 	return h.largeFileHandler.GetFileInfo(filename)
@@ -637,4 +615,109 @@ func (h *CSVHandler) ProcessLargeFile(
 	})
 
 	return h.largeFileHandler.ProcessLargeFileInChunks(filename, windowSize, callback)
+}
+
+// errEmptyPhaseAnalysis 標示 WritePhaseAnalysis 收到沒有 phase 結果可寫的請求。
+// caller 該在進 WritePhaseAnalysis 前就確保 PhaseResults 非空, 但對外仍給明確 error
+// 以便 GUI 顯示「無分析結果可匯出」而非吞 nil。
+var errEmptyPhaseAnalysis = stderrors.New("WritePhaseAnalysis: 沒有 phase 結果可寫")
+
+// WriteRequest 是 format-aware write 共用的目的地請求。
+//
+// Filename 是 CSV 檔名;SubDir 為空時直接寫到 OutputDir 根,非空時自動
+// MkdirAll(OutputDir/SubDir) 後寫到該子目錄。
+//
+// 此 struct 取代 caller 端在「WriteCSVToOutput vs WriteCSVToOutputDirectory」
+// 與「Convert* + WriteCSV*」兩條選擇上的 ad-hoc 拼接 — caller 一次描述「寫哪裡」即可。
+type WriteRequest struct {
+	Filename string
+	SubDir   string
+}
+
+// WriteMaxMean 把 MaxMean 計算結果寫成 6-row CSV (header / startRange / endRange /
+// startTime / endTime / maxMean)。
+//
+// row layout、scaling (config.ScalingFactor 推導的 scalingMultiplier)、precision
+// (config.Precision) 由 implementation 持有;caller 不再呼叫 Convert* 後組裝
+// [][]string。BOM / formula-injection sanitize / fsperm symlink reject / fsync
+// 兩段式收尾沿用 WriteCSV 既有路徑。
+func (h *CSVHandler) WriteMaxMean(
+	req WriteRequest,
+	headers []string,
+	results []models.MaxMeanResult,
+	startRange, endRange float64,
+) error {
+	data := h.converter.ConvertMaxMeanResults(headers, results, startRange, endRange)
+
+	return h.writeToTarget(req, data)
+}
+
+// WriteNormalized 把標準化後的 EMGDataset 寫成 CSV (1 header + N data rows)。
+//
+// Time 欄套用 dataset.OriginalTimePrecision,data 欄套用 config.Precision —
+// 這條「time vs data 不同 precision」的內部規則 caller 不會看到。
+func (h *CSVHandler) WriteNormalized(req WriteRequest, dataset *models.EMGDataset) error {
+	data := h.converter.ConvertNormalizedData(dataset)
+
+	return h.writeToTarget(req, data)
+}
+
+// WritePhaseAnalysis 把 phase 分析結果寫成 CSV;支援單 phase 與多 phase merge。
+//
+// Multi-phase row layout:
+//
+//	row 0:        header
+//	row 1..2N:    p1.max, p1.mean, p2.max, p2.mean, ..., pN.max, pN.mean
+//	row 2N+1:     全域 time-index row (僅當 MaxTimeIndex 非空)
+//
+// Single phase 退化為 [header, max, mean, time-index?]。
+//
+// 取代 caller 端「迴圈 Convert + phaseRows[1:] skip header + fullRows[3:] dedupe
+// time row」這串對 ConvertPhaseAnalysis 內部 4-row 結構的 leakage:
+// 由於 MaxTimeIndex 是全域資料 (跨 phase 共用),把它帶給「最後一個 phase」呼叫
+// converter 是合法 invariant — 結果與「先全部 nil 再單獨補 time row」等價,但消除
+// row index 切片的 magic number。
+func (h *CSVHandler) WritePhaseAnalysis(
+	req WriteRequest,
+	headers []string,
+	result *calculator.AnalyzeResult,
+) error {
+	if result == nil || len(result.PhaseResults) == 0 {
+		return errEmptyPhaseAnalysis
+	}
+
+	var data [][]string
+
+	lastIdx := len(result.PhaseResults) - 1
+	for i := range result.PhaseResults {
+		// 只在最後一個 phase 把 MaxTimeIndex 傳給 converter,讓 time-index row
+		// 自然 land 在所有 phase 之後;前面的 phase 一律傳 nil 不加 time row。
+		var timeIdx map[int]float64
+		if i == lastIdx {
+			timeIdx = result.MaxTimeIndex
+		}
+
+		phaseRows := h.converter.ConvertPhaseAnalysis(headers, &result.PhaseResults[i], timeIdx)
+		if i == 0 {
+			data = phaseRows
+			continue
+		}
+		// 後續 phase 跳過 header (phaseRows[0]),只附加 max/mean (與最後一個的 time-index)。
+		if len(phaseRows) > 1 {
+			data = append(data, phaseRows[1:]...)
+		}
+	}
+
+	return h.writeToTarget(req, data)
+}
+
+// writeToTarget 是 format-aware write 的內部 dispatch 點:依 req.SubDir 走 WriteCSVToOutput
+// 或 WriteCSVToOutputDirectory,確保 path validation / BOM / sanitize / fsync 路徑沿用
+// WriteCSV 既有守門。
+func (h *CSVHandler) writeToTarget(req WriteRequest, data [][]string) error {
+	if req.SubDir != "" {
+		return h.WriteCSVToOutputDirectory(req.SubDir, req.Filename, data)
+	}
+
+	return h.WriteCSVToOutput(req.Filename, data)
 }

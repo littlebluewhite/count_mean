@@ -14,6 +14,7 @@ import (
 	"count_mean/internal/calculator"
 	"count_mean/internal/config"
 	"count_mean/internal/io"
+	"count_mean/internal/models"
 	"count_mean/internal/security/fsperm"
 )
 
@@ -71,14 +72,13 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 2) // 兩個通道
 
-	// 轉換結果為CSV格式
-	outputData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, 0.1, 0.4)
-	require.Len(t, outputData, 6) // 標題 + 5行結果
-
-	// 寫入輸出文件
-	outputFile := filepath.Join(tempDir, "maxmean_result.csv")
-	err = csvHandler.WriteCSV(outputFile, outputData)
+	// 透過 format-aware write 寫入輸出 (row layout / scaling / precision 由 io 套件管)
+	err = csvHandler.WriteMaxMean(
+		io.WriteRequest{Filename: "maxmean_result.csv"},
+		records[0], results, 0.1, 0.4,
+	)
 	require.NoError(t, err)
+	outputFile := filepath.Join(tempDir, "maxmean_result.csv")
 
 	// 驗證輸出文件內容
 	content, err := os.ReadFile(outputFile)
@@ -145,11 +145,12 @@ func TestFullWorkflow_DataNormalization(t *testing.T) {
 	require.Equal(t, 4.0, result.Data[1].Channels[0]) // 400/100 = 4.0
 	require.Equal(t, 4.0, result.Data[1].Channels[1]) // 200/50 = 4.0
 
-	// 轉換為CSV並輸出
-	outputData := csvHandler.ConvertNormalizedDataToCSV(result)
-	outputFile := filepath.Join(tempDir, "normalized_result.csv")
-	err = csvHandler.WriteCSV(outputFile, outputData)
+	// 透過 format-aware write 寫入輸出
+	err = csvHandler.WriteNormalized(
+		io.WriteRequest{Filename: "normalized_result.csv"}, result,
+	)
 	require.NoError(t, err)
+	outputFile := filepath.Join(tempDir, "normalized_result.csv")
 
 	// 驗證輸出文件
 	content, err := os.ReadFile(outputFile)
@@ -225,16 +226,21 @@ func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 	require.Equal(t, "Phase4", phase4.PhaseName)
 	require.Len(t, phase4.MaxValues, 0) // 無數據
 
-	// 生成每個階段的輸出文件
+	// 每個 phase 寫一個檔, 包成 single-phase AnalyzeResult 走 WritePhaseAnalysis
 	for i, phaseResult := range result.PhaseResults {
-		outputData := csvHandler.ConvertPhaseAnalysisToCSV(records[0], &phaseResult, result.MaxTimeIndex)
-		outputFile := filepath.Join(tempDir, "phase_"+phaseResult.PhaseName+".csv")
+		singleResult := &calculator.AnalyzeResult{
+			PhaseResults: []models.PhaseAnalysisResult{phaseResult},
+			MaxTimeIndex: result.MaxTimeIndex,
+		}
+		outputName := "phase_" + phaseResult.PhaseName + ".csv"
 
-		err := csvHandler.WriteCSV(outputFile, outputData)
+		err := csvHandler.WritePhaseAnalysis(
+			io.WriteRequest{Filename: outputName}, records[0], singleResult,
+		)
 		require.NoError(t, err)
 
 		// 驗證輸出文件內容
-		content, err := os.ReadFile(outputFile)
+		content, err := os.ReadFile(filepath.Join(tempDir, outputName))
 		require.NoError(t, err)
 		require.Contains(t, string(content), phaseResult.PhaseName+" 最大值")
 		require.Contains(t, string(content), phaseResult.PhaseName+" 平均值")
