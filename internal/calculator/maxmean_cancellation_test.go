@@ -113,8 +113,8 @@ func TestCalculate_CtxCancel_NoGoroutineLeak(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Calculate 沒在 cancel 後 2s 內返回,worker 可能在 results send 上 deadlock")
+	case <-time.After(cancellationBudget):
+		t.Fatalf("Calculate 沒在 cancel 後 %v 內返回,worker 可能在 results send 上 deadlock", cancellationBudget)
 	}
 
 	// 給 worker / cleanup goroutine 一點時間退出
