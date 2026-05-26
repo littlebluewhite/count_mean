@@ -104,35 +104,49 @@ func RenderComposer(ctx context.Context, in ComposerInput, w io.Writer) error {
 	return nil
 }
 
-// gridSpec 描述單一 stacked grid 的 layout(top% / height%)。
+// gridSpec 描述單一 stacked grid 的 layout(pixel top / height)。
+//
+// 為何用純 pixel 而非 percent 或 CSS calc():
+//   - ECharts 的 grid.top / grid.height 只解析數字(pixel)或簡單百分比字串(如 "30%"),
+//     **不解析 CSS calc(...)** — calc 字串原樣序列化進 JSON,前端解析失敗 layout 破版。
+//   - 純 percent 在容器高度變動時 reserved-top (title+legend) / reserved-bottom (dataZoom slider)
+//     比例會失準(legend 撞第一 grid)。
+//   - 既然 RenderComposer 透過 Initialization.Height 固定容器 900px,直接 emit 絕對 pixel
+//     最穩;後續 Slice D 若改變容器高度,需同步更新 composerContainerHeight。
 type gridSpec struct {
 	top    string
 	height string
 }
 
-// computeGridLayout 把 N 個 grid 在垂直方向均分,首 grid top 從 90px(留 title + legend),
-// 末 grid bottom 留 80px(dataZoom slider)。height = (100% - 200px) / N。
+// composerContainerHeight 是 Initialization.Height 對應的容器 pixel 高度。
+// 必須與 setComposerGlobalOptions 中的 Height: "900px" 同步;若任一改變,grid 排版
+// 比例會錯。Slice D frontend 應維持同樣高度的 iframe 容器。
+const composerContainerHeight = 900
+
+// computeGridLayout 把 N 個 grid 在垂直方向均分(以絕對 pixel 計算):
+//   - 首 grid top 從 90px(留 title + legend);
+//   - 末 grid bottom 留 80px(dataZoom slider);
+//   - 每 grid 之間留 40px gap 讓相鄰 grid 的 top-axis label 可見;
+//   - gridHeight = (containerHeight - reservedTop - reservedBottom - gap*(N-1)) / N。
 //
-// 為何用 px + % 混合而非純 %:title / legend / slider 高度固定,純 % 在容器高度變化下
-// 比例失準(legend 會撞到第一 grid)。混合表達法是 echarts 官方推薦(option.grid 範例)。
+// emit 純 pixel 字串("90" 而非 "90px");ECharts 對純數字 string 視為 pixel。
+// 避免使用 CSS calc(),ECharts 不會解析。
 func computeGridLayout(n int) []gridSpec {
 	if n <= 0 {
 		return nil
 	}
-	specs := make([]gridSpec, n)
-	// 預留 90px 給 title+legend(top)、80px 給 dataZoom slider(bottom);
-	// 並在 grid 之間留 40px gap 讓 top-axis label 可見
 	const reservedTop = 90
 	const reservedBottom = 80
 	const gapPx = 40
 	totalGap := gapPx * (n - 1)
-	// 每 grid 高 = (容器 px 高 - reserved - gaps) / N;用百分比表達需仰賴容器 height,
-	// 改用 calc 形式:height = (100% - X px) / N
+	available := composerContainerHeight - reservedTop - reservedBottom - totalGap
+	gridHeight := available / n
+	specs := make([]gridSpec, n)
 	for i := 0; i < n; i++ {
-		topPx := reservedTop + i*(gapPx)
+		topPx := reservedTop + i*(gridHeight+gapPx)
 		specs[i] = gridSpec{
-			top:    fmt.Sprintf("calc((100%% - %dpx) * %d / %d + %dpx)", reservedTop+reservedBottom+totalGap, i, n, topPx),
-			height: fmt.Sprintf("calc((100%% - %dpx) / %d)", reservedTop+reservedBottom+totalGap, n),
+			top:    fmt.Sprintf("%d", topPx),
+			height: fmt.Sprintf("%d", gridHeight),
 		}
 	}
 	return specs
@@ -174,7 +188,7 @@ func buildComposerLine(ctx context.Context, in ComposerInput) (*charts.Line, err
 	line := charts.NewLine()
 	setComposerGlobalOptions(line, in.Subject, grids, n)
 
-	// X axes:每 grid 一 bottom-time(category) + 一 top-percent(category)
+	// X axes:每 grid 一 bottom-time(value 軸,秒)+ 一 top-percent(value 軸,0-100)
 	// XAxisList[0] 是 echarts 預設;後續 ExtendXAxis 追加
 	// 對齊原則:bottom xAxis index = i(0..n-1),top xAxis index = n+i(n..2n-1)
 	if err := configureComposerAxes(ctx, line, n, emgTime, muscleTime, in.MotionData, &in.PhasePoints); err != nil {
@@ -437,60 +451,43 @@ func setComposerGlobalOptions(line *charts.Line, subject string, grids []gridSpe
 	)
 }
 
-// configureComposerAxes 設置 N 個 bottom xAxis(time)+ N 個 top xAxis(percent)+ N 個 yAxis。
+// configureComposerAxes 設置 N 個 bottom xAxis(time, value 軸)+ N 個 top xAxis(percent, value 軸)+ N 個 yAxis。
 //
 // echarts 預設 XAxisList / YAxisList 各 1 個(initXYAxis);ExtendXAxis / ExtendYAxis 追加。
 //
 // 為何 N=2 時 bottom_idx=0,1 / top_idx=2,3;N=3 時 bottom_idx=0,1,2 / top_idx=3,4,5:
 // dataZoom XAxisIndex 才能用單一 [0..2n-1] 表達聯動,讓 inside-zoom 自動同步所有 axis。
 //
-// percent axis 計算規則:
-//   - EMG / muscle_ratio:以該 grid 的 time series duration 為 100%
-//   - motion:同樣對映自己的 time series
+// 為何全部 xAxis 用 Type:"value" 而非 "category":
+//   - category axis 把 series data 視為 ordinal index 對映而非絕對時間 — 當 EMG 與 motion
+//     有不同 sampling rate / 起始時間時,「同一秒」的兩組樣本會落在不同 x 位置,phase
+//     markLine / tooltip / dataZoom 全錯位。
+//   - value axis 從 series data 的 [time, value] pair 推 min/max,時間維度被忠實保留;
+//     不同 series 不同採樣率 / 不同起始時間都對得齊。
+//   - 代價:caller 必須把 series data 從 []v 改為 [][t,v] pair 形式(addComposerSeries 處理)。
 //
-// 為簡化 caller 端,percent 直接 derive 自 time series(time[0] 為 0%,time[len-1] 為 100%)。
+// Top percent axes 同樣用 Type:"value",並設 Min:0/Max:100 固定範圍,避免「無 series
+// 對應」時 echarts 推不出 min/max 而 axis 不顯示。
 func configureComposerAxes(
 	ctx context.Context,
 	line *charts.Line,
 	n int,
-	emgTime []float64,
-	muscleTime []float64,
-	motion *MotionData,
+	_ []float64, // emgTime — kept for signature stability; not needed on value axis
+	_ []float64, // muscleTime
+	_ *MotionData, // motion
 	_ *models.PhasePoints,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	// Bottom time axes — 每 grid 對應一條 time series。
-	// grid 順序:0 = EMG, 1 = muscle(if 3-grid), last = motion
-	gridTimes := make([][]float64, 0, n)
-	gridTimes = append(gridTimes, emgTime)
-	if n == 3 {
-		gridTimes = append(gridTimes, muscleTime)
-	}
-	if motion != nil {
-		gridTimes = append(gridTimes, motion.Time)
-	} else {
-		// motion 缺席:用 EMG time 充當(罕見路徑,不該到此 — caller 應提供 motion)
-		gridTimes = append(gridTimes, emgTime)
-	}
-
-	// XAxisList[0] 預設存在 → 直接 SetXAxis 為 emg time labels(LineData.SetXAxis 只填第 0 軸)
-	emgTimeLabels, err := buildComposerTimeLabels(ctx, emgTime)
-	if err != nil {
-		return err
-	}
-	line.SetXAxis(toComposerInterfaceSlice(emgTimeLabels))
-
-	// 設 axis[0] 的 name 為 "Time (s)"(透過 WithXAxisOpts index=0)
+	// XAxis[0] 預設存在 → 用 SetGlobalOptions 設 bottom time axis (grid 0)。
+	// 不 SetXAxis(...) — 那只對 category 軸有意義(填 .Data);value 軸由 series data 推。
 	line.SetGlobalOptions(
 		charts.WithXAxisOpts(opts.XAxis{
-			Type:        "category",
-			Name:        "Time (s)",
-			Data:        toComposerInterfaceSlice(emgTimeLabels),
-			BoundaryGap: opts.Bool(false),
-			GridIndex:   0,
+			Type:      "value",
+			Name:      "Time (s)",
+			GridIndex: 0,
 		}, 0),
 		charts.WithYAxisOpts(opts.YAxis{
 			Type:      "value",
@@ -500,12 +497,8 @@ func configureComposerAxes(
 		}, 0),
 	)
 
-	// Extend 其餘 N-1 個 bottom time xAxis(對應 grid 1..n-1)
+	// Extend 其餘 N-1 個 bottom time xAxis(對應 grid 1..n-1)+ 對應 Y axis。
 	for i := 1; i < n; i++ {
-		labels, err := buildComposerTimeLabels(ctx, gridTimes[i])
-		if err != nil {
-			return err
-		}
 		var name string
 		switch {
 		case n == 3 && i == 1:
@@ -514,13 +507,10 @@ func configureComposerAxes(
 			name = "Motion (s)"
 		}
 		line.ExtendXAxis(opts.XAxis{
-			Type:        "category",
-			Name:        name,
-			Data:        toComposerInterfaceSlice(labels),
-			BoundaryGap: opts.Bool(false),
-			GridIndex:   i,
+			Type:      "value",
+			Name:      name,
+			GridIndex: i,
 		})
-		// 對應 Y axis(grid i)
 		var yName string
 		switch {
 		case n == 3 && i == 1:
@@ -536,16 +526,20 @@ func configureComposerAxes(
 		})
 	}
 
-	// Top percent axes — N 個,grid 0..n-1 各一個 position=top
+	// Top percent axes — N 個,grid 0..n-1 各一個 position=top。
+	// 沒有 series 對應 top axes(series 只 attach 到 bottom xAxisIndex);Min:0 / Max:100
+	// 確保 axis ticks 在 0-100% 範圍。caller 上層應對齊 bottom 軸 zoom range 對應 0-100%
+	// (frontend 透過 dataZoom 同步,本層不負責)。
 	for i := 0; i < n; i++ {
-		pctLabels := buildComposerPercentLabels(gridTimes[i])
+		minVal := 0.0
+		maxVal := 100.0
 		line.ExtendXAxis(opts.XAxis{
-			Type:        "category",
-			Position:    "top",
-			Name:        "Time (%)",
-			Data:        toComposerInterfaceSlice(pctLabels),
-			BoundaryGap: opts.Bool(false),
-			GridIndex:   i,
+			Type:      "value",
+			Position:  "top",
+			Name:      "Time (%)",
+			GridIndex: i,
+			Min:       minVal,
+			Max:       maxVal,
 			AxisLabel: &opts.AxisLabel{
 				Show:     opts.Bool(true),
 				Interval: "20",
@@ -558,46 +552,6 @@ func configureComposerAxes(
 	return nil
 }
 
-// buildComposerTimeLabels 把 float64 時間軸格式化為「%.3f」字串 — 對齊 CCI 風格。
-// hot loop ctx-aware:每 composerCtxCheckInterval 點 check 一次。
-func buildComposerTimeLabels(ctx context.Context, timeValues []float64) ([]string, error) {
-	labels := make([]string, len(timeValues))
-	for i, t := range timeValues {
-		if i > 0 && i%composerCtxCheckInterval == 0 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-			}
-		}
-		labels[i] = fmt.Sprintf("%.3f", t)
-	}
-	return labels, nil
-}
-
-// buildComposerPercentLabels duration 為 0 / 空 slice 時 fallback 全 "0.0%"。
-// 對齊 CCI buildPercentAxisLabels 的責任分工:caller 保證 duration > 0,此處 defensive。
-func buildComposerPercentLabels(timeValues []float64) []string {
-	if len(timeValues) == 0 {
-		return []string{}
-	}
-	start := timeValues[0]
-	end := timeValues[len(timeValues)-1]
-	duration := end - start
-	labels := make([]string, len(timeValues))
-	if duration <= 0 {
-		for i := range labels {
-			labels[i] = "0.0%"
-		}
-		return labels
-	}
-	for i, t := range timeValues {
-		pct := (t - start) / duration * 100
-		labels[i] = fmt.Sprintf("%.1f%%", pct)
-	}
-	return labels
-}
-
 // addComposerSeries 把所有 series attach 到對應 grid。Series 順序:
 //   - EMG channels(grid 0)
 //   - muscle_ratio channels(grid 1,若 3-grid)
@@ -605,6 +559,10 @@ func buildComposerPercentLabels(timeValues []float64) []string {
 //
 // 第一個 series(EMG 首條)會 carry phase markLine — markLine 透過 XAxisIndex 鎖在 grid 0,
 // 但因為 echarts dataZoom 聯動,visual 上會在所有 grid 對齊。
+//
+// Series data 格式:`[]opts.LineData{ {Value: [t1, v1]}, {Value: [t2, v2]}, ... }`。
+// 因為 xAxis Type 為 "value"(見 configureComposerAxes doc),series data 必須以
+// [time, value] pair 形式提供,echarts 才能正確 anchor 每筆樣本到絕對時間。
 //
 // markLine 樣式對齊 CCI:dashed grey(#808080 / dashed)。
 func addComposerSeries(
@@ -631,7 +589,7 @@ func addComposerSeries(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		lineData, err := buildComposerLineData(ctx, vals)
+		lineData, err := buildComposerLineData(ctx, emgTime, vals)
 		if err != nil {
 			return err
 		}
@@ -654,10 +612,9 @@ func addComposerSeries(
 	// muscle_ratio series → grid 1(僅 3-grid)
 	if hasMuscle {
 		muscleNames := sortedKeys(muscleSeries)
-		_ = muscleTime
 		for _, name := range muscleNames {
 			vals := muscleSeries[name]
-			lineData, err := buildComposerLineData(ctx, vals)
+			lineData, err := buildComposerLineData(ctx, muscleTime, vals)
 			if err != nil {
 				return err
 			}
@@ -683,7 +640,7 @@ func addComposerSeries(
 			if !ok {
 				continue
 			}
-			lineData, err := buildComposerLineData(ctx, vals)
+			lineData, err := buildComposerLineData(ctx, motion.Time, vals)
 			if err != nil {
 				return err
 			}
@@ -699,15 +656,30 @@ func addComposerSeries(
 				)
 		}
 	}
-	_ = emgTime
 	return nil
 }
 
-// buildComposerLineData 把 float64 values 轉成 opts.LineData,NaN/Inf → nil(線斷開)。
+// buildComposerLineData 把 (time, values) pair 轉成 opts.LineData 序列。
+//
+// 因 xAxis Type=value (見 configureComposerAxes doc),每筆 LineData.Value 必須是
+// [time, value] 二元 slice;echarts 從這個 pair 直接 anchor 樣本到絕對時間軸,
+// 不同 sampling rate / 不同起始時間的 series 自動對齊。
+//
+// NaN/Inf value 或 NaN/Inf time → LineData.Value=nil(線斷開、不繪製)。time 應該
+// 不會 NaN(來自 EMG.Time / motion.Time / muscle.Time,parser 已校驗);保留防禦
+// 用以對齊 CCI 的 NaN-row dropping invariant。
+//
+// time / vals 長度不等 → 用 min(len(time), len(vals)) 截斷;這是 caller bug
+// (composer 內部都同源),不該發生,defensively handle 避免 panic。
+//
 // hot loop ctx-aware:每 composerCtxCheckInterval 點 check。
-func buildComposerLineData(ctx context.Context, vals []float64) ([]opts.LineData, error) {
-	out := make([]opts.LineData, len(vals))
-	for i, v := range vals {
+func buildComposerLineData(ctx context.Context, time []float64, vals []float64) ([]opts.LineData, error) {
+	n := len(vals)
+	if len(time) < n {
+		n = len(time)
+	}
+	out := make([]opts.LineData, n)
+	for i := 0; i < n; i++ {
 		if i > 0 && i%composerCtxCheckInterval == 0 {
 			select {
 			case <-ctx.Done():
@@ -715,10 +687,12 @@ func buildComposerLineData(ctx context.Context, vals []float64) ([]opts.LineData
 			default:
 			}
 		}
-		if math.IsNaN(v) || math.IsInf(v, 0) {
+		t := time[i]
+		v := vals[i]
+		if math.IsNaN(t) || math.IsInf(t, 0) || math.IsNaN(v) || math.IsInf(v, 0) {
 			out[i] = opts.LineData{Value: nil}
 		} else {
-			out[i] = opts.LineData{Value: v}
+			out[i] = opts.LineData{Value: []any{t, v}}
 		}
 	}
 	return out, nil
@@ -758,9 +732,12 @@ func composerPhaseMarkLineOpts(phase models.PhasePoints) []charts.SeriesOpts {
 
 	items := make([]opts.MarkLineNameXAxisItem, 0, len(pairs))
 	for _, p := range pairs {
+		// xAxis Type 為 value(見 configureComposerAxes doc) → markLine.XAxis 必須是
+		// 數值(float64),echarts 才能 anchor 到絕對時間。category 軸時代用 string
+		// 表示「Data 陣列的某個 label」,改 value 軸後 string 會被視為非數值丟棄。
 		items = append(items, opts.MarkLineNameXAxisItem{
 			Name:  p.name,
-			XAxis: fmt.Sprintf("%.3f", p.sec),
+			XAxis: p.sec,
 		})
 	}
 
@@ -812,11 +789,3 @@ func sortedKeys(m map[string][]float64) []string {
 	return keys
 }
 
-// toComposerInterfaceSlice converts []string to []any for go-echarts X axis data.
-func toComposerInterfaceSlice(ss []string) []any {
-	result := make([]any, len(ss))
-	for i, s := range ss {
-		result[i] = s
-	}
-	return result
-}

@@ -268,3 +268,167 @@ func TestRenderComposer_SelectedChannelsFilter(t *testing.T) {
 	assert.NotContains(t, html, `"name":"ES"`, "未選 ES 不應出現於 EMG series")
 	assert.NotContains(t, html, `"name":"BB"`, "未選 BB 不應出現於 EMG series")
 }
+
+// TestRenderComposer_GridLayoutNoCSSCalc — regression for codex P1 #1.
+//
+// 舊版 computeGridLayout emit `top: calc((100% - 210px) * 0 / 2 + 90px)`
+// 之類 CSS calc(...) 字串給 opts.Grid.{Top,Height};ECharts 前端解析 grid 字串
+// 僅接受純數字(pixel)或簡單百分比("30%"),不認 calc。Runtime 時 grid layout
+// 會 fallback 或破版,但 Go test 看 HTML 含 "calc(" 字串也看不出來。
+//
+// 修法:emit 純 pixel 字串(如 "90" / "200")。
+// 防線:HTML 不該含字串 "calc(" 任何處(尤其 grid block 內)。
+func TestRenderComposer_GridLayoutNoCSSCalc(t *testing.T) {
+	t.Run("two-grid", func(t *testing.T) {
+		in := ComposerInput{
+			Subject:          "S",
+			EMGDataset:       makeEMGDataset(100, "RA"),
+			SelectedChannels: []string{"RA"},
+			MotionData:       makeMotionData(50, "knee"),
+		}
+		html := renderToString(t, context.Background(), in)
+		assert.NotContains(t, html, "calc(",
+			"grid layout 不該洩漏 CSS calc(...) — ECharts 不解析 calc, runtime 會破版")
+	})
+	t.Run("three-grid", func(t *testing.T) {
+		in := ComposerInput{
+			Subject:          "S",
+			EMGDataset:       makeEMGDataset(100, "RA"),
+			SelectedChannels: []string{"RA"},
+			MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"),
+			MotionData:       makeMotionData(50, "knee"),
+		}
+		html := renderToString(t, context.Background(), in)
+		assert.NotContains(t, html, "calc(",
+			"3-grid layout 不該洩漏 CSS calc(...)")
+	})
+}
+
+// TestRenderComposer_AbsoluteTimeAxis — regression for codex P1 #2 part 1.
+//
+// 舊版所有 xAxis 用 Type:"category" + .Data: [time string labels...];
+// category 軸把 series data 當 ordinal index 對映 → 不同 sampling rate / 不同
+// 起始時間的 EMG 與 motion 同一秒會落在不同 x 位置,phase markLine / dataZoom
+// 全錯位。
+//
+// 修法:全部 bottom + top xAxis 改 Type:"value",移除 Data 欄(value 軸從 series 推);
+// series data 改 [time, value] pair。
+//
+// 防線:
+//   1. HTML 含 `"type":"value"` (至少 bottom + top xAxes + yAxes)
+//   2. xAxis block 不含 `"type":"category"` — 整個 chart 沒任何 category 軸
+//   3. xAxis block 不含 `"data":` (value 軸不應該有 Data field 序列化)
+//      註:這條 assert 整個 HTML 不含 `"data":` — series 雖然有 data,但 go-echarts
+//      template 把 series.data 渲染成 "data:[..]" 而非 JSON `"data":` (含引號),
+//      所以這個 assert 純針對 xAxis JSON block 內的 data field。
+func TestRenderComposer_AbsoluteTimeAxis(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(100, "RA"),
+		SelectedChannels: []string{"RA"},
+		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"),
+		MotionData:       makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	// 至少 xAxis 應該全是 value 軸 → 應出現多次 "type":"value"
+	// (3 bottom xAxis + 3 top xAxis + 3 yAxis = 9 個 "type":"value")
+	valueTypeCount := strings.Count(html, `"type":"value"`)
+	assert.GreaterOrEqual(t, valueTypeCount, 9,
+		"3 grid 應有 ≥9 個 value 軸(3 bottom xAxis + 3 top xAxis + 3 yAxis)")
+
+	// category 軸不該出現 — 修法後沒有任何 category 軸
+	assert.NotContains(t, html, `"type":"category"`,
+		"所有 xAxis 應改用 Type:value,不該有 category 軸殘留")
+
+	// "boundaryGap" 屬於 category 軸 — value 軸下該 field 應該 omitempty 不序列化
+	assert.NotContains(t, html, `"boundaryGap"`,
+		"value 軸不該有 boundaryGap field;殘留代表還有 category 軸 attribute 沒清掉")
+}
+
+// TestRenderComposer_SeriesAsTimeValuePairs — regression for codex P1 #2 part 2.
+//
+// 配合 value 軸,series data 必須是 [time, value] pair。EMG 3 點 t=[0, 0.5, 1.0],
+// motion 2 點 t=[0.5, 1.0],render 後 HTML 內 series.data 應該包含這些 pair。
+func TestRenderComposer_SeriesAsTimeValuePairs(t *testing.T) {
+	// 用「精心構造」的 dataset:EMG 3 點、3 個時間 (0, 0.5, 1.0),3 個值 (10, 20, 30)。
+	emg := &models.EMGDataset{
+		Headers: []string{"time", "RA"},
+		Data: []models.EMGData{
+			{Time: 0.0, Channels: []float64{10}},
+			{Time: 0.5, Channels: []float64{20}},
+			{Time: 1.0, Channels: []float64{30}},
+		},
+		OriginalTimePrecision: 1,
+	}
+	// motion 2 點:t=[0.5, 1.0],v=[100, 200]
+	motion := &MotionData{
+		Time:   []float64{0.5, 1.0},
+		Series: map[string][]float64{"knee": {100, 200}},
+		Order:  []string{"knee"},
+	}
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       emg,
+		SelectedChannels: []string{"RA"},
+		MotionData:       motion,
+	}
+	html := renderToString(t, context.Background(), in)
+
+	// EMG series 預期 pair `[0,10]` `[0.5,20]` `[1,30]` 出現於 HTML。
+	// go-echarts 對 LineData.Value = []any{t, v} 序列化會產生 {"value":[0,10]}。
+	// 為了不過度依賴細部 formatting,用「包含 [t,v] 子字串」做粗 assert。
+	assert.Contains(t, html, `[0,10]`, "EMG t=0,v=10 應以 [0,10] pair 出現")
+	assert.Contains(t, html, `[0.5,20]`, "EMG t=0.5,v=20 應以 [0.5,20] pair 出現")
+	assert.Contains(t, html, `[1,30]`, "EMG t=1,v=30 應以 [1,30] pair 出現")
+
+	// motion series pair
+	assert.Contains(t, html, `[0.5,100]`, "motion t=0.5,v=100 應以 [0.5,100] pair 出現")
+	assert.Contains(t, html, `[1,200]`, "motion t=1,v=200 應以 [1,200] pair 出現")
+}
+
+// TestRenderComposer_OffsetMisalignmentRegression — capture bug 本質。
+//
+// 在 category 軸下,EMG t=[0,1,2] 與 motion t=[1,2,3](起始 +1s)會被 echarts
+// 視為「相同 3 個 ordinal index」對映 → motion 第一點顯示在 x=0 位置而非絕對
+// 時間 t=1。修法後 value 軸 + [t,v] pair,motion 第一點時間值是 1.0,正確 anchor。
+//
+// 防線:motion 第一個 sample 必須以 `[1,` 開頭的 pair 出現於 HTML,而非 `[0,`。
+func TestRenderComposer_OffsetMisalignmentRegression(t *testing.T) {
+	// EMG t=[0,1,2], v=[10,20,30]
+	emg := &models.EMGDataset{
+		Headers: []string{"time", "RA"},
+		Data: []models.EMGData{
+			{Time: 0.0, Channels: []float64{10}},
+			{Time: 1.0, Channels: []float64{20}},
+			{Time: 2.0, Channels: []float64{30}},
+		},
+		OriginalTimePrecision: 1,
+	}
+	// motion t=[1,2,3], v=[100,200,300] — 起始時間比 EMG 慢 1s
+	motion := &MotionData{
+		Time:   []float64{1.0, 2.0, 3.0},
+		Series: map[string][]float64{"knee": {100, 200, 300}},
+		Order:  []string{"knee"},
+	}
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       emg,
+		SelectedChannels: []string{"RA"},
+		MotionData:       motion,
+	}
+	html := renderToString(t, context.Background(), in)
+
+	// motion 第一點絕對時間是 1.0 — 必須以 [1, ... pair 出現
+	assert.Contains(t, html, `[1,100]`,
+		"motion 第一點 t=1.0,v=100 應以 [1,100] pair 出現 — 確保 motion 起始時間被 preserve")
+	// motion 第二點 t=2,v=200
+	assert.Contains(t, html, `[2,200]`, "motion 第二點時間應 preserve")
+	// motion 第三點 t=3,v=300
+	assert.Contains(t, html, `[3,300]`, "motion 第三點時間應 preserve")
+
+	// 反例:motion 第一點不應該被 echarts 誤判到 t=0(那是 category 軸 bug)。
+	// 透過「motion data 中不該存在 [0,100] pair」做 negative assert。
+	assert.NotContains(t, html, `[0,100]`,
+		"motion v=100 不該 anchor 到 t=0 — 那是 category-axis bug 的 fingerprint")
+}
