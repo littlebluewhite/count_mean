@@ -73,6 +73,12 @@ linters:
           - wrapcheck
           - errcheck
           - gosec
+      # gui/ 是 Wails handler 層，error 訊息會放進 result.Message 直接送前端
+      # 顯示給使用者（包含 i18n 翻譯 + redact 過的 PII path），屬 user-facing UI
+      # string，不適合套 sentinel pattern。err113 對此語境語意空洞。
+      - path: ^gui/
+        linters:
+          - err113
 
 issues:
   max-issues-per-linter: 0
