@@ -128,6 +128,13 @@ func writeCSVWithBOM(outputPath string) (*os.File, *csv.Writer, error) {
 // ExportToCSV 將統計結果導出為 CSV 檔案.
 // Flush 與 Close 的錯誤都會被回傳：磁碟滿等狀況下 csv.Writer 把錯誤延後到 Flush 才丟，
 // 若僅在 defer 中忽略，caller 會看到 nil 但檔案內容不完整。
+//
+// ADR-0001 migration status: 主流 PhaseSync export 已搬到
+// io.CSVHandler.WritePhaseSyncResult (Analysis pipeline family 統一路徑)。
+// 剩餘 caller: gui/normalized_phase_sync_handlers.go — 該 handler 用自訂 filename +
+// 自訂 precision (normalizedPhaseSyncPrecision),不符合 WritePhaseSyncResult 的
+// auto-filename + 固定 phaseSyncPrecision 契約,後續若擴展 csvHandler 支援 filename
+// override 與可選 precision 才能完成 migrate。
 func (calc *EMGStatisticsCalculator) ExportToCSV(
 	stats *models.EMGStatistics,
 	outputPath string,

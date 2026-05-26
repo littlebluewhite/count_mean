@@ -1151,8 +1151,9 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 		}, nil
 	}
 
-	// 導出結果
-	outputPath, err := a.phaseSyncAnalyzer.ExportResults(stats, s.config.OutputDir)
+	// 導出結果 — ADR-0001: 寫檔職責由 PhaseSyncAnalyzer 搬到 CSVHandler,
+	// 與其他 Analysis pipeline family handler 走同一條 format-aware write 路徑。
+	outputPath, err := s.csvHandler.WritePhaseSyncResult(io.WriteRequest{}, stats)
 	if err != nil {
 		a.logger.Error("導出結果失敗", err, map[string]interface{}{})
 

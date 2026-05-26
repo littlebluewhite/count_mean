@@ -568,28 +568,6 @@ func validateEMGTimeRange(
 	return nil
 }
 
-// ExportResults 導出分析結果.
-func (analyzer *PhaseSyncAnalyzer) ExportResults(
-	stats *models.EMGStatistics,
-	outputDir string,
-) (string, error) {
-	// 生成輸出檔案名
-	fileName := calculator.GenerateOutputFileName(
-		stats.Subject,
-		stats.StartPhase,
-		stats.EndPhase,
-	)
-
-	outputPath := filepath.Join(outputDir, fileName)
-
-	// 導出 CSV
-	if err := analyzer.statsCalculator.ExportToCSV(stats, outputPath); err != nil {
-		return "", fmt.Errorf("導出 CSV 失敗: %w", err)
-	}
-
-	return outputPath, nil
-}
-
 // LoadManifestSubjects 載入分期總檔案中的所有主題.
 func (analyzer *PhaseSyncAnalyzer) LoadManifestSubjects(manifestPath string) ([]string, error) {
 	manifests, err := analyzer.manifestParser.ParseFile(manifestPath)

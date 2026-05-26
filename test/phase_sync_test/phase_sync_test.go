@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"count_mean/internal/config"
+	"count_mean/internal/io"
 	"count_mean/internal/models"
 	"count_mean/internal/phase_sync"
 	"count_mean/internal/security/fsperm"
@@ -92,8 +94,14 @@ func TestPhaseSyncAnalysis_NSF2(t *testing.T) {
 		t.Errorf("結束時間計算錯誤: 期望 %.6f, 實際 %.6f", expectedEndTime, stats.EndTime)
 	}
 
-	// 導出結果
-	outputPath, err := analyzer.ExportResults(stats, outputDir)
+	// 導出結果 — ADR-0001: 走 csvHandler 統一寫檔路徑。
+	cfg := config.DefaultConfig()
+	cfg.OutputDir = outputDir
+	cfg.InputDir = outputDir
+	cfg.OperateDir = outputDir
+	csvHandler := io.NewCSVHandler(cfg)
+
+	outputPath, err := csvHandler.WritePhaseSyncResult(io.WriteRequest{}, stats)
 	if err != nil {
 		t.Fatalf("導出失敗: %v", err)
 	}

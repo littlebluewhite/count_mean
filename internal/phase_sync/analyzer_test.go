@@ -89,44 +89,6 @@ func TestPhaseSyncAnalyzer_LoadManifestSubjects_InvalidFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "解析分期總檔案失敗")
 }
 
-func TestPhaseSyncAnalyzer_ExportResults(t *testing.T) {
-	analyzer := NewPhaseSyncAnalyzer()
-
-	// Create test statistics
-	stats := &models.EMGStatistics{
-		Subject:      "TestSubject",
-		StartPhase:   "P0",
-		EndPhase:     "P2",
-		StartTime:    0.0,
-		EndTime:      2.0,
-		ChannelNames: []string{"Ch1", "Ch2"},
-		ChannelMeans: map[string]float64{
-			"Ch1": 100.5,
-			"Ch2": 200.3,
-		},
-		ChannelMaxes: map[string]float64{
-			"Ch1": 150.0,
-			"Ch2": 250.0,
-		},
-	}
-
-	// Create temporary output directory
-	outputDir := t.TempDir()
-
-	// Test export
-	outputPath, err := analyzer.ExportResults(stats, outputDir)
-	assert.NoError(t, err)
-	assert.NotEmpty(t, outputPath)
-
-	// Verify file exists
-	_, err = os.Stat(outputPath)
-	assert.NoError(t, err)
-
-	// Verify file is in correct directory
-	assert.True(t, filepath.IsAbs(outputPath))
-	assert.Contains(t, outputPath, outputDir)
-}
-
 func TestPhaseSyncAnalyzer_AnalyzePhaseSync_InvalidParams(t *testing.T) {
 	analyzer := NewPhaseSyncAnalyzer()
 

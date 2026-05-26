@@ -246,3 +246,167 @@ func TestWritePhaseAnalysis_NilResult(t *testing.T) {
 	)
 	require.ErrorIs(t, err, errEmptyPhaseAnalysis)
 }
+
+// TestWritePhaseSyncResult_NilStats 驗證 nil stats 走 fail-fast,
+// 與 WritePhaseAnalysis_NilResult 的對稱契約。
+func TestWritePhaseSyncResult_NilStats(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newFormatAwareTestHandler(t)
+
+	outputPath, err := handler.WritePhaseSyncResult(WriteRequest{}, nil)
+	require.ErrorIs(t, err, errEmptyPhaseSyncResult)
+	require.Empty(t, outputPath, "失敗時 outputPath 必為空")
+}
+
+// TestWritePhaseSyncResult_SubjectSanitization 釘住:WritePhaseSyncResult 把
+// stats.Subject 交給 calculator.GenerateOutputFileName -> SanitizeFileName,
+// Unicode 控制 / 雙向書寫覆寫 (U+202E) / NUL / ZWSP / 各 bidi isolation marker /
+// CRLF 等不會落到實際 filename。原 TestExportResults_SubjectWithRTLAndControl_FilenameSanitized
+// 在 phase_sync 套件以 ExportResults 路徑釘同一份契約; ADR-0001 把寫檔職責搬到 csvHandler 後
+// 同份契約改在 io 套件以 WritePhaseSyncResult 路徑釘住。
+//
+// Unicode literals 一律走 \uXXXX 表記 (避免 editor 真的渲染 RTL override 干擾 review)。
+func TestWritePhaseSyncResult_SubjectSanitization(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		subject string
+		mustNot []rune
+	}{
+		{name: "rtl_override", subject: "evil\u202egsp.csv", mustNot: []rune{0x202E}},
+		{name: "null_byte", subject: "Sub\x00ject", mustNot: []rune{0x00}},
+		{name: "ascii_bell", subject: "Sub\x07ject", mustNot: []rune{0x07}},
+		{name: "zero_width_space", subject: "Sub\u200bject", mustNot: []rune{0x200B}},
+		{name: "bidi_iso_pop", subject: "Sub\u2068x\u2069ject", mustNot: []rune{0x2068, 0x2069}},
+		{name: "crlf_in_subject", subject: "Sub\r\nject", mustNot: []rune{0x0D, 0x0A}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, tempDir := newFormatAwareTestHandler(t)
+
+			stats := &models.EMGStatistics{
+				Subject:      tc.subject,
+				StartPhase:   models.PhaseP0,
+				EndPhase:     models.PhaseP2,
+				StartTime:    0.0,
+				EndTime:      2.0,
+				ChannelNames: []string{"Ch1"},
+				ChannelMeans: map[string]float64{"Ch1": 1.0},
+				ChannelMaxes: map[string]float64{"Ch1": 2.0},
+			}
+
+			outputPath, err := handler.WritePhaseSyncResult(WriteRequest{}, stats)
+			require.NoError(t, err)
+
+			base := filepath.Base(outputPath)
+			for _, ch := range tc.mustNot {
+				require.NotContainsf(t, base, string(ch),
+					"output filename %q still contains forbidden rune U+%04X (subject=%q)",
+					base, ch, tc.subject)
+			}
+
+			// sanitize 後組合路徑不會逸出 tempDir。
+			cleaned := filepath.Clean(outputPath)
+			require.True(t, strings.HasPrefix(cleaned, tempDir),
+				"sanitized output path %q must stay inside %q", cleaned, tempDir)
+
+			// 檔案真的被寫到清理後的路徑。
+			_, statErr := os.Stat(outputPath)
+			require.NoError(t, statErr)
+		})
+	}
+}
+
+// TestWritePhaseSyncResult_SubDir 驗證 req.SubDir 自動 mkdir 並寫到子目錄,
+// 回傳的 outputPath 反映 OutputDir/SubDir/<auto-filename>。
+func TestWritePhaseSyncResult_SubDir(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	stats := &models.EMGStatistics{
+		Subject:      "subj_subdir",
+		StartPhase:   models.PhaseP0,
+		EndPhase:     models.PhaseP2,
+		StartTime:    0.0,
+		EndTime:      1.0,
+		ChannelNames: []string{"Ch1"},
+		ChannelMeans: map[string]float64{"Ch1": 1.0},
+		ChannelMaxes: map[string]float64{"Ch1": 2.0},
+	}
+
+	outputPath, err := handler.WritePhaseSyncResult(WriteRequest{SubDir: "run_42"}, stats)
+	require.NoError(t, err)
+
+	expectedFilename := calculator.GenerateOutputFileName(
+		stats.Subject, stats.StartPhase, stats.EndPhase,
+	)
+	require.Equal(t, filepath.Join(tempDir, "run_42", expectedFilename), outputPath,
+		"outputPath 應包含 SubDir segment")
+
+	_, err = os.Stat(outputPath)
+	require.NoError(t, err, "SubDir 路徑應該存在 (自動 mkdir)")
+}
+
+// TestWritePhaseSyncResult_RoundTrip 釘住 ADR-0001 invariant:
+// PhaseSync 的 8-row layout 跟自動 filename 由 CSVHandler 持有,
+// caller 只給 stats 跟 WriteRequest (SubDir 可選); 回傳 outputPath。
+//
+// Row layout (與 calculator.EMGStatisticsCalculator.ExportToCSV 對齊,
+// 確保 migrate 後輸出檔對等):
+//
+//	row 0: header (空格 + channel names)
+//	row 1: 開始分期點
+//	row 2: 開始時間
+//	row 3: 結束分期點
+//	row 4: 結束時間
+//	row 5: 時間差值
+//	row 6: 平均值
+//	row 7: 最大值
+//
+// Filename = calculator.GenerateOutputFileName(stats.Subject, StartPhase, EndPhase).
+func TestWritePhaseSyncResult_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	stats := &models.EMGStatistics{
+		Subject:      "subject_01",
+		StartPhase:   models.PhaseP0,
+		StartTime:    1.0,
+		EndPhase:     models.PhaseL,
+		EndTime:      2.5,
+		ChannelNames: []string{"RA", "ES"},
+		ChannelMeans: map[string]float64{"RA": 0.123456, "ES": 0.234567},
+		ChannelMaxes: map[string]float64{"RA": 1.5, "ES": 2.0},
+	}
+
+	outputPath, err := handler.WritePhaseSyncResult(WriteRequest{}, stats)
+	require.NoError(t, err)
+
+	// outputPath 應反映自動生成 filename (含 subject + phase range + _statistics.csv)。
+	expectedFilename := calculator.GenerateOutputFileName(
+		stats.Subject, stats.StartPhase, stats.EndPhase,
+	)
+	require.Equal(t, filepath.Join(tempDir, expectedFilename), outputPath,
+		"outputPath 應為 OutputDir/<auto-generated filename>")
+
+	lines := readRows(t, outputPath)
+	require.Len(t, lines, 8, "PhaseSync 8-row layout (header + 5 metadata + 平均值 + 最大值)")
+	require.Contains(t, lines[0], "RA", "header 應含 channel name")
+	require.Contains(t, lines[0], "ES")
+	require.Contains(t, lines[1], "開始分期點")
+	require.Contains(t, lines[1], "P0", "開始分期點 row 應含 StartPhase 值")
+	require.Contains(t, lines[2], "開始時間")
+	require.Contains(t, lines[3], "結束分期點")
+	require.Contains(t, lines[3], "L", "結束分期點 row 應含 EndPhase 值")
+	require.Contains(t, lines[4], "結束時間")
+	require.Contains(t, lines[5], "時間差值")
+	require.Contains(t, lines[6], "平均值")
+	require.Contains(t, lines[7], "最大值")
+}

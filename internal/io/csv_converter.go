@@ -10,6 +10,11 @@ import (
 // CSV result row count constants.
 const (
 	maxMeanResultRowCount = 6 // Number of rows for max mean results (header + 5 data rows)
+
+	// phaseSyncPrecision 是 PhaseSync 統計輸出的固定小數位數。
+	// EMG 統計報告的數字格式視為跨 config 的物理單位常規,不從 config.Precision 拿;
+	// 與舊路徑 phase_sync.defaultEMGStatsPrecision 對齊以保證 migrate 前後輸出等效。
+	phaseSyncPrecision = 6
 )
 
 // csvConverter handles conversion of data structures to CSV format.
@@ -158,6 +163,57 @@ func (c *csvConverter) scaleValue(value float64) float64 {
 func (*csvConverter) buildRow(label string, capacity int) []string {
 	row := make([]string, 1, capacity)
 	row[0] = label
+
+	return row
+}
+
+// ConvertPhaseSyncResult converts EMGStatistics to the 8-row PhaseSync layout
+// (header + 5 metadata rows + 平均值 + 最大值). Precision is fixed to
+// phaseSyncPrecision; values are written as-is (no scaling).
+func (*csvConverter) ConvertPhaseSyncResult(stats *models.EMGStatistics) [][]string {
+	channelCount := len(stats.ChannelNames)
+	headerRow := make([]string, 0, channelCount+1)
+	headerRow = append(headerRow, "")
+	headerRow = append(headerRow, stats.ChannelNames...)
+
+	format := fmt.Sprintf("%%.%df", phaseSyncPrecision)
+
+	return [][]string{
+		csvutil.SanitizeHeaderRow(headerRow),
+		buildUniformPhaseSyncRow("開始分期點", string(stats.StartPhase), channelCount),
+		buildUniformPhaseSyncRow("開始時間", fmt.Sprintf(format, stats.StartTime), channelCount),
+		buildUniformPhaseSyncRow("結束分期點", string(stats.EndPhase), channelCount),
+		buildUniformPhaseSyncRow("結束時間", fmt.Sprintf(format, stats.EndTime), channelCount),
+		buildUniformPhaseSyncRow("時間差值",
+			fmt.Sprintf(format, stats.EndTime-stats.StartTime), channelCount),
+		buildChannelPhaseSyncRow("平均值", stats.ChannelNames, stats.ChannelMeans, format),
+		buildChannelPhaseSyncRow("最大值", stats.ChannelNames, stats.ChannelMaxes, format),
+	}
+}
+
+// buildUniformPhaseSyncRow creates a row with the same value repeated for each channel.
+func buildUniformPhaseSyncRow(label, value string, channelCount int) []string {
+	row := make([]string, 0, channelCount+1)
+	row = append(row, label)
+
+	for range channelCount {
+		row = append(row, value)
+	}
+
+	return row
+}
+
+// buildChannelPhaseSyncRow creates a row with per-channel values pulled from a map
+// in the order given by channelNames.
+func buildChannelPhaseSyncRow(
+	label string, channelNames []string, values map[string]float64, format string,
+) []string {
+	row := make([]string, 0, len(channelNames)+1)
+	row = append(row, label)
+
+	for _, name := range channelNames {
+		row = append(row, fmt.Sprintf(format, values[name]))
+	}
 
 	return row
 }

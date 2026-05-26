@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"count_mean/internal/config"
+	"count_mean/internal/io"
 	"count_mean/internal/models"
 	"count_mean/internal/phase_sync"
 	"count_mean/internal/security/fsperm"
@@ -106,8 +108,14 @@ func TestNSF2_T_to_O_Analysis(t *testing.T) {
 			expectedDuration, actualDuration)
 	}
 
-	// Export results
-	outputPath, err := analyzer.ExportResults(stats, outputDir)
+	// Export results — ADR-0001: write via csvHandler unified path.
+	cfg := config.DefaultConfig()
+	cfg.OutputDir = outputDir
+	cfg.InputDir = outputDir
+	cfg.OperateDir = outputDir
+	csvHandler := io.NewCSVHandler(cfg)
+
+	outputPath, err := csvHandler.WritePhaseSyncResult(io.WriteRequest{}, stats)
 	if err != nil {
 		t.Fatalf("Export failed: %v", err)
 	}
@@ -221,8 +229,14 @@ func TestNSF2_P0_to_P1_Analysis(t *testing.T) {
 			expectedDuration, actualDuration)
 	}
 
-	// Export results
-	outputPath, err := analyzer.ExportResults(stats, outputDir)
+	// Export results — ADR-0001: write via csvHandler unified path.
+	cfg := config.DefaultConfig()
+	cfg.OutputDir = outputDir
+	cfg.InputDir = outputDir
+	cfg.OperateDir = outputDir
+	csvHandler := io.NewCSVHandler(cfg)
+
+	outputPath, err := csvHandler.WritePhaseSyncResult(io.WriteRequest{}, stats)
 	if err != nil {
 		t.Fatalf("Export failed: %v", err)
 	}

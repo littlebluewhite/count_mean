@@ -622,6 +622,11 @@ func (h *CSVHandler) ProcessLargeFile(
 // 以便 GUI 顯示「無分析結果可匯出」而非吞 nil。
 var errEmptyPhaseAnalysis = stderrors.New("WritePhaseAnalysis: 沒有 phase 結果可寫")
 
+// errEmptyPhaseSyncResult 標示 WritePhaseSyncResult 收到 nil stats。
+// 對稱於 errEmptyPhaseAnalysis: caller 應確保 stats 非 nil,但對外仍給明確 error
+// 避免 nil-deref panic 上拋到 GUI。
+var errEmptyPhaseSyncResult = stderrors.New("WritePhaseSyncResult: stats 不可為 nil")
+
 // WriteRequest 是 format-aware write 共用的目的地請求。
 //
 // Filename 是 CSV 檔名;SubDir 為空時直接寫到 OutputDir 根,非空時自動
@@ -720,4 +725,39 @@ func (h *CSVHandler) writeToTarget(req WriteRequest, data [][]string) error {
 	}
 
 	return h.WriteCSVToOutput(req.Filename, data)
+}
+
+// WritePhaseSyncResult 把 PhaseSync 分析結果 (EMGStatistics) 寫成 CSV。
+//
+// Filename 由 calculator.GenerateOutputFileName(Subject, StartPhase, EndPhase)
+// 自動生成 — req.Filename 被忽略, 僅 req.SubDir 生效 (空字串 → OutputDir 根)。
+// 回傳實際 outputPath (絕對路徑, 形如 OutputDir/[SubDir/]<filename>) 與錯誤。
+//
+// row layout (8-row: header / 開始分期點 / 開始時間 / 結束分期點 / 結束時間 /
+// 時間差值 / 平均值 / 最大值)、precision (phaseSyncPrecision=6) 由 implementation 持有。
+// 路徑驗證 / BOM / fsperm symlink reject / 兩段式 fsync 沿用 WriteCSV 既有守門 —
+// 比舊 calculator.EMGStatisticsCalculator.ExportToCSV 多了 SanitizePath /
+// SanitizeAllRows / OpenWriteValidated 三道守門 (ADR-0001 invariant 擴張的順手紅利)。
+func (h *CSVHandler) WritePhaseSyncResult(
+	req WriteRequest,
+	stats *models.EMGStatistics,
+) (string, error) {
+	if stats == nil {
+		return "", errEmptyPhaseSyncResult
+	}
+
+	filename := calculator.GenerateOutputFileName(
+		stats.Subject, stats.StartPhase, stats.EndPhase,
+	)
+
+	data := h.converter.ConvertPhaseSyncResult(stats)
+
+	writeReq := WriteRequest{Filename: filename, SubDir: req.SubDir}
+	if err := h.writeToTarget(writeReq, data); err != nil {
+		return "", err
+	}
+
+	outputPath := filepath.Join(h.config.OutputDir, req.SubDir, filename)
+
+	return outputPath, nil
 }

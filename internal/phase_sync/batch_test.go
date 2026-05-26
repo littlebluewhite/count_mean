@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,91 +12,13 @@ import (
 	"count_mean/internal/models"
 )
 
-// TestExportResults_SubjectWithRTLAndControl_FilenameSanitized 釘住 
-// ExportResults 把 stats.Subject 直接交給 GenerateOutputFileName -> SanitizeFileName，
-// 後者過去只替換路徑分隔符，未處理 Unicode 控制 / 雙向書寫覆寫（U+202E）/ ASCII
-// 控制碼。RTL override 可在 Finder/Explorer 製造視覺檔名欺騙（"evil.exe.csv" 顯示為
-// "evilcsv.exe"），NUL/Bell 等 ASCII 控制碼可破壞下游處理或 log，必須在寫入檔案前
-// 清除。本 test 在修復前會 fail（檔名仍含 U+202E / NUL / 控制碼）。
-//
-// Unicode literals 一律走 \uXXXX 表記，符合 staticcheck ST1018 要求且避免
-// editor 把 RTL override 真的渲染到原始碼上造成 review 困擾。
-func TestExportResults_SubjectWithRTLAndControl_FilenameSanitized(t *testing.T) {
-	analyzer := NewPhaseSyncAnalyzer()
+// TestExportResults_SubjectWithRTLAndControl_FilenameSanitized 隨 ADR-0001
+// 把 PhaseSync 寫檔職責搬到 csvHandler 同步移除。對應的 RTL / NUL / ZWSP /
+// bidi-iso / CRLF subject sanitization 契約由
+// io.TestWritePhaseSyncResult_SubjectSanitization 釘住 — 內部仍走
+// calculator.GenerateOutputFileName -> SanitizeFileName 同一份過濾規則,
+// migrate 前後行為對等。
 
-	cases := []struct {
-		name    string
-		subject string
-		mustNot []rune
-	}{
-		{
-			name:    "rtl_override",
-			subject: "evil\u202egsp.csv",
-			mustNot: []rune{0x202E},
-		},
-		{
-			name:    "null_byte",
-			subject: "Sub\x00ject",
-			mustNot: []rune{0x00},
-		},
-		{
-			name:    "ascii_bell",
-			subject: "Sub\x07ject",
-			mustNot: []rune{0x07},
-		},
-		{
-			name:    "zero_width_space",
-			subject: "Sub\u200bject",
-			mustNot: []rune{0x200B},
-		},
-		{
-			name:    "bidi_iso_pop",
-			subject: "Sub\u2068x\u2069ject",
-			mustNot: []rune{0x2068, 0x2069},
-		},
-		{
-			name:    "crlf_in_subject",
-			subject: "Sub\r\nject",
-			mustNot: []rune{0x0D, 0x0A},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			stats := &models.EMGStatistics{
-				Subject:      tc.subject,
-				StartPhase:   "P0",
-				EndPhase:     "P2",
-				StartTime:    0.0,
-				EndTime:      2.0,
-				ChannelNames: []string{"Ch1"},
-				ChannelMeans: map[string]float64{"Ch1": 1.0},
-				ChannelMaxes: map[string]float64{"Ch1": 2.0},
-			}
-
-			outputDir := t.TempDir()
-			outputPath, err := analyzer.ExportResults(stats, outputDir)
-			require.NoError(t, err)
-
-			base := filepath.Base(outputPath)
-			for _, ch := range tc.mustNot {
-				if strings.ContainsRune(base, ch) {
-					t.Errorf("output filename %q still contains forbidden rune U+%04X (subject=%q)",
-						base, ch, tc.subject)
-				}
-			}
-
-			// 額外保證：sanitize 後組合路徑不會逸出 outputDir。
-			cleaned := filepath.Clean(outputPath)
-			require.True(t, strings.HasPrefix(cleaned, outputDir),
-				"sanitized output path %q must stay inside %q", cleaned, outputDir)
-
-			// 確認檔案真的被寫到清理後的路徑（symlink / mkdir 副作用測試）。
-			_, statErr := os.Stat(outputPath)
-			require.NoError(t, statErr)
-		})
-	}
-}
 
 // TestValidateEMGFilePath_NonExistentBaseFolder 釘住 當 baseFolder 不
 // 存在時，EvalSymlinks 會回傳 *PathError；舊版只 silently 落回原始字串（baseFolder
