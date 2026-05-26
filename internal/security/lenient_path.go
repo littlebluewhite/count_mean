@@ -88,7 +88,15 @@ func ResolveLenientPath(baseFolder, filename string) (string, error) {
 		return "", fmt.Errorf("檔名過長（> %d）: %d 字元", maxFilenameLength, len(base))
 	}
 
-	if filepath.IsAbs(normalized) {
+	// 同時擋 native absolute path 與 Unix-style leading-slash:
+	//   - filepath.IsAbs 在 Windows 只認 `C:\...` / UNC,**不**認 `/etc/passwd`
+	//     → manifest 在 Windows 引用 "/etc/passwd" 會被誤判為 relative,join 後可能
+	//     落回 baseFolder/etc/passwd(視 filepath.Join 對 leading-`/` 的處理)。
+	//   - Threat model:manifest 半可信,絕對路徑(無論 OS 慣例)都不該出現。Unix-style
+	//     `/...` 在 Windows 雖非語法 absolute 但**語義**上是「想跳到 root」的意圖,保守 reject。
+	//   - macOS / Linux 上 `filepath.IsAbs("/etc/passwd")` = true,HasPrefix 是 redundant
+	//     defense-in-depth,沒有 regress。
+	if filepath.IsAbs(normalized) || strings.HasPrefix(normalized, "/") {
 		return "", fmt.Errorf("檔名不可為絕對路徑: %s", filename)
 	}
 

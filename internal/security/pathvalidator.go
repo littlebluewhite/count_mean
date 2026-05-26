@@ -578,6 +578,13 @@ func isPathWithinBase(targetPath, basePath string) bool {
 // EvalSymlinks(/etc) 的真實結果),讓 layer-2 也能擋住經 symlink 跳轉的攻擊;
 // 但**不**加 `/private/var/`、`/private/tmp/`,避免誤擋 macOS `t.TempDir()`
 // 與 GUI app working dir(真實落在 `/private/var/folders/`)。
+//
+// Windows 端有完全對稱的權衡:`\AppData\` 整段擋(底下含 `Roaming\`、`LocalLow\`、
+// `Local\Microsoft\Credentials\` 等真實 credential / persistence 入口),但對
+// `\AppData\Local\Temp\` 子樹開「explicit carve-out」放行 — 它是 Windows runner
+// 與一般 user 的 `t.TempDir()` 落點,等同 macOS `/private/var/folders/`,屬合法
+// test fixture 與 GUI 暫存區。Carve-out 比「pattern enumeration 列敏感 vendor」
+// 維護成本低、安全姿態更保守(預設擋,明示放行)。
 func performBasicSecurityChecks(absPath string) error {
 	// 跨平台系統敏感路徑。`.ssh/` / `.aws/` / `.kube/` 用 `/` 開頭涵蓋
 	// Unix home(`~/.ssh/`)與 Windows %USERPROFILE%。Windows 端用 `\Windows\`、
@@ -603,7 +610,7 @@ func performBasicSecurityChecks(absPath string) error {
 		"\\Windows\\",         // 非 C: drive 的 Windows
 		"\\System32\\",        // 非 C: drive 的 System32
 		"\\Program Files\\",   // 非 C: drive 的 Program Files
-		"\\AppData\\",         // Windows AppData (Roaming/Local/LocalLow)
+		"\\AppData\\",         // Windows AppData (Roaming/Local/LocalLow) — carve-out 見下方
 		"\\\\",                // UNC prefix (server share、device namespace、global)
 	}
 
@@ -618,8 +625,29 @@ func performBasicSecurityChecks(absPath string) error {
 		return strings.ReplaceAll(filepath.ToSlash(strings.ToLower(s)), `\`, "/")
 	}
 	absPathSlash := normalizePath(absPath)
+
+	// `\AppData\Local\Temp\` carve-out:Windows runner 與一般 user 的 `t.TempDir()`
+	// 都落在這個子樹下(`C:\Users\<u>\AppData\Local\Temp\Test...\001\...`),等同
+	// macOS `/private/var/folders/`,屬合法 test fixture 與 GUI 暫存區。
+	//
+	// 設計權衡(對應 doc comment 上方說明):
+	//   - 不擋 `\AppData\Local\Temp\<anything>`,即便 path 也含 `\AppData\` 子串。
+	//   - 仍擋 `\AppData\Local\Microsoft\Credentials\`、`\AppData\Roaming\<vendor>\` 等。
+	//
+	// Carve-out 必須在 sensitivePatterns substring match 之前 short-circuit,因為
+	// `\AppData\` 一定先命中。**只**對 AppData 這一條 pattern 套 carve-out — 其他
+	// pattern(/etc/、UNC 等)在 Temp 子樹下出現仍應擋。
+	const (
+		appDataPattern         = "/appdata/"
+		appDataLocalTempPrefix = "/appdata/local/temp/"
+	)
+	inAppDataLocalTemp := strings.Contains(absPathSlash, appDataLocalTempPrefix)
+
 	for _, pattern := range sensitivePatterns {
 		patternSlash := normalizePath(pattern)
+		if patternSlash == appDataPattern && inAppDataLocalTemp {
+			continue // carve-out: `\AppData\Local\Temp\` 不視為敏感
+		}
 		if strings.Contains(absPathSlash, patternSlash) {
 			return fmt.Errorf("%w: %s", ErrSensitiveDirectory, pattern)
 		}
