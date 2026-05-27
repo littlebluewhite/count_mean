@@ -813,11 +813,13 @@ func (h *CSVHandler) WriteCCIResult(
 
 	safeSubject := calculator.SanitizeFileName(result.Subject)
 	filename := fmt.Sprintf("%s_CCI_Rudolph.csv", safeSubject)
-	outputPath := filepath.Join(h.config.OutputDir, req.SubDir, filename)
+	outputPath, joinErr := h.safeJoinOutput(req.SubDir, filename)
+	if joinErr != nil {
+		return "", fmt.Errorf("CCI 輸出路徑無效: %w", joinErr)
+	}
 
-	// Defense-in-depth: 對齊 muscle_ratio.Analyzer / WritePhaseSyncResult 同款守門。
-	checkPath := filepath.Join(h.config.OutputDir, req.SubDir, "_validation_marker")
-	if err := h.pathValidator.ValidateExternalPath(checkPath); err != nil {
+	// Defense-in-depth: system-dir prefix check via pathValidator(對齊 ADR-0001 守門)。
+	if err := h.pathValidator.ValidateExternalPath(outputPath); err != nil {
 		return "", fmt.Errorf("CCI 輸出路徑無效: %w", err)
 	}
 
@@ -952,7 +954,10 @@ func (h *CSVHandler) WriteMuscleRatioOutputAll(
 
 	safeSubject := calculator.SanitizeFileName(p.Subject)
 	filename := fmt.Sprintf("%s_muscle_ratio.csv", safeSubject)
-	outputPath := filepath.Join(h.config.OutputDir, req.SubDir, filename)
+	outputPath, joinErr := h.safeJoinOutput(req.SubDir, filename)
+	if joinErr != nil {
+		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
+	}
 
 	if err := h.validateMuscleRatioOutputDir(req.SubDir); err != nil {
 		return "", err
@@ -1002,7 +1007,10 @@ func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 
 	safeSubject := calculator.SanitizeFileName(p.Subject)
 	filename := fmt.Sprintf("%s_muscle_ratio_phases.csv", safeSubject)
-	outputPath := filepath.Join(h.config.OutputDir, req.SubDir, filename)
+	outputPath, joinErr := h.safeJoinOutput(req.SubDir, filename)
+	if joinErr != nil {
+		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
+	}
 
 	if err := h.validateMuscleRatioOutputDir(req.SubDir); err != nil {
 		return "", err
@@ -1067,10 +1075,15 @@ func nearestTimeIndex(times []float64, target float64) int {
 	return best
 }
 
-// validateMuscleRatioOutputDir は muscle_ratio write path 共用の defense-in-depth
+// validateMuscleRatioOutputDir 是 muscle_ratio write path 共用的 defense-in-depth
 // 守門 — 對齊既有 muscle_ratio.Analyzer 內 ValidateExternalPath 的位置。
+// SubDir 的 traversal 檢查已由 safeJoinOutput 在 caller 端完成;本 helper 只負責
+// system-dir prefix 檢查(/etc 等) + 確保目錄存在。
 func (h *CSVHandler) validateMuscleRatioOutputDir(subDir string) error {
-	checkPath := filepath.Join(h.config.OutputDir, subDir, "_validation_marker")
+	checkPath, joinErr := h.safeJoinOutput(subDir, "_validation_marker")
+	if joinErr != nil {
+		return fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
+	}
 	if err := h.pathValidator.ValidateExternalPath(checkPath); err != nil {
 		return fmt.Errorf("muscle_ratio 輸出路徑無效: %w", err)
 	}
@@ -1078,6 +1091,24 @@ func (h *CSVHandler) validateMuscleRatioOutputDir(subDir string) error {
 		return fmt.Errorf("muscle_ratio 輸出目錄建立失敗: %w", err)
 	}
 	return nil
+}
+
+// safeJoinOutput 把 subDir + filename 安全 join 在 OutputDir 之下,拒絕逸出 OutputDir
+// 的 SubDir(含 traversal 如 "../evil" 或絕對路徑如 "/etc")。
+//
+// ADR-0001 invariant 補課:既有 writeToTarget → WriteCSVToOutputDirectory → WriteCSV
+// 路徑透過 WriteCSV 內部 path containment 守住 OutputDir 邊界;新加的 direct
+// csvutil.WriteCSVAtomic writer(WriteCCIResult / WriteMuscleRatioOutput*)沒走
+// WriteCSV,本 helper 把同款邊界檢查補回來,確保 codex review 抓到的 SubDir traversal
+// 不會把 *.csv 寫到 OutputDir 外面。
+func (h *CSVHandler) safeJoinOutput(subDir, filename string) (string, error) {
+	joined := filepath.Join(h.config.OutputDir, subDir, filename)
+	rel, err := filepath.Rel(h.config.OutputDir, joined)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("輸出路徑逸出 OutputDir: SubDir=%q filename=%q (resolved=%q)",
+			subDir, filename, joined)
+	}
+	return joined, nil
 }
 
 var errEmptyMuscleRatioPayload = stderrors.New("WriteMuscleRatio*: payload 缺 Times/Points")

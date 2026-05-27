@@ -604,3 +604,64 @@ func TestWriteMuscleRatioOutputPhases_EmptyTimesRejected(t *testing.T) {
 	})
 	require.ErrorIs(t, err, errEmptyMuscleRatioPayload)
 }
+
+// TestSafeJoinOutput_RejectsTraversal 驗證 codex review Run 2 抓的 P2 — req.SubDir
+// 含 traversal ("../evil") 或絕對路徑 ("/etc") 時,3 個 direct atomic writer
+// (WriteCCIResult / WriteMuscleRatioOutputAll / WriteMuscleRatioOutputPhases)
+// 都要 reject,不能讓 *.csv 寫到 OutputDir 外面。
+func TestSafeJoinOutput_RejectsTraversal(t *testing.T) {
+	traversalCases := []struct {
+		name   string
+		subDir string
+	}{
+		{"relative_traversal", "../evil"},
+		{"absolute_path", "/etc"},
+		{"deep_traversal", "../../etc"},
+	}
+
+	for _, tc := range traversalCases {
+		t.Run(tc.name+"/WriteCCIResult", func(t *testing.T) {
+			handler, _ := newFormatAwareTestHandler(t)
+			_, err := handler.WriteCCIResult(context.Background(),
+				WriteRequest{SubDir: tc.subDir},
+				&cci.CCIAnalysisResult{
+					Subject:       "s",
+					GaitStartTime: 0.0,
+					GaitEndTime:   1.0,
+					TimeValues:    []float64{0.0},
+					PairResults:   []cci.CCIResult{{PairName: "P1", Values: []float64{0.1}}},
+				})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "輸出路徑")
+		})
+
+		t.Run(tc.name+"/WriteMuscleRatioOutputAll", func(t *testing.T) {
+			handler, _ := newFormatAwareTestHandler(t)
+			_, err := handler.WriteMuscleRatioOutputAll(
+				WriteRequest{SubDir: tc.subDir},
+				MuscleRatioOutputAllPayload{
+					Subject:    "s",
+					PairLabels: []string{"R1"},
+					Times:      []float64{0.0, 1.0},
+					Ratios:     [][]float64{{0.1, 0.2}},
+				})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "輸出路徑")
+		})
+
+		t.Run(tc.name+"/WriteMuscleRatioOutputPhases", func(t *testing.T) {
+			handler, _ := newFormatAwareTestHandler(t)
+			_, err := handler.WriteMuscleRatioOutputPhases(
+				WriteRequest{SubDir: tc.subDir},
+				MuscleRatioOutputPhasesPayload{
+					Subject:    "s",
+					PairLabels: []string{"R1"},
+					Times:      []float64{0.0, 1.0},
+					Ratios:     [][]float64{{0.1, 0.2}},
+					Points:     []MuscleRatioPhasePoint{{Name: "P1", Time: 0.5}},
+				})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "輸出路徑")
+		})
+	}
+}
