@@ -17,8 +17,12 @@ _Avoid_: column, channel data, muscle, signal stream.
 _Avoid_: stage, interval, segment, period.
 
 **Manifest**
-描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析都先解析 manifest 取得 dataset 集合再計算。
+描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析都先解析 manifest 取得 dataset 集合再計算。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有四個 analyzer 不消費此欄位，向後相容。
 _Avoid_: config, batch file, descriptor, sheet.
+
+**Subject**
+[[Manifest]] 一列代表的「一個分析對象」，是所有 [[Analysis pipeline family]] 與 [[Chart Composer]] 的 unit of work。在程式碼裡是 `PhaseManifest.Subject` 字串欄位（首欄）；在 UI 上 CCI / PhaseSync / Chart Composer panel 統一以「分析主題」呈現 — 兩個詞**同義**。Subject 名稱經 `SanitizeFileName` 後成為 muscle_ratio output1 (`{safeSubject}_muscle_ratio.csv`) 等下游檔名的 prefix。
+_Avoid_: trial, sample, case, 分析主題（UI label only — 內部以 Subject 為準）.
 
 **Reference EMG**
 標準化（Normalize）時作為分母的參考訊號，常見來源是 MVIC（Maximal Voluntary Isometric Contraction）。Normalizer 把主訊號除以 reference 對應 channel 的代表值。
@@ -38,17 +42,17 @@ _Avoid_: structured write, typed write, formatted output.
 _Avoid_: write options, write spec, csv request.
 
 **Analysis pipeline family**
-四個形狀相近的 GUI handler 家族：`AnalyzePhases`、`AnalyzePhaseSync`、`AnalyzeCCI`、`AnalyzeMuscleRatio`。共同形狀為「validate → execute（含 manifest/dataset load）→ CSV write via csvHandler」三步管線，輸入為 manifest 或 dataset、輸出為 result + outputPath。`AnalyzeMuscleRatio` 是 batch 變體，CSV write 暫時摺進 execute 內（per-subject），對應 [[AnalysisHandler[P, R]]] 的 WriteCSV closure 設為 nil；候選 2 推進時可把 write 上移、closure 從 nil 補回實作。
-_Not included_: `CalculateMaxMean`（batch loop + file discovery）、`NormalizeData`（雙 input file）、`AnalyzeNormalizedPhaseSync`（multi-step：load → resolve×2 → normalize → write1 → range → stats → write2，雙 output、跨 step ctx 檢查）── 形狀不同，不屬此家族；這些 handler 直接走 [[HandlerRun]]，繞過 Tier 2 樣板。
+四個形狀相近的 GUI handler 家族：`AnalyzePhases`、`AnalyzePhaseSync`、未來的 `AnalyzeCCI`、未來的 `AnalyzeMuscleRatio`。共同形狀為「validate → execute（含 manifest/dataset load）→ CSV write via csvHandler」三步管線，輸入為 manifest 或 dataset、輸出為 result + outputPath。
+_Not included_: `CalculateMaxMean`（batch loop + file discovery）、`NormalizeData`（雙 input file）── 形狀不同，不屬此家族。
 _Avoid_: GUI handler, analysis function, analyzer.
 
-**HandlerRun**
-所有 Wails GUI handler 共吃的 cross-cutting wrapper：吸收 `recoverHandlerPanic`（panic safety via named-return）+ logger entry/exit（「開始 X」/「X 完成」）+ 純 (R, error) 透傳。Contract-neutral —— body 回什麼就傳什麼，不強制 single-channel。Signature：`HandlerRun[R any](logger, name string, body func() (R, error)) (R, error)`。不注入 ctx；body 自己 close over `a.context()`。是 [[AnalysisHandler[P, R]]] 的底層；不在 [[Analysis pipeline family]] 的 handler（例如 `AnalyzeNormalizedPhaseSync`）直接呼叫此 wrapper。
-_Avoid_: HandlerWrapper, HandlerBoilerplate, RunWithRecover.
-
 **AnalysisHandler[P, R]**
-[[Analysis pipeline family]] 的泛型樣板，以 generic struct + Run method 形式存在。承載三個 field（`Name`、`Logger`、`CSV *io.CSVHandler`）與三個 closure：`Validate(P) error`（required）、`Execute(ctx, P) (R, error)`（required；樣板注入 ctx 給 Execute）、`WriteCSV(*io.CSVHandler, R) (outputPath, error)`（**optional**；nil 時 skip，對應 [[Analysis pipeline family]] batch 變體把 write 摺進 execute 的情況）。Run signature：`Run(ctx, params) (result R, outputPath string, err error)`。內部委派給 [[HandlerRun]] 拿 panic recovery + logger entry/exit；不負責 `state.Load`、result transform、i18n，這三項由 caller 在 Run 外處理。
+[[Analysis pipeline family]] 的泛型樣板，以 generic struct + Run method 形式存在。承載 `csvHandler`、`logger` 依賴，接收三個 closure（validate、execute、write CSV）注入差異。Run body 內建 `recoverHandlerPanic`、logger entry/exit、generic error wrapping；不負責 `state.Load`、result transform、i18n，這三項由 caller 在 Run 外處理。
 _Avoid_: AnalysisRunner, GenericHandler, AnalyzerWrapper.
+
+**Chart Composer**
+Visualization-only feature：讀 [[Manifest]] + 數據資料夾後，把單一 subject 的 EMG / motion / muscle_ratio output1 三類資料同框渲染成三張帶 [[Phase]] 虛線與時期百分比軸的圖。**不計算、不寫 CSV、不產生新的 result struct** —— 與 [[Analysis pipeline family]] 的形狀差異就在這裡：它是 multi-source viewer，不是 analyzer。Phase line / 百分比軸的 UX 機制沿用既有 CCI chart（go-echarts + Wails postMessage），但資料來源不同。
+_Avoid_: data plotting, chart panel, multi-chart viewer, 資料做圖（後者是舊單檔流程的口語名，新版避免共用）.
 
 ## Example dialogue
 

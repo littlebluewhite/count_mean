@@ -45,8 +45,8 @@ import (
 // 過去 known-gap 含 `GetTranslations` / `SetLanguage` /
 // `GetAvailablePhases` 三個 i18n / synchronizer dispatch shim,以「邊際效益低」
 // 為由暫緩。本輪補上 defer (defense-in-depth),從 known-gap 移除。
-// `GenerateInteractiveChart` / `GenerateChart` / `savePNGFromBase64` 已在
-// 完成補 defer,亦從 known-gap 移除。
+// 舊「資料做圖」path 的 chart 家族 method 已於 Chart Composer Slice E 移除,
+// 不再需要 panic safety net 條目。
 //
 // # 失敗模式
 //
@@ -317,6 +317,14 @@ func knownGapEntries() map[string]string {
 		"AnalyzeCCI":                 "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
 		"AnalyzeMuscleRatio":         "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
 		"AnalyzeNormalizedPhaseSync": "panic safety via HandlerRun (Tier 1, PRD #7 / wave-6)",
+		// Chart Composer family (Slice C, PRD #15) — 3 個 handler 走 HandlerRun
+		// Tier 1 拿 panic safety;body 內不再 `defer recoverHandlerPanic`。
+		// DownloadChartComposerImage 不在此 known-gap 列表 — 該 handler 鏡像
+		// DownloadCCIChart 的 dual-channel 模式,顯式 `defer recoverHandlerPanic`
+		// 在 body 第一行,AST 直接掃得到。
+		"LoadChartComposerSubjects":    "panic safety via HandlerRun (Tier 1, Chart Composer PRD #15)",
+		"LoadChartComposerEMGChannels": "panic safety via HandlerRun (Tier 1, Chart Composer PRD #15)",
+		"GenerateChartComposer":        "panic safety via HandlerRun (Tier 1, Chart Composer PRD #15)",
 	}
 }
 

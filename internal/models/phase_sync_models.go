@@ -11,6 +11,8 @@ import "time"
 //     （見 synchronizer.TimeSynchronizer.MotionIndexToEMGTime）
 //   - PhasePoints：10 個分期點，混合 force-time（OptFloat 秒，可區分 t=0 與「未提供」）
 //     與 motion-index（int，0 仍為「未提供」sentinel），由 PhasePoint.IsMotionIndex 區分
+//   - MuscleRatioFile：V.14 manifest 第 16 欄；filename only、相對 DataFolder、可空。
+//     V.10 / V.13 manifest（15 欄）解析時為 ""，仍走 happy path。
 //
 // "未提供" 契約（Batch T 重構後）：
 //   - 力板時間欄位 (P0/P1/P2/S/C/T0/T/L)：型別為 OptFloat，Set=false 表示未提供。
@@ -37,6 +39,7 @@ type PhaseManifest struct {
 	EMGFile         string      // EMG檔案名
 	EMGMotionOffset int         // EMG第一筆對應Motion的index
 	PhasePoints     PhasePoints // 分期點數據
+	MuscleRatioFile string      // V.14 第 16 欄；filename only、相對 DataFolder、可空（V.10/V.13 manifest 為 ""）
 }
 
 // PhasePoints 分期點定義。

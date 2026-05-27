@@ -283,7 +283,6 @@ const (
 	// Phase 2 panel titles & descriptions (2026-05-14).
 	KeyPanelMaxmeanTitle     = "panel.maxmean.title"
 	KeyPanelNormalizeTitle   = "panel.normalize.title"
-	KeyPanelChartTitle       = "panel.chart.title"
 	KeyPanelPhaseTitle       = "panel.phase.title"
 	KeyPanelPhaseSyncTitle   = "panel.phasesync.title"
 	KeyPanelCCITitle         = "panel.cci.title"
@@ -298,7 +297,6 @@ const (
 	KeyButtonStartNormalize    = "button.start_normalize"
 	KeyButtonStartAnalyze      = "button.start_analyze"
 	KeyButtonStartBatchAnalyze = "button.start_batch_analyze"
-	KeyButtonDownloadChart     = "button.download_chart"
 	KeyButtonOpenOutputFolder  = "button.open_output_folder"
 
 	// Phase 2 form labels — process mode (MaxMean panel).
@@ -319,14 +317,6 @@ const (
 	KeyFormLabelReferenceFile    = "form.label.reference_file"
 	KeyFormLabelOutputName       = "form.label.output_name"
 	KeyFormPlaceholderOutputName = "form.placeholder.output_name"
-
-	// Phase 2 form labels — Chart panel.
-	KeyFormLabelChartFile      = "form.label.chart_file"
-	KeyFormLabelChartTitle     = "form.label.chart_title"
-	KeyFormDefaultChartTitle   = "form.default.chart_title"
-	KeyFormLabelSelectColumns  = "form.label.select_columns"
-	KeyFormHelpSelectFileFirst = "form.help.select_file_first"
-	KeyChartPreviewTitle       = "chart.preview.title"
 
 	// Phase 2 form labels — Phase panel.
 	KeyFormLabelPhaseFile         = "form.label.phase_file"
@@ -391,90 +381,77 @@ const (
 	KeyDialogTitleHint          = "dialog.title.hint"
 
 	// Phase 2 static error messages.
-	KeyErrorMsgOnlyCSV               = "error.msg.only_csv"
-	KeyErrorMsgSelectInputFile       = "error.msg.select_input_file"
-	KeyErrorMsgSelectInputFolder     = "error.msg.select_input_folder"
-	KeyErrorMsgSelectBothFiles       = "error.msg.select_both_files"
-	KeyErrorMsgChartSelectColumns    = "error.msg.chart_select_columns"
-	KeyErrorMsgChartNotFound         = "error.msg.chart_not_found"
-	KeyErrorMsgCCIChartNotFound      = "error.msg.cci_chart_not_found"
-	KeyErrorMsgPhaseInputs           = "error.msg.phase_inputs"
-	KeyErrorMsgPhasePointsCount      = "error.msg.phase_points_count"
-	KeyErrorMsgFillRequiredFields    = "error.msg.fill_required_fields"
-	KeyErrorMsgMuscleFillFields      = "error.msg.muscle_fill_fields"
-	KeyErrorMsgOpenOutputFolderFail  = "error.msg.open_output_folder"
-	KeyErrorMsgEChartsNotFound       = "error.msg.echarts_not_found"
+	KeyErrorMsgOnlyCSV              = "error.msg.only_csv"
+	KeyErrorMsgSelectInputFile      = "error.msg.select_input_file"
+	KeyErrorMsgSelectInputFolder    = "error.msg.select_input_folder"
+	KeyErrorMsgSelectBothFiles      = "error.msg.select_both_files"
+	KeyErrorMsgCCIChartNotFound     = "error.msg.cci_chart_not_found"
+	// Chart download / ECharts runtime error messages (CCI download + Composer download 共用)。
+	// Slice E (#20) deletion sweep 把舊「資料做圖」一族 key 全刪時誤帶這 4 個;CCI 與
+	// Composer download 路徑都還在用,restore 維持 user-facing message 不破。
 	KeyErrorMsgChartElementNotFound  = "error.msg.chart_element_not_found"
 	KeyErrorMsgChartInstanceNotFound = "error.msg.chart_instance_not_found"
+	KeyErrorMsgEChartsNotFound       = "error.msg.echarts_not_found"
+	KeyErrorMsgPhaseInputs          = "error.msg.phase_inputs"
+	KeyErrorMsgPhasePointsCount     = "error.msg.phase_points_count"
+	KeyErrorMsgFillRequiredFields   = "error.msg.fill_required_fields"
+	KeyErrorMsgMuscleFillFields     = "error.msg.muscle_fill_fields"
+	KeyErrorMsgOpenOutputFolderFail = "error.msg.open_output_folder"
 
 	// Phase 2 dynamic error messages (with %v for error / path).
 	KeyErrorMsgCalculationFailedDyn   = "error.msg.calculation_failed"
 	KeyErrorMsgNormalizationFailedDyn = "error.msg.normalization_failed"
-	KeyErrorMsgChartGenFailedDyn      = "error.msg.chart_generation_failed"
-	KeyErrorMsgChartDownloadFailedDyn = "error.msg.chart_download_failed"
 	KeyErrorMsgPhaseAnalysisFailedDyn = "error.msg.phase_analysis_failed"
 	KeyErrorMsgConfigSaveFailedDyn    = "error.msg.config_save_failed"
 	KeyErrorMsgConfigResetFailedDyn   = "error.msg.config_reset_failed"
 	KeyErrorMsgConfigImportFailedDyn  = "error.msg.config_import_failed"
 	KeyErrorMsgFilePickerFailedDyn    = "error.msg.file_picker_failed"
-	KeyErrorMsgLoadColumnsFailedDyn   = "error.msg.load_columns_failed"
-	KeyErrorMsgChartPreviewFailedDyn  = "error.msg.chart_preview_failed"
 	KeyErrorMsgLoadSubjectsFailedDyn  = "error.msg.load_subjects_failed"
 	KeyErrorMsgAnalysisFailedDyn      = "error.msg.analysis_failed_dynamic"
 	KeyErrorMsgLanguageSwitchFailed   = "error.msg.language_switch_failed"
+	// Chart download dynamic error (CCI + Composer download 共用)。
+	KeyErrorMsgChartDownloadFailedDyn = "error.msg.chart_download_failed"
 
 	// Phase 2 success messages (most contain %s for output path).
 	KeyOkMsgCalculationDone        = "success.msg.calculation_done"
 	KeyOkMsgNormalizationDone      = "success.msg.normalization_done"
-	KeyOkMsgChartGenerated         = "success.msg.chart_generated"
-	KeyOkMsgChartDownloaded        = "success.msg.chart_downloaded"
 	KeyOkMsgPhaseAnalysisDone      = "success.msg.phase_analysis_done"
 	KeyOkMsgConfigSaved            = "success.msg.config_saved"
 	KeyOkMsgConfigReset            = "success.msg.config_reset"
 	KeyOkMsgConfigImported         = "success.msg.config_imported"
 	KeyOkMsgAnalysisDone           = "success.msg.analysis_done"
 	KeyOkMsgCCIAnalysisDone        = "success.msg.cci_analysis_done"
+	KeyOkMsgChartDownloaded        = "success.msg.chart_downloaded"
 	KeyOkMsgNormalizedAnalysisDone = "success.msg.normalized_analysis_done"
 
 	// Phase 2 info messages.
 	KeyInfoMsgOutputFolder = "info.msg.output_folder"
 
 	// Phase 2 status bar messages (status bar bottom of window).
-	KeyStatusAppReady              = "status.app_ready"
-	KeyStatusCalculationRunning    = "status.calculation_running"
-	KeyStatusCalculationDone       = "status.calculation_done"
-	KeyStatusCalculationFailed     = "status.calculation_failed"
-	KeyStatusNormalizationRunning  = "status.normalization_running"
-	KeyStatusNormalizationDone     = "status.normalization_done"
-	KeyStatusNormalizationFailed   = "status.normalization_failed"
-	KeyStatusChartGenerating       = "status.chart_generating"
-	KeyStatusChartGenerated        = "status.chart_generated"
-	KeyStatusChartGenerationFailed = "status.chart_generation_failed"
-	KeyStatusChartDownloading      = "status.chart_downloading"
-	KeyStatusChartDownloadDone     = "status.chart_download_done"
-	KeyStatusChartDownloadFailed   = "status.chart_download_failed"
-	KeyStatusPhaseAnalysisRunning  = "status.phase_analysis_running"
-	KeyStatusPhaseAnalysisDone     = "status.phase_analysis_done"
-	KeyStatusPhaseAnalysisFailed   = "status.phase_analysis_failed"
-	KeyStatusPhasesyncRunning      = "status.phasesync_running"
-	KeyStatusCCIRunning            = "status.cci_running"
-	KeyStatusCCIChartDownloading   = "status.cci_chart_downloading"
-	KeyStatusNormalizedRunning     = "status.normalized_running"
-	KeyStatusMuscleRunning         = "status.muscle_running"
-	KeyStatusMusclePartialFailed   = "status.muscle_partial_failed"
-	KeyStatusAnalysisDone          = "status.analysis_done"
-	KeyStatusAnalysisFailed        = "status.analysis_failed"
-	KeyStatusSubjectsLoaded        = "status.subjects_loaded"
-
-	// Phase 2 dynamic column-loading status.
-	KeyStatusLoadingColumns    = "status.loading_columns"
-	KeyStatusLoadColumnsFailed = "status.load_columns_failed"
+	KeyStatusAppReady             = "status.app_ready"
+	KeyStatusCalculationRunning   = "status.calculation_running"
+	KeyStatusCalculationDone      = "status.calculation_done"
+	KeyStatusCalculationFailed    = "status.calculation_failed"
+	KeyStatusNormalizationRunning = "status.normalization_running"
+	KeyStatusNormalizationDone    = "status.normalization_done"
+	KeyStatusNormalizationFailed  = "status.normalization_failed"
+	KeyStatusPhaseAnalysisRunning = "status.phase_analysis_running"
+	KeyStatusPhaseAnalysisDone    = "status.phase_analysis_done"
+	KeyStatusPhaseAnalysisFailed  = "status.phase_analysis_failed"
+	KeyStatusPhasesyncRunning     = "status.phasesync_running"
+	KeyStatusCCIRunning           = "status.cci_running"
+	KeyStatusCCIChartDownloading  = "status.cci_chart_downloading"
+	KeyStatusChartDownloadDone    = "status.chart_download_done"
+	KeyStatusChartDownloadFailed  = "status.chart_download_failed"
+	KeyStatusNormalizedRunning    = "status.normalized_running"
+	KeyStatusMuscleRunning        = "status.muscle_running"
+	KeyStatusMusclePartialFailed  = "status.muscle_partial_failed"
+	KeyStatusAnalysisDone         = "status.analysis_done"
+	KeyStatusAnalysisFailed       = "status.analysis_failed"
+	KeyStatusSubjectsLoaded       = "status.subjects_loaded"
 
 	// Phase 2 console warnings.
 	KeyWarnGetVersionFailed = "warning.get_version_failed"
-
-	// Phase 2 chart placeholder (used by index.html before user opens chart panel).
-	KeyChartTitlePlaceholder = "chart.title.placeholder"
 
 	// Phase 2 import config: invalid format error (thrown by main.js, surfaced via ShowError).
 	KeyErrorMsgInvalidConfigFormat = "error.msg.invalid_config_format"

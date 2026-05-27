@@ -911,6 +911,76 @@ func TestPhaseManifestParser_ParseFile_StripsBOM(t *testing.T) {
 		"Subject 不能含 U+FEFF — manifest 必須在剝除 BOM 後 parse")
 }
 
+// TestPhaseManifestParser_MuscleRatioFile_VersionMatrix 釘住 V.14 manifest schema
+// 升級的核心契約 — 新增第 16 欄 MuscleRatioFile（filename only、相對 DataFolder、可空）
+// 必須對既有 V.10 / V.13 manifest（15 欄）保持 happy path:
+//
+//	1) V.10 fixture（15 欄,header 不含 MuscleRatioFile）→ 解析成功,MuscleRatioFile == ""
+//	2) V.14 fixture（16 欄,header 含 MuscleRatioFile）  → 解析成功,MuscleRatioFile == "muscle_ratio_subject1.csv"
+//	3) V.14 fixture with empty MuscleRatioFile（16 欄但第 16 欄為空字串）→ MuscleRatioFile == ""
+//
+// 同時:PhaseManifestMinFields 必須維持 15(新欄位純加值,不收緊既有契約)。
+func TestPhaseManifestParser_MuscleRatioFile_VersionMatrix(t *testing.T) {
+	// 釘住常數值 — PhaseManifestMinFields 必須維持 15,V.10 / V.13 仍 happy path。
+	require.Equal(t, 15, PhaseManifestMinFields,
+		"PhaseManifestMinFields 必須維持 15;V.14 新增第 16 欄是純加值,不可收緊既有 V.10/V.13 契約")
+
+	tests := []struct {
+		name                    string
+		csvContent              string
+		expectedMuscleRatioFile string
+	}{
+		{
+			name: "V.10 manifest (15 cols, no MuscleRatioFile header) -> empty",
+			csvContent: `Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
+Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,150,6.000,7.000,200,8.000`,
+			expectedMuscleRatioFile: "",
+		},
+		{
+			name: "V.14 manifest (16 cols) -> populated",
+			csvContent: `Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L,MuscleRatioFile
+Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,150,6.000,7.000,200,8.000,muscle_ratio_subject1.csv`,
+			expectedMuscleRatioFile: "muscle_ratio_subject1.csv",
+		},
+		{
+			name: "V.14 manifest with empty MuscleRatioFile cell -> empty",
+			csvContent: `Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L,MuscleRatioFile
+Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,150,6.000,7.000,200,8.000,`,
+			expectedMuscleRatioFile: "",
+		},
+		{
+			name: "V.14 manifest with whitespace around MuscleRatioFile -> trimmed",
+			csvContent: `Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L,MuscleRatioFile
+Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,150,6.000,7.000,200,8.000,  muscle_ratio_subject1.csv  `,
+			expectedMuscleRatioFile: "muscle_ratio_subject1.csv",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_v14_*.csv")
+			require.NoError(t, err)
+			_, err = tmpFile.WriteString(tt.csvContent)
+			require.NoError(t, err)
+			require.NoError(t, tmpFile.Close())
+
+			parser := NewPhaseManifestParser()
+			manifests, err := parser.ParseFile(tmpFile.Name())
+			require.NoError(t, err, "V.10 / V.14 manifest 皆必須解析成功")
+			require.Len(t, manifests, 1)
+
+			assert.Equal(t, tt.expectedMuscleRatioFile, manifests[0].MuscleRatioFile,
+				"MuscleRatioFile 解析結果不符預期")
+
+			// V.10 / V.14 都應保留既有 happy path — 隨手驗一下其他欄位沒被破壞。
+			assert.Equal(t, "Subject1", manifests[0].Subject)
+			assert.Equal(t, "motion1.csv", manifests[0].MotionFile)
+			assert.Equal(t, models.MakeOpt(1.000), manifests[0].PhasePoints.P0)
+			assert.Equal(t, 150, manifests[0].PhasePoints.D)
+		})
+	}
+}
+
 // TestPhaseManifest_StripsBOM對齊 ANC 版本 TestANCParser_StripsBOM 的契約:
 // (1) BOM-prefixed manifest CSV 必須能順利 ParseFile,不報錯;
 // (2) Subject / MotionFile / ForceFile / EMGFile 都不能殘留 BOM bytes;

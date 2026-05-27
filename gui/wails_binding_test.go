@@ -1,7 +1,6 @@
 package gui
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -43,60 +42,6 @@ func TestGetAvailablePhases_ReturnsStringMapForWailsCompatibility(t *testing.T) 
 	assert.Equal(t,
 		[]string{"P1", "P2", "S", "C", "D", "T0", "T", "O", "L"},
 		phases["end"])
-}
-
-// TestGenerateChart_InvalidImageData_PropagatesError 是 cross-compare review 補的
-// Wave 2 P1 fix (GenerateChart silent-success 移除) 的 regression test。
-// 過去 chart.Generator 靜態 PNG 路徑會建出 chartConfig 但從未 WriteFile，仍回傳
-// Success=true → 對前端是 silent success。修法後改為「沒有 ImageData = 錯誤」。
-// 守護此契約：空 ImageData / 非 PNG dataURL 必須 return error 而非 nil result。
-//
-// GenerateChart 加 defer recoverHandlerPanic 後不能再用 nil App receiver —
-// defer 引數 `a.logger` 在 method entry 就被評估,nil receiver 在 defer 註冊前
-// 就會 panic,test 變成測「defer 註冊前 panic」而非「業務 happy path」。改用
-// NewApp() 建合法 App,業務 early-return 路徑與 nil-app 行為等價(都回
-// ErrInvalidImageFormat / ErrPNGSignatureInvalid)。
-func TestGenerateChart_InvalidImageData_PropagatesError(t *testing.T) {
-	app := NewApp(config.DefaultConfig(), "test-invalid-image-data")
-
-	t.Run("empty_ImageData", func(t *testing.T) {
-		result, err := app.GenerateChart(ChartParams{
-			Title:    "test",
-			FilePath: "irrelevant.csv",
-			// ImageData intentionally empty
-		})
-		require.Nil(t, result, "empty ImageData should NOT return a result (silent-success regression)")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidImageFormat),
-			"want ErrInvalidImageFormat, got %v", err)
-	})
-
-	t.Run("non_png_data_url", func(t *testing.T) {
-		result, err := app.GenerateChart(ChartParams{
-			Title:     "test",
-			FilePath:  "irrelevant.csv",
-			ImageData: "data:image/svg+xml;base64,PHN2Zy8+",
-		})
-		require.Nil(t, result, "non-png dataURL should NOT return a result")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidImageFormat),
-			"want ErrInvalidImageFormat, got %v", err)
-	})
-
-	// 端對端守門:GenerateChart 必須走 DecodeAndValidatePNG,
-	// reject 非 PNG 的 base64 payload(即使 dataURL prefix 是 image/png)。
-	t.Run("data_url_with_invalid_png_payload", func(t *testing.T) {
-		// 用 image/png prefix 但 payload 是 'AAAA...' 不含 PNG signature
-		result, err := app.GenerateChart(ChartParams{
-			Title:     "test",
-			FilePath:  "irrelevant.csv",
-			ImageData: "data:image/png;base64,AAAAAAAAAAAAAAAAAAAA",
-		})
-		require.Nil(t, result)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrPNGSignatureInvalid),
-			"PNG-prefixed dataURL 內含非 PNG signature 必須被 H26 validator reject, got %v", err)
-	})
 }
 
 // TestApplyConfig_RebuildsComponents 是 cross-compare review 補的 Wave 2 P1 fix

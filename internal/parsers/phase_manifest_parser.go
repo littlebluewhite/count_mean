@@ -190,6 +190,13 @@ func (p *PhaseManifestParser) parseRecord(
 
 	manifest.PhasePoints = phasePoints
 
+	// V.14 manifest 第 16 欄 MuscleRatioFile（filename only、相對 DataFolder、可空）。
+	// V.10 / V.13 manifest 只有 15 欄,此處留空字串 — PhaseManifestMinFields 維持 15
+	// 表示「新欄位純加值,不影響舊 manifest happy path」。
+	if len(record) >= 16 {
+		manifest.MuscleRatioFile = strings.TrimSpace(record[15])
+	}
+
 	return manifest, nil
 }
 
