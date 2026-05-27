@@ -13,7 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"count_mean/internal/config"
 	"count_mean/internal/i18n"
+	"count_mean/internal/io"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 )
@@ -30,6 +32,15 @@ func TestMain(m *testing.M) {
 	_ = i18n.InitI18n("./nonexistent") // 不存在路徑 → fallback 走內建 translationData
 	i18n.SetLocale(i18n.LocaleZhTW)    // 覆寫 InitI18n 內部的 system-locale detection
 	os.Exit(m.Run())
+}
+
+// newTestCSVHandler 建立一個以 outDir 為輸出根的 CSVHandler,供 analyzer_test 注入 Params.CSVHandler。
+func newTestCSVHandler(outDir string) *io.CSVHandler {
+	return io.NewCSVHandler(&config.AppConfig{
+		OutputDir:     outDir,
+		ScalingFactor: 3,
+		Precision:     6,
+	})
 }
 
 // emgHeaderLine 是 8 通道 R.* EMG CSV 的標準標題列（與 input/NSF_*_RMS*.csv 對齊）。
@@ -136,6 +147,7 @@ func TestAnalyze_MissingChannelFailFast(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -173,6 +185,7 @@ func TestAnalyze_PhasePoints_FullPhasesYieldRows(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -247,6 +260,7 @@ func TestAnalyze_PhasePoints_NoIntervalMidpointsWhenSDTAbsent(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 
@@ -307,6 +321,7 @@ func TestAnalyze_PhasePoints_MissingS_OnlyMidDT(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 
@@ -341,6 +356,7 @@ func TestAnalyze_PhasePoints_MissingD_NoIntervalMidpoints(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 
@@ -375,6 +391,7 @@ func TestAnalyze_PhasePoints_MissingT_OnlyMidSD(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 
@@ -413,6 +430,7 @@ func TestAnalyze_PhasePoints_MissingC_NoDuplicateMidSD(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 
@@ -450,6 +468,7 @@ func TestAnalyze_PhasePoints_MissingT0_NoDuplicateMidDT(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 
@@ -493,6 +512,7 @@ func TestAnalyze_PhasePoints_MissingC_ReversedSDOrder_NoDuplicate(t *testing.T) 
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 
@@ -535,6 +555,7 @@ func TestAnalyze_PhasePoints_MissingT0_ReversedDTOrder_NoDuplicate(t *testing.T)
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 
@@ -571,6 +592,7 @@ func TestAnalyze_PhaseTimeOutOfRange(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 
@@ -620,6 +642,7 @@ func TestAnalyze_ConcurrentCallsNoRace(t *testing.T) {
 					ManifestFile: manifestPath,
 					DataFolder:   dataDir,
 					OutputDir:    outDir,
+				CSVHandler:   newTestCSVHandler(outDir),
 				})
 				// 不 assert err — concurrent writes 到同個 outDir 可能有檔案 race（O_TRUNC），
 				// 但本 test 是 race detector 守門：只要 -race 不報 race 就行
@@ -658,6 +681,7 @@ func TestAnalyze_EMGFileWithLiteralPercent(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -686,6 +710,7 @@ func TestAnalyze_EMGFileTraversalRejected(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -718,6 +743,7 @@ func TestAnalyze_CaseOnlySubjectCollision_FailFast(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.Error(t, err, "case-only 不同的 subject 在 case-insensitive FS 上會互覆蓋，應 fail-fast")
 	assert.Contains(t, err.Error(), "輸出檔名衝突")
@@ -755,6 +781,7 @@ func TestAnalyze_NFCvsNFDSubjectCollision_FailFast(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.Error(t, err, "NFC 與 NFD 的 \"café\" 在 macOS HFS+/APFS 上為同檔，應 fail-fast")
 	assert.Contains(t, err.Error(), "輸出檔名衝突")
@@ -784,6 +811,7 @@ func TestAnalyze_FormulaInjectionSubject_Sanitized(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -826,6 +854,7 @@ func TestAnalyze_NegativeTime_Handled(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err, "負時間 EMG 不應讓批次 Analyze 整體失敗")
 	require.Len(t, result, 1)
@@ -854,6 +883,7 @@ func TestAnalyze_DuplicateSanitizedSubjects_FailFast(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.Error(t, err, "重複 sanitized subject 應 fail-fast")
 	assert.Contains(t, err.Error(), "輸出檔名衝突")
@@ -880,6 +910,7 @@ func TestAnalyze_TwoSubjects_BothExported(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	require.Len(t, result, 2)
@@ -936,6 +967,7 @@ func TestAnalyze_NaNCellWrittenAsEmpty(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	sr := result[0]
@@ -980,6 +1012,7 @@ func TestAnalyze_EMGUpstreamNaN_OutputCellEmpty(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	sr := result[0]
@@ -1025,6 +1058,7 @@ func TestAnalyze_EmptyManifest_FailFast(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "沒有任何主題記錄")
@@ -1049,6 +1083,7 @@ func TestAnalyze_EmptySubject_Rejected(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -1083,6 +1118,7 @@ func TestAnalyze_EMGFileNotFound(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -1117,6 +1153,7 @@ func TestAnalyze_PhaseTimeAtBoundary(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 
@@ -1153,6 +1190,7 @@ func TestAnalyze_Output2WriteFailure_StickyOutput1Success(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -1198,6 +1236,7 @@ func TestAnalyze_ConcurrentCallsNoRace_IsolatedFiles(t *testing.T) {
 				ManifestFile: manifestPath,
 				DataFolder:   dataDir,
 				OutputDir:    perOut,
+				CSVHandler:   newTestCSVHandler(perOut),
 			})
 			_ = err
 		}(i)
@@ -1231,6 +1270,7 @@ func TestAnalyze_ContextCancelledBeforeStart(t *testing.T) {
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
 		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
 	})
 
 	require.Error(t, err, "ctx 已 cancel,Analyze 必須回 error")
@@ -1246,6 +1286,7 @@ func TestAnalyze_NilContext(t *testing.T) {
 		ManifestFile: filepath.Join(tempDir, "no-manifest.csv"),
 		DataFolder:   tempDir,
 		OutputDir:    tempDir,
+		CSVHandler:   newTestCSVHandler(tempDir),
 	})
 	require.Error(t, err, "nil ctx 必須回 error")
 	assert.Contains(t, err.Error(), "ctx", "錯誤訊息應指出 ctx 為 nil")
