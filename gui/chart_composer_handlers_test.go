@@ -176,6 +176,52 @@ func TestLoadChartComposerSubjects_RejectsTraversalPath(t *testing.T) {
 	assert.Contains(t, result.Message, "路徑驗證失敗")
 }
 
+// TestLoadChartComposerSubjects_SurfacesMissingEMGFiles 釘住 Bug 1 整合:
+// LoadChartComposerSubjects 在 Load 階段呼叫 manifest.ValidateAllEMGFiles
+// 掃過所有 EMG 檔,把不存在 row 收集到 result.MissingFiles surface 給 user。
+// Success 仍為 true(non-blocking) — user 仍可在 dropdown 選其他 OK subject
+// 繼續分析,只是有 missing 的會被警告。
+//
+// 動機:V.14 manifest 升級時 NSF 系列 EMGFile 欄誤改,user 在 Chart Composer
+// Generate 階段才看到「EMG 檔案不存在」錯誤;此整合讓 Load 階段就 surface,
+// 避免 user 進 dropdown 選 subject 後才在最後一步炸。
+func TestLoadChartComposerSubjects_SurfacesMissingEMGFiles(t *testing.T) {
+	app := setupChartComposerTestApp(t)
+	dataFolder := t.TempDir()
+
+	// 只建 ok subject 對應的 EMG;broken subject 的 EMG 故意不建。
+	writeChartComposerMinimalEMG(t, filepath.Join(dataFolder, "exists.csv"))
+
+	// 注意:LoadChartComposerSubjects 只 LoadManifests + dedup,**不會** 嘗試
+	// parse motion/force(那是 LoadChartComposerEMGChannels / GenerateComposerChart
+	// 的事),所以 fixture 不必建 motion.csv / force.anc。Subject dropdown 邏輯
+	// 只看 EMGFile 欄是否 disk 上存在。
+	manifestContent := "Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n" +
+		"OkSubject,motion.csv,force.anc,exists.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,0.8\n" +
+		"BrokenSubject,motion.csv,force.anc,missing.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,0.8"
+	manifestPath := filepath.Join(dataFolder, "manifest.csv")
+	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o644))
+
+	result, err := app.LoadChartComposerSubjects(&LoadChartComposerSubjectsParams{
+		ManifestPath: manifestPath,
+		DataFolder:   dataFolder,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Success,
+		"missing EMG 不該阻擋 Load (non-blocking surface),Message=%s", result.Message)
+	assert.Equal(t, []string{"OkSubject", "BrokenSubject"}, result.Subjects,
+		"dropdown 仍應列出兩個 subject — missing 的 user 仍可選看到 warning")
+
+	require.Len(t, result.MissingFiles, 1,
+		"應 surface 1 個 missing EMG row,實際 %d:%+v", len(result.MissingFiles), result.MissingFiles)
+	assert.Equal(t, "BrokenSubject", result.MissingFiles[0].Subject)
+	assert.Equal(t, "missing.csv", result.MissingFiles[0].EMGFile)
+	assert.Contains(t, result.MissingFiles[0].ErrMessage, "missing.csv",
+		"ErrMessage 應含 missing.csv 名稱 / path 讓 user 知道期待的檔位置")
+}
+
 // ---------------------------------------------------------------------------
 // LoadChartComposerEMGChannels
 // ---------------------------------------------------------------------------

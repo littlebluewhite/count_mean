@@ -85,11 +85,29 @@ type DownloadChartComposerImageParams struct {
 	OutputPath string `json:"outputPath"`
 }
 
+// MissingFileDTO 把 manifest.MissingRow 轉成 JSON-marshalable form(error type
+// 不可直接被 Wails JSON encoder 處理,改用 ErrMessage 字串)。
+//
+// 前端可透過 ChartComposerSubjectsResult.MissingFiles 列出在 Load 階段就偵測到
+// 缺 EMG 檔的 row,UI 顯示警告 banner / 表格給 user 看「期待的檔在哪、為何沒找到」,
+// 而非等 Generate 階段才炸。
+type MissingFileDTO struct {
+	Subject    string `json:"subject"`    // 對應 PhaseManifest.Subject
+	EMGFile    string `json:"emgFile"`    // manifest 內字面的 EMGFile 欄
+	ErrMessage string `json:"errMessage"` // ResolveEMGFile error 訊息(含期待路徑)
+}
+
 // ChartComposerSubjectsResult Wails RPC result for subject list lookup.
+//
+// MissingFiles 是 Bug 1 整合產物:LoadChartComposerSubjects 在 Load 階段
+// validator-pass 掃過所有 EMG 檔,把缺檔 row 收集進來。non-blocking — Success
+// 仍可能為 true,user 看到 missing list 後決定下一步(改 manifest / data folder
+// 或忽略 missing 跑健康的 subject)。
 type ChartComposerSubjectsResult struct {
-	Subjects []string `json:"subjects"`
-	Success  bool     `json:"success"`
-	Message  string   `json:"message"`
+	Subjects     []string         `json:"subjects"`
+	MissingFiles []MissingFileDTO `json:"missingFiles"`
+	Success      bool             `json:"success"`
+	Message      string           `json:"message"`
 }
 
 // ChartComposerChannelsResult Wails RPC result for EMG channel lookup.
@@ -203,10 +221,25 @@ func (a *App) LoadChartComposerSubjects(
 			subjects = append(subjects, s)
 		}
 
+		// Bug 1 整合:Load 階段先掃過所有 EMG 檔,把不存在的 row surface 給前端,
+		// 避免 user 進 dropdown 後在 Generate 階段才看到「EMG 檔案不存在」錯誤。
+		// non-blocking — 即使有 missing,dropdown 仍列出全部 subject,user 自行
+		// 決定下一步(改 manifest / data folder 或忽略 missing 跑其他 OK subject)。
+		missing := manifest.ValidateAllEMGFiles(manifests, params.DataFolder)
+		missingDTOs := make([]MissingFileDTO, len(missing))
+		for i, m := range missing {
+			missingDTOs[i] = MissingFileDTO{
+				Subject:    m.Subject,
+				EMGFile:    m.EMGFile,
+				ErrMessage: m.Err.Error(),
+			}
+		}
+
 		return &ChartComposerSubjectsResult{
-			Subjects: subjects,
-			Success:  true,
-			Message:  fmt.Sprintf("已載入 %d 個主題", len(subjects)),
+			Subjects:     subjects,
+			MissingFiles: missingDTOs,
+			Success:      true,
+			Message:      fmt.Sprintf("已載入 %d 個主題", len(subjects)),
 		}, nil
 	})
 }
