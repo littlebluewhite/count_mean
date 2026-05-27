@@ -30,6 +30,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -156,6 +157,15 @@ func (a *App) LoadChartComposerSubjects(
 			return failedChartComposerSubjectsResult("參數為空"), nil
 		}
 
+		// DataFolder 必填短路 — validateExternalPathInputs 對空字串視為「跳過驗
+		// 證」放行；若 manifest 內 EMG/Motion 走相對路徑，manifest.ResolveEMGFile
+		// 會以 process cwd 接相對檔名，讀到 app cwd 的同名檔而非目標病患資料夾，
+		// 是 silent visual / data bug。對齊 cci_handlers.validateCCIParams 的
+		// ErrNoDataFolder 慣例，在入口 fail-fast。
+		if params.DataFolder == "" {
+			return failedChartComposerSubjectsResult(ErrNoDataFolder.Error()), nil
+		}
+
 		// 邊界路徑驗證 — manifest 與 data folder 都來自前端 file dialog。
 		// 對齊 sibling handler (cci / muscle_ratio / phase_sync) 的 defense-in-depth 模式。
 		if pathErr := validateExternalPathInputs(
@@ -207,6 +217,11 @@ func (a *App) LoadChartComposerEMGChannels(
 	return HandlerRun(a.logger, "Chart Composer 載入 EMG 通道", func() (*ChartComposerChannelsResult, error) {
 		if params == nil {
 			return failedChartComposerChannelsResult("參數為空"), nil
+		}
+
+		// DataFolder 必填短路（見 LoadChartComposerSubjects 同欄位註解）。
+		if params.DataFolder == "" {
+			return failedChartComposerChannelsResult(ErrNoDataFolder.Error()), nil
 		}
 
 		if pathErr := validateExternalPathInputs(
@@ -284,6 +299,14 @@ func (a *App) GenerateChartComposer(
 			return failedChartComposerResult("參數為空"), nil
 		}
 
+		// DataFolder 必填短路（見 LoadChartComposerSubjects 同欄位註解）。
+		// 順序：nil → DataFolder → boundary path → Subject → SelectedChannels；
+		// 邊界路徑優先於業務參數對齊 sibling handler(cci / muscle_ratio)的
+		// fail-fast 順序，避免 traversal-path test 被業務參數 short-circuit 蓋掉。
+		if params.DataFolder == "" {
+			return failedChartComposerResult(ErrNoDataFolder.Error()), nil
+		}
+
 		if pathErr := validateExternalPathInputs(
 			"分期總檔案", params.ManifestPath,
 			"資料夾", params.DataFolder,
@@ -308,6 +331,18 @@ func (a *App) GenerateChartComposer(
 			return failedChartComposerResult(
 				fmt.Sprintf("Subject %q 不存在於分期總檔案", params.Subject),
 			), nil
+		}
+
+		// SelectedChannels 空 slice → fail-fast。
+		// chart.RenderComposer 內部對 empty SelectedChannels 走「fallback 全
+		// channel」(buildEMGSeries line 235-241)是 composer 合理 default;但
+		// Slice D frontend 預設「不勾」,使用者沒勾就不該渲染任何 EMG。handler
+		// 是兩個語意之間的守門點 — 在這裡 fail-fast 讓 UI 行為一致。
+		// 放在 manifest+subject 解析之後 — 維持「邊界路徑 → 結構性檢查 → 業務
+		// 參數」的 fail-fast 順序;對 sibling test (UnknownSubject /
+		// RejectsTraversalPath) 不形成 short-circuit 蓋過。
+		if len(params.SelectedChannels) == 0 {
+			return failedChartComposerResult("請至少選擇一個 EMG 通道"), nil
 		}
 
 		// 載入 EMG(必要)
@@ -351,13 +386,21 @@ func (a *App) GenerateChartComposer(
 			muscleRatioData = mr
 		}
 
+		// PhasePoints (P0/P1/P2/S/C/T0/T/L) 在 manifest 內為**力板時間** domain
+		// 秒值（見 internal/models/phase_sync_models.go PhasePoints 註解）。Chart
+		// Composer 的所有 grid X 軸是 **EMG 時間** domain；若不換算直接 attach,
+		// markLine 會早 / 晚整個 sync offset(`(EMGMotionOffset - 1) / 250` 秒)—
+		// silent visual bug。對齊 synchronizer.TimeSynchronizer.ForceTimeToEMGTime
+		// 公式逐欄換算;Set=false 的 OptFloat 保持 NoOpt 不污染 markLine。
+		emgPhase := convertPhasePointsToEMGTime(row.PhasePoints, params.EMGMotionOffset)
+
 		composerInput := chart.ComposerInput{
 			Subject:          row.Subject,
 			EMGDataset:       emgDataset,
 			SelectedChannels: params.SelectedChannels,
 			MuscleRatioData:  muscleRatioData,
 			MotionData:       composerMotion,
-			PhasePoints:      row.PhasePoints,
+			PhasePoints:      emgPhase,
 			EMGMotionOffset:  params.EMGMotionOffset,
 		}
 
@@ -537,13 +580,13 @@ func loadComposerMotion(
 		times[i] = ts.MotionIndexToEMGTime(idx, emgMotionOffset)
 	}
 
-	// Headers[0] 為 index 欄;data series 從 Headers[1:] 起。
+	// motion.Headers 已是純資料 channel 名 — parsers.MotionParser.initializeMotionData
+	// 已透過 `Headers: headers[1:]` 把 Index 欄剝掉(motion_parser.go line 133)。
+	// 過去這段對 `k == 0 continue` 是錯認 Index 仍在 Headers 內,結果把第一個真資料
+	// channel 永遠不渲染(單 channel motion 整 grid 空白)。直接 iterate 即可。
 	order := make([]string, 0, len(motion.Headers))
 	series := make(map[string][]float64, len(motion.Headers))
-	for k, name := range motion.Headers {
-		if k == 0 {
-			continue
-		}
+	for _, name := range motion.Headers {
 		vals := motion.Data[name]
 		// 防呆:若 parser 因 jagged row 略 row 而 vals 不齊,直接 skip 該 series
 		// 而非 panic;motion 資料量大,degraded mode 比 hard fail 對使用者好。
@@ -631,7 +674,16 @@ func loadComposerMuscleRatio(dataFolder, muscleRatioFile string) (*chart.MuscleR
 			if name == "" {
 				continue
 			}
-			v, _ := parseFloatCell(row[j])
+			// 空 / 不可解析 cell → NaN(不是 0)。muscle_ratio writer 對 NaN/Inf
+			// 寫成空 cell;若 parse 失敗 silent 給 0,等於把缺值「畫成真實 0」,
+			// 對共收縮比值研究是嚴重誤導。NaN 走 composer
+			// buildComposerLineData line 692-695:`LineData{Value: nil}`,
+			// 序列化(opts.LineData.Value `json:"value,omitempty"`)整個 value
+			// 欄位 omit;echarts 渲染為 line gap,正確反映缺值。
+			v, ok := parseFloatCell(row[j])
+			if !ok {
+				v = math.NaN()
+			}
 			series[name] = append(series[name], v)
 		}
 	}
@@ -641,6 +693,49 @@ func loadComposerMuscleRatio(dataFolder, muscleRatioFile string) (*chart.MuscleR
 		Series: series,
 		Order:  order,
 	}, nil
+}
+
+// convertPhasePointsToEMGTime 把 PhasePoints 內 8 個 OptFloat 力板時間欄位
+// (P0/P1/P2/S/C/T0/T/L)換算成 EMG-time domain 秒值。
+//
+// 換算公式來自 synchronizer.TimeSynchronizer.ForceTimeToEMGTime:
+//
+//	emgTime = forceTime - (emgMotionOffset - 1) / FrequencyMotion
+//
+// EMGMotionOffset 在 manifest 內單位是「EMG 起點對應的 motion frame index」
+// (1-based),非秒;FrequencyMotion = 250 Hz(parsers.FrequencyMotion)。
+//
+// Set=false 的 OptFloat 保持 NoOpt,不會出現在 markLine 上 — 換算
+// 「未提供」會把它變成有限值並 inject 一條偽 marker,違反 OptFloat 契約。
+//
+// D / O(motion-index sentinel int 欄位)維持原樣回傳;composer 本來就
+// 不對它們作 markLine,handler 也不負責 motion-index → 秒值的轉換(那是
+// 上游 parser / synchronizer 的職責)。
+//
+// 為何 reuse synchronizer.TimeSynchronizer 而非寫死公式:換算規則是 cross-
+// cutting domain knowledge,單一來源。
+func convertPhasePointsToEMGTime(
+	src models.PhasePoints, emgMotionOffset int,
+) models.PhasePoints {
+	ts := synchronizer.NewTimeSynchronizer()
+	conv := func(o models.OptFloat) models.OptFloat {
+		if v, ok := o.Get(); ok {
+			return models.MakeOpt(ts.ForceTimeToEMGTime(v, emgMotionOffset))
+		}
+		return models.NoOpt()
+	}
+	return models.PhasePoints{
+		P0: conv(src.P0),
+		P1: conv(src.P1),
+		P2: conv(src.P2),
+		S:  conv(src.S),
+		C:  conv(src.C),
+		D:  src.D, // motion-index 不換算
+		T0: conv(src.T0),
+		T:  conv(src.T),
+		O:  src.O, // motion-index 不換算
+		L:  conv(src.L),
+	}
 }
 
 // parseFloatCell parses a CSV cell as float64. Empty / unparseable cells become
