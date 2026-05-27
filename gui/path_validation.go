@@ -87,3 +87,24 @@ func validateExternalPathInputs(labelPathPairs ...string) error {
 
 	return nil
 }
+
+// validateManifestHandlerParams 是 7 個「manifest + dataFolder」Wails handler 共用
+// 的 prelude:先走 strict empty check(manifestFile 先, dataFolder 次, 任一為空
+// 即回對應 sentinel),再 delegate 給 validateExternalPathInputs 跑 traversal /
+// sensitive prefix / null byte / 超長 path 等 boundary 驗證,label 固定為
+// 「分期總檔案」/「資料夾」。
+//
+// 設計成 pure function(無 *App / *appState receiver) — boundary 驗證本身不依賴
+// app state,純函式更好測、caller 也不必持 App instance 才能驗 input。
+func validateManifestHandlerParams(manifestFile, dataFolder string) error {
+	if manifestFile == "" {
+		return ErrNoManifestFile
+	}
+	if dataFolder == "" {
+		return ErrNoDataFolder
+	}
+	return validateExternalPathInputs(
+		"分期總檔案", manifestFile,
+		"資料夾", dataFolder,
+	)
+}

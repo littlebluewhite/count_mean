@@ -50,6 +50,10 @@ _Avoid_: GUI handler, analysis function, analyzer.
 [[Analysis pipeline family]] 的泛型樣板，以 generic struct + Run method 形式存在。承載 `csvHandler`、`logger` 依賴，接收三個 closure（validate、execute、write CSV）注入差異。Run body 內建 `recoverHandlerPanic`、logger entry/exit、generic error wrapping；不負責 `state.Load`、result transform、i18n，這三項由 caller 在 Run 外處理。
 _Avoid_: AnalysisRunner, GenericHandler, AnalyzerWrapper.
 
+**Manifest handler prelude**
+manifest+dataFolder 系列 GUI handler 共用入口三步：sentinel empty check（`ErrNoManifestFile` / `ErrNoDataFolder`，manifest 先檢）+ `validateExternalPathInputs` 帶固定 label「分期總檔案」「資料夾」。由 `gui/path_validation.go` 的 `validateManifestHandlerParams(manifestFile, dataFolder string) error` 持有。[[Analysis pipeline family]] 四個成員（`AnalyzePhases` 不在其內 — 接 InputFile 而非 manifest）與 [[Chart Composer]] 三個 RPC handler 共 7 處消費。**strict 行為**：Chart Composer 既有對空 `ManifestPath` 的 silent fall-through（落入 `LoadManifests("")`）在此 prelude 落地後同步收緊為 `ErrNoManifestFile` 提早 reject。
+_Avoid_: handler entry guard, manifest precheck, path prelude, validate prelude.
+
 **Chart Composer**
 Visualization-only feature：讀 [[Manifest]] + 數據資料夾後，把單一 subject 的 EMG / motion / muscle_ratio output1 三類資料同框渲染成三張帶 [[Phase]] 虛線與時期百分比軸的圖。**不計算、不寫 CSV、不產生新的 result struct** —— 與 [[Analysis pipeline family]] 的形狀差異就在這裡：它是 multi-source viewer，不是 analyzer。Phase line / 百分比軸的 UX 機制沿用既有 CCI chart（go-echarts + Wails postMessage），但資料來源不同。
 _Avoid_: data plotting, chart panel, multi-chart viewer, 資料做圖（後者是舊單檔流程的口語名，新版避免共用）.

@@ -449,3 +449,90 @@ func TestValidateExternalPathInputs_RejectsWindowsReservedDevice(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateManifestHandlerParams_HappyPath 釘住合法 manifestFile + dataFolder
+// 兩者皆為 t.TempDir() 給的絕對路徑時, helper 應回 nil — 這是 7 個 manifest+dataFolder
+// Wails handler 的 normal happy-path 入口。
+func TestValidateManifestHandlerParams_HappyPath(t *testing.T) {
+	manifestDir := t.TempDir()
+	dataDir := t.TempDir()
+
+	err := validateManifestHandlerParams(manifestDir+"/manifest.csv", dataDir)
+	require.NoError(t, err, "合法 manifestFile + dataFolder 應通過 boundary")
+}
+
+// TestValidateManifestHandlerParams_EmptyManifestFile 釘住 strict empty check
+// 第一條:manifestFile 為空字串時必須回 ErrNoManifestFile sentinel(用 errors.Is
+// 對應),即使 dataFolder 合法亦然 — 不能 silent skip 或誤把 dataFolder 當主體報錯。
+func TestValidateManifestHandlerParams_EmptyManifestFile(t *testing.T) {
+	dataDir := t.TempDir()
+
+	err := validateManifestHandlerParams("", dataDir)
+	require.Error(t, err, "空 manifestFile 必須回 error")
+	assert.True(t, errors.Is(err, ErrNoManifestFile),
+		"err 應 wrap ErrNoManifestFile (caller 可 errors.Is 對應): %v", err)
+}
+
+// TestValidateManifestHandlerParams_EmptyDataFolder 釘住 strict empty check
+// 第二條:dataFolder 為空字串時必須回 ErrNoDataFolder(manifestFile 合法時)。
+func TestValidateManifestHandlerParams_EmptyDataFolder(t *testing.T) {
+	manifestDir := t.TempDir()
+
+	err := validateManifestHandlerParams(manifestDir+"/manifest.csv", "")
+	require.Error(t, err, "空 dataFolder 必須回 error")
+	assert.True(t, errors.Is(err, ErrNoDataFolder),
+		"err 應 wrap ErrNoDataFolder (caller 可 errors.Is 對應): %v", err)
+}
+
+// TestValidateManifestHandlerParams_BothEmptySentinelOrder 釘住 sentinel order
+// invariant:兩者皆空時, manifestFile 先檢查 → 必須回 ErrNoManifestFile(而非
+// ErrNoDataFolder)。caller / UI 文案依賴此順序給出第一個該補的欄位提示。
+func TestValidateManifestHandlerParams_BothEmptySentinelOrder(t *testing.T) {
+	err := validateManifestHandlerParams("", "")
+	require.Error(t, err, "兩者皆空必須回 error")
+	assert.True(t, errors.Is(err, ErrNoManifestFile),
+		"兩者皆空時應優先回 ErrNoManifestFile (manifestFile 先檢查): %v", err)
+	assert.False(t, errors.Is(err, ErrNoDataFolder),
+		"兩者皆空時不應回 ErrNoDataFolder (manifestFile 第一個 fail-fast): %v", err)
+}
+
+// TestValidateManifestHandlerParams_RejectsTraversalManifest 釘住 helper 對
+// manifestFile 走 boundary path validation:traversal / 系統敏感目錄樣本必須擋下,
+// 且 error message 帶有「分期總檔案」label 與「路徑驗證失敗」標誌(來自
+// validateExternalPathInputs 的 wrap),讓 UI / audit log 能定位是哪個欄位失敗。
+//
+// Reuse traversalPaths() 把樣本集中,確保 7 個 caller handler 共享同一套防線。
+func TestValidateManifestHandlerParams_RejectsTraversalManifest(t *testing.T) {
+	dataDir := t.TempDir()
+
+	for _, tc := range traversalPaths() {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateManifestHandlerParams(tc.path, dataDir)
+			require.Error(t, err, "traversal manifestFile 必須被擋下: %s", tc.path)
+			assert.Contains(t, err.Error(), "分期總檔案",
+				"err 應含 manifestFile label「分期總檔案」: %v", err)
+			assert.Contains(t, err.Error(), "路徑驗證失敗",
+				"err 應含 boundary path validation 標誌「路徑驗證失敗」: %v", err)
+		})
+	}
+}
+
+// TestValidateManifestHandlerParams_RejectsTraversalDataFolder 釘住 helper 對
+// dataFolder 走 boundary path validation:manifestFile 合法 + dataFolder 含
+// traversal/sensitive 樣本時,error message 必須帶「資料夾」label 與
+// 「路徑驗證失敗」標誌(避免兩個欄位失敗訊息互相混淆)。
+func TestValidateManifestHandlerParams_RejectsTraversalDataFolder(t *testing.T) {
+	manifestDir := t.TempDir()
+	legitManifest := manifestDir + "/manifest.csv"
+
+	for _, tc := range traversalPaths() {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateManifestHandlerParams(legitManifest, tc.path)
+			require.Error(t, err, "traversal dataFolder 必須被擋下: %s", tc.path)
+			assert.Contains(t, err.Error(), "資料夾",
+				"err 應含 dataFolder label「資料夾」: %v", err)
+			assert.Contains(t, err.Error(), "路徑驗證失敗",
+				"err 應含 boundary path validation 標誌「路徑驗證失敗」: %v", err)
+		})
+	}
+}

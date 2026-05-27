@@ -1164,34 +1164,18 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 		Logger: a.logger,
 		CSV:    s.csvHandler,
 		Validate: func(p *models.AnalysisParams) error {
-			if p.ManifestFile == "" {
-				return &phaseSyncValidateGateErr{inner: ErrNoManifestFile}
+			if err := validateManifestHandlerParams(p.ManifestFile, p.DataFolder); err != nil {
+				return &phaseSyncValidateGateErr{inner: err}
 			}
-
-			if p.DataFolder == "" {
-				return &phaseSyncValidateGateErr{inner: ErrNoDataFolder}
-			}
-
 			if p.StartPhase == "" || p.EndPhase == "" {
 				return &phaseSyncValidateGateErr{inner: ErrNoPhaseSelection}
 			}
-
 			if !p.StartPhase.IsValid() || !p.EndPhase.IsValid() {
 				return &phaseSyncValidateGateErr{inner: fmt.Errorf(
 					"StartPhase=%q EndPhase=%q: %w",
 					p.StartPhase, p.EndPhase, ErrInvalidPhasePoint,
 				)}
 			}
-
-			// 邊界路徑驗證 — manifest 與 data folder 都來自前端 file dialog;
-			// 擋掉 traversal / 系統敏感目錄,提早 reject 對前端 UX 與 audit log 更友善。
-			if pathErr := validateExternalPathInputs(
-				"分期總檔案", p.ManifestFile,
-				"資料夾", p.DataFolder,
-			); pathErr != nil {
-				return &phaseSyncValidateGateErr{inner: pathErr}
-			}
-
 			return nil
 		},
 		Execute: func(ctx context.Context, p *models.AnalysisParams) (*models.EMGStatistics, error) {

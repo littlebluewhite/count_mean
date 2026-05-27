@@ -78,15 +78,7 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 		Logger: a.logger,
 		CSV:    s.csvHandler,
 		Validate: func(p MuscleRatioParams) error {
-			if validationErr := validateMuscleRatioParams(p); validationErr != nil {
-				return validationErr
-			}
-			// 邊界路徑驗證 — 提早擋 traversal / 系統敏感目錄，downstream
-			// muscle_ratio.Analyzer 內部仍有 defense-in-depth check 作為第二道防線。
-			return validateExternalPathInputs(
-				"分期總檔案", p.ManifestFile,
-				"資料夾", p.DataFolder,
-			)
+			return validateManifestHandlerParams(p.ManifestFile, p.DataFolder)
 		},
 		Execute: func(ctx context.Context, p MuscleRatioParams) ([]muscle_ratio.SubjectResult, error) {
 			// ctx 由樣板注入,沿用原 a.context() 行為:支援 Wails Shutdown /
@@ -171,19 +163,6 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 		Success:  allSuccess,
 		Message:  message,
 	}, nil
-}
-
-// validateMuscleRatioParams checks required muscle-ratio parameters.
-func validateMuscleRatioParams(params MuscleRatioParams) error {
-	if params.ManifestFile == "" {
-		return ErrNoManifestFile
-	}
-
-	if params.DataFolder == "" {
-		return ErrNoDataFolder
-	}
-
-	return nil
 }
 
 // failedMuscleRatioResult builds a muscle-ratio result indicating overall failure.

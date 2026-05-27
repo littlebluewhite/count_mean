@@ -200,22 +200,8 @@ func (a *App) LoadChartComposerSubjects(
 			return failedChartComposerSubjectsResult("參數為空"), nil
 		}
 
-		// DataFolder 必填短路 — validateExternalPathInputs 對空字串視為「跳過驗
-		// 證」放行；若 manifest 內 EMG/Motion 走相對路徑，manifest.ResolveEMGFile
-		// 會以 process cwd 接相對檔名，讀到 app cwd 的同名檔而非目標病患資料夾，
-		// 是 silent visual / data bug。對齊 cci_handlers.validateCCIParams 的
-		// ErrNoDataFolder 慣例，在入口 fail-fast。
-		if params.DataFolder == "" {
-			return failedChartComposerSubjectsResult(ErrNoDataFolder.Error()), nil
-		}
-
-		// 邊界路徑驗證 — manifest 與 data folder 都來自前端 file dialog。
-		// 對齊 sibling handler (cci / muscle_ratio / phase_sync) 的 defense-in-depth 模式。
-		if pathErr := validateExternalPathInputs(
-			"分期總檔案", params.ManifestPath,
-			"資料夾", params.DataFolder,
-		); pathErr != nil {
-			return failedChartComposerSubjectsResult(pathErr.Error()), nil
+		if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
+			return failedChartComposerSubjectsResult(err.Error()), nil
 		}
 
 		manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
@@ -277,16 +263,8 @@ func (a *App) LoadChartComposerEMGChannels(
 			return failedChartComposerChannelsResult("參數為空"), nil
 		}
 
-		// DataFolder 必填短路（見 LoadChartComposerSubjects 同欄位註解）。
-		if params.DataFolder == "" {
-			return failedChartComposerChannelsResult(ErrNoDataFolder.Error()), nil
-		}
-
-		if pathErr := validateExternalPathInputs(
-			"分期總檔案", params.ManifestPath,
-			"資料夾", params.DataFolder,
-		); pathErr != nil {
-			return failedChartComposerChannelsResult(pathErr.Error()), nil
+		if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
+			return failedChartComposerChannelsResult(err.Error()), nil
 		}
 
 		if params.Subject == "" {
@@ -358,19 +336,8 @@ func (a *App) GenerateChartComposer(
 			return failedChartComposerResult("參數為空"), nil
 		}
 
-		// DataFolder 必填短路（見 LoadChartComposerSubjects 同欄位註解）。
-		// 順序：nil → DataFolder → boundary path → Subject → SelectedChannels；
-		// 邊界路徑優先於業務參數對齊 sibling handler(cci / muscle_ratio)的
-		// fail-fast 順序，避免 traversal-path test 被業務參數 short-circuit 蓋掉。
-		if params.DataFolder == "" {
-			return failedChartComposerResult(ErrNoDataFolder.Error()), nil
-		}
-
-		if pathErr := validateExternalPathInputs(
-			"分期總檔案", params.ManifestPath,
-			"資料夾", params.DataFolder,
-		); pathErr != nil {
-			return failedChartComposerResult(pathErr.Error()), nil
+		if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
+			return failedChartComposerResult(err.Error()), nil
 		}
 
 		if params.Subject == "" {

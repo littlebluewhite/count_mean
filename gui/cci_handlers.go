@@ -61,17 +61,7 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 		Logger: a.logger,
 		CSV:    s.csvHandler,
 		Validate: func(p CCIParams) error {
-			if validationErr := validateCCIParams(p); validationErr != nil {
-				return validationErr
-			}
-			// 邊界路徑驗證 — 在 analyzer 內部 defense-in-depth 之前先擋
-			// traversal / 系統敏感目錄。downstream cci.Analyzer 仍會二次擋，
-			// 但 GUI 邊界提早 reject 對前端 UX 與 audit 較友善（不會等中途
-			// 某個 reader 才失敗）。
-			return validateExternalPathInputs(
-				"分期總檔案", p.ManifestFile,
-				"資料夾", p.DataFolder,
-			)
+			return validateManifestHandlerParams(p.ManifestFile, p.DataFolder)
 		},
 		Execute: func(ctx context.Context, p CCIParams) (*cci.CCIAnalysisResult, error) {
 			analysisParams := &cci.CCIParams{
@@ -225,19 +215,6 @@ func (a *App) DownloadCCIChart(params CCIDownloadParams) (result *ChartResult, e
 		Success:    true,
 		Message:    fmt.Sprintf("圖表已下載至: %s", outputPath),
 	}, nil
-}
-
-// validateCCIParams checks required CCI parameters.
-func validateCCIParams(params CCIParams) error {
-	if params.ManifestFile == "" {
-		return ErrNoManifestFile
-	}
-
-	if params.DataFolder == "" {
-		return ErrNoDataFolder
-	}
-
-	return nil
 }
 
 // failedCCIResult returns a CCI result indicating failure.

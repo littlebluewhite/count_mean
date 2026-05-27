@@ -96,15 +96,6 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 			return failedNormalizedPhaseSyncResult(validationErr.Error()), nil
 		}
 
-		// 邊界路徑驗證 — 提早擋 traversal / 系統敏感目錄，downstream
-		// phase_sync.Analyzer 仍會二次擋。
-		if pathErr := validateExternalPathInputs(
-			"分期總檔案", params.ManifestFile,
-			"資料夾", params.DataFolder,
-		); pathErr != nil {
-			return failedNormalizedPhaseSyncResult(pathErr.Error()), nil
-		}
-
 		// 1. 載入 manifest 與 EMG（共用兩組區間的前置步驟）
 		baseParams := &models.AnalysisParams{
 			ManifestFile: params.ManifestFile,
@@ -263,22 +254,15 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 // validateNormalizedPhaseSyncParams 檢查必填欄位。沿用既有錯誤型別保持訊息一致。
 // 兩組分期點（Norm 與 Stats）只要任一組未填齊就回 ErrNoPhaseSelection。
 func validateNormalizedPhaseSyncParams(params NormalizedPhaseSyncParams) error {
-	if params.ManifestFile == "" {
-		return ErrNoManifestFile
+	if err := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); err != nil {
+		return err
 	}
-
-	if params.DataFolder == "" {
-		return ErrNoDataFolder
-	}
-
 	if params.NormStartPhase == "" || params.NormEndPhase == "" {
 		return ErrNoPhaseSelection
 	}
-
 	if params.StatsStartPhase == "" || params.StatsEndPhase == "" {
 		return ErrNoPhaseSelection
 	}
-
 	return nil
 }
 
