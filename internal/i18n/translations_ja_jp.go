@@ -272,6 +272,10 @@ var translationsJaJP = map[string]string{
 	KeyErrorMsgSelectInputFolder:    "フォルダを選択してください",
 	KeyErrorMsgSelectBothFiles:      "メインファイルと参照ファイルの両方を選択してください",
 	KeyErrorMsgCCIChartNotFound:     "チャートが見つかりません",
+	// Chart download / ECharts runtime errors (CCI + Composer download 共用)。
+	KeyErrorMsgChartElementNotFound:  "チャート要素が見つかりません",
+	KeyErrorMsgChartInstanceNotFound: "チャートインスタンスが見つかりません",
+	KeyErrorMsgEChartsNotFound:       "ECharts が見つかりません",
 	KeyErrorMsgPhaseInputs:          "データファイルを選択し、段階の時刻を入力してください",
 	KeyErrorMsgPhasePointsCount:     "時刻の数はラベル数より1つ多い必要があります",
 	KeyErrorMsgFillRequiredFields:   "必須項目をすべて入力してください",
@@ -288,6 +292,7 @@ var translationsJaJP = map[string]string{
 	KeyErrorMsgLoadSubjectsFailedDyn:  "対象の読み込みに失敗しました: %v",
 	KeyErrorMsgAnalysisFailedDyn:      "解析に失敗しました: %v",
 	KeyErrorMsgLanguageSwitchFailed:   "言語切り替えに失敗しました: %v",
+	KeyErrorMsgChartDownloadFailedDyn: "ダウンロードに失敗しました: %v",
 	// Phase 2 success messages.
 	KeyOkMsgCalculationDone:        "計算が完了しました。結果の保存先:\n%s",
 	KeyOkMsgNormalizationDone:      "正規化が完了しました。結果の保存先:\n%s",
@@ -297,6 +302,7 @@ var translationsJaJP = map[string]string{
 	KeyOkMsgConfigImported:         "設定をインポートして保存しました",
 	KeyOkMsgAnalysisDone:           "解析が完了しました。結果の保存先: %s",
 	KeyOkMsgCCIAnalysisDone:        "解析が完了しました。\nCSV: %s",
+	KeyOkMsgChartDownloaded:        "チャートをダウンロードしました: %s",
 	KeyOkMsgNormalizedAnalysisDone: "解析が完了しました。\n正規化 EMG: %s\nフェーズ統計: %s",
 	// Phase 2 info messages.
 	KeyInfoMsgOutputFolder: "出力ファイルの保存先: %s",
@@ -314,6 +320,8 @@ var translationsJaJP = map[string]string{
 	KeyStatusPhasesyncRunning:     "フェーズ同期解析を実行中...",
 	KeyStatusCCIRunning:           "CCI Rudolph 解析を実行中...",
 	KeyStatusCCIChartDownloading:  "CCI チャートをダウンロード中...",
+	KeyStatusChartDownloadDone:    "チャートダウンロード完了",
+	KeyStatusChartDownloadFailed:  "チャートダウンロード失敗",
 	KeyStatusNormalizedRunning:    "正規化フェーズ同期解析を実行中...",
 	KeyStatusMuscleRunning:        "筋肉比をバッチ計算中...",
 	KeyStatusMusclePartialFailed:  "一部失敗",

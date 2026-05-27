@@ -386,6 +386,12 @@ const (
 	KeyErrorMsgSelectInputFolder    = "error.msg.select_input_folder"
 	KeyErrorMsgSelectBothFiles      = "error.msg.select_both_files"
 	KeyErrorMsgCCIChartNotFound     = "error.msg.cci_chart_not_found"
+	// Chart download / ECharts runtime error messages (CCI download + Composer download 共用)。
+	// Slice E (#20) deletion sweep 把舊「資料做圖」一族 key 全刪時誤帶這 4 個;CCI 與
+	// Composer download 路徑都還在用,restore 維持 user-facing message 不破。
+	KeyErrorMsgChartElementNotFound  = "error.msg.chart_element_not_found"
+	KeyErrorMsgChartInstanceNotFound = "error.msg.chart_instance_not_found"
+	KeyErrorMsgEChartsNotFound       = "error.msg.echarts_not_found"
 	KeyErrorMsgPhaseInputs          = "error.msg.phase_inputs"
 	KeyErrorMsgPhasePointsCount     = "error.msg.phase_points_count"
 	KeyErrorMsgFillRequiredFields   = "error.msg.fill_required_fields"
@@ -403,6 +409,8 @@ const (
 	KeyErrorMsgLoadSubjectsFailedDyn  = "error.msg.load_subjects_failed"
 	KeyErrorMsgAnalysisFailedDyn      = "error.msg.analysis_failed_dynamic"
 	KeyErrorMsgLanguageSwitchFailed   = "error.msg.language_switch_failed"
+	// Chart download dynamic error (CCI + Composer download 共用)。
+	KeyErrorMsgChartDownloadFailedDyn = "error.msg.chart_download_failed"
 
 	// Phase 2 success messages (most contain %s for output path).
 	KeyOkMsgCalculationDone        = "success.msg.calculation_done"
@@ -413,6 +421,7 @@ const (
 	KeyOkMsgConfigImported         = "success.msg.config_imported"
 	KeyOkMsgAnalysisDone           = "success.msg.analysis_done"
 	KeyOkMsgCCIAnalysisDone        = "success.msg.cci_analysis_done"
+	KeyOkMsgChartDownloaded        = "success.msg.chart_downloaded"
 	KeyOkMsgNormalizedAnalysisDone = "success.msg.normalized_analysis_done"
 
 	// Phase 2 info messages.
@@ -432,6 +441,8 @@ const (
 	KeyStatusPhasesyncRunning     = "status.phasesync_running"
 	KeyStatusCCIRunning           = "status.cci_running"
 	KeyStatusCCIChartDownloading  = "status.cci_chart_downloading"
+	KeyStatusChartDownloadDone    = "status.chart_download_done"
+	KeyStatusChartDownloadFailed  = "status.chart_download_failed"
 	KeyStatusNormalizedRunning    = "status.normalized_running"
 	KeyStatusMuscleRunning        = "status.muscle_running"
 	KeyStatusMusclePartialFailed  = "status.muscle_partial_failed"

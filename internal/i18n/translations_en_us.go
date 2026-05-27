@@ -272,6 +272,10 @@ var translationsEnUS = map[string]string{
 	KeyErrorMsgSelectInputFolder:    "Please select a folder",
 	KeyErrorMsgSelectBothFiles:      "Please select both main and reference data files",
 	KeyErrorMsgCCIChartNotFound:     "Chart not found",
+	// Chart download / ECharts runtime errors (CCI + Composer download 共用)。
+	KeyErrorMsgChartElementNotFound:  "Chart element not found",
+	KeyErrorMsgChartInstanceNotFound: "Chart instance not found",
+	KeyErrorMsgEChartsNotFound:       "ECharts not found",
 	KeyErrorMsgPhaseInputs:          "Please select a data file and enter phase time points",
 	KeyErrorMsgPhasePointsCount:     "Number of time points must be one more than the number of labels",
 	KeyErrorMsgFillRequiredFields:   "Please fill in all required fields",
@@ -288,6 +292,7 @@ var translationsEnUS = map[string]string{
 	KeyErrorMsgLoadSubjectsFailedDyn:  "Failed to load subjects: %v",
 	KeyErrorMsgAnalysisFailedDyn:      "Analysis failed: %v",
 	KeyErrorMsgLanguageSwitchFailed:   "Failed to switch language: %v",
+	KeyErrorMsgChartDownloadFailedDyn: "Download failed: %v",
 	// Phase 2 success messages.
 	KeyOkMsgCalculationDone:        "Calculation complete. Result saved to:\n%s",
 	KeyOkMsgNormalizationDone:      "Normalisation complete. Result saved to:\n%s",
@@ -297,6 +302,7 @@ var translationsEnUS = map[string]string{
 	KeyOkMsgConfigImported:         "Configuration imported and saved",
 	KeyOkMsgAnalysisDone:           "Analysis complete. Result saved to: %s",
 	KeyOkMsgCCIAnalysisDone:        "Analysis complete.\nCSV: %s",
+	KeyOkMsgChartDownloaded:        "Chart downloaded to: %s",
 	KeyOkMsgNormalizedAnalysisDone: "Analysis complete.\nNormalised EMG: %s\nPhase statistics: %s",
 	// Phase 2 info messages.
 	KeyInfoMsgOutputFolder: "Output file saved to: %s",
@@ -314,6 +320,8 @@ var translationsEnUS = map[string]string{
 	KeyStatusPhasesyncRunning:     "Running phase sync analysis...",
 	KeyStatusCCIRunning:           "Running CCI Rudolph analysis...",
 	KeyStatusCCIChartDownloading:  "Downloading CCI chart...",
+	KeyStatusChartDownloadDone:    "Chart download complete",
+	KeyStatusChartDownloadFailed:  "Chart download failed",
 	KeyStatusNormalizedRunning:    "Running normalised phase sync analysis...",
 	KeyStatusMuscleRunning:        "Batch-computing muscle ratios...",
 	KeyStatusMusclePartialFailed:  "Partial failure",

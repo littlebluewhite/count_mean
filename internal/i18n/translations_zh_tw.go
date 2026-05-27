@@ -276,6 +276,10 @@ var translationsZhTW = map[string]string{
 	KeyErrorMsgSelectInputFolder:    "請選擇資料夾",
 	KeyErrorMsgSelectBothFiles:      "請選擇主要資料檔案和參考資料檔案",
 	KeyErrorMsgCCIChartNotFound:     "找不到圖表",
+	// Chart download / ECharts runtime errors (CCI + Composer download 共用)。
+	KeyErrorMsgChartElementNotFound:  "找不到圖表元素",
+	KeyErrorMsgChartInstanceNotFound: "找不到圖表實例",
+	KeyErrorMsgEChartsNotFound:       "ECharts 未找到",
 	KeyErrorMsgPhaseInputs:          "請選擇資料檔案並輸入階段時間點",
 	KeyErrorMsgPhasePointsCount:     "時間點數量應該比標籤數量多1",
 	KeyErrorMsgFillRequiredFields:   "請填寫所有必要欄位",
@@ -292,6 +296,7 @@ var translationsZhTW = map[string]string{
 	KeyErrorMsgLoadSubjectsFailedDyn:  "載入主題失敗:%v",
 	KeyErrorMsgAnalysisFailedDyn:      "分析失敗:%v",
 	KeyErrorMsgLanguageSwitchFailed:   "切換語言失敗:%v",
+	KeyErrorMsgChartDownloadFailedDyn: "下載失敗:%v",
 	// Phase 2 success messages.
 	KeyOkMsgCalculationDone:        "計算完成!結果已儲存至:\n%s",
 	KeyOkMsgNormalizationDone:      "標準化完成!結果已儲存至:\n%s",
@@ -301,6 +306,7 @@ var translationsZhTW = map[string]string{
 	KeyOkMsgConfigImported:         "配置已匯入並儲存",
 	KeyOkMsgAnalysisDone:           "分析完成!結果已保存至:%s",
 	KeyOkMsgCCIAnalysisDone:        "分析完成!\nCSV: %s",
+	KeyOkMsgChartDownloaded:        "圖表已下載至:%s",
 	KeyOkMsgNormalizedAnalysisDone: "分析完成!\n標準化 EMG: %s\n分期統計: %s",
 	// Phase 2 info messages.
 	KeyInfoMsgOutputFolder: "輸出檔案已保存至:%s",
@@ -318,6 +324,8 @@ var translationsZhTW = map[string]string{
 	KeyStatusPhasesyncRunning:     "正在進行分期同步分析...",
 	KeyStatusCCIRunning:           "正在進行 CCI Rudolph 分析...",
 	KeyStatusCCIChartDownloading:  "正在下載 CCI 圖表...",
+	KeyStatusChartDownloadDone:    "圖表下載完成",
+	KeyStatusChartDownloadFailed:  "圖表下載失敗",
 	KeyStatusNormalizedRunning:    "正在進行標準化分期同步分析...",
 	KeyStatusMuscleRunning:        "正在批次計算肌肉比值...",
 	KeyStatusMusclePartialFailed:  "部分失敗",
