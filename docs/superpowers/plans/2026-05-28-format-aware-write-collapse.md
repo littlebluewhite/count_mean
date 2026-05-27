@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 `io.CSVHandler` 既有 4 個 format-aware write method 統一為 `(outputPath, error)` return shape，新增 `WriteCCIResult` + `WriteMuscleRatioOutputAll` + `WriteMuscleRatioOutputPhases` 三個 method，把 CCI 與 muscle_ratio 的 row layout 吸進 CSVHandler，落實 ADR-0001 「row layout invariant 100% 覆蓋」結論（同時尊重 ADR-0003 三條 sticky boundary）。
+**Goal:** 把 `io.CSVHandler` 既有 4 個 format-aware write method 統一為 `(outputPath, error)` return shape，新增 `WriteCCIResult` + `WriteMuscleRatioOutputAll` + `WriteMuscleRatioOutputPhases` 三個 method，把 CCI 與 muscle_ratio 的 row layout 吸進 CSVHandler，落實 ADR-0001 「row layout invariant 100% 覆蓋」結論（同時尊重 ADR-0004 三條 sticky boundary）。
 
-**Architecture:** Format-aware write 深化的最後一哩 — row layout 從 `cci/analyzer.go` 與 `muscle_ratio/analyzer.go` 搬進 `io/csv_handler.go`；business semantics（muscle_ratio sticky-success）與 closure shape（`AnalysisHandler[P, R].WriteCSV`）刻意保留不動。CCI streaming + ctx-aware cancellation 透過 `csvutil.WriteCSVAtomic` 的 Emit callback 維持。Subject-based write 在 CSVHandler 內推導 filename，File-based 走 caller-supplied `req.Filename` — 兩種 ownership 共存（ADR-0003 Boundary 2）。
+**Architecture:** Format-aware write 深化的最後一哩 — row layout 從 `cci/analyzer.go` 與 `muscle_ratio/analyzer.go` 搬進 `io/csv_handler.go`；business semantics（muscle_ratio sticky-success）與 closure shape（`AnalysisHandler[P, R].WriteCSV`）刻意保留不動。CCI streaming + ctx-aware cancellation 透過 `csvutil.WriteCSVAtomic` 的 Emit callback 維持。Subject-based write 在 CSVHandler 內推導 filename，File-based 走 caller-supplied `req.Filename` — 兩種 ownership 共存（ADR-0004 Boundary 2）。
 
 **Tech Stack:** Go 1.25+ · `csvutil.WriteCSVAtomic` · `internal/io.CSVHandler` · `internal/cci.CCIAnalysisResult` · `internal/muscle_ratio.SubjectResult` · testify/assert
 
 **Reference docs (read these first):**
 - `docs/adr/0001-phase-sync-export-via-csvhandler.md` — 統一 write path 的起點
-- `docs/adr/0003-format-aware-write-collapse-boundaries.md` — 三條 sticky boundary（本 plan 嚴守）
+- `docs/adr/0004-format-aware-write-collapse-boundaries.md` — 三條 sticky boundary（本 plan 嚴守）
 - `CONTEXT.md` Format-aware write 條目 — 領域語言定義
 - GitHub Issue #21 — Q5 (family err channel) follow-up（本 plan **不**動 err channel）
 
@@ -280,7 +280,7 @@ EOF
 
 ## Task 2: 新增 io→cci 套件 dep 並 WriteCCIResult method（含 ctx-aware streaming）
 
-**Why this task matters:** Candidate 1 最具實質 depth 增益的一步 — 把 CCI 的 12-pair × N-point row layout（含 NaN/Inf 處理、droppedRowCount log、ctx-aware emit）從 `internal/cci/analyzer.go:540-664` 搬進 `internal/io/csv_handler.go`。注意 ADR-0003 Boundary 2：CSVHandler 內部從 `result.Subject` 推導 filename，`req.Filename` 被忽略。
+**Why this task matters:** Candidate 1 最具實質 depth 增益的一步 — 把 CCI 的 12-pair × N-point row layout（含 NaN/Inf 處理、droppedRowCount log、ctx-aware emit）從 `internal/cci/analyzer.go:540-664` 搬進 `internal/io/csv_handler.go`。注意 ADR-0004 Boundary 2：CSVHandler 內部從 `result.Subject` 推導 filename，`req.Filename` 被忽略。
 
 **Files:**
 - Modify: `internal/io/csv_handler.go:1-25`（imports 加 cci）
@@ -540,7 +540,7 @@ git add internal/io/csv_handler.go internal/io/csv_handler_format_aware_test.go
 git commit -m "$(cat <<'EOF'
 feat(io): WriteCCIResult — CSVHandler 吸 CCI row layout(含 ctx-aware streaming)
 
-ADR-0003 Boundary 2: Subject-based write,CSVHandler 內部從 result.Subject 推導
+ADR-0004 Boundary 2: Subject-based write,CSVHandler 內部從 result.Subject 推導
 filename ({safeSubject}_CCI_Rudolph.csv),req.Filename 被忽略。
 
 實作沿用 csvutil.WriteCSVAtomic streaming Emit pattern,維持原 cci.ExportToCSV 的:
@@ -589,7 +589,7 @@ WriteCSV: func(_ *io.CSVHandler, analysisResult *cci.CCIAnalysisResult) (string,
 },
 
 // after
-// WriteCSV: ADR-0003 Boundary 2 — Subject-based write,CSVHandler 內部從
+// WriteCSV: ADR-0004 Boundary 2 — Subject-based write,CSVHandler 內部從
 // analysisResult.Subject 推導 filename;req.Filename 被忽略。SubDir 用 ""
 // (寫到 OutputDir 根)。outputDir capture 由 CSVHandler 自身的 h.config.OutputDir
 // 替代(state.Load 在 Run 外做時 csvHandler 已綁定當時 config)。
@@ -669,7 +669,7 @@ EOF
 
 ## Task 4: 新增 WriteMuscleRatioOutputAll + WriteMuscleRatioOutputPhases 與 payload struct
 
-**Why this task matters:** ADR-0003 Boundary 1 — 拆兩個 method 每個只負責一個檔的 row layout（不是合 single method 內部 sticky）。Payload struct 定義在 io 套件（避免 muscle_ratio → io 與 io → muscle_ratio 撞 cycle）。
+**Why this task matters:** ADR-0004 Boundary 1 — 拆兩個 method 每個只負責一個檔的 row layout（不是合 single method 內部 sticky）。Payload struct 定義在 io 套件（避免 muscle_ratio → io 與 io → muscle_ratio 撞 cycle）。
 
 **Files:**
 - Modify: `internal/io/csv_handler.go` 末尾（append payload struct + 2 methods）
@@ -956,9 +956,9 @@ git add internal/io/csv_handler.go internal/io/csv_handler_format_aware_test.go
 git commit -m "$(cat <<'EOF'
 feat(io): WriteMuscleRatioOutputAll/OutputPhases — CSVHandler 吸 MR row layout
 
-ADR-0003 Boundary 1: 拆兩 method 各自負責 Output 1 / Output 2 row layout,
+ADR-0004 Boundary 1: 拆兩 method 各自負責 Output 1 / Output 2 row layout,
 sticky-success 規則仍留在 muscle_ratio.Analyzer (本 task 不動 Analyzer)。
-ADR-0003 Boundary 2: Subject-based,filename 由 Subject 內部推導。
+ADR-0004 Boundary 2: Subject-based,filename 由 Subject 內部推導。
 
 - MuscleRatioOutputAllPayload / MuscleRatioOutputPhasesPayload / MuscleRatioPhasePoint
   payload struct 全部 in io 套件 (避免 muscle_ratio → io vs io → muscle_ratio cycle)
@@ -975,7 +975,7 @@ EOF
 
 ## Task 5: muscle_ratio.Analyzer 改呼 CSVHandler，刪除 writeOutputAll/writeOutputPhases
 
-**Why this task matters:** ADR-0003 Boundary 1 落實 — Analyzer 持有 sticky-success 規則與 collectPhasePoints warn-path，row layout 透過 CSVHandler 兩個新 method 落實。`gui/muscle_ratio_handlers.go` 的 `WriteCSV: nil` 維持（ADR-0003 Boundary 3），但 comment 從「TODO」改為「設計如此」。
+**Why this task matters:** ADR-0004 Boundary 1 落實 — Analyzer 持有 sticky-success 規則與 collectPhasePoints warn-path，row layout 透過 CSVHandler 兩個新 method 落實。`gui/muscle_ratio_handlers.go` 的 `WriteCSV: nil` 維持（ADR-0004 Boundary 3），但 comment 從「TODO」改為「設計如此」。
 
 **Files:**
 - Modify: `internal/muscle_ratio/analyzer.go:28-33`（Params 加 CSVHandler 欄位）
@@ -1001,7 +1001,7 @@ type Params struct {
     ManifestFile string
     DataFolder   string
     OutputDir    string
-    CSVHandler   *io.CSVHandler // ADR-0003 Boundary 1: row layout 透過 CSVHandler 落實
+    CSVHandler   *io.CSVHandler // ADR-0004 Boundary 1: row layout 透過 CSVHandler 落實
 }
 ```
 
@@ -1057,7 +1057,7 @@ if writeAllErr != nil {
 }
 result.OutputAllPath = outAllPath
 
-// Output 2 — phases + midpoints (ADR-0003 Boundary 1: sticky-success 規則留在
+// Output 2 — phases + midpoints (ADR-0004 Boundary 1: sticky-success 規則留在
 // Analyzer。collectPhasePoints warn-path 與 Output 2 寫檔失敗都讓 Output 1
 // 視為 sticky-success)。
 points, warn := a.collectPhasePoints(m, emg)
@@ -1145,11 +1145,11 @@ subjectResults, analyzeErr := a.muscleRatioAnalyzer.Analyze(ctx, &muscle_ratio.P
 WriteCSV: nil,
 
 // after
-// WriteCSV = nil:batch unit-of-work 不適用 single-path closure (ADR-0003 Boundary 3)。
+// WriteCSV = nil:batch unit-of-work 不適用 single-path closure (ADR-0004 Boundary 3)。
 // per-subject row layout 已透過 muscle_ratio.Analyzer 內呼叫 csvHandler.WriteMuscleRatioOutputAll
 // 與 WriteMuscleRatioOutputPhases 落實;outputPath 由 analyzer 回填到
 // SubjectResult.OutputAllPath / OutputPhasePath。
-// 詳見 docs/adr/0003-format-aware-write-collapse-boundaries.md。
+// 詳見 docs/adr/0004-format-aware-write-collapse-boundaries.md。
 WriteCSV: nil,
 ```
 
@@ -1187,11 +1187,11 @@ Expected: 全 PASS。
 git add internal/muscle_ratio/analyzer.go gui/muscle_ratio_handlers.go
 git rm internal/muscle_ratio/writer_atomic_test.go
 git commit -m "$(cat <<'EOF'
-refactor(muscle_ratio): Analyzer 改呼 CSVHandler.WriteMuscleRatioOutput* — ADR-0003 落實
+refactor(muscle_ratio): Analyzer 改呼 CSVHandler.WriteMuscleRatioOutput* — ADR-0004 落實
 
-ADR-0003 Boundary 1: row layout 搬進 CSVHandler,sticky-success 規則 (Output 1
+ADR-0004 Boundary 1: row layout 搬進 CSVHandler,sticky-success 規則 (Output 1
 保留 + Output 2 跳過 / 寫檔失敗 → result.Success=true) 仍留在 Analyzer。
-ADR-0003 Boundary 3: gui/muscle_ratio_handlers.go WriteCSV: nil 維持,
+ADR-0004 Boundary 3: gui/muscle_ratio_handlers.go WriteCSV: nil 維持,
 comment 從 "Candidate 2 TODO" 改寫為 "設計如此" narrative。
 
 - muscle_ratio.Params 加 CSVHandler *io.CSVHandler 欄位
@@ -1243,7 +1243,7 @@ Expected: 全 PASS。`test/integration/` 內若有 fixture-based CCI / MR 整合
 
 - [ ] **Step 6.4: (option) 用真實 manifest fixture 跑一次 GUI smoke**
 
-如果 grilling 時的 ADR-0003 narrative 還沒入心，建議跑一次 GUI smoke 驗 CCI / MR 兩條 path 的 outputPath 仍正確回給前端：
+如果 grilling 時的 ADR-0004 narrative 還沒入心，建議跑一次 GUI smoke 驗 CCI / MR 兩條 path 的 outputPath 仍正確回給前端：
 
 Run:
 ```bash
@@ -1272,12 +1272,12 @@ gh pr create --title "refactor(io): Candidate 1 — format-aware write contract 
 ## Summary
 
 - 收乾 ADR-0001 的延續工程：4 個既有 method 統一 `(outputPath, error)` shape + 新增 `WriteCCIResult` / `WriteMuscleRatioOutputAll` / `WriteMuscleRatioOutputPhases`
-- 落實 ADR-0003 三條 sticky boundary：muscle_ratio sticky-success 留在 Analyzer、filename ownership 沿 unit-of-work 形狀分、`AnalysisHandler[P, R].WriteCSV` closure 簽章不變（MR nil 是設計如此）
+- 落實 ADR-0004 三條 sticky boundary：muscle_ratio sticky-success 留在 Analyzer、filename ownership 沿 unit-of-work 形狀分、`AnalysisHandler[P, R].WriteCSV` closure 簽章不變（MR nil 是設計如此）
 - 刪除 `internal/cci/analyzer.go` ExportToCSV (~130 行) 與 `internal/muscle_ratio/analyzer.go` writeOutputAll/writeOutputPhases (~80 行)
 
 ## Architecture narrative
 
-注意：本 PR **沒有**把 4 個 family member 的 closure shape 收成同一形 — `WriteCSV: nil` 在 muscle_ratio 是 semantic-correct 的設計（batch unit-of-work），不是未收乾的 TODO。HTML report 的「after · one contract」圖視覺上整齊四欄是粗略表達；本 PR 落實的是「row layout invariant 100% 覆蓋」而非「closure shape 100% 統一」。詳見 `docs/adr/0003-format-aware-write-collapse-boundaries.md`。
+注意：本 PR **沒有**把 4 個 family member 的 closure shape 收成同一形 — `WriteCSV: nil` 在 muscle_ratio 是 semantic-correct 的設計（batch unit-of-work），不是未收乾的 TODO。HTML report 的「after · one contract」圖視覺上整齊四欄是粗略表達；本 PR 落實的是「row layout invariant 100% 覆蓋」而非「closure shape 100% 統一」。詳見 `docs/adr/0004-format-aware-write-collapse-boundaries.md`。
 
 ## Out of scope（追在 #21）
 
@@ -1326,7 +1326,7 @@ EOF
 **1. Subagent-Driven (recommended)** — 我每個 task 派一個 fresh subagent，task 之間我做 review 把關。對本 plan 特別合適，因為：
 - 每個 task 有獨立的 commit boundary
 - Task 2-5 涉及 io ↔ cci / io ↔ muscle_ratio 套件邊界改動，每 task 結束後我可以驗證 dep graph 還乾淨
-- 6 個 task 預估累計 1.5–2 小時 wall time，subagent fan-out 不會省，但每 task 有 fresh context 比較不容易混淆 ADR-0001 vs ADR-0003 的 narrative
+- 6 個 task 預估累計 1.5–2 小時 wall time，subagent fan-out 不會省，但每 task 有 fresh context 比較不容易混淆 ADR-0001 vs ADR-0004 的 narrative
 
 **2. Inline Execution** — 在當前 session 內以 executing-plans 跑，batch 執行 + checkpoint review。優點是省 context-switch；缺點是中間有 lint / test fail 時 debug 路徑會卡住 6 個 task 全部。
 

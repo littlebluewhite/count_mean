@@ -29,7 +29,7 @@ type Params struct {
 	ManifestFile string
 	DataFolder   string
 	OutputDir    string
-	CSVHandler   *io.CSVHandler // ADR-0003 Boundary 1: row layout 透過 CSVHandler 落實
+	CSVHandler   *io.CSVHandler // ADR-0004 Boundary 1: row layout 透過 CSVHandler 落實
 }
 
 // SubjectResult records one subject's outcome in the batch.
@@ -88,11 +88,11 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 	if params == nil {
 		return nil, fmt.Errorf("params 不能為 nil")
 	}
-	// ADR-0003 Boundary 1: muscle_ratio 寫檔須透過 CSVHandler。如果 caller 沿用舊
+	// ADR-0004 Boundary 1: muscle_ratio 寫檔須透過 CSVHandler。如果 caller 沿用舊
 	// Params 結構未填 CSVHandler 欄位,在 analyzeSubject 內取用會 nil-deref panic;
 	// 提早 fail 給 caller 明確訊息。
 	if params.CSVHandler == nil {
-		return nil, fmt.Errorf("params.CSVHandler 不能為 nil (ADR-0003: muscle_ratio 寫檔須透過 CSVHandler)")
+		return nil, fmt.Errorf("params.CSVHandler 不能為 nil (ADR-0004: muscle_ratio 寫檔須透過 CSVHandler)")
 	}
 
 	// Defense-in-depth：config 載入時已驗證 OutputDir，但 GUI file dialog 等繞過
@@ -213,7 +213,7 @@ func (a *Analyzer) analyzeSubject(
 
 	result.OutputAllPath = outAllPath
 
-	// Output 2 — phases + midpoints (ADR-0003 Boundary 1: sticky-success 規則
+	// Output 2 — phases + midpoints (ADR-0004 Boundary 1: sticky-success 規則
 	// 留在 Analyzer。collectPhasePoints warn-path 與 Output 2 寫檔失敗都讓
 	// Output 1 視為 sticky-success)。
 	points, warn := a.collectPhasePoints(m, emg)

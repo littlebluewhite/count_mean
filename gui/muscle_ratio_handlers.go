@@ -103,11 +103,11 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 			}
 			return subjectResults, nil
 		},
-		// WriteCSV = nil:batch unit-of-work 不適用 single-path closure (ADR-0003 Boundary 3)。
+		// WriteCSV = nil:batch unit-of-work 不適用 single-path closure (ADR-0004 Boundary 3)。
 		// per-subject row layout 已透過 muscle_ratio.Analyzer 內呼叫 csvHandler.WriteMuscleRatioOutputAll
 		// 與 WriteMuscleRatioOutputPhases 落實;outputPath 由 analyzer 回填到
 		// SubjectResult.OutputAllPath / OutputPhasePath。
-		// 詳見 docs/adr/0003-format-aware-write-collapse-boundaries.md。
+		// 詳見 docs/adr/0004-format-aware-write-collapse-boundaries.md。
 		WriteCSV: nil,
 	}
 

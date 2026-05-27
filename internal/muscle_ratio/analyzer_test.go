@@ -1359,7 +1359,7 @@ func TestCollectPhasePoints_NegativeMotionIndex(t *testing.T) {
 
 // TestAnalyze_NilCSVHandlerReturnsErr 驗證 codex review 抓的 P2 — 舊式 Params
 // 構造若未填 CSVHandler 欄位,Analyze 必須回乾淨 error 而非 deep 入 analyzeSubject
-// 內 nil-deref panic。對應 ADR-0003 Boundary 1 「Analyzer 依賴 CSVHandler 注入」。
+// 內 nil-deref panic。對應 ADR-0004 Boundary 1 「Analyzer 依賴 CSVHandler 注入」。
 func TestAnalyze_NilCSVHandlerReturnsErr(t *testing.T) {
 	a := NewAnalyzer()
 	_, err := a.Analyze(context.Background(), &Params{

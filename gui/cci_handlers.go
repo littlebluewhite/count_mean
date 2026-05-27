@@ -83,7 +83,7 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 			}
 			return analysisResult, nil
 		},
-		// WriteCSV: ADR-0003 Boundary 2 — Subject-based write,CSVHandler 內部從
+		// WriteCSV: ADR-0004 Boundary 2 — Subject-based write,CSVHandler 內部從
 		// analysisResult.Subject 推導 filename;req.Filename 被忽略。SubDir 用 ""
 		// (寫到 OutputDir 根)。outputDir capture 由 CSVHandler 自身的 h.config.OutputDir
 		// 替代(state.Load 在 Run 外做時 csvHandler 已綁定當時 config)。
