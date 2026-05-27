@@ -340,48 +340,6 @@ func TestGenerateCCIInteractiveChart_CtxCancel(t *testing.T) {
 	})
 }
 
-// TestExportToCSV_CtxCancel 守護 (CSV 路徑):writeCSVFile 透過 ExportToCSV
-// 應接受 ctx,pre-cancel 必須拒絕寫檔。對稱 GenerateCCIInteractiveChart 的 ctx 契約。
-func TestExportToCSV_CtxCancel(t *testing.T) {
-	tempDir := t.TempDir()
-	a := NewCCIAnalyzer()
-
-	const n = 100
-	timeValues := make([]float64, n)
-	values := make([]float64, n)
-	for i := 0; i < n; i++ {
-		timeValues[i] = float64(i) * 0.01
-		values[i] = float64(i)
-	}
-	result := &CCIAnalysisResult{
-		Subject:    "p1-22-csv-test",
-		TimeValues: timeValues,
-		PairResults: []CCIResult{
-			{PairName: "RA/ES", Values: values},
-		},
-		GaitStartTime: 0,
-		GaitEndTime:   timeValues[n-1],
-	}
-
-	t.Run("PreCancelledCtxRejectsWrite", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		_, err := a.ExportToCSV(ctx, result, tempDir)
-		require.Error(t, err, "pre-cancelled ctx 必須拒絕寫 CSV")
-		assert.True(t,
-			errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded),
-			"expected ctx.Canceled,got %v", err)
-	})
-
-	t.Run("HappyPath_NormalCtxWrites", func(t *testing.T) {
-		outputPath, err := a.ExportToCSV(context.Background(), result, tempDir)
-		require.NoError(t, err)
-		_, statErr := os.Stat(outputPath)
-		assert.NoError(t, statErr, "正常 ctx 應產生 CSV")
-	})
-}
-
 // assertNoCCIGoroutineLeak 比對 baseline 與目前 goroutine 數，容許 ±2 偏差。
 // AnalyzeCCI 用 errgroup 啟 12 個 goroutine，cancel 後 errgroup.Wait() 必須回收全部，
 // 因此 cancel 完成後不應有任何持續存活的 cci goroutine。

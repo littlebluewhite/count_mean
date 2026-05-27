@@ -5,21 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
 
-	"count_mean/internal/calculator"
-	"count_mean/internal/csvutil"
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
-	"count_mean/internal/security"
-	"count_mean/internal/security/fsperm"
 	"count_mean/internal/synchronizer"
 	"count_mean/util"
 )
@@ -528,137 +522,6 @@ func (a *CCIAnalyzer) computeSinglePair(
 	}
 
 	return cciValues, nil
-}
-
-// ExportToCSV exports CCI results to a CSV file.
-// result.Subject 來自外部 manifest，需先做 SanitizeFileName 去除路徑分隔符與特殊字元，
-// 否則 "../foo" 之類的值會讓 filepath.Join 寫到 outputDir 之外（路徑穿越）。
-//
-// ctx 為第一個參數,讓 caller 在大 dataset CSV 匯出中斷流程。
-// pre-cancel 直接拒絕寫檔;writeCSVFile 的 emit loop 中也每 cciChartCtxCheckInterval
-// 點檢查一次 ctx.Done。
-func (a *CCIAnalyzer) ExportToCSV(
-	ctx context.Context, result *CCIAnalysisResult, outputDir string,
-) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-
-	// Defense-in-depth：附 dummy child 後 ValidateExternalPath 擋 traversal /
-	// system-dir prefix（與 muscle_ratio.Analyze 對稱）。
-	checkPath := filepath.Join(outputDir, "_validation_marker")
-	if err := security.NewPathValidator(nil).ValidateExternalPath(checkPath); err != nil {
-		return "", fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIOutputDirInvalid), err)
-	}
-
-	if err := os.MkdirAll(outputDir, fsperm.DirPerm); err != nil {
-		return "", fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIMkdirFailed), err)
-	}
-
-	safeSubject := calculator.SanitizeFileName(result.Subject)
-	fileName := fmt.Sprintf("%s_CCI_Rudolph.csv", safeSubject)
-	outputPath := filepath.Join(outputDir, fileName)
-
-	// 過去版本對 writeCSVFile error 仍回 outputPath — caller 看到 "(path, err)"
-	// 兩者皆非零,容易誤把 path 當「寫進去了但有 warn」處理。實際上 WriteCSVAtomic
-	// 失敗時 tmp 檔已被 abort,outputPath 上不會有檔案(或為前次留下的舊版本)。
-	// 改為:寫檔失敗時 return "" + err,讓 caller 無法誤用 path。
-	if err := writeCSVFile(ctx, outputPath, result, a.logger); err != nil {
-		return "", err
-	}
-	return outputPath, nil
-}
-
-// writeCSVFile writes the CCI result data to a CSV via csvutil.WriteCSVAtomic
-// (tmp+rename atomic). NaN/Inf 處理保留 row-level 邏輯：
-//   - cell 為 NaN/Inf → 輸出空字串（CSV 慣例代表 missing data）
-//   - 若整 row 所有 pair 都 NaN/Inf → skip 整 row 並計入 droppedRowCount
-//   - 結束時 log warning，與 large_file_handler 的 -Inf channel skip 邏輯一致
-//
-// ctx 為第一個參數,emit loop 中每 cciChartCtxCheckInterval 點檢查一次
-// ctx.Done(),caller cancel 後立即停寫並回 ctx.Err。csvutil.WriteCSVAtomic
-// 對 emit 回 error 會走 tmp file abort 路徑,不留下半成品。
-func writeCSVFile(ctx context.Context, outputPath string, result *CCIAnalysisResult, logger *logging.Logger) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	duration := result.GaitEndTime - result.GaitStartTime
-	if duration <= 0 {
-		return fmt.Errorf("%w: start=%v end=%v", ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
-	}
-
-	header := []string{"Time (s)", "Gait Cycle (%)"}
-	for _, pr := range result.PairResults {
-		header = append(header, pr.PairName)
-	}
-
-	var droppedRowCount int
-	numPoints := len(result.TimeValues)
-
-	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header: header,
-		Emit: func(emit func([]string) error) error {
-			for i := 0; i < numPoints; i++ {
-				if i > 0 && i%cciChartCtxCheckInterval == 0 {
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					default:
-					}
-				}
-
-				t := result.TimeValues[i]
-				pct := (t - result.GaitStartTime) / duration * 100
-
-				pairCells := make([]string, 0, len(result.PairResults))
-				allNonFinite := true
-
-				for _, pr := range result.PairResults {
-					if i >= len(pr.Values) {
-						pairCells = append(pairCells, "")
-						continue
-					}
-					v := pr.Values[i]
-					if math.IsNaN(v) || math.IsInf(v, 0) {
-						pairCells = append(pairCells, "")
-						continue
-					}
-					pairCells = append(pairCells, fmt.Sprintf("%.6f", v))
-					allNonFinite = false
-				}
-
-				if len(result.PairResults) > 0 && allNonFinite {
-					droppedRowCount++
-					continue
-				}
-
-				row := []string{
-					fmt.Sprintf("%.4f", t),
-					fmt.Sprintf("%.2f", pct),
-				}
-				row = append(row, pairCells...)
-
-				if err := emit(row); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
-	})
-	if err != nil {
-		return err
-	}
-
-	if droppedRowCount > 0 && logger != nil {
-		logger.Warn("CCI 匯出 CSV 時跳過全 NaN/Inf 的 row", map[string]any{
-			"dropped_rows": droppedRowCount,
-			"total_rows":   numPoints,
-			"output_path":  outputPath,
-		})
-	}
-
-	return nil
 }
 
 // GenerateReport produces a text summary of the CCI analysis.

@@ -54,7 +54,6 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 	a.logger.Info("CCI 分析參數", map[string]any{"params": params})
 
 	s := a.state.Load()
-	outputDir := s.config.OutputDir
 
 	handler := &AnalysisHandler[CCIParams, *cci.CCIAnalysisResult]{
 		Name:   "CCI 分析",
@@ -84,15 +83,12 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 			}
 			return analysisResult, nil
 		},
-		// WriteCSV 暫保留 cciAnalyzer.ExportToCSV — Candidate 2 推進時把 closure
-		// 內容換成 csvHandler.WriteCCIResult(...) 即可，handler 本身不再動。
-		// `*io.CSVHandler` 參數此版本還用不到（走 cciAnalyzer 內部 export），
-		// 是 Candidate 2 前的暫保留設計。outputDir 透過 closure capture caller
-		// 端的 local var（state.Load 已在 Run 外做）。
-		WriteCSV: func(_ *io.CSVHandler, analysisResult *cci.CCIAnalysisResult) (string, error) {
-			// 帶 ctx 讓大 dataset CSV 匯出也能配合 Wails Shutdown / 使用者中止
-			// 取消;closure 內走 a.context() 與 Execute 一致。
-			csvPath, exportErr := a.cciAnalyzer.ExportToCSV(a.context(), analysisResult, outputDir)
+		// WriteCSV: ADR-0003 Boundary 2 — Subject-based write,CSVHandler 內部從
+		// analysisResult.Subject 推導 filename;req.Filename 被忽略。SubDir 用 ""
+		// (寫到 OutputDir 根)。outputDir capture 由 CSVHandler 自身的 h.config.OutputDir
+		// 替代(state.Load 在 Run 外做時 csvHandler 已綁定當時 config)。
+		WriteCSV: func(handler *io.CSVHandler, analysisResult *cci.CCIAnalysisResult) (string, error) {
+			csvPath, exportErr := handler.WriteCCIResult(a.context(), io.WriteRequest{}, analysisResult)
 			if exportErr != nil {
 				// UIError 包裝:Error() 仍回中文訊息(維持 result.Message 契約),
 				// sentinel 對接 errors.Is(err, ErrCCICSVExportFailed)。
