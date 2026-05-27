@@ -1892,6 +1892,9 @@ class EMGAnalysisApp {
             originalPctLabelsRef: this._cciOriginalPctLabelsCell,
             findNearestLabel: this._findNearestLabel.bind(this),
             onAfterApply: (recalcPercents) => this._updatePhasePositionDisplay(recalcPercents),
+            // CCI chart 用 type='category' xAxis(time label 是 string slot),markLine
+            // 必須對映到 xLabels 內某個 string;helper 走 findNearestLabel 路徑。
+            axisMode: 'category',
         });
     }
 
@@ -2180,6 +2183,17 @@ class EMGAnalysisApp {
     // 切 subject 時:zoom reset(清除 iframe)+ 保留 channel / phase 勾選 Set;
     // 不自動重新呼叫 loadComposerEMGChannels — 對齊 spec「manual 觸發」設計,使用者
     // 仍需按「載入 EMG 欄位」才更新 checkbox 列表(channel reconcile 在那時統一發生)。
+    //
+    // codex P2 #3 修補:必須 reset `_composerEMGMotionOffset` 與 `_composerLoadedSubject`。
+    //
+    //   情境:user 載入 subject A → backend 回 emgMotionOffset=0.5,寫入 `_composerEMGMotionOffset`。
+    //   切到 subject B 但**沒按**「載入 EMG 欄位」(channel name 在兩 subject 重疊
+    //   時看起來不需重載)。直接按「生成圖表」 → emgMotionOffset 仍是 A 的 0.5,
+    //   套到 B 的 motion data 上 → motion / phase markers 全錯位。
+    //
+    //   修法:subject change 時 clear offset 為 0 + clear `_composerLoadedSubject`
+    //   to null。`generateComposerChart` 會在 RPC 前驗 `_composerLoadedSubject` 等於
+    //   當前 subject,否則 ShowError 強制 user 重新按「載入 EMG 欄位」。
     onComposerSubjectChange() {
         const resultDiv = document.getElementById('composerResult');
         if (resultDiv) {
@@ -2191,6 +2205,10 @@ class EMGAnalysisApp {
         if (this._composerOriginalPctCell) {
             this._composerOriginalPctCell.value = null;
         }
+        // codex P2#3:reset offset + loaded-subject flag,避免上個 subject 的 offset
+        // silent 套用到新 subject。
+        this._composerEMGMotionOffset = 0;
+        this._composerLoadedSubject = null;
         // phase checkbox 暫時保留勾選 Set(下次 generate 後重新 render checkbox)
     }
 
@@ -2261,6 +2279,9 @@ class EMGAnalysisApp {
             }
 
             this._composerEMGMotionOffset = Number(result.emgMotionOffset) || 0;
+            // codex P2#3:記錄成功 load 的 subject,讓 generateComposerChart 能驗證
+            // user 沒有「subject 切了但沒重新 load」就直接 generate。
+            this._composerLoadedSubject = subject;
         } catch (err) {
             console.error('載入 EMG 通道失敗:', err);
             await ShowError(t('dialog.error'), err.toString());
@@ -2281,6 +2302,17 @@ class EMGAnalysisApp {
         }
         if (selectedChannels.length === 0) {
             await ShowError(t('dialog.error'), '請至少選擇一個 EMG 通道');
+            return;
+        }
+
+        // codex P2#3 guard:_composerLoadedSubject 必須與當前 subject 一致,
+        // 否則 `_composerEMGMotionOffset` 是上個 subject 的值 — silent 套用會讓
+        // motion / phase markers 錯位。強制 user 重按「載入 EMG 欄位」對齊一致性。
+        if (this._composerLoadedSubject !== subject) {
+            await ShowError(
+                t('dialog.error'),
+                '主題已變更但未重新載入 EMG 欄位 — 請先按「載入 EMG 欄位」再生成圖表'
+            );
             return;
         }
 
@@ -2308,8 +2340,22 @@ class EMGAnalysisApp {
             iframe.style.height = '720px';
             iframe.style.border = 'none';
             // 對齊 P2-7 iframe security guard:srcdoc 賦值前先設 sandbox=allow-scripts。
-            // 不可加 allow-same-origin(P1-12 已收斂)— Wails WebView 同 origin 下
-            // 仍可 cross-frame 讀 echarts。
+            // 不可加 allow-same-origin(P1-12 已收斂)。
+            //
+            // codex P1 #1 baseline-debt note:standards-compliant webview 在
+            // `sandbox=allow-scripts`(無 allow-same-origin)下會把 iframe 視為
+            // opaque origin → parent **無法**跨 frame 讀 `iframe.contentWindow.echarts`
+            // / `iframe.contentDocument`,後續 `_onComposerIframeLoaded` 反推 phaseTimes
+            // 與 `downloadComposerChart` 取 ECharts dataURL 都會失效。
+            //
+            // 這是 **CCI 既有 baseline debt** — 見 main.js:~1840 CCI showCCIResult
+            // 那段對應 comment(line 1841-1845)寫明「此版本失效,屬未來 follow-up」。
+            // CCI 既已知 deliberate trade-off,Composer 鏡像同樣行為不算 regression;
+            // 待 follow-up issue 統一改寫為「iframe 內主動 postMessage(option / dataURL)
+            // 給 parent」設計後,CCI / Composer 一起解決。Wails embedded WebView
+            // (macOS WKWebView / Windows WebView2)目前仍允許同 origin cross-frame
+            // 讀取(WKWebView 把 opaque origin 視為同 origin),所以實務上 still works
+            // 在當前 Wails 環境;此 note 描述的是未來 webview 升級或第三方嵌入時的風險。
             iframe.sandbox = 'allow-scripts';
             iframe.srcdoc = result.html;
             wrapper.appendChild(iframe);
@@ -2407,6 +2453,10 @@ class EMGAnalysisApp {
     }
 
     // 共用 helper thin wrapper — 對齊 updateCCIPhaseLines。
+    //
+    // Composer 後端 (internal/chart/composer.go::configureComposerAxes) 走 Type:"value"
+    // xAxis 讓 EMG / motion 不同採樣率對齊絕對時間,沒有 xAxis[0].data;markLine
+    // 必須直接用 numeric phaseTime — 詳見 helper signature 的 axisMode doc。
     _updateComposerPhaseLines() {
         updatePhaseLines({
             iframeSelector: '#composerChartContent iframe',
@@ -2414,11 +2464,27 @@ class EMGAnalysisApp {
             checkboxSelector: '[id^="composer_phase_"]',
             originalPctLabelsRef: this._composerOriginalPctCell,
             findNearestLabel: this._findNearestLabel.bind(this),
+            axisMode: 'value',
         });
     }
 
     // 下載 PNG — 從 iframe 抓 ECharts dataURL(反映當下 zoom / phase / legend 狀態)
-    // → 走 file dialog 取得 outputPath → 呼叫 DownloadChartComposerImage。
+    // → 拼 outputDir + 自動檔名 → 呼叫 DownloadChartComposerImage。
+    //
+    // codex P2 #4 修補:不走 `SelectFile('save', ...)`。Wails `SelectFile` 是
+    // `runtime.OpenFileDialog` 包裝(見 gui/app.go:316),`buttonType` switch case
+    // 只認 'input' / 'output' / 'operate' 設預設目錄;'save' 不在 switch case 內
+    // 會 fall through,**實際打開的仍然是 OpenFileDialog**(請選擇現有檔案)。
+    // user cancel 後舊版 fallback 寫 `<subject>.png` 到 app cwd — 是 silent 寫到
+    // 不可預期目錄(macOS 是 app bundle 內、Windows 是 install dir),屬危險。
+    //
+    // 鏡像 `downloadCCIChart` baseline(gui/cci_handlers.go:159):走 config.outputDir
+    // + 自動拼檔名,不問 user。Composer backend `DownloadChartComposerImage`
+    // (gui/chart_composer_handlers.go:451)已接受 outputPath,前端只負責拼好 PATH。
+    //
+    // 檔名 pattern 沿用 CCI 風格(`<subject>_<suffix>.png`),Composer suffix 是
+    // 'chart_composer';backend 已 SanitizeFileName(filepath.Base(outputPath))
+    // 二次防 traversal,再加 validateExternalPathInputs 防 sensitive dir。
     async downloadComposerChart() {
         const iframe = document.querySelector('#composerChartContent iframe');
         if (!iframe) {
@@ -2426,6 +2492,19 @@ class EMGAnalysisApp {
             return;
         }
         try {
+            // 先驗 outputDir 存在 — 沒設定的話直接 ShowError 而非 silent 寫到 cwd。
+            // GetConfig 在 init() 時就存到 this.config,但 user 可能進過設定 panel 改;
+            // 重新呼叫 GetConfig 拿最新值。
+            const cfg = await GetConfig();
+            const outputDir = (cfg && cfg.outputDir) ? String(cfg.outputDir).trim() : '';
+            if (!outputDir) {
+                await ShowError(
+                    t('dialog.error'),
+                    '輸出目錄未設定 — 請先到「設定」設定輸出資料夾'
+                );
+                return;
+            }
+
             await new Promise((resolve) => {
                 if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
                     resolve();
@@ -2450,19 +2529,12 @@ class EMGAnalysisApp {
                 backgroundColor: '#fff',
             });
 
+            // 拼 outputDir + `<subject>_chart_composer.png`(對齊 CCI 用 `_CCI_Rudolph.png`)。
+            // backend 會再 SanitizeFileName(filepath.Base(...)) 做最終 sanitize +
+            // path validation(prefix '/' 視 OS 而定,前端只負責 join,不裸接受 user input)。
             const subject = document.getElementById('composerSubject').value || 'chart_composer';
-            let outputPath = '';
-            try {
-                outputPath = await SelectFile('儲存 PNG', [{
-                    displayName: 'PNG (*.png)',
-                    pattern: '*.png',
-                }], 'save');
-            } catch (e) {
-                outputPath = '';
-            }
-            if (!outputPath) {
-                outputPath = subject + '.png';
-            }
+            const sep = outputDir.endsWith('/') || outputDir.endsWith('\\') ? '' : '/';
+            const outputPath = outputDir + sep + subject + '_chart_composer.png';
 
             const result = await DownloadChartComposerImage({
                 base64Data: dataURL,
