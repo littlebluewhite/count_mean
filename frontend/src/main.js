@@ -110,50 +110,9 @@ class EMGAnalysisApp {
         // ADR-0003:初始化 chart iframe bridge — singleton window-level
         // postMessage listener,後續 Composer / CCI 通訊都走此 bridge。
         // init() 自身 idempotent,HMR / 重複 init 不會累積 listener。
+        // CCI 'cci-chart-*' subscription 改在 showCCIResult iframe 建好後做,
+        // 避免在 init() 時 iframe 尚未存在的問題。
         bridge.init();
-
-        // 註冊 CCI iframe 的 postMessage listener(P0-A H1 修補)。
-        // 舊版每次 showCCIResult 都 addEventListener 一個新 closure,跑 N 次分析
-        // 就累積 N 個 listener — listener leak 加 N 次 updateCCIPhaseLines 觸發,
-        // 重畫 phase line 會在 setOption 後互相干擾、最後 chart 渲染抖動。
-        // 改為 init() 時註冊一次,handler 從 this._cciResult 取 context;
-        // 沒有 active CCI 結果時 (e.g. 切到別的 panel) 直接 no-op。
-        //
-        // P2-9:init() 在 Vite HMR / 測試重複呼叫情境下會跑多次 — 若不先解綁
-        // 舊 listener,每次 reload 都累積一個新的 handler。先 removeEventListener
-        // 前一次 ref(第一次 init 時 this._cciMessageHandler === undefined,
-        // removeEventListener 會 silently no-op,合 contract),再 add 新的。
-        if (typeof this._cciMessageHandler === 'function') {
-            window.removeEventListener('message', this._cciMessageHandler);
-        }
-        // P1-13:postMessage handler 必須 verify event.origin + event.source —
-        // 否則任何頁面(惡意 iframe / 開發 cross-origin tool)都可以 postMessage
-        // 到我們的 window 觸發 updateCCIPhaseLines。Wails webview 預設同 origin
-        // (production embedded scheme;dev 是 localhost),但 P1-12 移除 iframe
-        // 的 allow-same-origin 後,iframe.contentWindow.postMessage 的 origin
-        // 會是 "null" — 我們明確只接受 "null" 或當前 window.location.origin。
-        //
-        // 沒此 guard 的 PoC:攻擊者誘導使用者打開含 <iframe src="malicious">
-        // 的網頁,該 iframe top.postMessage("cci-chart-restored", "*") 可觸發
-        // updateCCIPhaseLines。雖然此 method 本身只重畫 chart,但任何「無 origin
-        // check 的 message listener」都是後續攻擊面擴張的入口(future feature 加
-        // 進更敏感 message type 時 silent 引入 vector)。
-        const expectedOrigin = window.location.origin;
-        this._cciMessageHandler = (e) => {
-            // null origin = sandboxed iframe (P1-12 後 chart iframe 就屬此類);
-            // same origin = top window 同源訊息(理論上不會由 chart iframe 發,
-            // 但其他 future feature 可能);任何外來 origin reject。
-            if (e.origin !== 'null' && e.origin !== expectedOrigin) {
-                return;
-            }
-            // event.source 必須是我們自己 append 的 chart iframe 的 contentWindow,
-            // 或同 window 內。沒 _cciResult 代表沒在 CCI panel,無關 message 無視。
-            if (!this._cciResult) return;
-            if (e.data === 'cci-chart-restored' || e.data === 'cci-chart-legend-changed') {
-                setTimeout(() => this.updateCCIPhaseLines(), 100);
-            }
-        };
-        window.addEventListener('message', this._cciMessageHandler);
 
         // 綁定事件
         this.bindEvents();
@@ -1567,11 +1526,22 @@ class EMGAnalysisApp {
             // 避免被後續(例如 downloadCCIChart 等待 iframe ready)的賦值蓋掉造成
             // updateCCIPhaseLines handler 失效。{once: true} 確保不會 leak。
             iframe.addEventListener('load', () => this.updateCCIPhaseLines(), { once: true });
+
+            // ADR-0003:每次 showCCIResult 都新建 iframe element,bridge subscription
+            // 也要重新綁。先 unsubscribe 前一次(避免舊 iframe entry 在 bridge 內
+            // 累積 — 跑 N 次分析就 leak N 個 subscription)。
+            this._cciBridgeUnsub?.();
+            this._cciBridgeUnsub = bridge.subscribe(iframe, 'cci-chart-*', (_payload, type) => {
+                if (!this._cciResult) return;
+                if (type === 'cci-chart-restored' || type === 'cci-chart-legend-changed') {
+                    setTimeout(() => this.updateCCIPhaseLines(), 100);
+                }
+            });
         }
 
         // Store for download and phase line updates。
-        // postMessage listener 已在 init() 註冊一次(this._cciMessageHandler),
-        // 此處只更新 _cciResult 引用,handler 會在收到 iframe 事件時讀取此 context。
+        // bridge.subscribe 已在上方 if-block 內針對該 iframe 註冊,handler 會在
+        // 收到 iframe 事件時透過 this._cciResult 取 context。
         this._cciResult = result;
         // 重置 phase-line helper 的 originalPctLabels 快取 cell;cell 本身保留(讓
         // updatePhaseLines 共用同一 reference),只 reset value 為 null 觸發下次
@@ -1583,31 +1553,27 @@ class EMGAnalysisApp {
         }
     }
 
-    // 更新 CCI 圖表的分期點垂直線(thin wrapper)。
-    //
-    // 實作已抽到 `frontend/src/charts/phaseLines.mjs#updatePhaseLines` 共用 helper —
-    // 同一條邏輯路徑被 CCI panel 與 Chart Composer panel 共用。差異化參數
-    // (selector / phaseTimes / originalPctLabels 快取 cell / 後置 callback)
-    // 全部在 caller 端配置。
-    //
-    // _originalPctLabels 用 `{value: ...}` cell pattern 而非裸 property —
-    // helper 不能 mutate `this._originalPctLabels`(無法跨函式共享 reference),
-    // 故包成 cell;showCCIResult 初始化時把 cell.value 設回 null 來 reset。
+    // ADR-0003:走 bridge.send 寄 'cci-update-phase-markers' 給 iframe,
+    // iframe customJS 自己用 findNearestLabel + setOption 重畫 markLine。
+    // parent 只負責讀 checkbox state、algorithm helper(recalcPercents)算 pct、
+    // 送 checkedPhases payload。pct 仍在 parent 算一次以供 _updatePhasePositionDisplay
+    // 直接顯示(iframe 端用同個 pct 組 markLine label,不會 drift)。
     updateCCIPhaseLines() {
-        if (!this._cciOriginalPctLabelsCell) {
-            this._cciOriginalPctLabelsCell = { value: null };
-        }
-        updatePhaseLines({
-            iframeSelector: '#cciChartContent iframe',
-            phaseTimes: (this._cciResult && this._cciResult.phaseTimes) || {},
-            checkboxSelector: '[id^="phase_"]',
-            originalPctLabelsRef: this._cciOriginalPctLabelsCell,
-            findNearestLabel: this._findNearestLabel.bind(this),
-            onAfterApply: (recalcPercents) => this._updatePhasePositionDisplay(recalcPercents),
-            // CCI chart 用 type='category' xAxis(time label 是 string slot),markLine
-            // 必須對映到 xLabels 內某個 string;helper 走 findNearestLabel 路徑。
-            axisMode: 'category',
-        });
+        const iframe = document.querySelector('#cciChartContent iframe');
+        if (!iframe || !this._cciResult) return;
+        const phaseTimes = this._cciResult.phaseTimes || {};
+        const allCheckboxes = document.querySelectorAll('[id^="phase_"]');
+        const checkedNames = Array.from(
+            document.querySelectorAll('[id^="phase_"]:checked')
+        ).map((cb) => cb.value);
+        const checkedPhases = checkedNames
+            .filter((n) => phaseTimes[n] !== undefined)
+            .map((n) => ({ name: n, time: phaseTimes[n] }));
+        const pcts = recalcPercents(checkedPhases);
+        const payload = checkedPhases.map((p) => ({ ...p, pct: pcts[p.name] }));
+        const allChecked = checkedPhases.length === allCheckboxes.length && checkedPhases.length > 0;
+        bridge.send(iframe, 'cci-update-phase-markers', { checkedPhases: payload, allChecked });
+        this._updatePhasePositionDisplay(pcts);
     }
 
     // 更新分期點位置顯示
@@ -1659,7 +1625,11 @@ class EMGAnalysisApp {
         return nearest;
     }
 
-    // 下載 CCI 圖表為 PNG
+    // 下載 CCI 圖表為 PNG (ADR-0003 latent bomb #2 拆除):
+    // 改走 bridge.requestReply,iframe 端 myChart.getDataURL → 回 reply。
+    // 不再 cross-frame 讀 iframe.contentWindow.echarts(在 wails dev opaque-origin
+    // sandbox 下 silent fail)。Bridge 內建 10s timeout + requestId 配對,
+    // caller 不再寫 30+ 行 readiness/instance/getDataURL boilerplate。
     async downloadCCIChart() {
         const iframe = document.querySelector('#cciChartContent iframe');
         if (!iframe) {
@@ -1669,48 +1639,11 @@ class EMGAnalysisApp {
 
         try {
             this.updateStatus(t('status.cci_chart_downloading'));
-
-            // P2-10:用 addEventListener('load') 取代 iframe.onload = resolve。
-            // 過去這裡寫 iframe.onload = resolve 會「覆蓋」showCCIResult 內已
-            // 設定的 () => this.updateCCIPhaseLines() handler — 若 download
-            // 在 iframe load 完成之前被觸發,phase lines 永遠不會被畫上。
-            // 改用 addEventListener({once:true}) 後兩個 handler 各自獨立。
-            await new Promise(resolve => {
-                if (iframe.contentDocument.readyState === 'complete') {
-                    resolve();
-                } else {
-                    iframe.addEventListener('load', resolve, { once: true });
-                }
-            });
-
-            const iframeWindow = iframe.contentWindow;
-            const iframeDocument = iframe.contentDocument;
-
-            if (!iframeWindow.echarts) {
-                throw new Error(t('error.msg.echarts_not_found'));
-            }
-
-            const chartElement = iframeDocument.querySelector('[_echarts_instance_]');
-            if (!chartElement) {
-                throw new Error(t('error.msg.chart_element_not_found'));
-            }
-
-            const chartInstance = iframeWindow.echarts.getInstanceByDom(chartElement);
-            if (!chartInstance) {
-                throw new Error(t('error.msg.chart_instance_not_found'));
-            }
-
-            const dataURL = chartInstance.getDataURL({
-                type: 'png',
-                pixelRatio: 2,
-                backgroundColor: '#fff'
-            });
-
+            const reply = await bridge.requestReply(iframe, 'cci-request-png', {});
             const result = await DownloadCCIChart({
-                imageData: dataURL,
-                subject: this._cciResult.subject
+                imageData: reply.dataURL,
+                subject: this._cciResult.subject,
             });
-
             this.updateStatus(t('status.chart_download_done'));
             await ShowMessage(t('dialog.success'), t('success.msg.chart_downloaded', result.outputPath));
         } catch (err) {

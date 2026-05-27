@@ -86,24 +86,13 @@ test('P2-7: iframe.sandbox 不可包含 allow-top-navigation / allow-popups / al
 });
 
 // -------------------- P2-9:listener idempotent source guard --------------------
-
-test('P2-9: init() 內 postMessage listener 在 add 之前先 removeEventListener', async () => {
-    const src = await readMainJs();
-
-    // 在 init() async 函式內找 addEventListener('message', ...);前 5 行應出現
-    // removeEventListener('message', this._cciMessageHandler)
-    const initStart = src.indexOf('async init()');
-    assert.ok(initStart > 0, '找不到 async init()');
-
-    // init body 邊界以下一個 method 開頭抓
-    const nextMethod = src.indexOf('\n    initProgressSubscription(', initStart);
-    const initBody = src.slice(initStart, nextMethod);
-
-    // 必須有先 remove 再 add 的 pattern
-    const removeBeforeAdd = /removeEventListener\(['"]message['"]\s*,\s*this\._cciMessageHandler\)[\s\S]*?addEventListener\(['"]message['"]\s*,\s*this\._cciMessageHandler\)/;
-    assert.match(initBody, removeBeforeAdd,
-        'init() 必須先 removeEventListener("message", this._cciMessageHandler) 再重新 add — 確保 HMR / 重複 init 不會累積 listener');
-});
+//
+// P2-9 「init() 內 _cciMessageHandler 先 remove 再 add」原本對齊舊架構 — 直接
+// window.addEventListener('message') + this._cciMessageHandler。ADR-0003 後
+// iframeBridge 在 frontend/src/charts/iframeBridge.mjs 統一接管 window-level
+// message listener,idempotent 保證收到 bridge.init() 內,既有 source-string
+// 比對的 P2-9 invariant 失效 — 等價 behavioural invariant 移到
+// iframeBridge.test.mjs(『init() 重複呼叫不累積 listener』)。
 
 test('P2-9: initDragAndDrop 在 OnFileDrop 前先 OnFileDropOff', async () => {
     const src = await readMainJs();
@@ -160,8 +149,13 @@ test('P2-10: 所有 iframe load 等待都用 addEventListener("load", ..., {once
     // (e.g. arrow fn 內也有 ())把 regex pattern 拐到錯的位置。
     const lines = src.split('\n');
     const loadLines = lines.filter(l => /iframe\.addEventListener\(\s*['"]load['"]\s*,/.test(l));
-    assert.ok(loadLines.length >= 3,
-        `應至少 3 個 iframe.addEventListener("load", ...)(showCCIResult + downloadCCIChart + Composer iframe / downloadComposerChart),got ${loadLines.length}\n` +
+
+    // ADR-0003 後 download path 不再需要 iframe-ready wait(bridge.requestReply
+    // 內部處理 readiness + timeout),所以 downloadCCIChart / downloadComposerChart
+    // 那兩個 load listener 刪除。剩下 2 個是 showCCIResult + generateComposerChart
+    // 內的「iframe 建好觸發 updateXxxPhaseLines / _onComposerIframeLoaded」path。
+    assert.ok(loadLines.length >= 2,
+        `應至少 2 個 iframe.addEventListener("load", ...)(showCCIResult + Composer 生成 iframe load),got ${loadLines.length}\n` +
         loadLines.join('\n'));
 
     // 每個都應該帶 { once: true } 避免重複 fire 累積
@@ -171,44 +165,26 @@ test('P2-10: 所有 iframe load 等待都用 addEventListener("load", ..., {once
     }
 });
 
-// -------------------- P2-9 + P2-10:行為驗證(happy-dom) --------------------
+// -------------------- ADR-0003 bridge bypass guard --------------------
+//
+// ADR-0003 強制所有 chart iframe 通訊走 iframeBridge — main.js 不可再直接
+// window.addEventListener('message', ...);否則就回退到「caller 各自寫 origin
+// filter / requestId / timeout」shallow 反命題,memory feedback_wails_sandbox_
+// iframe_crossframe 的成本又會回頭。
+//
+// 等價 idempotent 行為驗證移至 frontend/src/iframeBridge.test.mjs 的
+// 「init() 重複呼叫不累積 listener」test;此 file 只看 source 防 backslide。
 
-// 模擬 init() 註冊的「先 remove 再 add」pattern,確保多次呼叫不會累積 listener。
-// 跑兩次 simulateInit,然後在 window 上 dispatchEvent,僅應觸發一次 handler。
-test('P2-9 behavioural: 重複 init 後 message handler 只觸發一次', () => {
-    const window = new Window();
-    const doc = window.document;
-
-    // 模擬 EMGAnalysisApp 物件
-    const app = { _cciMessageHandler: undefined, fired: 0 };
-
-    // 對應 main.js init() 的 listener 註冊 pattern
-    function simulateInit(handler) {
-        if (typeof app._cciMessageHandler === 'function') {
-            window.removeEventListener('message', app._cciMessageHandler);
-        }
-        app._cciMessageHandler = handler;
-        window.addEventListener('message', app._cciMessageHandler);
-    }
-
-    const handler = () => { app.fired += 1; };
-
-    // 跑 3 次 init(模擬 HMR / 重複載入)
-    simulateInit(handler);
-    simulateInit(handler);
-    simulateInit(handler);
-
-    // 觸發一次 message event
-    const evt = new window.MessageEvent('message', { data: 'cci-chart-restored' });
-    window.dispatchEvent(evt);
-
-    assert.equal(app.fired, 1,
-        `3 次 simulateInit 後僅應有一個 handler — 收到一次 message 應觸發 1 次,實際 ${app.fired}`);
-
-    // 必要的 hygiene:解除全部
-    window.removeEventListener('message', app._cciMessageHandler);
-    window.dispatchEvent(evt);
-    assert.equal(app.fired, 1, '解除後再 dispatch 不可觸發');
+test('bridge bypass guard: main.js 剝註解後不可直接 window.addEventListener("message", ...)', async () => {
+    const src = await readMainJs();
+    // 移除所有 /* ... */ block comment 與 // line comment(留 string literal 不動)
+    const stripped = src
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    assert.ok(
+        !/window\.addEventListener\(\s*['"]message['"]/.test(stripped),
+        'main.js 不可直接 window.addEventListener("message", ...) — 所有 iframe 訊息走 iframeBridge.subscribe / requestReply(ADR-0003)',
+    );
 });
 
 // -------------------- Slice D codex P2 #3 + #4 source guards --------------------

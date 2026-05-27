@@ -11,6 +11,7 @@ import (
 	"github.com/go-echarts/go-echarts/v2/opts"
 
 	"count_mean/internal/chart"
+	"count_mean/internal/chart/assets"
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
 )
@@ -521,11 +522,18 @@ func addCCIMeanSeries(
 // （chart 仍正常顯示）。
 const wailsParentOrigins = `["wails://wails","http://wails.localhost","https://wails.localhost"]`
 
-// addCCICustomJS adds resize handler, keyboard shortcuts, and restore listener.
+// addCCICustomJS adds resize handler, keyboard shortcuts, restore/legend
+// notifications, and ADR-0003 inbound listeners (phase-markers update + PNG
+// request) to the CCI chart iframe customJS.
+//
 // postMessage targetOrigin 走 wailsParentOrigins allowlist，避免 "*"
-// over-permissive — 詳細理由見 wailsParentOrigins doc。
+// over-permissive — 詳細理由見 wailsParentOrigins doc。Inbound listener 接受
+// e.source === window.parent 作為 wails dev 動態 port 不在 allowlist 的退路。
+//
+// IMPORTANT: customJS body 只能用 /* ... */ block comments — Composer 那側
+// 已踩過 go-echarts newlineTabPat 把 // 後內容吃光的雷(見 composer.go doc)。
 func addCCICustomJS(line *charts.Line) {
-	customJS := `
+	customJS := assets.PhaseMarkersJS + `
 		let myChart = %MY_ECHARTS%;
 		const wailsParentOrigins = ` + wailsParentOrigins + `;
 		function postToParent(msg) {
@@ -533,11 +541,15 @@ func addCCICustomJS(line *charts.Line) {
 				try {
 					window.parent.postMessage(msg, wailsParentOrigins[i]);
 				} catch (e) {
-					// 非匹配 origin 不會 throw（user-agent 靜默丟棄），但保留 try/catch
-					// 防 future browser API surprise（postMessage 在 detached iframe 等
-					// edge case 可能 throw）。Swallow 以免重畫事件 path 中斷後續呼叫。
+					/* 非匹配 origin 不會 throw（user-agent 靜默丟棄），但保留 try/catch
+					   防 future browser API surprise（postMessage 在 detached iframe 等
+					   edge case 可能 throw）。Swallow 以免重畫事件 path 中斷後續呼叫。 */
 				}
 			}
+			/* dev fallback:wails dev parent origin 是 http://localhost:34115(或變動 port),不在生產
+			   allowlist 內。再多 post 一次 targetOrigin='*' 給有 e.source check 的 parent。安全性
+			   仰賴 parent 端 listener 自己驗 e.origin === window.location.origin / 'null'。 */
+			try { window.parent.postMessage(msg, '*'); } catch (e) {}
 		}
 		if (myChart) {
 			document.addEventListener('keydown', function(e) {
@@ -549,10 +561,122 @@ func addCCICustomJS(line *charts.Line) {
 				myChart.resize();
 			});
 			myChart.on('restore', function() {
-				postToParent('cci-chart-restored');
+				postToParent({type: 'cci-chart-restored'});
 			});
 			myChart.on('legendselectchanged', function() {
-				postToParent('cci-chart-legend-changed');
+				postToParent({type: 'cci-chart-legend-changed'});
+			});
+			/* ADR-0003 inbound hub:
+			   - 'cci-update-phase-markers' → 解 payload.checkedPhases →
+			     findNearestLabel against xAxis[0].data → 組 markData →
+			     setOption({series, xAxis[1].data: newPctLabels})
+			   - 'cci-request-png' → myChart.getDataURL → post 'cci-png-result'
+			     reply envelope {requestId, payload?, error?} */
+			window.addEventListener('message', function(e) {
+				if (e.source !== window.parent && wailsParentOrigins.indexOf(e.origin) === -1) {
+					return;
+				}
+				if (!e.data || typeof e.data !== 'object') {
+					return;
+				}
+				if (e.data.type === 'cci-request-png') {
+					const requestId = e.data.requestId;
+					try {
+						const dataURL = myChart.getDataURL({
+							type: 'png',
+							pixelRatio: 2,
+							backgroundColor: '#fff'
+						});
+						postToParent({type: 'cci-png-result', requestId: requestId, payload: {dataURL: dataURL}});
+					} catch (err) {
+						postToParent({type: 'cci-png-result', requestId: requestId, error: String(err)});
+					}
+					return;
+				}
+				if (e.data.type === 'cci-update-phase-markers') {
+					try {
+						const payload = e.data.payload || {};
+						const checkedPhases = Array.isArray(payload.checkedPhases) ? payload.checkedPhases : [];
+						const allChecked = payload.allChecked === true;
+						const option = myChart.getOption();
+						if (!option || !option.xAxis) return;
+						const xLabels = (option.xAxis[0] && option.xAxis[0].data) || [];
+						/* originalPctLabels cache:首次成功讀到 secondary xAxis label slice
+						   後 cache 給後續切換 phase checkbox 想還原「全勾原始百分比」時用。 */
+						if (window.__cciOriginalPctLabels === undefined && option.xAxis[1] && option.xAxis[1].data) {
+							window.__cciOriginalPctLabels = option.xAxis[1].data.slice();
+						}
+						const cached = window.__cciOriginalPctLabels;
+						let minT = 0, maxT = 0;
+						if (checkedPhases.length > 0) {
+							minT = checkedPhases[0].time;
+							maxT = checkedPhases[0].time;
+							for (let i = 1; i < checkedPhases.length; i++) {
+								const t = checkedPhases[i].time;
+								if (t < minT) minT = t;
+								if (t > maxT) maxT = t;
+							}
+						}
+						const duration = maxT - minT;
+						/* secondary xAxis 百分比 label 重建:
+						   - 全勾 + cache → 還原 cache(避免浮點累積誤差)
+						   - >=2 個勾 + duration > 0 → 線性重算
+						   - else fallback cache 或 0.0% */
+						let newPctLabels;
+						if (allChecked && cached) {
+							newPctLabels = cached;
+						} else if (checkedPhases.length >= 2 && duration > 0 && isFinite(duration)) {
+							newPctLabels = xLabels.map(function(label) {
+								const tVal = parseFloat(label);
+								return ((tVal - minT) / duration * 100).toFixed(1) + '%';
+							});
+						} else if (cached) {
+							newPctLabels = cached;
+						} else {
+							newPctLabels = xLabels.map(function() { return '0.0%'; });
+						}
+						/* markData via findNearestLabel(category axis 必須對映 string label) */
+						const findNearestLabel = window.__phaseMarkers.findNearestLabel;
+						const markData = [];
+						for (let i = 0; i < checkedPhases.length; i++) {
+							const p = checkedPhases[i];
+							const pct = (typeof p.pct === 'number') ? p.pct : 0;
+							const nearestLabel = findNearestLabel(p.time, xLabels);
+							if (!nearestLabel) continue;
+							markData.push({
+								name: p.name + '\n(' + pct.toFixed(1) + '%)',
+								xAxis: nearestLabel,
+								lineStyle: { type: 'dashed', color: '#888', width: 1 },
+								label: { show: true, formatter: '{b}', position: 'end' }
+							});
+						}
+						/* 找 targetIdx(legendSelected 第一條 mean curve,跳過 ±SD pair) */
+						if (option.series && option.series.length > 0) {
+							const legendSelected = (option.legend && option.legend[0] && option.legend[0].selected) || {};
+							let targetIdx = 0;
+							for (let i = 0; i < option.series.length; i++) {
+								const name = option.series[i].name || '';
+								if (name.indexOf(' -SD') !== -1 || name.indexOf(' +SD') !== -1) continue;
+								if (legendSelected[name] !== false) {
+									targetIdx = i;
+									break;
+								}
+							}
+							const seriesUpdate = option.series.map(function(s, i) {
+								if (i === targetIdx) {
+									return { markLine: { silent: true, symbol: ['none','none'], data: markData } };
+								}
+								if (s.markLine && s.markLine.data && s.markLine.data.length > 0) {
+									return { markLine: { data: [] } };
+								}
+								return {};
+							});
+							myChart.setOption({ series: seriesUpdate, xAxis: [{}, { data: newPctLabels }] });
+						}
+					} catch (err) {
+						try { console.error('cci-update-phase-markers 失敗:', err); } catch (e) {}
+					}
+				}
 			});
 		}
 	`
