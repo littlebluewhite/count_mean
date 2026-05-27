@@ -1105,10 +1105,14 @@ func (h *CSVHandler) safeJoinOutput(subDir, filename string) (string, error) {
 	joined := filepath.Join(h.config.OutputDir, subDir, filename)
 	rel, err := filepath.Rel(h.config.OutputDir, joined)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("輸出路徑逸出 OutputDir: SubDir=%q filename=%q (resolved=%q)",
-			subDir, filename, joined)
+		return "", fmt.Errorf("%w: SubDir=%q filename=%q (resolved=%q)",
+			errOutputPathEscapesOutputDir, subDir, filename, joined)
 	}
 	return joined, nil
 }
 
 var errEmptyMuscleRatioPayload = stderrors.New("WriteMuscleRatio*: payload 缺 Times/Points")
+
+// errOutputPathEscapesOutputDir 標示 SubDir 含 traversal 或絕對路徑導致 join
+// 後的路徑逸出 OutputDir;供 safeJoinOutput / WriteCCIResult / WriteMuscleRatio* wrap。
+var errOutputPathEscapesOutputDir = stderrors.New("輸出路徑逸出 OutputDir")
