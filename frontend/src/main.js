@@ -28,7 +28,6 @@ import {
 } from '../wailsjs/go/gui/App.js';
 import { OnFileDrop, OnFileDropOff, EventsOn, EventsOff } from '../wailsjs/runtime/runtime.js';
 import { initI18n, t, tHtml, changeLanguage, onLocaleChange, getCurrentLocale } from './i18n.js';
-import { updatePhaseLines } from './charts/phaseLines.mjs';
 import { bridge } from './charts/iframeBridge.mjs';
 import { recalcPercents } from './charts/phaseMarkers.mjs';
 import { buildChartComposerPanelHtml } from './panels/chart_composer_panel.mjs';
@@ -1541,16 +1540,10 @@ class EMGAnalysisApp {
 
         // Store for download and phase line updates。
         // bridge.subscribe 已在上方 if-block 內針對該 iframe 註冊,handler 會在
-        // 收到 iframe 事件時透過 this._cciResult 取 context。
+        // 收到 iframe 事件時透過 this._cciResult 取 context。ADR-0003 後
+        // originalPctLabels 快取改在 iframe customJS 內部維護
+        // (window.__cciOriginalPctLabels),parent 不再持有 chart-internal state。
         this._cciResult = result;
-        // 重置 phase-line helper 的 originalPctLabels 快取 cell;cell 本身保留(讓
-        // updatePhaseLines 共用同一 reference),只 reset value 為 null 觸發下次
-        // 首次 setOption 時重新 snapshot 原始百分比 label。
-        if (!this._cciOriginalPctLabelsCell) {
-            this._cciOriginalPctLabelsCell = { value: null };
-        } else {
-            this._cciOriginalPctLabelsCell.value = null;
-        }
     }
 
     // ADR-0003:走 bridge.send 寄 'cci-update-phase-markers' 給 iframe,
@@ -1610,21 +1603,6 @@ class EMGAnalysisApp {
         container.appendChild(wrapper);
     }
 
-    // 找到最接近目標時間的 X 軸標籤
-    _findNearestLabel(targetTime, labels) {
-        if (!labels || labels.length === 0) return null;
-        let nearest = labels[0];
-        let minDiff = Math.abs(parseFloat(labels[0]) - targetTime);
-        for (const label of labels) {
-            const diff = Math.abs(parseFloat(label) - targetTime);
-            if (diff < minDiff) {
-                minDiff = diff;
-                nearest = label;
-            }
-        }
-        return nearest;
-    }
-
     // 下載 CCI 圖表為 PNG (ADR-0003 latent bomb #2 拆除):
     // 改走 bridge.requestReply,iframe 端 myChart.getDataURL → 回 reply。
     // 不再 cross-frame 讀 iframe.contentWindow.echarts(在 wails dev opaque-origin
@@ -1666,7 +1644,6 @@ class EMGAnalysisApp {
     // **State preservation 設計**:
     //   - this._composerSelectedChannels    : Set<string>  切 subject 時保留勾選
     //   - this._composerCheckedPhases       : Set<string>  phase checkbox 勾選保留
-    //   - this._composerOriginalPctCell     : {value:null} phaseLines helper cache cell
     //   - this._composerPhaseTimes          : map  從 iframe ECharts option 反推
     //                                          (composer handler 不額外回傳 phaseTimes,
     //                                          已把 markLine bake 進 HTML)
@@ -1674,7 +1651,6 @@ class EMGAnalysisApp {
         const panel = document.getElementById('functionPanel');
         if (!this._composerSelectedChannels) this._composerSelectedChannels = new Set();
         if (!this._composerCheckedPhases) this._composerCheckedPhases = new Set();
-        if (!this._composerOriginalPctCell) this._composerOriginalPctCell = { value: null };
 
         // HTML template 抽到 panels/chart_composer_panel.mjs:讓 test 能注入
         // fake translator 走 happy-dom 釘 DOM,不用 import main.js(連帶拉
@@ -1785,10 +1761,6 @@ class EMGAnalysisApp {
             resultDiv.style.display = 'none';
             const wrap = document.getElementById('composerChartContent');
             if (wrap) wrap.textContent = '';
-        }
-        // reset phase line cache(下次 generate 後重新 snapshot)
-        if (this._composerOriginalPctCell) {
-            this._composerOriginalPctCell.value = null;
         }
         // codex P2#3:reset offset + loaded-subject flag,避免上個 subject 的 offset
         // silent 套用到新 subject。
@@ -1964,12 +1936,8 @@ class EMGAnalysisApp {
             // 與 markLine.xAxis 同一座標系,無需前端再次轉換。
             this._composerPhaseTimes = result.phaseTimes || {};
 
-            if (this._composerOriginalPctCell) {
-                this._composerOriginalPctCell.value = null;
-            }
-
-            // iframe load 後從 ECharts option 反推 phaseTimes → render phase checkbox
-            // → updatePhaseLines。{once: true} 對齊 P2-10 guard。
+            // iframe load 後 _onComposerIframeLoaded 走 bridge.send 重畫 markers。
+            // {once: true} 對齊 P2-10 guard。
             iframe.addEventListener('load', () => this._onComposerIframeLoaded(), { once: true });
 
             document.getElementById('composerResult').style.display = 'block';
