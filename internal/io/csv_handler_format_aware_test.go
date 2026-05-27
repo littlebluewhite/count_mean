@@ -514,3 +514,75 @@ func TestWriteCCIResult_CtxCancel(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(tempDir, "subj_C_CCI_Rudolph.csv"))
 	require.True(t, os.IsNotExist(statErr), "pre-cancel 不應留下檔案")
 }
+
+// TestWriteMuscleRatioOutputAll_RoundTrip 驗證 Output 1 (per-subject full
+// time-series ratio) 的 round-trip + filename derivation.
+func TestWriteMuscleRatioOutputAll_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	payload := MuscleRatioOutputAllPayload{
+		Subject:    "s1",
+		PairLabels: []string{"R1", "R2"},
+		Times:      []float64{0.0, 0.5, 1.0},
+		Ratios:     [][]float64{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}},
+	}
+
+	outputPath, err := handler.WriteMuscleRatioOutputAll(WriteRequest{}, payload)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(tempDir, "s1_muscle_ratio.csv"), outputPath)
+
+	rows := readCSVRows(t, outputPath)
+	require.Len(t, rows, 4)
+	assert.Equal(t, []string{"Time (s)", "R1", "R2"}, rows[0])
+	assert.Equal(t, []string{"0.0000", "0.100000", "0.400000"}, rows[1])
+}
+
+// TestWriteMuscleRatioOutputPhases_RoundTrip 驗證 Output 2 round-trip.
+func TestWriteMuscleRatioOutputPhases_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	payload := MuscleRatioOutputPhasesPayload{
+		Subject:    "s1",
+		PairLabels: []string{"R1"},
+		Times:      []float64{0.0, 0.5, 1.0},
+		Ratios:     [][]float64{{0.1, 0.2, 0.3}},
+		Points: []MuscleRatioPhasePoint{
+			{Name: "P1", Time: 0.5},
+		},
+	}
+
+	outputPath, err := handler.WriteMuscleRatioOutputPhases(WriteRequest{}, payload)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(tempDir, "s1_muscle_ratio_phases.csv"), outputPath)
+
+	rows := readCSVRows(t, outputPath)
+	require.Len(t, rows, 2)
+	assert.Equal(t, []string{"Phase", "Time (s)", "R1"}, rows[0])
+	assert.Equal(t, []string{"P1", "0.5000", "0.200000"}, rows[1])
+}
+
+// TestWriteMuscleRatioOutputAll_NaNInfCell 驗證 NaN/Inf cell → 空字串.
+func TestWriteMuscleRatioOutputAll_NaNInfCell(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newFormatAwareTestHandler(t)
+
+	payload := MuscleRatioOutputAllPayload{
+		Subject:    "s2",
+		PairLabels: []string{"R1"},
+		Times:      []float64{0.0, 1.0},
+		Ratios:     [][]float64{{math.NaN(), math.Inf(1)}},
+	}
+
+	outputPath, err := handler.WriteMuscleRatioOutputAll(WriteRequest{}, payload)
+	require.NoError(t, err)
+
+	rows := readCSVRows(t, outputPath)
+	require.Len(t, rows, 3)
+	assert.Equal(t, []string{"0.0000", ""}, rows[1])
+	assert.Equal(t, []string{"1.0000", ""}, rows[2])
+}

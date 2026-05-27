@@ -904,3 +904,175 @@ const cciStreamCtxCheckInterval = 64
 
 // errEmptyCCIResult 標示 WriteCCIResult 收到 nil result。
 var errEmptyCCIResult = stderrors.New("WriteCCIResult: result is nil")
+
+// MuscleRatioOutputAllPayload 是 WriteMuscleRatioOutputAll 的輸入承載結構。
+//
+// 把 muscle_ratio.Analyzer.analyzeSubject 內部計算出的 ratios 與時間軸打包傳給
+// CSVHandler;Subject 給 filename derivation 用,PairLabels 是 ratio pair 的
+// header 名稱 (對齊 muscle_ratio.DefaultRatios() Name 欄位)。
+type MuscleRatioOutputAllPayload struct {
+	Subject    string
+	PairLabels []string
+	Times      []float64
+	Ratios     [][]float64 // 每個 pair 一個 inner slice,長度與 Times 對齊
+}
+
+// MuscleRatioOutputPhasesPayload 是 WriteMuscleRatioOutputPhases 的輸入承載。
+//
+// Points 與 Ratios 由 muscle_ratio.Analyzer 預先 collectPhasePoints 計算得;
+// CSVHandler 只負責照 Point.Time 找 Ratios 切片的對應 cell 並 emit row。
+type MuscleRatioOutputPhasesPayload struct {
+	Subject    string
+	PairLabels []string
+	Times      []float64
+	Ratios     [][]float64
+	Points     []MuscleRatioPhasePoint
+}
+
+// MuscleRatioPhasePoint 是 muscle_ratio.Analyzer 在 collectPhasePoints 階段
+// 算出的 phase / midpoint 條目,Name 為顯示名稱,Time 為 EMG-time-aligned 時間值。
+type MuscleRatioPhasePoint struct {
+	Name string
+	Time float64
+}
+
+// WriteMuscleRatioOutputAll 寫 per-subject Output 1 — full time-series ratio CSV。
+//
+// Filename 由 Subject 經 SanitizeFileName 後 + "_muscle_ratio.csv" 推導;
+// req.Filename 被忽略,僅 req.SubDir 生效。
+//
+// row layout: 1 header ["Time (s)", PairLabels...] + N data rows。
+// NaN/Inf cell → 空字串。
+func (h *CSVHandler) WriteMuscleRatioOutputAll(
+	req WriteRequest, p MuscleRatioOutputAllPayload,
+) (string, error) {
+	if len(p.Times) == 0 {
+		return "", errEmptyMuscleRatioPayload
+	}
+
+	safeSubject := calculator.SanitizeFileName(p.Subject)
+	filename := fmt.Sprintf("%s_muscle_ratio.csv", safeSubject)
+	outputPath := filepath.Join(h.config.OutputDir, req.SubDir, filename)
+
+	if err := h.validateMuscleRatioOutputDir(req.SubDir); err != nil {
+		return "", err
+	}
+
+	header := make([]string, 0, 1+len(p.PairLabels))
+	header = append(header, "Time (s)")
+	header = append(header, p.PairLabels...)
+
+	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: header,
+		Emit: func(emit func([]string) error) error {
+			for i, t := range p.Times {
+				row := make([]string, 0, 1+len(p.Ratios))
+				row = append(row, fmt.Sprintf("%.4f", t))
+				for k := range p.Ratios {
+					row = append(row, formatMuscleRatioCell(p.Ratios[k], i))
+				}
+				if err := emit(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return outputPath, nil
+}
+
+// WriteMuscleRatioOutputPhases 寫 per-subject Output 2 — phase+midpoint slice CSV。
+//
+// Filename 由 Subject 推導 + "_muscle_ratio_phases.csv";req.Filename 被忽略。
+// Row 數量由 caller (muscle_ratio.Analyzer) 預先決定的 Points 切片長度決定。
+func (h *CSVHandler) WriteMuscleRatioOutputPhases(
+	req WriteRequest, p MuscleRatioOutputPhasesPayload,
+) (string, error) {
+	if len(p.Points) == 0 {
+		return "", errEmptyMuscleRatioPayload
+	}
+
+	safeSubject := calculator.SanitizeFileName(p.Subject)
+	filename := fmt.Sprintf("%s_muscle_ratio_phases.csv", safeSubject)
+	outputPath := filepath.Join(h.config.OutputDir, req.SubDir, filename)
+
+	if err := h.validateMuscleRatioOutputDir(req.SubDir); err != nil {
+		return "", err
+	}
+
+	header := make([]string, 0, 2+len(p.PairLabels))
+	header = append(header, "Phase", "Time (s)")
+	header = append(header, p.PairLabels...)
+
+	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: header,
+		Emit: func(emit func([]string) error) error {
+			for _, point := range p.Points {
+				idx := nearestTimeIndex(p.Times, point.Time)
+				row := make([]string, 0, 2+len(p.Ratios))
+				row = append(row, point.Name, fmt.Sprintf("%.4f", p.Times[idx]))
+				for k := range p.Ratios {
+					row = append(row, formatMuscleRatioCell(p.Ratios[k], idx))
+				}
+				if err := emit(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return outputPath, nil
+}
+
+// formatMuscleRatioCell formats one ratio value (與 cci.ExportToCSV row-format
+// 同款規則,NaN/Inf → 空字串、否則 %.6f)。
+func formatMuscleRatioCell(values []float64, idx int) string {
+	if idx < 0 || idx >= len(values) {
+		return ""
+	}
+	v := values[idx]
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return ""
+	}
+	return fmt.Sprintf("%.6f", v)
+}
+
+// nearestTimeIndex 是 muscle_ratio.Analyzer 內 synchronizer.FindNearestTimeIndex
+// 的純函式 mirror — 取出最接近 target 的 times slice index。time series 假設
+// 已 ascending sorted (muscle_ratio.Analyzer 上游已保證)。
+func nearestTimeIndex(times []float64, target float64) int {
+	if len(times) == 0 {
+		return 0
+	}
+	best := 0
+	bestDelta := math.Abs(times[0] - target)
+	for i, t := range times[1:] {
+		delta := math.Abs(t - target)
+		if delta < bestDelta {
+			best = i + 1
+			bestDelta = delta
+		}
+	}
+	return best
+}
+
+// validateMuscleRatioOutputDir は muscle_ratio write path 共用の defense-in-depth
+// 守門 — 對齊既有 muscle_ratio.Analyzer 內 ValidateExternalPath 的位置。
+func (h *CSVHandler) validateMuscleRatioOutputDir(subDir string) error {
+	checkPath := filepath.Join(h.config.OutputDir, subDir, "_validation_marker")
+	if err := h.pathValidator.ValidateExternalPath(checkPath); err != nil {
+		return fmt.Errorf("muscle_ratio 輸出路徑無效: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(checkPath), fsperm.DirPerm); err != nil {
+		return fmt.Errorf("muscle_ratio 輸出目錄建立失敗: %w", err)
+	}
+	return nil
+}
+
+var errEmptyMuscleRatioPayload = stderrors.New("WriteMuscleRatio*: payload 缺 Times/Points")
