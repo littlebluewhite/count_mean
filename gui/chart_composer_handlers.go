@@ -46,6 +46,17 @@ import (
 	"count_mean/internal/synchronizer"
 )
 
+// err113 sentinel — 純承載 user-facing 訊息(caller 把 err.Error() 灌入
+// result.Message,不做 errors.Is 比對;test 走 substring assertion)。
+var (
+	ErrChartComposerNilParams              = errors.New("參數為空")
+	ErrChartComposerEmptyOutputName        = errors.New("輸出檔名不可為空")
+	ErrChartComposerMotionFileEmpty        = errors.New("manifest 內 MotionFile 為空")
+	ErrChartComposerMuscleRatioFileEmpty   = errors.New("manifest 內 MuscleRatioFile 為空")
+	ErrChartComposerMuscleRatioCSVEmpty    = errors.New("muscle_ratio CSV 為空或缺少資料行")
+	ErrChartComposerMuscleRatioCSVNoHeader = errors.New("muscle_ratio CSV 標題不足: 至少需要時間欄與一個 ratio 欄")
+)
+
 // LoadChartComposerSubjectsParams Wails RPC params for subject list lookup.
 type LoadChartComposerSubjectsParams struct {
 	ManifestPath string `json:"manifestPath"`
@@ -527,7 +538,7 @@ func (a *App) DownloadChartComposerImage(
 	a.logger.Info("開始下載 Chart Composer 圖表", nil)
 
 	if params == nil {
-		return nil, errors.New("參數為空")
+		return nil, ErrChartComposerNilParams
 	}
 
 	dataURL := params.Base64Data
@@ -548,7 +559,7 @@ func (a *App) DownloadChartComposerImage(
 	outputDir := filepath.Dir(params.OutputPath)
 	outputBase := calculator.SanitizeFileName(filepath.Base(params.OutputPath))
 	if outputBase == "" {
-		return nil, errors.New("輸出檔名不可為空")
+		return nil, ErrChartComposerEmptyOutputName
 	}
 	// 確保副檔名 .png — Chart Composer 一律輸出 PNG(對齊前端 toDataURL)。
 	if !strings.HasSuffix(strings.ToLower(outputBase), ".png") {
@@ -640,7 +651,7 @@ func loadComposerMotion(
 ) (*chart.MotionData, error) {
 	if strings.TrimSpace(motionFile) == "" {
 		// motion 是必要 grid;空檔名直接 fail。
-		return nil, errors.New("manifest 內 MotionFile 為空")
+		return nil, ErrChartComposerMotionFileEmpty
 	}
 
 	motionPath, err := manifest.ResolveEMGFile(dataFolder, motionFile)
@@ -698,7 +709,7 @@ func loadComposerMotion(
 func loadComposerMuscleRatio(dataFolder, muscleRatioFile string) (*chart.MuscleRatioData, error) {
 	if strings.TrimSpace(muscleRatioFile) == "" {
 		// caller 應在呼叫前已檢查;這裡是 defense-in-depth。
-		return nil, errors.New("manifest 內 MuscleRatioFile 為空")
+		return nil, ErrChartComposerMuscleRatioFileEmpty
 	}
 
 	// 解析 lenient path(對齊 manifest.ResolveEMGFile 但拒絕傳出 ErrManifestEMGFileMissing,
@@ -717,12 +728,12 @@ func loadComposerMuscleRatio(dataFolder, muscleRatioFile string) (*chart.MuscleR
 		return nil, fmt.Errorf("讀取 muscle_ratio CSV 失敗: %w", err)
 	}
 	if len(records) < 2 {
-		return nil, errors.New("muscle_ratio CSV 為空或缺少資料行")
+		return nil, ErrChartComposerMuscleRatioCSVEmpty
 	}
 
 	header := records[0]
 	if len(header) < 2 {
-		return nil, errors.New("muscle_ratio CSV 標題不足: 至少需要時間欄與一個 ratio 欄")
+		return nil, ErrChartComposerMuscleRatioCSVNoHeader
 	}
 
 	dataRows := records[1:]
