@@ -97,11 +97,18 @@ type ChartComposerSubjectsResult struct {
 // HasMuscleRatio 為 V.14 manifest schema 信號：若指定 Subject 對應的 manifest
 // row 內 MuscleRatioFile 非空，則前端應顯示 3-grid 模式（EMG + muscle_ratio +
 // motion）；空 → 2-grid 模式（EMG + motion）。
+//
+// EMGMotionOffset 為該 Subject 的 sync offset（EMG 第一筆樣本對應的 motion
+// index，1-based）。前端 Generate 時要原封不動回傳給 backend，讓 phase markers
+// 與 motion 時間軸正確對齊；若硬編 0，V.14 典型 offset=600+ 會產生 ~2.4s 視覺
+// 錯位（已在 Slice C P1 codex 修補過 backend 端 conversion，但 frontend 需正確
+// 提供該值才能達成 cross-domain 對齊）。
 type ChartComposerChannelsResult struct {
-	Channels       []string `json:"channels"`
-	HasMuscleRatio bool     `json:"hasMuscleRatio"`
-	Success        bool     `json:"success"`
-	Message        string   `json:"message"`
+	Channels        []string `json:"channels"`
+	HasMuscleRatio  bool     `json:"hasMuscleRatio"`
+	EMGMotionOffset int      `json:"emgMotionOffset"`
+	Success         bool     `json:"success"`
+	Message         string   `json:"message"`
 }
 
 // ChartComposerResult Wails RPC result for chart generation.
@@ -272,10 +279,11 @@ func (a *App) LoadChartComposerEMGChannels(
 		copy(channels, emgData.Headers)
 
 		return &ChartComposerChannelsResult{
-			Channels:       channels,
-			HasMuscleRatio: strings.TrimSpace(row.MuscleRatioFile) != "",
-			Success:        true,
-			Message:        fmt.Sprintf("已載入 %d 個 EMG 通道", len(channels)),
+			Channels:        channels,
+			HasMuscleRatio:  strings.TrimSpace(row.MuscleRatioFile) != "",
+			EMGMotionOffset: row.EMGMotionOffset,
+			Success:         true,
+			Message:         fmt.Sprintf("已載入 %d 個 EMG 通道", len(channels)),
 		}, nil
 	})
 }

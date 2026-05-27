@@ -196,6 +196,8 @@ func TestLoadChartComposerEMGChannels_V10_NoMuscleRatio(t *testing.T) {
 	assert.Equal(t, []string{"R.RA", "R.ES"}, result.Channels)
 	assert.False(t, result.HasMuscleRatio,
 		"V.10 manifest 無 MuscleRatioFile 欄位,HasMuscleRatio 必為 false")
+	assert.Equal(t, 1, result.EMGMotionOffset,
+		"EMGMotionOffset 必須從 manifest row 透傳給 frontend(否則 Slice D 硬編 0 → V.14 典型 offset=600+ 視覺錯位 ~2.4s)")
 }
 
 func TestLoadChartComposerEMGChannels_V14_HasMuscleRatio(t *testing.T) {
@@ -214,6 +216,8 @@ func TestLoadChartComposerEMGChannels_V14_HasMuscleRatio(t *testing.T) {
 	assert.Equal(t, []string{"R.RA", "R.ES"}, result.Channels)
 	assert.True(t, result.HasMuscleRatio,
 		"V.14 manifest 帶 MuscleRatioFile,HasMuscleRatio 必為 true")
+	assert.Equal(t, 1, result.EMGMotionOffset,
+		"EMGMotionOffset 同 V.10 路徑透傳")
 }
 
 func TestLoadChartComposerEMGChannels_NilParams(t *testing.T) {

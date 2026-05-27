@@ -22,10 +22,15 @@ import {
     AnalyzeCCI,
     DownloadCCIChart,
     AnalyzeMuscleRatio,
-    GetVersion
+    GetVersion,
+    LoadChartComposerSubjects,
+    LoadChartComposerEMGChannels,
+    GenerateChartComposer,
+    DownloadChartComposerImage
 } from '../wailsjs/go/gui/App.js';
 import { OnFileDrop, OnFileDropOff, EventsOn, EventsOff } from '../wailsjs/runtime/runtime.js';
 import { initI18n, t, tHtml, changeLanguage, onLocaleChange, getCurrentLocale } from './i18n.js';
+import { updatePhaseLines } from './charts/phaseLines.mjs';
 
 // 應用程序主類
 class EMGAnalysisApp {
@@ -37,7 +42,9 @@ class EMGAnalysisApp {
         this.panelDispatch = {
             maxMean: () => this.showMaxMeanPanel(),
             normalize: () => this.showNormalizePanel(),
-            chart: () => this.showChartPanel(),
+            // chart → Chart Composer(PRD #15);舊 showChartPanel 仍保留在 main.js
+            // 內供 Slice E 統一刪除,本 slice 只切換入口 dispatch。
+            chart: () => this.showChartComposerPanel(),
             phase: () => this.showPhasePanel(),
             phaseSync: () => this.showPhaseSyncPanel(),
             cci: () => this.showCCIPanel(),
@@ -278,7 +285,9 @@ class EMGAnalysisApp {
                 this.showNormalizePanel();
                 break;
             case 'chart':
-                this.showChartPanel();
+                // 入口指向 Chart Composer(PRD #15)— showChartPanel 函式體尚未刪除
+                // (Slice E scope),但 menu action 已不再導向。
+                this.showChartComposerPanel();
                 break;
             case 'phase':
                 this.showPhasePanel();
@@ -1852,118 +1861,38 @@ class EMGAnalysisApp {
         // postMessage listener 已在 init() 註冊一次(this._cciMessageHandler),
         // 此處只更新 _cciResult 引用,handler 會在收到 iframe 事件時讀取此 context。
         this._cciResult = result;
-        this._originalPctLabels = null;
+        // 重置 phase-line helper 的 originalPctLabels 快取 cell;cell 本身保留(讓
+        // updatePhaseLines 共用同一 reference),只 reset value 為 null 觸發下次
+        // 首次 setOption 時重新 snapshot 原始百分比 label。
+        if (!this._cciOriginalPctLabelsCell) {
+            this._cciOriginalPctLabelsCell = { value: null };
+        } else {
+            this._cciOriginalPctLabelsCell.value = null;
+        }
     }
 
-    // 更新 CCI 圖表的分期點垂直線
+    // 更新 CCI 圖表的分期點垂直線(thin wrapper)。
+    //
+    // 實作已抽到 `frontend/src/charts/phaseLines.mjs#updatePhaseLines` 共用 helper —
+    // 同一條邏輯路徑被 CCI panel 與 Chart Composer panel 共用。差異化參數
+    // (selector / phaseTimes / originalPctLabels 快取 cell / 後置 callback)
+    // 全部在 caller 端配置。
+    //
+    // _originalPctLabels 用 `{value: ...}` cell pattern 而非裸 property —
+    // helper 不能 mutate `this._originalPctLabels`(無法跨函式共享 reference),
+    // 故包成 cell;showCCIResult 初始化時把 cell.value 設回 null 來 reset。
     updateCCIPhaseLines() {
-        const iframe = document.querySelector('#cciChartContent iframe');
-        if (!iframe || !iframe.contentWindow || !iframe.contentWindow.echarts) return;
-
-        const iframeDoc = iframe.contentDocument;
-        const chartEl = iframeDoc.querySelector('[_echarts_instance_]');
-        if (!chartEl) return;
-
-        const chart = iframe.contentWindow.echarts.getInstanceByDom(chartEl);
-        if (!chart) return;
-
-        const option = chart.getOption();
-        if (!this._originalPctLabels && option.xAxis && option.xAxis[1] && option.xAxis[1].data) {
-            this._originalPctLabels = option.xAxis[1].data.slice();
+        if (!this._cciOriginalPctLabelsCell) {
+            this._cciOriginalPctLabelsCell = { value: null };
         }
-        const xLabels = (option.xAxis && option.xAxis[0] && option.xAxis[0].data) || [];
-        const phaseTimes = this._cciResult.phaseTimes || {};
-
-        // Collect checked phases and their times
-        const checkedPhases = [];
-        const checkboxes = document.querySelectorAll('[id^="phase_"]');
-        checkboxes.forEach(cb => {
-            if (cb.checked && phaseTimes[cb.value] !== undefined) {
-                checkedPhases.push({ name: cb.value, time: phaseTimes[cb.value] });
-            }
+        updatePhaseLines({
+            iframeSelector: '#cciChartContent iframe',
+            phaseTimes: (this._cciResult && this._cciResult.phaseTimes) || {},
+            checkboxSelector: '[id^="phase_"]',
+            originalPctLabelsRef: this._cciOriginalPctLabelsCell,
+            findNearestLabel: this._findNearestLabel.bind(this),
+            onAfterApply: (recalcPercents) => this._updatePhasePositionDisplay(recalcPercents),
         });
-
-        // Recalculate percentages: min checked = 0%, max checked = 100%
-        let minTime = Infinity, maxTime = -Infinity;
-        for (const p of checkedPhases) {
-            if (p.time < minTime) minTime = p.time;
-            if (p.time > maxTime) maxTime = p.time;
-        }
-        const duration = maxTime - minTime;
-
-        // Rebuild secondary X-axis percentage labels based on checked phase range
-        let newPctLabels;
-        const allCheckboxes = document.querySelectorAll('[id^="phase_"]');
-        const allChecked = checkedPhases.length === allCheckboxes.length;
-        if (allChecked && this._originalPctLabels) {
-            newPctLabels = this._originalPctLabels;
-        } else if (checkedPhases.length >= 2 && duration > 0 && isFinite(duration)) {
-            newPctLabels = xLabels.map(label => {
-                const t = parseFloat(label);
-                return ((t - minTime) / duration * 100).toFixed(1) + '%';
-            });
-        } else if (this._originalPctLabels) {
-            newPctLabels = this._originalPctLabels;
-        } else {
-            newPctLabels = xLabels.map(() => '0.0%');
-        }
-
-        const recalcPercents = {};
-        for (const p of checkedPhases) {
-            recalcPercents[p.name] = duration > 0
-                ? ((p.time - minTime) / duration * 100)
-                : 0;
-        }
-
-        // Build markLine data with two-line labels
-        const markData = [];
-        for (const p of checkedPhases) {
-            const pct = recalcPercents[p.name].toFixed(1);
-            const nearest = this._findNearestLabel(p.time, xLabels);
-            if (nearest) {
-                markData.push({
-                    name: p.name + '\n(' + pct + '%)',
-                    xAxis: nearest,
-                    lineStyle: { type: 'dashed', color: '#888', width: 1 },
-                    label: { show: true, formatter: '{b}', position: 'end' }
-                });
-            }
-        }
-
-        // Find first visible (legend-selected) mean curve series for markLine attachment
-        if (option.series && option.series.length > 0) {
-            const legendSelected = (option.legend && option.legend[0] && option.legend[0].selected) || {};
-            let targetIdx = 0;
-            for (let i = 0; i < option.series.length; i++) {
-                const name = option.series[i].name;
-                if (name.includes(' -SD') || name.includes(' +SD')) continue;
-                if (legendSelected[name] !== false) {
-                    targetIdx = i;
-                    break;
-                }
-            }
-
-            // Clear markLine from previous holder, apply to new target
-            const seriesUpdate = option.series.map((s, i) => {
-                if (i === targetIdx) {
-                    return {
-                        markLine: {
-                            silent: true,
-                            symbol: ['none', 'none'],
-                            data: markData
-                        }
-                    };
-                }
-                if (s.markLine && s.markLine.data && s.markLine.data.length > 0) {
-                    return { markLine: { data: [] } };
-                }
-                return {};
-            });
-            chart.setOption({ series: seriesUpdate, xAxis: [{}, { data: newPctLabels }] });
-        }
-
-        // Update dynamic phase position display
-        this._updatePhasePositionDisplay(recalcPercents);
     }
 
     // 更新分期點位置顯示
@@ -2072,6 +2001,481 @@ class EMGAnalysisApp {
         } catch (err) {
             this.updateStatus(t('status.chart_download_failed'));
             await ShowError(t('dialog.error'), t('error.msg.chart_download_failed', err.message || err));
+        }
+    }
+
+    // ==================== Chart Composer(PRD #15)====================
+    //
+    // 對齊 showCCIPanel 結構:manifest + data folder picker、subject dropdown、
+    // 載入 EMG 通道、checkbox 多選、phase line 多選(沿用 CCI 樣式)、chart
+    // iframe、PNG 下載。
+    //
+    // i18n keys 在 Slice E 才補,本 slice 對 user-facing 中文字串走 hardcoded
+    // (對齊 showCCIPanel 既有風格,如 `'下載圖表'` / `'分析報告'`)。template
+    // 內全部 hardcoded 文字 + tHtml(button.back) — 不引入外部 user input,
+    // 風險面與既有 showCCIPanel innerHTML template 相同。
+    //
+    // **State preservation 設計**:
+    //   - this._composerSelectedChannels    : Set<string>  切 subject 時保留勾選
+    //   - this._composerCheckedPhases       : Set<string>  phase checkbox 勾選保留
+    //   - this._composerOriginalPctCell     : {value:null} phaseLines helper cache cell
+    //   - this._composerPhaseTimes          : map  從 iframe ECharts option 反推
+    //                                          (composer handler 不額外回傳 phaseTimes,
+    //                                          已把 markLine bake 進 HTML)
+    showChartComposerPanel() {
+        const panel = document.getElementById('functionPanel');
+        if (!this._composerSelectedChannels) this._composerSelectedChannels = new Set();
+        if (!this._composerCheckedPhases) this._composerCheckedPhases = new Set();
+        if (!this._composerOriginalPctCell) this._composerOriginalPctCell = { value: null };
+
+        // 對齊 showCCIPanel 寫法:用 template literal 組 HTML 後 assign;
+        // 所有插值 (tHtml) 均經 i18n.escapeHtml,template 內無 user input。
+        const composerHtml = `
+            <div class="panel-header">
+                <h2>資料做圖</h2>
+                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
+            </div>
+
+            <div id="composerWarningBanner" class="result-info"
+                 style="display:none; background:#fff3cd; border-left:4px solid #ffc107; padding:0.5rem 0.75rem; margin-bottom:0.5rem;">
+            </div>
+
+            <div class="form-group">
+                <label>1. 分期總檔案</label>
+                <div class="input-group drop-zone" data-drop-target="composerManifest" style="--wails-drop-target: drop;">
+                    <input type="text" id="composerManifest" class="form-control" placeholder="選擇 V.10 / V.14 分期總檔案" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectComposerManifest()">${tHtml('button.browse')}</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>2. 資料夾</label>
+                <div class="input-group">
+                    <input type="text" id="composerDataFolder" class="form-control" placeholder="選擇 EMG / motion / muscle_ratio 資料夾" readonly>
+                    <button class="btn btn-secondary" onclick="app.selectComposerDataFolder()">${tHtml('button.browse')}</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>3. 分析主題</label>
+                <select id="composerSubject" class="form-control" disabled onchange="app.onComposerSubjectChange()">
+                    <option value="">請先載入分期總檔案</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <button class="btn btn-secondary" onclick="app.loadComposerEMGChannels()">載入 EMG 欄位</button>
+                <p class="help-text" id="composerGridInfo" style="margin-top:0.5rem;"></p>
+            </div>
+
+            <div class="form-group">
+                <label>EMG 通道(預設全不勾)</label>
+                <div id="composerChannelSelector" class="checkbox-group" style="display:flex; flex-wrap:wrap; gap:0.5rem;">
+                    <p class="help-text">先按「載入 EMG 欄位」</p>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>分期點顯示</label>
+                <div id="composerPhaseSelector" class="checkbox-group" style="display:flex; flex-wrap:wrap; gap:0.5rem;">
+                    <p class="help-text">圖表生成後可勾選</p>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button class="btn btn-primary" onclick="app.generateComposerChart()">生成圖表</button>
+                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
+            </div>
+
+            <div id="composerResult" class="result-section" style="display:none;">
+                <h3>圖表預覽</h3>
+                <div id="composerChartContent"></div>
+                <div class="button-group" style="margin-top:0.5rem;">
+                    <button class="btn btn-primary" onclick="app.downloadComposerChart()">下載 PNG</button>
+                </div>
+            </div>
+        `;
+        panel.innerHTML = composerHtml;
+        this.showPanel(panel);
+    }
+
+    // 顯示頂部 warning banner(channel 缺漏 reconcile 時觸發);
+    // 傳空 array 隱藏。banner 內容走 textContent — 任何來自後端的 channel name
+    // 都當外部輸入處理(對齊 P0-A H2 XSS hardening 慣例)。
+    _showComposerWarning(droppedChannelNames) {
+        const banner = document.getElementById('composerWarningBanner');
+        if (!banner) return;
+        if (!droppedChannelNames || droppedChannelNames.length === 0) {
+            banner.style.display = 'none';
+            banner.textContent = '';
+            return;
+        }
+        banner.textContent = `已自動取消勾選不存在於新主題的通道:${droppedChannelNames.join(', ')}`;
+        banner.style.display = 'block';
+    }
+
+    async selectComposerManifest() {
+        try {
+            const filters = [{ displayName: 'CSV Files (*.csv)', pattern: '*.csv' }];
+            const file = await SelectFile('選擇分期總檔案', filters, 'open');
+            if (file) {
+                document.getElementById('composerManifest').value = file;
+                await this.loadComposerSubjects();
+            }
+        } catch (err) {
+            console.error('選擇分期總檔案失敗:', err);
+            await ShowError(t('dialog.error'), err.toString());
+        }
+    }
+
+    async selectComposerDataFolder() {
+        try {
+            const folder = await SelectDirectory('選擇資料夾');
+            if (folder) {
+                document.getElementById('composerDataFolder').value = folder;
+                if (document.getElementById('composerManifest').value) {
+                    await this.loadComposerSubjects();
+                }
+            }
+        } catch (err) {
+            console.error('選擇資料夾失敗:', err);
+            await ShowError(t('dialog.error'), err.toString());
+        }
+    }
+
+    // 載入 manifest 對應的 subject dropdown。
+    async loadComposerSubjects() {
+        const manifestPath = document.getElementById('composerManifest').value;
+        const dataFolder = document.getElementById('composerDataFolder').value;
+        if (!manifestPath) return;
+
+        try {
+            const result = await LoadChartComposerSubjects({
+                manifestPath,
+                dataFolder,
+            });
+            if (!result.success) {
+                await ShowError(t('dialog.error'), result.message);
+                return;
+            }
+            const select = document.getElementById('composerSubject');
+            select.innerHTML = '';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = '請選擇主題';
+            select.appendChild(placeholder);
+            (result.subjects || []).forEach((subject) => {
+                const opt = document.createElement('option');
+                opt.value = subject;
+                opt.textContent = subject;
+                select.appendChild(opt);
+            });
+            select.disabled = false;
+        } catch (err) {
+            console.error('載入主題失敗:', err);
+            await ShowError(t('dialog.error'), err.toString());
+        }
+    }
+
+    // 切 subject 時:zoom reset(清除 iframe)+ 保留 channel / phase 勾選 Set;
+    // 不自動重新呼叫 loadComposerEMGChannels — 對齊 spec「manual 觸發」設計,使用者
+    // 仍需按「載入 EMG 欄位」才更新 checkbox 列表(channel reconcile 在那時統一發生)。
+    onComposerSubjectChange() {
+        const resultDiv = document.getElementById('composerResult');
+        if (resultDiv) {
+            resultDiv.style.display = 'none';
+            const wrap = document.getElementById('composerChartContent');
+            if (wrap) wrap.textContent = '';
+        }
+        // reset phase line cache(下次 generate 後重新 snapshot)
+        if (this._composerOriginalPctCell) {
+            this._composerOriginalPctCell.value = null;
+        }
+        // phase checkbox 暫時保留勾選 Set(下次 generate 後重新 render checkbox)
+    }
+
+    // 載入 EMG 通道 — manual 觸發。
+    //
+    // Channel reconcile:本次新主題 channel 列表 ∩ this._composerSelectedChannels
+    // 為「保留勾選」;落差的舊勾選 channel 走 silent drop + 頂部 warning banner。
+    async loadComposerEMGChannels() {
+        const manifestPath = document.getElementById('composerManifest').value;
+        const dataFolder = document.getElementById('composerDataFolder').value;
+        const subject = document.getElementById('composerSubject').value;
+        if (!manifestPath || !dataFolder || !subject) {
+            await ShowError(t('dialog.error'), '請先選擇分期總檔案、資料夾與主題');
+            return;
+        }
+
+        try {
+            const result = await LoadChartComposerEMGChannels({
+                manifestPath,
+                dataFolder,
+                subject,
+            });
+            if (!result.success) {
+                await ShowError(t('dialog.error'), result.message);
+                return;
+            }
+            const channels = result.channels || [];
+
+            const channelSet = new Set(channels);
+            const dropped = [];
+            for (const ch of this._composerSelectedChannels) {
+                if (!channelSet.has(ch)) {
+                    dropped.push(ch);
+                    this._composerSelectedChannels.delete(ch);
+                }
+            }
+            this._showComposerWarning(dropped);
+
+            const container = document.getElementById('composerChannelSelector');
+            container.textContent = '';
+            channels.forEach((ch) => {
+                const item = document.createElement('div');
+                item.className = 'checkbox-item';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.id = 'composer_ch_' + ch;
+                cb.value = ch;
+                cb.checked = this._composerSelectedChannels.has(ch);
+                cb.addEventListener('change', () => {
+                    if (cb.checked) this._composerSelectedChannels.add(ch);
+                    else this._composerSelectedChannels.delete(ch);
+                });
+                const label = document.createElement('label');
+                label.setAttribute('for', cb.id);
+                label.textContent = ch;
+                item.appendChild(cb);
+                item.appendChild(label);
+                container.appendChild(item);
+            });
+
+            const info = document.getElementById('composerGridInfo');
+            if (info) {
+                if (result.hasMuscleRatio) {
+                    info.textContent = '本主題提供肌肉比值資料 → 3 個 grid(EMG / 肌肉比值 / motion)';
+                } else {
+                    info.textContent = '本主題未提供肌肉比值資料 → 2 個 grid(EMG / motion)';
+                }
+            }
+
+            this._composerEMGMotionOffset = Number(result.emgMotionOffset) || 0;
+        } catch (err) {
+            console.error('載入 EMG 通道失敗:', err);
+            await ShowError(t('dialog.error'), err.toString());
+        }
+    }
+
+    // 生成圖表 — 呼叫 GenerateChartComposer → 把回傳 HTML 塞進 iframe srcdoc,
+    // iframe load 後從 ECharts option 抽 phase markLine data 反推 phaseTimes,
+    // 然後 render phase checkbox 並更新 markLine 顯示。
+    async generateComposerChart() {
+        const manifestPath = document.getElementById('composerManifest').value;
+        const dataFolder = document.getElementById('composerDataFolder').value;
+        const subject = document.getElementById('composerSubject').value;
+        const selectedChannels = Array.from(this._composerSelectedChannels);
+        if (!manifestPath || !dataFolder || !subject) {
+            await ShowError(t('dialog.error'), '請先選擇分期總檔案、資料夾與主題');
+            return;
+        }
+        if (selectedChannels.length === 0) {
+            await ShowError(t('dialog.error'), '請至少選擇一個 EMG 通道');
+            return;
+        }
+
+        const emgMotionOffset = this._composerEMGMotionOffset || 0;
+
+        try {
+            this.updateStatus('Chart Composer 生成中...');
+            const result = await GenerateChartComposer({
+                manifestPath,
+                dataFolder,
+                subject,
+                selectedChannels,
+                emgMotionOffset,
+            });
+            if (!result.success) {
+                await ShowError(t('dialog.error'), result.message);
+                this.updateStatus('Chart Composer 生成失敗');
+                return;
+            }
+
+            const wrapper = document.getElementById('composerChartContent');
+            wrapper.textContent = '';
+            const iframe = document.createElement('iframe');
+            iframe.style.width = '100%';
+            iframe.style.height = '720px';
+            iframe.style.border = 'none';
+            // 對齊 P2-7 iframe security guard:srcdoc 賦值前先設 sandbox=allow-scripts。
+            // 不可加 allow-same-origin(P1-12 已收斂)— Wails WebView 同 origin 下
+            // 仍可 cross-frame 讀 echarts。
+            iframe.sandbox = 'allow-scripts';
+            iframe.srcdoc = result.html;
+            wrapper.appendChild(iframe);
+
+            if (this._composerOriginalPctCell) {
+                this._composerOriginalPctCell.value = null;
+            }
+
+            // iframe load 後從 ECharts option 反推 phaseTimes → render phase checkbox
+            // → updatePhaseLines。{once: true} 對齊 P2-10 guard。
+            iframe.addEventListener('load', () => this._onComposerIframeLoaded(), { once: true });
+
+            document.getElementById('composerResult').style.display = 'block';
+            this.updateStatus('Chart Composer 生成完成');
+        } catch (err) {
+            console.error('Chart Composer 生成失敗:', err);
+            await ShowError(t('dialog.error'), err.toString());
+            this.updateStatus('Chart Composer 生成失敗');
+        }
+    }
+
+    // iframe load 後從 ECharts option 反推 phaseTimes(handler 已把 markLine bake
+    // 進 HTML,前端不重新後端 RPC 拿 phase points)。
+    //
+    // markLine.data 結構由 composerPhaseMarkLineOpts 產出:
+    //   { name: "P1",  xAxis: <emgTimeSeconds> } …每個 phase 一筆。
+    // caller 把 name → xAxis 攤平成 { [name]: seconds }。
+    _onComposerIframeLoaded() {
+        const iframe = document.querySelector('#composerChartContent iframe');
+        if (!iframe || !iframe.contentWindow || !iframe.contentWindow.echarts) return;
+        const iframeDoc = iframe.contentDocument;
+        if (!iframeDoc) return;
+        const chartEl = iframeDoc.querySelector('[_echarts_instance_]');
+        if (!chartEl) return;
+        const chart = iframe.contentWindow.echarts.getInstanceByDom(chartEl);
+        if (!chart) return;
+
+        const option = chart.getOption();
+        const phaseTimes = {};
+        (option.series || []).forEach((s) => {
+            if (!s || !s.markLine || !Array.isArray(s.markLine.data)) return;
+            s.markLine.data.forEach((d) => {
+                if (d && typeof d.name === 'string' && typeof d.xAxis !== 'undefined') {
+                    const x = typeof d.xAxis === 'string' ? parseFloat(d.xAxis) : d.xAxis;
+                    if (!isNaN(x)) {
+                        phaseTimes[d.name] = x;
+                    }
+                }
+            });
+        });
+        this._composerPhaseTimes = phaseTimes;
+
+        this._renderComposerPhaseCheckboxes(phaseTimes);
+        this._updateComposerPhaseLines();
+    }
+
+    // 渲染 phase checkbox。phase 名走既有 phaseOrder whitelist,phaseTimes 內無對
+    // 應 phase value 的 silent skip(對齊 CCI 既有 `available` filter 邏輯)。
+    //
+    // 勾選狀態保留 — `this._composerCheckedPhases` 為跨 generate 持久化的 Set;
+    // 若 set 為空(初次 render)預設全勾。
+    _renderComposerPhaseCheckboxes(phaseTimes) {
+        const container = document.getElementById('composerPhaseSelector');
+        if (!container) return;
+        container.textContent = '';
+
+        const phaseOrder = ['P0', 'P1', 'P2', 'S', 'C', 'D', 'T0', 'T', 'O', 'L'];
+        const available = phaseOrder.filter((p) => phaseTimes[p] !== undefined);
+
+        const useDefaultAllChecked = this._composerCheckedPhases.size === 0;
+
+        available.forEach((p) => {
+            const item = document.createElement('div');
+            item.className = 'checkbox-item';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.id = 'composer_phase_' + p;
+            cb.value = p;
+            cb.checked = useDefaultAllChecked || this._composerCheckedPhases.has(p);
+            if (cb.checked) {
+                this._composerCheckedPhases.add(p);
+            }
+            cb.addEventListener('change', () => {
+                if (cb.checked) this._composerCheckedPhases.add(p);
+                else this._composerCheckedPhases.delete(p);
+                this._updateComposerPhaseLines();
+            });
+            const label = document.createElement('label');
+            label.setAttribute('for', cb.id);
+            label.textContent = p;
+            item.appendChild(cb);
+            item.appendChild(label);
+            container.appendChild(item);
+        });
+    }
+
+    // 共用 helper thin wrapper — 對齊 updateCCIPhaseLines。
+    _updateComposerPhaseLines() {
+        updatePhaseLines({
+            iframeSelector: '#composerChartContent iframe',
+            phaseTimes: this._composerPhaseTimes || {},
+            checkboxSelector: '[id^="composer_phase_"]',
+            originalPctLabelsRef: this._composerOriginalPctCell,
+            findNearestLabel: this._findNearestLabel.bind(this),
+        });
+    }
+
+    // 下載 PNG — 從 iframe 抓 ECharts dataURL(反映當下 zoom / phase / legend 狀態)
+    // → 走 file dialog 取得 outputPath → 呼叫 DownloadChartComposerImage。
+    async downloadComposerChart() {
+        const iframe = document.querySelector('#composerChartContent iframe');
+        if (!iframe) {
+            await ShowError(t('dialog.error'), '找不到圖表 iframe');
+            return;
+        }
+        try {
+            await new Promise((resolve) => {
+                if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
+                    resolve();
+                } else {
+                    iframe.addEventListener('load', resolve, { once: true });
+                }
+            });
+
+            const win = iframe.contentWindow;
+            const doc = iframe.contentDocument;
+            if (!win || !win.echarts || !doc) {
+                throw new Error('iframe 內無 ECharts');
+            }
+            const chartEl = doc.querySelector('[_echarts_instance_]');
+            if (!chartEl) throw new Error('找不到 ECharts instance DOM');
+            const chartInstance = win.echarts.getInstanceByDom(chartEl);
+            if (!chartInstance) throw new Error('找不到 ECharts instance');
+
+            const dataURL = chartInstance.getDataURL({
+                type: 'png',
+                pixelRatio: 2,
+                backgroundColor: '#fff',
+            });
+
+            const subject = document.getElementById('composerSubject').value || 'chart_composer';
+            let outputPath = '';
+            try {
+                outputPath = await SelectFile('儲存 PNG', [{
+                    displayName: 'PNG (*.png)',
+                    pattern: '*.png',
+                }], 'save');
+            } catch (e) {
+                outputPath = '';
+            }
+            if (!outputPath) {
+                outputPath = subject + '.png';
+            }
+
+            const result = await DownloadChartComposerImage({
+                base64Data: dataURL,
+                outputPath,
+            });
+            if (!result.success) {
+                await ShowError(t('dialog.error'), result.message);
+                return;
+            }
+            await ShowMessage(t('dialog.success'), result.message);
+        } catch (err) {
+            console.error('下載 PNG 失敗:', err);
+            await ShowError(t('dialog.error'), err.message || String(err));
         }
     }
 
