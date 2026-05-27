@@ -1982,28 +1982,47 @@ class EMGAnalysisApp {
             wrapper.textContent = '';
             const iframe = document.createElement('iframe');
             iframe.style.width = '100%';
-            iframe.style.height = '720px';
+            // Bug 4 + Bug D fix + Bug 2 第二輪 fix(2026-05-27 image #2/#5/#7/#16/#18):
+            // iframe.style.height **必須大於** backend composerContainerHeight(=1200)。
+            //
+            // 為何不是 1:1 對齊:user 實測 (2026-05-27 image #18) 1200px 仍會把 dataZoom
+            // slider bottom 切掉,需要加大到 ~1400px slider 才完整顯示。推測根因:
+            //   - ECharts 渲染 slider 時 handles + dataBackground 邊距會擴張到配置
+            //     `height:30` 之外(總視覺占用 ~50-60px)
+            //   - 加上 wails webview 對 srcdoc iframe inline style.height 的默認
+            //     reservation(觀察:~50-100px clip)
+            //   - 兩個誤差堆疊起來,1200 viewport 顯示不下完整 chart
+            //
+            // 1300 = 1200 (chart canvas) + 100 (buffer)。多出的 100px 視覺上是 chart
+            // 下方少量留白,user 實測 (2026-05-27) 1300 比 1400 layout 更舒服(1400 留白
+            // 太多)。試過 chart-internal 推 slider 往上(reservedBottom 100 → 150 +
+            // slider bottom:30 → 80)無效 — 真正 bottleneck 在 iframe 而非 chart 內部
+            // 佈局,所以解法只能加 iframe 高度。
+            iframe.style.height = '1300px';
             iframe.style.border = 'none';
-            // 對齊 P2-7 iframe security guard:srcdoc 賦值前先設 sandbox=allow-scripts。
-            // 不可加 allow-same-origin(P1-12 已收斂)。
+            // 顯式關閉 iframe 預設 scrollbar — 即便 height 算錯也不會出現雙重 scroll。
+            iframe.scrolling = 'no';
+            // 對齊 P2-7 / P1-12 iframe security guard:sandbox=allow-scripts 無
+            // allow-same-origin。Go-side sanitize 是唯一防線(internal/chart/composer.go
+            // 的 JSON encoder)。
             //
-            // codex P1 #1 baseline-debt note:standards-compliant webview 在
-            // `sandbox=allow-scripts`(無 allow-same-origin)下會把 iframe 視為
-            // opaque origin → parent **無法**跨 frame 讀 `iframe.contentWindow.echarts`
-            // / `iframe.contentDocument`,後續 `_onComposerIframeLoaded` 反推 phaseTimes
-            // 與 `downloadComposerChart` 取 ECharts dataURL 都會失效。
-            //
-            // 這是 **CCI 既有 baseline debt** — 見 main.js:~1840 CCI showCCIResult
-            // 那段對應 comment(line 1841-1845)寫明「此版本失效,屬未來 follow-up」。
-            // CCI 既已知 deliberate trade-off,Composer 鏡像同樣行為不算 regression;
-            // 待 follow-up issue 統一改寫為「iframe 內主動 postMessage(option / dataURL)
-            // 給 parent」設計後,CCI / Composer 一起解決。Wails embedded WebView
-            // (macOS WKWebView / Windows WebView2)目前仍允許同 origin cross-frame
-            // 讀取(WKWebView 把 opaque origin 視為同 origin),所以實務上 still works
-            // 在當前 Wails 環境;此 note 描述的是未來 webview 升級或第三方嵌入時的風險。
+            // 跨 frame access 限制下的設計:
+            //   - phaseTimes 由 `GenerateChartComposer` RPC 一併 return,
+            //     `_renderComposerPhaseCheckboxes` 直接讀 `this._composerPhaseTimes`,
+            //     不再嘗試從 `iframe.contentWindow.echarts` 反推(sandbox 下為 opaque
+            //     origin,讀取 silent fail)。對齊 CCI `result.phaseTimes` 既有 pattern。
+            //   - PNG 下載走 `composer-request-png` / `composer-png-result` postMessage
+            //     雙向通訊(由 backend `addComposerCustomJS` 注入 iframe 內 listener)。
+            //     parent → iframe `postMessage` 對 sandboxed iframe 仍可用(spec
+            //     bypass same-origin policy),取代過去直接讀 `chart.getDataURL`。
             iframe.sandbox = 'allow-scripts';
             iframe.srcdoc = result.html;
             wrapper.appendChild(iframe);
+
+            // 保存 phaseTimes 給 _renderComposerPhaseCheckboxes / _updateComposerPhaseLines。
+            // Go-side `convertPhasePointsToEMGTime` 已將 PhasePoints 換到 EMG 時間 domain,
+            // 與 markLine.xAxis 同一座標系,無需前端再次轉換。
+            this._composerPhaseTimes = result.phaseTimes || {};
 
             if (this._composerOriginalPctCell) {
                 this._composerOriginalPctCell.value = null;
@@ -2022,37 +2041,18 @@ class EMGAnalysisApp {
         }
     }
 
-    // iframe load 後從 ECharts option 反推 phaseTimes(handler 已把 markLine bake
-    // 進 HTML,前端不重新後端 RPC 拿 phase points)。
+    // iframe load 完成後渲染 phase checkbox + 套用初始 phase line。
     //
-    // markLine.data 結構由 composerPhaseMarkLineOpts 產出:
-    //   { name: "P1",  xAxis: <emgTimeSeconds> } …每個 phase 一筆。
-    // caller 把 name → xAxis 攤平成 { [name]: seconds }。
+    // phaseTimes 已在 generateComposerChart 從 `GenerateChartComposer` RPC return 保存
+    // 到 `this._composerPhaseTimes`,此 handler 不再嘗試跨 frame 讀 iframe.contentWindow
+    // .echarts 反推 — 那條路徑在 sandbox=allow-scripts(opaque origin)下 silent fail,
+    // 是過去 phase checkbox / phase markLine 失效的根因。
+    //
+    // 仍綁 iframe `load` event 而非直接同步呼叫,原因:_updateComposerPhaseLines 內部
+    // 透過 postMessage / `chart.setOption` 動態替換 markLine 的 path 需要 iframe ECharts
+    // instance 已掛 — 等 load 後再觸發,避免初次 render 時 ECharts 尚未 ready。
     _onComposerIframeLoaded() {
-        const iframe = document.querySelector('#composerChartContent iframe');
-        if (!iframe || !iframe.contentWindow || !iframe.contentWindow.echarts) return;
-        const iframeDoc = iframe.contentDocument;
-        if (!iframeDoc) return;
-        const chartEl = iframeDoc.querySelector('[_echarts_instance_]');
-        if (!chartEl) return;
-        const chart = iframe.contentWindow.echarts.getInstanceByDom(chartEl);
-        if (!chart) return;
-
-        const option = chart.getOption();
-        const phaseTimes = {};
-        (option.series || []).forEach((s) => {
-            if (!s || !s.markLine || !Array.isArray(s.markLine.data)) return;
-            s.markLine.data.forEach((d) => {
-                if (d && typeof d.name === 'string' && typeof d.xAxis !== 'undefined') {
-                    const x = typeof d.xAxis === 'string' ? parseFloat(d.xAxis) : d.xAxis;
-                    if (!isNaN(x)) {
-                        phaseTimes[d.name] = x;
-                    }
-                }
-            });
-        });
-        this._composerPhaseTimes = phaseTimes;
-
+        const phaseTimes = this._composerPhaseTimes || {};
         this._renderComposerPhaseCheckboxes(phaseTimes);
         this._updateComposerPhaseLines();
     }
@@ -2097,11 +2097,21 @@ class EMGAnalysisApp {
         });
     }
 
-    // 共用 helper thin wrapper — 對齊 updateCCIPhaseLines。
+    // 共用 helper thin wrapper — 對齊 updateCCIPhaseLines(2026-05-27 image #6 修正)。
+    //
+    // 前一輪試圖用 postMessage 繞 sandbox iframe,但 origin filter 把 message 拒掉 →
+    // phase 切換完全失效。實機觀察:CCI 用 sandbox=allow-scripts 同樣設定,跨 frame
+    // `iframe.contentWindow.echarts.setOption` 是 working — WKWebView/WebView2 對
+    // srcdoc iframe 沒嚴格實作 sandbox origin restriction(srcdoc origin 繼承 parent),
+    // 跨 frame access OK。回到 CCI pattern 是 simpler + proven。
     //
     // Composer 後端 (internal/chart/composer.go::configureComposerAxes) 走 Type:"value"
     // xAxis 讓 EMG / motion 不同採樣率對齊絕對時間,沒有 xAxis[0].data;markLine
     // 必須直接用 numeric phaseTime — 詳見 helper signature 的 axisMode doc。
+    //
+    // helper 在 value mode 下會對 **每條** 原本帶 markLine 的 series 都更新
+    // (對應 backend 為 Bug B 把 markLine 多 series attach 的設計),確保 user 用
+    // legend 隱藏某條 muscle/motion 時其他 series 上的 markLine 仍顯示。
     _updateComposerPhaseLines() {
         updatePhaseLines({
             iframeSelector: '#composerChartContent iframe',
@@ -2150,28 +2160,46 @@ class EMGAnalysisApp {
                 return;
             }
 
-            await new Promise((resolve) => {
-                if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
-                    resolve();
-                } else {
-                    iframe.addEventListener('load', resolve, { once: true });
-                }
-            });
+            // 透過 postMessage 向 iframe 索取當下 chart dataURL。
+            //
+            // 為何不能直接讀 `iframe.contentWindow.echarts`:iframe sandbox=allow-scripts
+            // (無 allow-same-origin)→ opaque origin,跨 frame 存取 silent fail 或拋 SecurityError。
+            // 改 postMessage 雙向通訊:parent → iframe 'composer-request-png',iframe →
+            // parent 'composer-png-result' 帶 dataURL(由 backend addComposerCustomJS
+            // 注入 listener)。
+            //
+            // requestId 配對 request/response,避免 user 連點兩次「下載 PNG」時 race
+            // 拿到別次 response 的 dataURL。10s timeout 防 iframe 內 JS error 導致
+            // 永遠不回(舊版 await new Promise 等 'load' 永遠 hang 的 bug)。
+            const requestId = 'png_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+            const dataURL = await new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    window.removeEventListener('message', handler);
+                    reject(new Error('PNG 請求超時(>10s) — iframe 無回應'));
+                }, 10000);
 
-            const win = iframe.contentWindow;
-            const doc = iframe.contentDocument;
-            if (!win || !win.echarts || !doc) {
-                throw new Error('iframe 內無 ECharts');
-            }
-            const chartEl = doc.querySelector('[_echarts_instance_]');
-            if (!chartEl) throw new Error('找不到 ECharts instance DOM');
-            const chartInstance = win.echarts.getInstanceByDom(chartEl);
-            if (!chartInstance) throw new Error('找不到 ECharts instance');
+                const handler = (e) => {
+                    if (e.origin !== 'null' && e.origin !== window.location.origin) return;
+                    if (!e.data || typeof e.data !== 'object') return;
+                    if (e.data.type !== 'composer-png-result') return;
+                    if (e.data.requestId !== requestId) return;
+                    clearTimeout(timer);
+                    window.removeEventListener('message', handler);
+                    if (e.data.error) {
+                        reject(new Error(e.data.error));
+                    } else {
+                        resolve(e.data.dataURL);
+                    }
+                };
+                window.addEventListener('message', handler);
 
-            const dataURL = chartInstance.getDataURL({
-                type: 'png',
-                pixelRatio: 2,
-                backgroundColor: '#fff',
+                // targetOrigin '*' for parent → sandboxed-iframe:sandboxed iframe origin
+                // 為 opaque,無法用具體 origin 串。iframe handler 端會驗 e.origin 在
+                // wailsParentOrigins allowlist 才回 dataURL,所以 '*' 在這個方向是 safe。
+                iframe.contentWindow.postMessage(
+                    { type: 'composer-request-png', requestId: requestId },
+                    '*'
+                );
             });
 
             // 拼 outputDir + `<subject>_chart_composer.png`(對齊 CCI 用 `_CCI_Rudolph.png`)。

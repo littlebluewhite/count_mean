@@ -133,10 +133,17 @@ type ChartComposerChannelsResult struct {
 //
 // HTML 為 echarts.NewLine().Render() 的完整 HTML 串（含 inline JS），前端塞進
 // iframe srcdoc 顯示。
+//
+// PhaseTimes 為已換算到 EMG 時間 domain 的 phase 名 → 秒數 map(只含 Set=true
+// 的 phase)。前端 `_renderComposerPhaseCheckboxes` 直接讀此欄位 render checkbox,
+// 不再嘗試從 iframe.contentWindow.echarts 反推 markLine.data — iframe sandbox=
+// allow-scripts(無 allow-same-origin)下跨 frame access 為 opaque origin,實機
+// 直接失敗(對齊 CCI 既有 `result.phaseTimes` RPC return pattern)。
 type ChartComposerResult struct {
-	HTML    string `json:"html"`
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	HTML       string             `json:"html"`
+	PhaseTimes map[string]float64 `json:"phaseTimes"`
+	Success    bool               `json:"success"`
+	Message    string             `json:"message"`
 }
 
 // failedChartComposerResult builds a composer-generate result indicating failure.
@@ -457,10 +464,41 @@ func (a *App) GenerateChartComposer(
 			), nil
 		}
 
+		// 攤平 emgPhase 為 map[string]float64 給前端 — 只送出 Set=true 的 phase。
+		// emgPhase 已是 EMG 時間 domain(convertPhasePointsToEMGTime 換算過),前端
+		// 直接配對 markLine.xAxis 用。motion-index sentinel D/O 在 composer 不轉
+		// 換為 markLine,此處同樣略過(對齊 composerPhaseMarkLineOpts whitelist)。
+		phaseTimes := make(map[string]float64, 8)
+		if v, ok := emgPhase.P0.Get(); ok {
+			phaseTimes["P0"] = v
+		}
+		if v, ok := emgPhase.P1.Get(); ok {
+			phaseTimes["P1"] = v
+		}
+		if v, ok := emgPhase.P2.Get(); ok {
+			phaseTimes["P2"] = v
+		}
+		if v, ok := emgPhase.S.Get(); ok {
+			phaseTimes["S"] = v
+		}
+		if v, ok := emgPhase.C.Get(); ok {
+			phaseTimes["C"] = v
+		}
+		if v, ok := emgPhase.T0.Get(); ok {
+			phaseTimes["T0"] = v
+		}
+		if v, ok := emgPhase.T.Get(); ok {
+			phaseTimes["T"] = v
+		}
+		if v, ok := emgPhase.L.Get(); ok {
+			phaseTimes["L"] = v
+		}
+
 		return &ChartComposerResult{
-			HTML:    buf.String(),
-			Success: true,
-			Message: "圖表生成完成",
+			HTML:       buf.String(),
+			PhaseTimes: phaseTimes,
+			Success:    true,
+			Message:    "圖表生成完成",
 		}, nil
 	})
 }

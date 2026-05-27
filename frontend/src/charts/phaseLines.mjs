@@ -121,30 +121,11 @@ export function updatePhaseLines({
     const doc = docArg || (typeof document !== 'undefined' ? document : null);
     if (!doc) return false;
 
-    const chart = resolveChartFromIframe(iframeSelector, doc);
-    if (!chart) return false;
-
     const mode = axisMode === 'value' ? 'value' : 'category';
-
-    const option = chart.getOption();
-    // 首次成功讀到 secondary xAxis label slice 後 cache 給 caller。
-    // option.xAxis[1].data 為 echarts 「百分比輔助軸」的 label array,後續切換 phase
-    // checkbox 想恢復「全勾原始百分比」時用得到。
-    if (
-        originalPctLabelsRef &&
-        originalPctLabelsRef.value == null &&
-        option.xAxis &&
-        option.xAxis[1] &&
-        option.xAxis[1].data
-    ) {
-        originalPctLabelsRef.value = option.xAxis[1].data.slice();
-    }
-
-    const xLabels = (option.xAxis && option.xAxis[0] && option.xAxis[0].data) || [];
     const times = phaseTimes || {};
 
-    // 收集 checked phases(對齊 main.js#updateCCIPhaseLines line 1879-1884)。
-    // cb.value === phase name(showCCIResult 在 createElement 時 cb.value = p)。
+    // 收集 checked phases — 與 chart 解耦,純 DOM 讀取。
+    // cb.value === phase name(showCCIResult / _renderComposerPhaseCheckboxes 在 createElement 時 cb.value = p)。
     // phaseTimes 內無對應 phase 值 → silent skip。
     const checkedPhases = [];
     const checkboxes = doc.querySelectorAll(checkboxSelector);
@@ -162,6 +143,77 @@ export function updatePhaseLines({
         if (p.time > maxTime) maxTime = p.time;
     }
     const duration = maxTime - minTime;
+
+    const recalcPercents = {};
+    for (const p of checkedPhases) {
+        recalcPercents[p.name] = duration > 0 ? ((p.time - minTime) / duration * 100) : 0;
+    }
+
+    // value mode (Chart Composer):走 postMessage 路徑,**不**做跨 frame chart 存取。
+    //
+    // 為何此 mode 不再用 `iframe.contentWindow.echarts.setOption`:
+    //   composer iframe 為 sandbox=allow-scripts(無 allow-same-origin),在較嚴格的
+    //   webview 環境(wails dev 預設 webview)下跨 frame chart 存取會被 silent block
+    //   → resolveChartFromIframe 永遠回 null → helper 無聲 no-op → phase 勾選毫無效果
+    //   (2026-05-27 user report)。改走 postMessage 與 PNG download 對稱:parent 把
+    //   markData 寄到 iframe,iframe 內 customJS(addComposerCustomJS)接收後本地
+    //   setOption — 在 iframe 內部不存在 cross-frame 問題。
+    //
+    // markData.xAxis 用 numeric phaseTime,markLine 自動 anchor 到 value axis 對應位置。
+    if (mode === 'value') {
+        const markData = [];
+        for (const p of checkedPhases) {
+            const pct = recalcPercents[p.name].toFixed(1);
+            markData.push({
+                name: p.name + '\n(' + pct + '%)',
+                xAxis: p.time,
+                lineStyle: { type: 'dashed', color: '#888', width: 1 },
+                label: { show: true, formatter: '{b}', position: 'end' },
+            });
+        }
+
+        const iframe = doc.querySelector(iframeSelector);
+        if (!iframe || !iframe.contentWindow) return false;
+
+        try {
+            // targetOrigin '*':parent → sandboxed iframe 因 iframe 為 opaque origin
+            // 無法用具體 origin 串。iframe 端 customJS message listener 走
+            // `e.source === window.parent` 驗證取代 origin 驗證(安全:只有 embedding
+            // parent 持有 iframe.contentWindow 引用,沒有第三方注入路徑)。
+            iframe.contentWindow.postMessage(
+                { type: 'composer-update-phase-markers', markData },
+                '*'
+            );
+        } catch (e) {
+            return false;
+        }
+
+        if (typeof onAfterApply === 'function') {
+            onAfterApply(recalcPercents);
+        }
+        return true;
+    }
+
+    // category mode (CCI 既有):cross-frame setOption 路徑,unchanged 對齊
+    // 過去 manual smoke 行為。
+    const chart = resolveChartFromIframe(iframeSelector, doc);
+    if (!chart) return false;
+
+    const option = chart.getOption();
+    // 首次成功讀到 secondary xAxis label slice 後 cache 給 caller。
+    // option.xAxis[1].data 為 echarts 「百分比輔助軸」的 label array,後續切換 phase
+    // checkbox 想恢復「全勾原始百分比」時用得到。
+    if (
+        originalPctLabelsRef &&
+        originalPctLabelsRef.value == null &&
+        option.xAxis &&
+        option.xAxis[1] &&
+        option.xAxis[1].data
+    ) {
+        originalPctLabelsRef.value = option.xAxis[1].data.slice();
+    }
+
+    const xLabels = (option.xAxis && option.xAxis[0] && option.xAxis[0].data) || [];
 
     // 重建 secondary xAxis 百分比 label。
     //   - 全勾 + 有 originalPctLabels cache → 直接還原(perf + avoid 浮點累積誤差)
@@ -184,44 +236,24 @@ export function updatePhaseLines({
         newPctLabels = xLabels.map(() => '0.0%');
     }
 
-    const recalcPercents = {};
-    for (const p of checkedPhases) {
-        recalcPercents[p.name] = duration > 0 ? ((p.time - minTime) / duration * 100) : 0;
-    }
-
-    // 建 markLine data — phase name 在 label 換行加百分比 `\n(xx.x%)`
-    //
-    // axisMode='category' (CCI 既有路徑):xAxis[0].type='category',markLine.xAxis
-    // 必須是 xLabels 內某個 string;走 findNearestLabel 對映 phaseTime 到最接近
+    // 建 markLine data — category 模式走 findNearestLabel 對映 phaseTime 到最接近
     // 的 string label(echarts 不接受 category axis 上的 numeric markLine value)。
-    //
-    // axisMode='value' (Composer 走 Type:"value" 對齊跨採樣率):xAxis[0].data 不
-    // 存在(value axis 從 series data 推 min/max),markLine.xAxis 直接用 numeric
-    // phaseTime — composerPhaseMarkLineOpts 在 backend 也是這樣 bake 進 HTML 的。
     const nearest = findNearestLabel || defaultFindNearestLabel;
     const markData = [];
     for (const p of checkedPhases) {
         const pct = recalcPercents[p.name].toFixed(1);
-        let xVal;
-        if (mode === 'value') {
-            // numeric — backend composerPhaseMarkLineOpts.XAxis 也是 p.sec 直接塞
-            xVal = p.time;
-        } else {
-            // category — 走 nearestLabel
-            const nearestLabel = nearest(p.time, xLabels);
-            if (!nearestLabel) continue;  // 找不到 → silent skip(對齊舊行為)
-            xVal = nearestLabel;
-        }
+        const nearestLabel = nearest(p.time, xLabels);
+        if (!nearestLabel) continue;
         markData.push({
             name: p.name + '\n(' + pct + '%)',
-            xAxis: xVal,
+            xAxis: nearestLabel,
             lineStyle: { type: 'dashed', color: '#888', width: 1 },
             label: { show: true, formatter: '{b}', position: 'end' },
         });
     }
 
-    // markLine attach 到「第一條可見 mean curve series」(跳過 ±SD pair、跳過
-    // legend 取消勾選的)。對齊舊 CCI 行為。
+    // category mode:markLine attach 到「第一條可見 mean curve series」(跳過
+    // ±SD pair、跳過 legend 取消勾選的);其他原本有 markLine 的 series clear。
     if (option.series && option.series.length > 0) {
         const legendSelected = (option.legend && option.legend[0] && option.legend[0].selected) || {};
         let targetIdx = 0;
@@ -250,13 +282,7 @@ export function updatePhaseLines({
             return {};
         });
 
-        // axisMode='value' 下 secondary xAxis 是 type='value' 且 Min:0/Max:100,
-        // 不該被 data:[] 覆蓋。只在 category mode 才 patch 第二軸 pct labels。
-        if (mode === 'value') {
-            chart.setOption({ series: seriesUpdate });
-        } else {
-            chart.setOption({ series: seriesUpdate, xAxis: [{}, { data: newPctLabels }] });
-        }
+        chart.setOption({ series: seriesUpdate, xAxis: [{}, { data: newPctLabels }] });
     }
 
     if (typeof onAfterApply === 'function') {

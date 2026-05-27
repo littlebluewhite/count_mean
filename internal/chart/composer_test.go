@@ -3,6 +3,7 @@ package chart
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -84,9 +85,10 @@ func TestRenderComposer_ThreeGridLayout(t *testing.T) {
 	html := renderToString(t, context.Background(), in)
 
 	// echarts 輸出 grid 陣列；3 grid 表示 grid:[ 三筆 ]。
-	// 透過 axis 數量間接驗證(每 grid 1 bottom + 1 top → 6 個 xAxis)
+	// 每筆 grid 都帶 `"left":"70px"`(setComposerGlobalOptions 固定 left),透過
+	// substring count 間接驗證 grid 數。
 	assert.Contains(t, html, `"grid":`, "HTML 必須含 grid 陣列")
-	gridCount := strings.Count(html, `"left":"60px"`)
+	gridCount := strings.Count(html, `"left":"70px"`)
 	assert.Equal(t, 3, gridCount, "MuscleRatioData != nil 預期 3 個 grid")
 }
 
@@ -102,7 +104,7 @@ func TestRenderComposer_TwoGridLayout(t *testing.T) {
 	html := renderToString(t, context.Background(), in)
 
 	assert.Contains(t, html, `"grid":`)
-	gridCount := strings.Count(html, `"left":"60px"`)
+	gridCount := strings.Count(html, `"left":"70px"`)
 	assert.Equal(t, 2, gridCount, "MuscleRatioData == nil 預期 2 個 grid (EMG + motion)")
 }
 
@@ -174,9 +176,385 @@ func TestRenderComposer_PhaseMarkLines(t *testing.T) {
 	html := renderToString(t, context.Background(), in)
 
 	assert.Contains(t, html, `"markLine"`, "HTML 必須包含 markLine 區塊")
-	// markLine name 用 phase point 字母標示
-	assert.Contains(t, html, `"P0"`, "P0 phase point 應出現於 markLine")
-	assert.Contains(t, html, `"S"`, "S phase point 應出現於 markLine")
+	// markLine name baked 為 `Phase\n(pct%)` 格式(對齊 CCI / frontend updatePhaseLines
+	// 風格);phase\n 之後接百分比讓 ECharts default formatter 即使在 frontend
+	// setOption 失效時也能顯示「P0\n(0.0%)」而非裸 xAxis 數值。
+	assert.Contains(t, html, `"P0\n(0.0%)"`, "P0 phase point 應以 baked name 出現於 markLine")
+	assert.Contains(t, html, `"L\n(100.0%)"`, "L phase point 為 max time → 100%")
+	// formatter `{b}` 顯式設定,不依賴 ECharts default(value-axis 上 markLine 預設
+	// fallback 為 xAxis 數值,bug image #3 即此現象)。
+	assert.Contains(t, html, `"formatter":"{b}"`, "markLine label 須顯式設 {b} formatter")
+	// Bug 3 regression(2026-05-27 image #1):label 必須明確 rotate=0,否則
+	// ECharts 預設讓文字沿 markLine 線方向(垂直線 → 90°)旋轉,顯示為傾斜書寫。
+	// 實作細節:go-echarts opts.Label 不暴露 Rotate field,改在 addComposerCustomJS
+	// 透過 setOption 補,故出現於 customJS 區段(JS 物件,非 JSON quoted key)。
+	assert.Contains(t, html, `rotate:0`,
+		"markLine label rotate 必須明確設 0,透過 customJS post-init setOption 補")
+}
+
+// TestRenderComposer_MarkLineOnEveryGrid — Bug 2 + Bug B regression(2026-05-27):
+//
+// 雙層需求:
+//   1. (Bug 2 / image #2):每個 grid 都要 phase 虛線(過去只 grid 0 有)。
+//   2. (Bug B / image #5):使用者透過 legend 隱藏某條 muscle/motion series 時
+//      (e.g. IL/GMax),markLine 不可隨之消失。
+//
+// 修法:對 **每條** EMG/muscle/motion series 都 attach markLine。即便其中一條被
+// legend 隱藏,其他 series 仍 visible 且帶 markLine → 視覺持續顯示。
+//
+// markLine 在 ECharts 是 series-level 屬性,繼承父 series 的 xAxisIndex;每條
+// series 多帶一份 markLine data 視覺上重疊在同位置,markLine 點數少 perf 不痛。
+//
+// 防線:3-grid scenario(EMG 2 + muscle 4 + motion 2 = 8 series),每個 phase 對
+// 應的 markLine.name 應出現 ≥ 8 次(每條 series 一次)。
+func TestRenderComposer_MarkLineOnEveryGrid(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(100, "RA", "ES"),
+		SelectedChannels: []string{"RA", "ES"},
+		MuscleRatioData:  makeMuscleRatioData(100, "IL_GMax", "RA_ES", "RF_BF", "TAIO_MF"),
+		MotionData:       makeMotionData(50, "knee", "ankle"),
+		PhasePoints: models.PhasePoints{
+			P0: models.MakeOpt(0.010),
+			L:  models.MakeOpt(0.090),
+		},
+	}
+	html := renderToString(t, context.Background(), in)
+
+	// EMG 2 + muscle 4 + motion 2 = 8 series,每條都 attach markLine。
+	p0Count := strings.Count(html, `"P0\n(0.0%)"`)
+	lCount := strings.Count(html, `"L\n(100.0%)"`)
+	assert.GreaterOrEqual(t, p0Count, 8,
+		"P0 markLine name 應對每條 series 都 attach(2 EMG + 4 muscle + 2 motion = 8)")
+	assert.GreaterOrEqual(t, lCount, 8,
+		"L markLine name 應對每條 series 都 attach(同上)")
+}
+
+// TestRenderComposer_BottomXAxisUnionRange — Bug C regression(2026-05-27 image #7):
+//
+// 三個 bottom xAxis 各自 Type:"value" 不設 Min/Max,從各自 series data 推 →
+// EMG 與 motion 收集起始時間不同會導致軸範圍不同(EMG 4.58~19.65s vs motion
+// 1.19~17.81s),三軸時間刻度視覺不對齊。
+//
+// 修法:backend 取 EMG/muscle/motion 三組 time 的 union min/max,套到所有 bottom
+// xAxis Min/Max,讓三軸時間刻度一致。
+//
+// 防線:用 motion t=[0..0.49](max 大於 EMG 的 0.099)做測,bottom xAxis 應該都
+// 顯式 emit `"max":0.49`(三個 grid 同樣 Max 值)。
+func TestRenderComposer_BottomXAxisUnionRange(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(100, "RA"),       // t=[0..0.099]
+		SelectedChannels: []string{"RA"},
+		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"), // t=[0..0.099]
+		MotionData:       makeMotionData(50, "knee"),       // t=[0..0.49] — 最大
+	}
+	html := renderToString(t, context.Background(), in)
+
+	// motion max=0.49 應該被套到所有 3 個 bottom xAxis 的 Max。
+	// `"max":0.49` 應出現至少 3 次(每個 bottom xAxis 一次)。
+	// (top percent xAxis 是 Min:0/Max:100,不會匹配 "max":0.49)
+	maxCount := strings.Count(html, `"max":0.49`)
+	assert.GreaterOrEqual(t, maxCount, 3,
+		`"max":0.49" 應出現至少 3 次(3 bottom xAxis 共用 union Max)`)
+}
+
+// TestRenderComposer_DataZoomSliderPosition — Bug F regression(2026-05-27 image #8):
+//
+// opts.DataZoom struct 不暴露 Bottom/Height/Left/Right field,ECharts 用 default
+// auto-position → 在 1200px 容器內把 slider 擠成細條且被切。修法:customJS post-init
+// setOption patch dataZoom index 1(slider)的明確 layout。
+//
+// 防線:customJS 必須含 `dataZoom:[{},{bottom:30,height:30,left:70,right:120}]` 形
+// patch,明確指定 slider 位置與尺寸。
+//
+// Bug 2 第二輪註記(image #16):試過把 slider 推到 bottom=80(增加 chart-internal
+// buffer)但 user 實測仍被 iframe 切。真實修法在 frontend iframe.style.height 加大,
+// 不是 chart-internal slider 位置;此 test 鎖回原 bottom=30 不再追加 chart-internal
+// buffer。
+func TestRenderComposer_DataZoomSliderPosition(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(50, "RA"),
+		SelectedChannels: []string{"RA"},
+		MotionData:       makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	assert.Contains(t, html, `bottom:30`,
+		"customJS 應明確設 dataZoom slider bottom=30(避免 default auto-position 被切)")
+	assert.Contains(t, html, `height:30`,
+		"customJS 應明確設 dataZoom slider height=30")
+}
+
+// TestRenderComposer_ContainerHeightAccommodatesZoomBar — Bug D regression(2026-05-27):
+//
+// User 報「整體圖長度太短,zoom bar 被切掉」。修法:擴大 composerContainerHeight
+// 與 reservedBottom 給 dataZoom slider 充足空間。
+//
+// 防線:Initialization.Height 必須 ≥ "1200px"(從 1100 拉大),確保 zoom bar 不
+// 被 iframe 邊界裁切。
+func TestRenderComposer_ContainerHeightAccommodatesZoomBar(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(50, "RA"),
+		SelectedChannels: []string{"RA"},
+		MotionData:       makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	assert.Contains(t, html, `height:1200px`,
+		"Initialization.Height 必須 ≥ 1200px,確保 dataZoom slider 不被切")
+}
+
+// TestRenderComposer_GridRightMargin — Bug 6 regression(2026-05-27):
+//
+// 過去 grid.Right="60px" 太窄,當 yAxis name(尤其 grid 1 "Muscle Ratio"、grid 2
+// "Motion")出現在 grid 右下時,標籤被切到只剩 "Muscle R" / "Motion " (image #3)。
+//
+// 修法:Right 拉大到 "120px" 以上,讓 yAxis name 完整顯示。
+func TestRenderComposer_GridRightMargin(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(100, "RA"),
+		SelectedChannels: []string{"RA"},
+		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"),
+		MotionData:       makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	// 拒絕 60px(舊值);應 emit 較大值。為避免硬釘特定數字,assert Right >= 100。
+	// 用負面斷言 + 正面包含,let composer 在 ≥ 100px 範圍自由調整。
+	assert.NotContains(t, html, `"right":"60px"`,
+		"grid right margin 不可為 60px(過窄,yAxis name 被切 — image #3)")
+}
+
+// TestRenderComposer_GridGapEnough — Bug 5 regression(2026-05-27):
+//
+// 過去 gap=40px 太小,相鄰 grid 之間 top-axis label / yAxis name 容易重疊
+// (image #2 顯示 "EMG"、"Ratio"、"Motion" 與相鄰 grid 軸刻度擠在一起)。
+//
+// 修法:gap 拉大到 ≥ 70px,確保相鄰 axis 文字不重疊。
+//
+// 防線:emit 的 grid `top` 偏移之間差距須 >= (gridHeight + 70)。直接看 composer
+// computeGridLayout 純函式即可,不需做 HTML 解析。
+func TestRenderComposer_GridGapEnough(t *testing.T) {
+	grids := computeGridLayout(3)
+	require.Len(t, grids, 3)
+
+	// grids[i].top 是字串 pixel;手動 parse 比 string contains 穩定。
+	parseTop := func(s string) int {
+		var n int
+		_, err := fmt.Sscanf(s, "%d", &n)
+		require.NoError(t, err)
+		return n
+	}
+	parseHeight := parseTop
+
+	for i := 1; i < len(grids); i++ {
+		prevBottom := parseTop(grids[i-1].top) + parseHeight(grids[i-1].height)
+		gap := parseTop(grids[i].top) - prevBottom
+		assert.GreaterOrEqual(t, gap, 70,
+			"grid %d 與 %d 之間 gap 應 ≥ 70px,目前 %d", i-1, i, gap)
+	}
+}
+
+// TestRenderComposer_NoComposerUpdatePhaseLinesListener — 釘住舊的失敗識別字。
+//
+// 歷史:前次 session 嘗試用 `composer-update-phase-lines` postMessage 但 origin
+// filter 把 message 拒掉。後來改回 cross-frame setOption,2026-05-27 user 報
+// 「phase 勾選毫無效果」,實際上是 wails dev 的 webview 比生產 webview 嚴格,
+// 跨 frame chart 存取 silent block。**新解**:postMessage with identifier
+// `composer-update-phase-markers`(注意 markers ≠ lines)+ 放寬 origin check
+// 走 e.source === window.parent,二者一起讓 wails dev 也能 work。
+//
+// 防線:確保未來 maintainer 不會誤改回舊識別字。新識別字 `markers` 走
+// TestRenderComposer_HasComposerPhaseMarkersListener。
+func TestRenderComposer_NoComposerUpdatePhaseLinesListener(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(50, "RA"),
+		SelectedChannels: []string{"RA"},
+		MotionData:       makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	assert.NotContains(t, html, `composer-update-phase-lines`,
+		"customJS 不應再有舊 `composer-update-phase-lines` 識別字(用 -markers 取代)")
+}
+
+// TestRenderComposer_HasComposerPhaseMarkersListener — Bug 1 fix(2026-05-27 image #12):
+//
+// 修補根因:wails dev 預設 webview(opaque origin enforcement 嚴格)下,parent 跨
+// frame 呼叫 `iframe.contentWindow.echarts.setOption` 被 silent block → phase 勾選
+// 改變毫無反應(user report:只勾 C/T0/T 但 8 個 markLine 仍在)。
+//
+// 修法:frontend updatePhaseLines value mode 改寄 `composer-update-phase-markers`
+// 給 iframe,iframe customJS 接收後本地 setOption — 完全繞開 cross-frame 限制。
+//
+// 防線:customJS 必須含 `composer-update-phase-markers` listener,且 markData 處理
+// 走 series-level patch(只更新 markLine,不動 series.data)。
+func TestRenderComposer_HasComposerPhaseMarkersListener(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(50, "RA"),
+		SelectedChannels: []string{"RA"},
+		MotionData:       makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	assert.Contains(t, html, `composer-update-phase-markers`,
+		"customJS 必須含 phase markers postMessage listener(Bug 1 修補)")
+	// 確認 iframe 端有逐 series patch markLine 的 setOption 動作
+	assert.Contains(t, html, `markLine`,
+		"customJS 應透過 setOption 寫 series[i].markLine.data")
+}
+
+// TestRenderComposer_RelaxedOriginCheck — Bug 3 fix(2026-05-27 image #15):
+//
+// wails dev parent origin 為 http://localhost:34115(動態 port),不在硬編
+// wailsParentOrigins allowlist (`wails://wails`、`http://wails.localhost` 等)
+// → iframe customJS message listener 把 parent 訊息全部 reject → PNG 下載 10s
+// timeout(user report)。
+//
+// 修法:接受 `e.source === window.parent` 作為 origin allowlist 退路。安全性
+// 推論:sandbox=allow-scripts iframe 為 opaque origin,只有 embedding parent
+// 持有 iframe.contentWindow 引用,沒有第三方注入路徑;e.source 比對等同於
+// 「來自 embedding parent」,等價於 trusted。
+//
+// 防線:customJS 必須含 `e.source === window.parent` 比對(或 `e.source!==window.parent`
+// 否定形式),避免 production-only allowlist 在 dev 環境鎖死。
+func TestRenderComposer_RelaxedOriginCheck(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(50, "RA"),
+		SelectedChannels: []string{"RA"},
+		MotionData:       makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	assert.Contains(t, html, `e.source !== window.parent`,
+		"customJS 必須含 `e.source !== window.parent` 退路,讓 wails dev 也能 postMessage")
+}
+
+// TestRenderComposer_BodyMarginReset — Bug 2 fix(2026-05-27 image #14):
+//
+// 瀏覽器預設 body 8px margin 把 1200px chart 推到 viewport y=8..1208,bottom 8px
+// (含 dataZoom slider 底邊)被 iframe 1200 viewport 切掉(user report:zoom bar
+// 被切)。
+//
+// 修法:customJS 在 init 後 reset body/html margin & padding 為 0,確保 chart
+// 完整占滿 iframe viewport,slider 不被切。
+//
+// 防線:customJS 必須含 `body.style.margin = '0'` 等樣式 reset。
+func TestRenderComposer_BodyMarginReset(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(50, "RA"),
+		SelectedChannels: []string{"RA"},
+		MotionData:       makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	assert.Contains(t, html, `document.body.style.margin`,
+		"customJS 必須 reset body margin(Bug 2:預設 8px margin 把 slider 切掉)")
+}
+
+// TestRenderComposer_CustomJSSyntaxValid — 釘住 go-echarts `newlineTabPat` 陷阱:
+// AddJSFuncStrs 把 raw string 內所有 `\n`/`\t` strip 成空。如果 JS 模板含 `//` line
+// comments,strip 後 `//` 後面整段(closing braces / 下一行 code)被吃成註解 →
+// catch / function 永不閉合 → SyntaxError → 整個 inline script 失敗 → iframe
+// 整片空白(2026-05-27 image #5 災難)。
+//
+// 修法為 JS 模板只用 `/* ... */` block comments,且 `FuncStripCommentsOpts` 不能用
+// (regex 不認識 string literal,會把 `"wails://wails"` 內的 `//` 也吃掉)。
+//
+// 此 test 釘 3 條 invariant:
+//   1. wailsParentOrigins 陣列完整(URLs 內 `//` 未被誤吃)
+//   2. postMessage handler 結構完整(關鍵 token 都在,代表 function/if 都閉合到位)
+//   3. customJS 區段內 `{` 與 `}` 數量相等(若 `//` 吃掉 closing braces 就會不平衡)
+func TestRenderComposer_CustomJSSyntaxValid(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(50, "RA"),
+		SelectedChannels: []string{"RA"},
+		MotionData:       makeMotionData(50, "knee"),
+		PhasePoints: models.PhasePoints{
+			P0: models.MakeOpt(0.010),
+			L:  models.MakeOpt(0.090),
+		},
+	}
+	html := renderToString(t, context.Background(), in)
+
+	// (1) wailsParentOrigins URLs 完整:`FuncStripCommentsOpts` regex 會吃 `//`
+	// 不認識 string,改回 FuncOpts 後 URLs 必須保留。
+	assert.Contains(t, html, `"wails://wails"`, "wails:// URL 完整")
+	assert.Contains(t, html, `"http://wails.localhost"`, "http:// URL 完整")
+	assert.Contains(t, html, `"https://wails.localhost"`, "https:// URL 完整")
+
+	// (2) postMessage handler 結構完整(三個關鍵 token 都在):
+	assert.Contains(t, html, `composer-request-png`, "postMessage handler 識別字未被 strip")
+	assert.Contains(t, html, `composer-png-result`, "postMessage response 識別字未被 strip")
+	assert.Contains(t, html, `getDataURL`, "PNG 取值呼叫未被 strip")
+
+	// (3) 抽出 `<script type="text/javascript">` ... `</script>` 區段做 brace
+	// balance 檢查 — 若 `//` 吃掉 closing braces,{ 開越多 } 越少,平衡破壞。
+	scriptStart := strings.Index(html, `<script type="text/javascript">`)
+	if scriptStart < 0 {
+		t.Fatal("找不到 <script> 區段")
+	}
+	scriptStart += len(`<script type="text/javascript">`)
+	scriptEnd := strings.Index(html[scriptStart:], `</script>`)
+	if scriptEnd < 0 {
+		t.Fatal("找不到 </script>")
+	}
+	js := html[scriptStart : scriptStart+scriptEnd]
+
+	openBraces := strings.Count(js, `{`)
+	closeBraces := strings.Count(js, `}`)
+	// option JSON 內含大量 {} 但都對稱,customJS 內 {} 也對稱 — 整體必平衡。
+	// 不平衡 = SyntaxError 警訊 → image #5 復發。
+	assert.Equal(t, openBraces, closeBraces,
+		"<script> 區段 { 與 } 數量必相等 — 不平衡代表 newline-strip 後 `//` 吃掉 closing braces(image #5 復發)")
+}
+
+// TestRenderComposer_SeriesRoutingPerGrid — H1 regression:每個 series 必須路由到自
+// 己的 grid(EMG→0、muscle_ratio→1、motion→n-1),否則上方 grid 全部空、資料擠到底。
+//
+// 過去 bug:`line.AddSeries(...).SetSeriesOptions(opts...)` 把 opts apply 到 **所有**
+// 既存 series(go-echarts charts/series.go:722-735 註解明示 last-write-wins),
+// motion 是最後加,把全部 series 的 XAxisIndex/YAxisIndex 蓋成 motionGridIdx。修法
+// 為改用 `line.AddSeries(name, data, opts...)` 第三 variadic 參數,每條 series
+// 獨立 opts。
+func TestRenderComposer_SeriesRoutingPerGrid(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(100, "RA", "ES"),
+		SelectedChannels: []string{"RA", "ES"},
+		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"),
+		MotionData:       makeMotionData(50, "knee", "ankle"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	// muscle_ratio (grid 1) 必須出現 `"xAxisIndex":1,"yAxisIndex":1` series 配對。
+	assert.Contains(t, html, `"xAxisIndex":1,"yAxisIndex":1`,
+		"muscle_ratio series 應路由到 grid 1(xAxisIndex=1, yAxisIndex=1)")
+	// motion (grid n-1=2) 必須出現 `"xAxisIndex":2,"yAxisIndex":2`。
+	assert.Contains(t, html, `"xAxisIndex":2,"yAxisIndex":2`,
+		"motion series 應路由到 grid 2(xAxisIndex=2, yAxisIndex=2)")
+
+	// H1 regression 核心斷言:全部 series series 配對個數不可全部等於 motion 的 (2,2)。
+	// 過去 bug 下 6 個 series 全部 `"xAxisIndex":2,"yAxisIndex":2`(被覆寫),雖然
+	// motion 自己也是 (2,2),正常情況最多 2 個(motion 2 個 channels)。
+	// 斷言 ≤2 個 — 任何 (2,2) 出現次數超過 motion channel 數即代表 H1 復發。
+	motionPairCount := strings.Count(html, `"xAxisIndex":2,"yAxisIndex":2`)
+	assert.LessOrEqual(t, motionPairCount, 2,
+		"(xAxisIndex=2, yAxisIndex=2) 出現 >2 次代表 H1 series-routing bug 復發(EMG/muscle 被覆寫到 motion grid)")
+
+	// 對應地 (1,1) 配對只能出現 1 次(只有 1 個 muscle channel)。
+	musclePairCount := strings.Count(html, `"xAxisIndex":1,"yAxisIndex":1`)
+	assert.Equal(t, 1, musclePairCount,
+		"(xAxisIndex=1, yAxisIndex=1) 應僅 1 次(對應唯一 muscle_ratio channel)")
 }
 
 // TestRenderComposer_SharedTimeAndPercentAxes — HTML 含兩種 axis：bottom time + top percent。

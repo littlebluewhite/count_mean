@@ -244,8 +244,9 @@ test('Slice D P2#3: generateComposerChart 必須驗證 _composerLoadedSubject �
 
     const fnStart = src.indexOf('async generateComposerChart()');
     assert.ok(fnStart > 0, '找不到 generateComposerChart');
-    const fnEnd = src.indexOf('\n    // iframe load 後從 ECharts option', fnStart);
-    assert.ok(fnEnd > fnStart, '找不到 generateComposerChart 結束邊界');
+    // 改用下一個 method signature 作邊界(比註解字串穩),不會被 comment 改動破。
+    const fnEnd = src.indexOf('\n    _onComposerIframeLoaded()', fnStart);
+    assert.ok(fnEnd > fnStart, '找不到 generateComposerChart 結束邊界(_onComposerIframeLoaded)');
     const fnBody = src.slice(fnStart, fnEnd);
 
     assert.match(

@@ -381,11 +381,10 @@ test('onAfterApply callback 收到 recalcPercents map(CCI 用此更新位置顯�
 // 直接用 phaseTime 數值。
 // ----------------------------------------------------------------------------
 
+// value-axis fixture — 2026-05-27 Bug 1 修補後 helper value-mode 走 postMessage,
+// 不再做跨 frame chart 存取,所以 fixture **不**需要 echarts stub;只需要 iframe
+// 元素跟一個能 capture postMessage 呼叫的 contentWindow stub。
 function buildValueAxisCtx({ iframeWrapId, checkboxIdPrefix, phaseNames }) {
-    // value-axis 版本的 chart stub:xAxis[0].type='value' 且無 data 屬性。
-    // xAxis[1] 同樣保留(percent 軸仍是 category)— 對齊 composer.go
-    // configureComposerAxes (bottom='value' / top='value' 但前端把 top 當
-    // category 重算 pctLabels 顯示)。
     const window = new Window();
     const doc = window.document;
 
@@ -395,46 +394,12 @@ function buildValueAxisCtx({ iframeWrapId, checkboxIdPrefix, phaseNames }) {
     const iframe = doc.createElement('iframe');
     wrap.appendChild(iframe);
 
-    const innerDoc = window.document.implementation.createHTMLDocument('');
-    const chartEl = innerDoc.createElement('div');
-    chartEl.setAttribute('_echarts_instance_', '1');
-    innerDoc.body.appendChild(chartEl);
-
-    const option = {
-        xAxis: [
-            { type: 'value' },                    // bottom time axis — 無 data
-            { data: ['0%', '50%', '100%'] },      // top percent axis(仍 category)
-        ],
-        series: [{ name: 'mean', markLine: { data: [] } }],
-        legend: [{ selected: {} }],
-    };
-    const chartStub = {
-        _option: option,
-        _lastSetOption: null,
-        getOption() { return JSON.parse(JSON.stringify(option)); },
-        setOption(patch) {
-            this._lastSetOption = patch;
-            if (patch.series) {
-                patch.series.forEach((s, i) => {
-                    if (s && s.markLine) option.series[i].markLine = s.markLine;
-                });
-            }
-            if (patch.xAxis) {
-                patch.xAxis.forEach((x, i) => {
-                    if (x && x.data) option.xAxis[i].data = x.data;
-                });
-            }
-        },
-    };
-
-    Object.defineProperty(iframe, 'contentDocument', {
-        get() { return innerDoc; }, configurable: true,
-    });
+    const postedMessages = [];
     Object.defineProperty(iframe, 'contentWindow', {
         get() {
             return {
-                echarts: {
-                    getInstanceByDom: (el) => (el === chartEl ? chartStub : null),
+                postMessage: (msg, targetOrigin) => {
+                    postedMessages.push({ msg, targetOrigin });
                 },
             };
         },
@@ -450,17 +415,20 @@ function buildValueAxisCtx({ iframeWrapId, checkboxIdPrefix, phaseNames }) {
         doc.body.appendChild(cb);
     });
 
-    return { doc, chartStub };
+    return { doc, postedMessages, getCheckbox: (name) => doc.querySelector('#' + checkboxIdPrefix + name) };
 }
 
-test('axisMode="value": markLine.xAxis 為 numeric phaseTime(Composer value-axis 路徑)', () => {
+test('axisMode="value": markData 透過 postMessage 寄到 iframe(Composer value-axis 路徑)', () => {
+    // 2026-05-27 修補:cross-frame `iframe.contentWindow.echarts.setOption` 在
+    // sandbox iframe + 嚴格 webview 下被 silent block(wails dev 環境),改走
+    // postMessage 由 iframe 內 customJS 接收後 local setOption。
     const ctx = buildValueAxisCtx({
         iframeWrapId: 'composerChartContent',
         checkboxIdPrefix: 'composer_phase_',
         phaseNames: ['P1', 'S'],
     });
 
-    updatePhaseLines({
+    const result = updatePhaseLines({
         iframeSelector: '#composerChartContent iframe',
         phaseTimes: { P1: 1.5, S: 3.25 },
         checkboxSelector: '[id^="composer_phase_"]',
@@ -468,22 +436,111 @@ test('axisMode="value": markLine.xAxis 為 numeric phaseTime(Composer value-axis
         document: ctx.doc,
         axisMode: 'value',
     });
+    assert.equal(result, true, '應該成功 postMessage(回 true)');
 
-    const last = ctx.chartStub._lastSetOption;
-    assert.ok(last, 'value-mode 應觸發 setOption');
-    const ml = last.series[0].markLine;
-    assert.ok(ml && Array.isArray(ml.data), 'series[0].markLine.data 應存在');
-    assert.equal(ml.data.length, 2, '兩個勾選 phase → 兩個 markLine');
+    // 驗:剛好寄一條訊息給 iframe
+    assert.equal(ctx.postedMessages.length, 1, 'value-mode 應寄一條 postMessage');
+    const { msg, targetOrigin } = ctx.postedMessages[0];
+    assert.equal(msg.type, 'composer-update-phase-markers',
+        'message type 應為 composer-update-phase-markers,got ' + msg.type);
+    assert.equal(targetOrigin, '*',
+        'targetOrigin 應為 "*"(sandbox iframe opaque origin)');
 
-    // value mode 的 xAxis 必須為 numeric(秒數)而非 string label。
-    const p1 = ml.data.find((d) => d.name.startsWith('P1\n'));
-    const s = ml.data.find((d) => d.name.startsWith('S\n'));
-    assert.ok(p1, 'markLine 應含 P1');
-    assert.ok(s, 'markLine 應含 S');
-    assert.equal(typeof p1.xAxis, 'number', 'P1.xAxis 應為 number(value-axis 模式),got ' + typeof p1.xAxis);
-    assert.equal(p1.xAxis, 1.5, 'P1.xAxis 應等於 phaseTimes.P1 (1.5),got ' + p1.xAxis);
-    assert.equal(typeof s.xAxis, 'number', 'S.xAxis 應為 number');
+    // 驗 markData 內容:兩個 prefer phase,xAxis 為 numeric phaseTime
+    assert.ok(Array.isArray(msg.markData), 'markData 應為 array');
+    assert.equal(msg.markData.length, 2, '兩個勾選 phase → 兩個 markLine');
+    const p1 = msg.markData.find((d) => d.name.startsWith('P1\n'));
+    const s = msg.markData.find((d) => d.name.startsWith('S\n'));
+    assert.ok(p1, 'markData 應含 P1');
+    assert.ok(s, 'markData 應含 S');
+    assert.equal(typeof p1.xAxis, 'number', 'P1.xAxis 應為 number(numeric phaseTime)');
+    assert.equal(p1.xAxis, 1.5, 'P1.xAxis === phaseTimes.P1');
+    assert.equal(typeof s.xAxis, 'number');
     assert.equal(s.xAxis, 3.25);
+    // 百分比:P1=min → 0.0%、S=max → 100.0%
+    assert.ok(p1.name.includes('(0.0%)'), 'P1 應為 0.0%');
+    assert.ok(s.name.includes('(100.0%)'), 'S 應為 100.0%');
+});
+
+test('axisMode="value": checkbox 未勾 → markData 不含該 phase(Composer 過濾驗證)', () => {
+    // Bug 1 核心驗證:user 只勾 C/T0/T,markData 必須只有這 3 個 item,
+    // 不包含 P0/P1/P2/S/L。
+    const ctx = buildValueAxisCtx({
+        iframeWrapId: 'composerChartContent',
+        checkboxIdPrefix: 'composer_phase_',
+        phaseNames: ['P0', 'P1', 'P2', 'S', 'C', 'T0', 'T', 'L'],
+    });
+    // 取消勾選 P0/P1/P2/S/L
+    ['P0', 'P1', 'P2', 'S', 'L'].forEach((name) => {
+        ctx.getCheckbox(name).checked = false;
+    });
+
+    updatePhaseLines({
+        iframeSelector: '#composerChartContent iframe',
+        phaseTimes: { P0: 12.92, P1: 12.95, P2: 13.50, S: 13.70, C: 13.93, T0: 14.27, T: 14.30, L: 14.92 },
+        checkboxSelector: '[id^="composer_phase_"]',
+        originalPctLabelsRef: { value: null },
+        document: ctx.doc,
+        axisMode: 'value',
+    });
+
+    assert.equal(ctx.postedMessages.length, 1);
+    const { msg } = ctx.postedMessages[0];
+    assert.equal(msg.markData.length, 3, '只勾 3 個 phase → markData 3 個 item');
+    const names = msg.markData.map((d) => d.name);
+    // 未勾的 phase 不該出現
+    ['P0', 'P1', 'P2', 'S', 'L'].forEach((n) => {
+        assert.ok(!names.some((x) => x.startsWith(n + '\n')),
+            `${n} 未勾不應出現於 markData,got: ${names.join('|')}`);
+    });
+    // 勾選的應出現
+    ['C', 'T0', 'T'].forEach((n) => {
+        assert.ok(names.some((x) => x.startsWith(n + '\n')),
+            `${n} 已勾應出現於 markData,got: ${names.join('|')}`);
+    });
+    // C 為最小 phaseTime → 0%、T 為最大 → 100%
+    const c = msg.markData.find((d) => d.name.startsWith('C\n'));
+    const t = msg.markData.find((d) => d.name.startsWith('T\n'));
+    assert.ok(c.name.includes('(0.0%)'), 'C 應為 0.0%,got: ' + c.name);
+    assert.ok(t.name.includes('(100.0%)'), 'T 應為 100.0%,got: ' + t.name);
+});
+
+test('axisMode="value": iframe 不存在 → silent no-op 回 false', () => {
+    const window = new Window();
+    const doc = window.document;
+    // 不建 iframe wrapper
+    const result = updatePhaseLines({
+        iframeSelector: '#missingChartContent iframe',
+        phaseTimes: { P1: 1.5, S: 3.25 },
+        checkboxSelector: '[id^="composer_phase_"]',
+        originalPctLabelsRef: { value: null },
+        document: doc,
+        axisMode: 'value',
+    });
+    assert.equal(result, false, '無 iframe 應 silent no-op 回 false');
+});
+
+test('axisMode="value": onAfterApply 仍被呼叫(用於 caller 端 UI 更新)', () => {
+    const ctx = buildValueAxisCtx({
+        iframeWrapId: 'composerChartContent',
+        checkboxIdPrefix: 'composer_phase_',
+        phaseNames: ['P1', 'S'],
+    });
+
+    let captured = null;
+    updatePhaseLines({
+        iframeSelector: '#composerChartContent iframe',
+        phaseTimes: { P1: 1.5, S: 3.25 },
+        checkboxSelector: '[id^="composer_phase_"]',
+        originalPctLabelsRef: { value: null },
+        document: ctx.doc,
+        onAfterApply: (rp) => { captured = rp; },
+        axisMode: 'value',
+    });
+
+    assert.ok(captured, 'onAfterApply 應被觸發');
+    assert.equal(captured.P1.toFixed(1), '0.0');
+    assert.equal(captured.S.toFixed(1), '100.0');
 });
 
 test('axisMode 預設="category"(向後相容,CCI 既有路徑釘住為 category)', () => {

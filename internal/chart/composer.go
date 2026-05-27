@@ -119,25 +119,43 @@ type gridSpec struct {
 }
 
 // composerContainerHeight 是 Initialization.Height 對應的容器 pixel 高度。
-// 必須與 setComposerGlobalOptions 中的 Height: "900px" 同步;若任一改變,grid 排版
-// 比例會錯。Slice D frontend 應維持同樣高度的 iframe 容器。
-const composerContainerHeight = 900
+// 必須與 setComposerGlobalOptions 中的 Height 字串同步;若任一改變,grid 排版
+// 比例會錯。
+//
+// 演進記錄:
+//   - 初始 900,grid gap 40 → image #1/#2 layout 太擠
+//   - 1100 + gap 80 + reservedTop 110 → 2026-05-27 修一輪;但 user 報 zoom bar
+//     仍被切(image #5/#7),所以再 push 到 1200 + reservedBottom 100。
+//
+// iframe 高度同步在 frontend main.js#generateComposerChart 設成 1200px,
+// 移除 iframe 內 scrollbar 並讓 dataZoom slider 完整顯示。
+const composerContainerHeight = 1200
 
 // computeGridLayout 把 N 個 grid 在垂直方向均分(以絕對 pixel 計算):
-//   - 首 grid top 從 90px(留 title + legend);
-//   - 末 grid bottom 留 80px(dataZoom slider);
-//   - 每 grid 之間留 40px gap 讓相鄰 grid 的 top-axis label 可見;
+//   - 首 grid top 從 110px(留 title + legend + top-axis label header) —
+//     legend ~30 + phase markLine label ~30 + 上下緩衝 → ≥ 110 否則 grid 0 上方
+//     phase label 與 legend 重疊(image #1);
+//   - 末 grid bottom 留 100px(dataZoom slider);
+//   - 每 grid 之間留 80px gap(從 40 加倍) — 讓 grid 0 bottom xAxis name
+//     ("Time (s)")、grid 1 top xAxis name + phase label 同時可見不重疊;
 //   - gridHeight = (containerHeight - reservedTop - reservedBottom - gap*(N-1)) / N。
 //
-// emit 純 pixel 字串("90" 而非 "90px");ECharts 對純數字 string 視為 pixel。
+// emit 純 pixel 字串("110" 而非 "110px");ECharts 對純數字 string 視為 pixel。
 // 避免使用 CSS calc(),ECharts 不會解析。
+//
+// Bug 2 第二輪註記(image #16,2026-05-27):chart-internal 推 slider 往上的 buffer
+// (reservedBottom 100 → 150)無效 — user 實測 chart 仍被 iframe 切。真實修法在
+// frontend main.js#generateComposerChart 的 iframe.style.height,需大於
+// composerContainerHeight 至少 ~150-200px 給 ECharts 額外渲染元件(slider handles、
+// dataBackground、邊距)+ webview 對 srcdoc iframe inline height 的默認 reservation
+// 留空間。
 func computeGridLayout(n int) []gridSpec {
 	if n <= 0 {
 		return nil
 	}
-	const reservedTop = 90
-	const reservedBottom = 80
-	const gapPx = 40
+	const reservedTop = 110
+	const reservedBottom = 100
+	const gapPx = 80
 	totalGap := gapPx * (n - 1)
 	available := composerContainerHeight - reservedTop - reservedBottom - totalGap
 	gridHeight := available / n
@@ -157,9 +175,10 @@ func computeGridLayout(n int) []gridSpec {
 //  1. 算出 N(2 or 3)、grid layout
 //  2. 設 global options(title / tooltip / legend / dataZoom / toolbox / N 個 grid)
 //  3. 為每個 grid 設 bottom-time + top-percent xAxis(共 2N 個)、Y axis(N 個)
-//  4. 為每個 grid 加 series(EMG / muscle_ratio downsample;motion 原樣)
-//  5. 第一條 series attach phase markLine
-//  6. 加 custom JS(resize + 鍵盤 R reset zoom)
+//     bottom xAxes 共用 union time min/max(Bug C 軸對齊)
+//  4. 為每個 grid 加 series(EMG / muscle_ratio downsample;motion 原樣);
+//     每條 series 都 attach phase markLine(Bug B legend 防護)
+//  5. 加 custom JS(resize + 鍵盤 R reset zoom + PNG postMessage)
 func buildComposerLine(ctx context.Context, in ComposerInput) (*charts.Line, error) {
 	// 計算 grid 配置
 	n := 2
@@ -185,13 +204,20 @@ func buildComposerLine(ctx context.Context, in ComposerInput) (*charts.Line, err
 		return nil, err
 	}
 
+	// 計算 union time range — 讓三 grid 的 bottom xAxis 共用同一 Min/Max,
+	// 解決 motion 收集起始時間早於 EMG 造成的軸不對齊(Bug C 2026-05-27 image #7)。
+	// 各 series time 都已換到 EMG-time domain(loadComposerMotion 已透過
+	// MotionIndexToEMGTime 轉,muscle 也是 EMG 軸 input),只是 visible range
+	// 不同;union 確保 X 刻度在三 grid 對齊。
+	minTime, maxTime := computeUnionTimeRange(emgTime, muscleTime, in.MotionData)
+
 	line := charts.NewLine()
 	setComposerGlobalOptions(line, in.Subject, grids, n)
 
 	// X axes:每 grid 一 bottom-time(value 軸,秒)+ 一 top-percent(value 軸,0-100)
 	// XAxisList[0] 是 echarts 預設;後續 ExtendXAxis 追加
 	// 對齊原則:bottom xAxis index = i(0..n-1),top xAxis index = n+i(n..2n-1)
-	if err := configureComposerAxes(ctx, line, n, emgTime, muscleTime, in.MotionData, &in.PhasePoints); err != nil {
+	if err := configureComposerAxes(ctx, line, n, minTime, maxTime); err != nil {
 		return nil, err
 	}
 
@@ -378,17 +404,23 @@ func setComposerGlobalOptions(line *charts.Line, subject string, grids []gridSpe
 	gridOpts := make([]opts.Grid, 0, n)
 	for _, g := range grids {
 		gridOpts = append(gridOpts, opts.Grid{
-			Top:    g.top,
-			Left:   "60px",
-			Right:  "60px",
+			Top:  g.top,
+			Left: "70px",
+			// Bug 6 regression(2026-05-27 image #3):60px 不夠寬,bottom xAxis name
+			// "Muscle Ratio (s)" / "Motion (s)" 預設 position='end',會擠在 grid 右下被
+			// 切掉(image #3 顯示 "Muscle R" 殘斷)。120px 給 axis name 足夠空間 +
+			// 一點緩衝,即便 future name 加長也安全。
+			Right:  "120px",
 			Height: g.height,
 		})
 	}
 
 	line.SetGlobalOptions(
 		charts.WithInitializationOpts(opts.Initialization{
-			Width:  "100%",
-			Height: "900px",
+			Width: "100%",
+			// 與 composerContainerHeight 同步;frontend iframe.style.height 也用此值
+			// 避免 iframe 內部產生 scrollbar 並讓 dataZoom slider 完整顯示(Bug D)。
+			Height: "1200px",
 		}),
 		charts.WithTitleOpts(opts.Title{
 			Title:    SanitizeChartString("Chart Composer"),
@@ -472,10 +504,8 @@ func configureComposerAxes(
 	ctx context.Context,
 	line *charts.Line,
 	n int,
-	_ []float64, // emgTime — kept for signature stability; not needed on value axis
-	_ []float64, // muscleTime
-	_ *MotionData, // motion
-	_ *models.PhasePoints,
+	minTime float64,
+	maxTime float64,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -483,12 +513,25 @@ func configureComposerAxes(
 
 	// XAxis[0] 預設存在 → 用 SetGlobalOptions 設 bottom time axis (grid 0)。
 	// 不 SetXAxis(...) — 那只對 category 軸有意義(填 .Data);value 軸由 series data 推。
-	line.SetGlobalOptions(
-		charts.WithXAxisOpts(opts.XAxis{
+	//
+	// Bug C(2026-05-27 image #7)— 明確設 Min/Max 而非讓 ECharts 自動從 series
+	// 推導:三條 bottom xAxis 共用同一範圍才能視覺對齊。空 range fallback 為 nil
+	// (省略 → ECharts 自動推)避免 minTime=maxTime=0 把所有 grid 軸壓縮到 0。
+	bottomAxisOpts := func(name string, gridIdx int) opts.XAxis {
+		ax := opts.XAxis{
 			Type:      "value",
-			Name:      "Time (s)",
-			GridIndex: 0,
-		}, 0),
+			Name:      name,
+			GridIndex: gridIdx,
+		}
+		if minTime < maxTime {
+			ax.Min = minTime
+			ax.Max = maxTime
+		}
+		return ax
+	}
+
+	line.SetGlobalOptions(
+		charts.WithXAxisOpts(bottomAxisOpts("Time (s)", 0), 0),
 		charts.WithYAxisOpts(opts.YAxis{
 			Type:      "value",
 			Name:      "EMG",
@@ -506,11 +549,7 @@ func configureComposerAxes(
 		default:
 			name = "Motion (s)"
 		}
-		line.ExtendXAxis(opts.XAxis{
-			Type:      "value",
-			Name:      name,
-			GridIndex: i,
-		})
+		line.ExtendXAxis(bottomAxisOpts(name, i))
 		var yName string
 		switch {
 		case n == 3 && i == 1:
@@ -581,8 +620,20 @@ func addComposerSeries(
 		return err
 	}
 
+	// markLine 對 **每條** series 都 attach — Bug B regression(2026-05-27 image #5):
+	//
+	// 過去 markLine 只放 grid 首條 series,user 用 legend 隱藏該 series(e.g.
+	// IL/GMax)時,markLine 也跟著消失。每條 series 各自帶一份 markLine 視覺上
+	// 重疊在同位置,grid 0/1/2 對應 EMG/muscle/motion 各自的 series — 任一條沒被
+	// legend 關掉,markLine 仍顯示。phase point 數量少 perf 不痛。
+	//
+	// 注意:必須用 AddSeries(name, data, opts...) 的第三 variadic 參數傳 seriesOpts,
+	// 不可改用 line.AddSeries(...).SetSeriesOptions(opts...) — 後者會把 opts 套用到
+	// **MultiSeries 內所有 series**(go-echarts 官方 charts/series.go:722-735 註解明示)
+	// 違反此 contract → 全部 series 的 XAxisIndex/YAxisIndex 會被最後一個 series 覆寫。
+	markLineOpts := composerPhaseMarkLineOpts(phase)
+
 	// EMG series → grid 0
-	firstSeries := true
 	emgNames := sortedKeys(emgSeries)
 	for _, name := range emgNames {
 		vals := emgSeries[name]
@@ -602,11 +653,8 @@ func addComposerSeries(
 			}),
 			charts.WithLineStyleOpts(opts.LineStyle{Width: 1.5}),
 		}
-		if firstSeries {
-			seriesOpts = append(seriesOpts, composerPhaseMarkLineOpts(phase)...)
-			firstSeries = false
-		}
-		line.AddSeries(SanitizeChartString(name), lineData).SetSeriesOptions(seriesOpts...)
+		seriesOpts = append(seriesOpts, markLineOpts...)
+		line.AddSeries(SanitizeChartString(name), lineData, seriesOpts...)
 	}
 
 	// muscle_ratio series → grid 1(僅 3-grid)
@@ -618,16 +666,17 @@ func addComposerSeries(
 			if err != nil {
 				return err
 			}
-			line.AddSeries(SanitizeChartString(name), lineData).
-				SetSeriesOptions(
-					charts.WithLineChartOpts(opts.LineChart{
-						Smooth:     opts.Bool(false),
-						ShowSymbol: opts.Bool(false),
-						XAxisIndex: 1,
-						YAxisIndex: 1,
-					}),
-					charts.WithLineStyleOpts(opts.LineStyle{Width: 1.5}),
-				)
+			seriesOpts := []charts.SeriesOpts{
+				charts.WithLineChartOpts(opts.LineChart{
+					Smooth:     opts.Bool(false),
+					ShowSymbol: opts.Bool(false),
+					XAxisIndex: 1,
+					YAxisIndex: 1,
+				}),
+				charts.WithLineStyleOpts(opts.LineStyle{Width: 1.5}),
+			}
+			seriesOpts = append(seriesOpts, markLineOpts...)
+			line.AddSeries(SanitizeChartString(name), lineData, seriesOpts...)
 		}
 	}
 
@@ -644,16 +693,17 @@ func addComposerSeries(
 			if err != nil {
 				return err
 			}
-			line.AddSeries(SanitizeChartString(name), lineData).
-				SetSeriesOptions(
-					charts.WithLineChartOpts(opts.LineChart{
-						Smooth:     opts.Bool(false),
-						ShowSymbol: opts.Bool(false),
-						XAxisIndex: motionGridIdx,
-						YAxisIndex: motionGridIdx,
-					}),
-					charts.WithLineStyleOpts(opts.LineStyle{Width: 1.5}),
-				)
+			seriesOpts := []charts.SeriesOpts{
+				charts.WithLineChartOpts(opts.LineChart{
+					Smooth:     opts.Bool(false),
+					ShowSymbol: opts.Bool(false),
+					XAxisIndex: motionGridIdx,
+					YAxisIndex: motionGridIdx,
+				}),
+				charts.WithLineStyleOpts(opts.LineStyle{Width: 1.5}),
+			}
+			seriesOpts = append(seriesOpts, markLineOpts...)
+			line.AddSeries(SanitizeChartString(name), lineData, seriesOpts...)
 		}
 	}
 	return nil
@@ -730,13 +780,37 @@ func composerPhaseMarkLineOpts(phase models.PhasePoints) []charts.SeriesOpts {
 		return nil
 	}
 
+	// 計算每個 phase 相對於可用 phase 範圍的百分比(min=0%, max=100%),baked 進 Name。
+	// 對齊 frontend/src/charts/phaseLines.mjs line 215-220 的 markData.name 格式
+	// `P0\n(0.0%)` — 即使 frontend `updatePhaseLines` setOption 失效(e.g. iframe
+	// sandbox 跨 frame access broken),backend 預設 markLine 也能顯示與 CCI 一致的
+	// `phase\n(pct%)` label,避免 fallback 顯示 ECharts 預設(value 軸時)的 xAxis 數值。
+	minSec, maxSec := pairs[0].sec, pairs[0].sec
+	for _, p := range pairs {
+		if p.sec < minSec {
+			minSec = p.sec
+		}
+		if p.sec > maxSec {
+			maxSec = p.sec
+		}
+	}
+	duration := maxSec - minSec
+
 	items := make([]opts.MarkLineNameXAxisItem, 0, len(pairs))
 	for _, p := range pairs {
 		// xAxis Type 為 value(見 configureComposerAxes doc) → markLine.XAxis 必須是
 		// 數值(float64),echarts 才能 anchor 到絕對時間。category 軸時代用 string
 		// 表示「Data 陣列的某個 label」,改 value 軸後 string 會被視為非數值丟棄。
+		var displayName string
+		if duration > 0 {
+			pct := (p.sec - minSec) / duration * 100
+			displayName = fmt.Sprintf("%s\n(%.1f%%)", p.name, pct)
+		} else {
+			// 單一 phase 場景(duration=0)— 不顯示百分比,只顯示 name。
+			displayName = p.name
+		}
 		items = append(items, opts.MarkLineNameXAxisItem{
-			Name:  p.name,
+			Name:  displayName,
 			XAxis: p.sec,
 		})
 	}
@@ -750,22 +824,91 @@ func composerPhaseMarkLineOpts(phase models.PhasePoints) []charts.SeriesOpts {
 				Type:  "dashed",
 				Width: 1.0,
 			},
+			// Formatter `{b}` 強制顯示 markLine.data[i].name(已 bake 含百分比)。
+			// 沒有 Formatter 時 ECharts 在 value-type xAxis 上的 markLine 預設 fallback
+			// 為 xAxis 數值(顯示「12.92」而非「P0\n(0.0%)」) — 此為 ECharts 版本相依
+			// quirk,明確設 `{b}` 不依賴 default。
+			//
+			// NOTE — Bug 3(rotate=0):go-echarts opts.Label 不暴露 Rotate field
+			// (見 series.go Label struct,僅含 Show/Color/.../Formatter),所以無法
+			// 在這裡直接設 rotate:0。改在 addComposerCustomJS post-init 透過 setOption
+			// patch 所有 markLine.label.rotate=0。`{b}` formatter + 水平 rotate=0
+			// 是兩條獨立 invariant。
 			Label: &opts.Label{
-				Show:     opts.Bool(true),
-				Position: "insideEndTop",
+				Show:      opts.Bool(true),
+				Position:  "insideEndTop",
+				Formatter: "{b}",
 			},
 		}),
 		charts.WithMarkLineNameXAxisItemOpts(items...),
 	}
 }
 
-// addComposerCustomJS 加入 resize handler、鍵盤 R reset zoom。
-// 與 CCI 風格一致但 composer 不需要 postMessage 給 parent(沒有 phase line 同步事件),
-// 等 Slice C handler 視需求再注入。
+// addComposerCustomJS 加入 resize handler、鍵盤 R reset zoom,以及 parent→iframe
+// postMessage 雙向通訊用於 PNG 下載。
+//
+// 為何需要 postMessage 而不是直接從 parent 跨 frame 讀 `iframe.contentWindow.echarts`:
+// frontend/src/main.js (showCCIResult 區段) 註解明示 iframe sandbox=allow-scripts
+// 無 allow-same-origin → opaque origin,parent 跨 frame 存取會 silent fail。P1-12
+// codex review 確立此安全策略,Composer 鏡像同樣 sandbox + 用 postMessage 達成原
+// 跨 frame 操作目的(取當下 zoom/legend 的 PNG dataURL)。
+//
+// 對齊 CCI addCCICustomJS 既有 postToParent + wailsParentOrigins allowlist pattern;
+// duplicate wailsParentOrigins string 而非 cross-package import — 兩個 chart module
+// 各自獨立、不引入新耦合,allowlist 變動風險低(只有 Wails 升級 URL scheme 才動)。
+//
+// CRITICAL — JS 模板**不可含 `//` line comments**(只能用 `/* ... */` block comments):
+// go-echarts `opts/js.go` 的 `newlineTabPat` 在 AddJSFuncStrs 時把 raw string 內所
+// 有 `\n`/`\t` strip 成空。如果 JS 模板含 `//` line comments,strip 後 `//` 後面
+// 整段(原本下一行的 code、closing braces)會被 single-line comment 吃掉到下個
+// `\n`(若無,吃到 `</script>`)— 結果 catch / function 永不閉合 → SyntaxError
+// → 整個 inline script 失敗 → ECharts setOption 不執行 → iframe 整片空白
+// (image #5 災難)。
+//
+// `FuncStripCommentsOpts` 看似能解但**不能用**:其 regex `(//.*)\n` 不認識 string
+// literal,把 `"wails://wails"` 內的 `//` 也吃掉 → wailsParentOrigins 被切斷。
+// `/* ... */` block comment 在 newline-strip 後仍正確閉合於 `*/`,是唯一安全選項。
+// 任何 future maintainer 想加註解必須用 block comment 形式。
 func addComposerCustomJS(line *charts.Line) {
 	customJS := `
 		let myChart = %MY_ECHARTS%;
+		const wailsParentOrigins = ["wails://wails","http://wails.localhost","https://wails.localhost"];
+		function postToParent(msg) {
+			for (let i = 0; i < wailsParentOrigins.length; i++) {
+				try {
+					window.parent.postMessage(msg, wailsParentOrigins[i]);
+				} catch (e) {
+					/* swallow: 非匹配 origin user-agent 靜默丟棄;保留 try/catch 防 future browser API surprise */
+				}
+			}
+			/* dev fallback:wails dev parent origin 是 http://localhost:34115(或變動 port),不在生產
+			   allowlist 內。再多 post 一次 targetOrigin='*' 給有 e.source check 的 parent。安全性
+			   仰賴 parent 端 listener 自己驗 e.origin === window.location.origin / 'null'。 */
+			try { window.parent.postMessage(msg, '*'); } catch (e) {}
+		}
 		if (myChart) {
+			/* Bug 2 fix(2026-05-27 image #14):瀏覽器預設 body 8px margin 把 1200px chart 推到
+			   viewport y=8..1208,bottom 8px(含 dataZoom slider 一部分)被 iframe 1200 viewport 切掉。
+			   重置 body/html margin & padding,確保 chart 完全占滿 iframe viewport。 */
+			document.documentElement.style.margin = '0';
+			document.documentElement.style.padding = '0';
+			document.body.style.margin = '0';
+			document.body.style.padding = '0';
+			/* Bug 3 fix(2026-05-27 image #1):強制 markLine.label.rotate=0。
+			   go-echarts opts.Label 不暴露 Rotate field,只能在 post-init 透過 setOption
+			   patch 所有原本 attach markLine 的 series — 每個 grid 都會被覆寫到 rotate:0。
+			   一行 setOption,寫法刻意 minify(無 newline)避免 newlineTabPat 風險。 */
+			myChart.setOption({series:(myChart.getOption().series||[]).map(function(s){return (s.markLine&&s.markLine.label)?{markLine:{label:{rotate:0}}}:{};})});
+			/* Bug F fix(2026-05-27 image #8):dataZoom slider 顯式 position + height。
+			   go-echarts opts.DataZoom struct 不暴露 Bottom/Height/Left/Right field,
+			   ECharts default auto-position 在 1200px 容器內把 slider 擠成細條且被切。
+			   bottom:30 與 reservedBottom=100 對齊(grid 2 bottom 之下留 100px buffer,
+			   slider 自 bottom=30 起算、height=30,占用 30-60px 區間,剩 40px 給 axis
+			   labels)。dataZoom index 1 對應 slider(index 0 是 inside),patch index-based。
+			   注:Bug 2 第二輪試過 bottom=80 推 slider 往上,user 實測無效;真實修法在
+			   frontend iframe.style.height 加大(>=1400px 給 ECharts 額外元件 + webview
+			   reservation 留空間)。 */
+			myChart.setOption({dataZoom:[{},{bottom:30,height:30,left:70,right:120}]});
 			document.addEventListener('keydown', function(e) {
 				if (e.key === 'r' || e.key === 'R') {
 					myChart.dispatchAction({type: 'dataZoom', start: 0, end: 100});
@@ -774,9 +917,97 @@ func addComposerCustomJS(line *charts.Line) {
 			window.addEventListener('resize', function() {
 				myChart.resize();
 			});
+			/* Parent ↔ iframe postMessage hub:
+			   - 'composer-request-png' → 回 'composer-png-result' 帶 dataURL
+			   - 'composer-update-phase-markers' → 內部 setOption 更新 markLine.data,
+			     不回 ack(fire-and-forget;parent 不等待)
+			   origin 驗證:e.source === window.parent 認 ANY origin(sandbox iframe 只能由
+			   embedding parent 寄到 — 沒有第三方注入面);allowlist 退路保留 production 路徑。
+			   2026-05-27 Bug 1/3 修補:wails dev 用 http://localhost:34115,不在 allowlist;
+			   parent 端跨 frame 直接 setOption 在 sandbox=allow-scripts 下被 silent 阻擋 →
+			   phase 勾選改用同一條 postMessage 路。 */
+			window.addEventListener('message', function(e) {
+				if (e.source !== window.parent && wailsParentOrigins.indexOf(e.origin) === -1) {
+					return;
+				}
+				if (!e.data || typeof e.data !== 'object') {
+					return;
+				}
+				if (e.data.type === 'composer-request-png') {
+					const requestId = e.data.requestId;
+					try {
+						const dataURL = myChart.getDataURL({
+							type: 'png',
+							pixelRatio: 2,
+							backgroundColor: '#fff'
+						});
+						postToParent({type: 'composer-png-result', requestId: requestId, dataURL: dataURL});
+					} catch (err) {
+						postToParent({type: 'composer-png-result', requestId: requestId, error: String(err)});
+					}
+					return;
+				}
+				if (e.data.type === 'composer-update-phase-markers') {
+					/* markData 為 frontend 已算好的 markLine.data items(name 含 baked %、
+					   xAxis 為 numeric phaseTime)。逐 series patch markLine.data — 對每條
+					   原本就帶 markLine 的 series 套用同一份 markData(對齊 Bug B multi-attach
+					   設計:legend 隱藏某條 series 時其他 series 仍顯示 markLine)。 */
+					try {
+						const markData = Array.isArray(e.data.markData) ? e.data.markData : [];
+						const currentSeries = myChart.getOption().series || [];
+						const seriesPatch = currentSeries.map(function(s) {
+							if (s && s.markLine) {
+								return { markLine: { silent: true, symbol: ['none','none'], data: markData } };
+							}
+							return {};
+						});
+						myChart.setOption({series: seriesPatch});
+					} catch (err) {
+						/* silent fail — phase 更新失敗不該擋 user 操作,debug 走 console */
+						try { console.error('composer-update-phase-markers 失敗:', err); } catch (e) {}
+					}
+				}
+			});
 		}
 	`
 	line.AddJSFuncStrs(opts.FuncOpts(customJS))
+}
+
+// computeUnionTimeRange 取 EMG / muscle / motion 三組 time slice 的 union min/max。
+//
+// 為何要 union 而非各軸獨立:三個 bottom xAxis 都是 value 軸,預設從各自 series
+// data 推 min/max — 不同 dataset 起始時間或 sample 範圍不同會造成軸範圍不一致,
+// 視覺上 phase markLine 雖然 numeric x 對齊,grid 與 grid 之間時間刻度錯位
+// (Bug C 2026-05-27 image #7)。
+//
+// 任一 series time 為空 → 該源跳過(degraded mode 仍可回 union)。三組全空時
+// 回 (0, 0) — caller(configureComposerAxes)需檢查 min<max 才套用,避免把所有
+// 軸壓縮到單一 point。
+func computeUnionTimeRange(emgTime, muscleTime []float64, motion *MotionData) (float64, float64) {
+	minTime := math.Inf(1)
+	maxTime := math.Inf(-1)
+	consider := func(times []float64) {
+		for _, t := range times {
+			if math.IsNaN(t) || math.IsInf(t, 0) {
+				continue
+			}
+			if t < minTime {
+				minTime = t
+			}
+			if t > maxTime {
+				maxTime = t
+			}
+		}
+	}
+	consider(emgTime)
+	consider(muscleTime)
+	if motion != nil {
+		consider(motion.Time)
+	}
+	if math.IsInf(minTime, 0) || math.IsInf(maxTime, 0) {
+		return 0, 0
+	}
+	return minTime, maxTime
 }
 
 // sortedKeys 對 map[string][]float64 取 keys 並排序;讓 series 順序可預測。
