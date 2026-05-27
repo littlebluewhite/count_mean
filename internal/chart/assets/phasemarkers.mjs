@@ -19,10 +19,12 @@ function recalcPercents(checkedPhases) {
     if (checkedPhases.length === 1) {
         return { [checkedPhases[0].name]: 0 };
     }
-    let minT = Infinity, maxT = -Infinity;
-    for (const p of checkedPhases) {
-        if (p.time < minT) minT = p.time;
-        if (p.time > maxT) maxT = p.time;
+    let minT = checkedPhases[0].time;
+    let maxT = checkedPhases[0].time;
+    for (let i = 1; i < checkedPhases.length; i++) {
+        const t = checkedPhases[i].time;
+        if (t < minT) minT = t;
+        if (t > maxT) maxT = t;
     }
     const range = maxT - minT;
     const out = {};
