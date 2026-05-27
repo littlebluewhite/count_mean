@@ -29,6 +29,8 @@ import {
 import { OnFileDrop, OnFileDropOff, EventsOn, EventsOff } from '../wailsjs/runtime/runtime.js';
 import { initI18n, t, tHtml, changeLanguage, onLocaleChange, getCurrentLocale } from './i18n.js';
 import { updatePhaseLines } from './charts/phaseLines.mjs';
+import { bridge } from './charts/iframeBridge.mjs';
+import { recalcPercents } from './charts/phaseMarkers.mjs';
 import { buildChartComposerPanelHtml } from './panels/chart_composer_panel.mjs';
 
 // 應用程序主類
@@ -104,6 +106,11 @@ class EMGAnalysisApp {
 
         // 訂閱後端進度事件(P1-A14-2:取代舊的 polling 模型)
         this.initProgressSubscription();
+
+        // ADR-0003:初始化 chart iframe bridge — singleton window-level
+        // postMessage listener,後續 Composer / CCI 通訊都走此 bridge。
+        // init() 自身 idempotent,HMR / 重複 init 不會累積 listener。
+        bridge.init();
 
         // 註冊 CCI iframe 的 postMessage listener(P0-A H1 修補)。
         // 舊版每次 showCCIResult 都 addEventListener 一個新 closure,跑 N 次分析
@@ -2097,30 +2104,23 @@ class EMGAnalysisApp {
         });
     }
 
-    // 共用 helper thin wrapper — 對齊 updateCCIPhaseLines(2026-05-27 image #6 修正)。
-    //
-    // 前一輪試圖用 postMessage 繞 sandbox iframe,但 origin filter 把 message 拒掉 →
-    // phase 切換完全失效。實機觀察:CCI 用 sandbox=allow-scripts 同樣設定,跨 frame
-    // `iframe.contentWindow.echarts.setOption` 是 working — WKWebView/WebView2 對
-    // srcdoc iframe 沒嚴格實作 sandbox origin restriction(srcdoc origin 繼承 parent),
-    // 跨 frame access OK。回到 CCI pattern 是 simpler + proven。
-    //
-    // Composer 後端 (internal/chart/composer.go::configureComposerAxes) 走 Type:"value"
-    // xAxis 讓 EMG / motion 不同採樣率對齊絕對時間,沒有 xAxis[0].data;markLine
-    // 必須直接用 numeric phaseTime — 詳見 helper signature 的 axisMode doc。
-    //
-    // helper 在 value mode 下會對 **每條** 原本帶 markLine 的 series 都更新
-    // (對應 backend 為 Bug B 把 markLine 多 series attach 的設計),確保 user 用
-    // legend 隱藏某條 muscle/motion 時其他 series 上的 markLine 仍顯示。
+    // ADR-0003:走 bridge.send 寄 'composer-update-phase-markers' 給 iframe,
+    // iframe customJS 自己組 markData 並 setOption。parent 只算 pct(via
+    // recalcPercents)送出 checkedPhases,不持有 chart-internal 知識(series
+    // patch / markLine 形狀都在 composer.go customJS 內)。
     _updateComposerPhaseLines() {
-        updatePhaseLines({
-            iframeSelector: '#composerChartContent iframe',
-            phaseTimes: this._composerPhaseTimes || {},
-            checkboxSelector: '[id^="composer_phase_"]',
-            originalPctLabelsRef: this._composerOriginalPctCell,
-            findNearestLabel: this._findNearestLabel.bind(this),
-            axisMode: 'value',
-        });
+        const iframe = document.querySelector('#composerChartContent iframe');
+        if (!iframe) return;
+        const phaseTimes = this._composerPhaseTimes || {};
+        const checkedNames = Array.from(
+            document.querySelectorAll('[id^="composer_phase_"]:checked')
+        ).map((cb) => cb.value);
+        const checkedPhases = checkedNames
+            .filter((n) => phaseTimes[n] !== undefined)
+            .map((n) => ({ name: n, time: phaseTimes[n] }));
+        const pcts = recalcPercents(checkedPhases);
+        const payload = checkedPhases.map((p) => ({ ...p, pct: pcts[p.name] }));
+        bridge.send(iframe, 'composer-update-phase-markers', { checkedPhases: payload });
     }
 
     // 下載 PNG — 從 iframe 抓 ECharts dataURL(反映當下 zoom / phase / legend 狀態)
@@ -2160,47 +2160,11 @@ class EMGAnalysisApp {
                 return;
             }
 
-            // 透過 postMessage 向 iframe 索取當下 chart dataURL。
-            //
-            // 為何不能直接讀 `iframe.contentWindow.echarts`:iframe sandbox=allow-scripts
-            // (無 allow-same-origin)→ opaque origin,跨 frame 存取 silent fail 或拋 SecurityError。
-            // 改 postMessage 雙向通訊:parent → iframe 'composer-request-png',iframe →
-            // parent 'composer-png-result' 帶 dataURL(由 backend addComposerCustomJS
-            // 注入 listener)。
-            //
-            // requestId 配對 request/response,避免 user 連點兩次「下載 PNG」時 race
-            // 拿到別次 response 的 dataURL。10s timeout 防 iframe 內 JS error 導致
-            // 永遠不回(舊版 await new Promise 等 'load' 永遠 hang 的 bug)。
-            const requestId = 'png_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-            const dataURL = await new Promise((resolve, reject) => {
-                const timer = setTimeout(() => {
-                    window.removeEventListener('message', handler);
-                    reject(new Error('PNG 請求超時(>10s) — iframe 無回應'));
-                }, 10000);
-
-                const handler = (e) => {
-                    if (e.origin !== 'null' && e.origin !== window.location.origin) return;
-                    if (!e.data || typeof e.data !== 'object') return;
-                    if (e.data.type !== 'composer-png-result') return;
-                    if (e.data.requestId !== requestId) return;
-                    clearTimeout(timer);
-                    window.removeEventListener('message', handler);
-                    if (e.data.error) {
-                        reject(new Error(e.data.error));
-                    } else {
-                        resolve(e.data.dataURL);
-                    }
-                };
-                window.addEventListener('message', handler);
-
-                // targetOrigin '*' for parent → sandboxed-iframe:sandboxed iframe origin
-                // 為 opaque,無法用具體 origin 串。iframe handler 端會驗 e.origin 在
-                // wailsParentOrigins allowlist 才回 dataURL,所以 '*' 在這個方向是 safe。
-                iframe.contentWindow.postMessage(
-                    { type: 'composer-request-png', requestId: requestId },
-                    '*'
-                );
-            });
+            // ADR-0003:走 bridge.requestReply 拿當下 chart dataURL。
+            // 內部包 requestId 配對 + 預設 10s timeout + opaque-origin '*' 退路,
+            // caller 不再寫 14 行 promise/listener boilerplate。
+            const reply = await bridge.requestReply(iframe, 'composer-request-png', {});
+            const dataURL = reply.dataURL;
 
             // 拼 outputDir + `<subject>_chart_composer.png`(對齊 CCI 用 `_CCI_Rudolph.png`)。
             // backend 會再 SanitizeFileName(filepath.Base(...)) 做最終 sanitize +
