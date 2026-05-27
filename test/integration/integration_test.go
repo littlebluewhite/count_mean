@@ -73,7 +73,7 @@ func TestFullWorkflow_MaxMeanCalculation(t *testing.T) {
 	require.Len(t, results, 2) // 兩個通道
 
 	// 透過 format-aware write 寫入輸出 (row layout / scaling / precision 由 io 套件管)
-	err = csvHandler.WriteMaxMean(
+	_, err = csvHandler.WriteMaxMean(
 		io.WriteRequest{Filename: "maxmean_result.csv"},
 		records[0], results, 0.1, 0.4,
 	)
@@ -146,7 +146,7 @@ func TestFullWorkflow_DataNormalization(t *testing.T) {
 	require.Equal(t, 4.0, result.Data[1].Channels[1]) // 200/50 = 4.0
 
 	// 透過 format-aware write 寫入輸出
-	err = csvHandler.WriteNormalized(
+	_, err = csvHandler.WriteNormalized(
 		io.WriteRequest{Filename: "normalized_result.csv"}, result,
 	)
 	require.NoError(t, err)
@@ -234,7 +234,7 @@ func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 		}
 		outputName := "phase_" + phaseResult.PhaseName + ".csv"
 
-		err := csvHandler.WritePhaseAnalysis(
+		_, err := csvHandler.WritePhaseAnalysis(
 			io.WriteRequest{Filename: outputName}, records[0], singleResult,
 		)
 		require.NoError(t, err)

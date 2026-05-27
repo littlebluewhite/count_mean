@@ -19,3 +19,5 @@
 
 # Security scanner output — gosec/CodeQL produce these on every run, no value in versioning.
 *.sarif
+coverage.out
+coverage/

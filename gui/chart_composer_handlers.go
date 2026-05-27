@@ -663,7 +663,7 @@ func loadComposerMotion(
 
 // loadComposerMuscleRatio 從 muscle_ratio CSV 載入並轉成 chart.MuscleRatioData。
 //
-// CSV layout(由 muscle_ratio.writeOutputAll 產出):
+// CSV layout(由 CSVHandler.WriteMuscleRatioOutputAll 產出):
 //
 //	Time (s), RA/ES, IL/GMax, RF/BF, TAIO/MF
 //	0.000000, 0.123456, ..., ...

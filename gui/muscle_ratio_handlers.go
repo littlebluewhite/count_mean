@@ -88,6 +88,7 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 				ManifestFile: p.ManifestFile,
 				DataFolder:   p.DataFolder,
 				OutputDir:    outputDir,
+				CSVHandler:   s.csvHandler,
 			})
 			if analyzeErr != nil {
 				// error 字面可能含 absolute path(downstream parser 用 %w wrap),
@@ -102,11 +103,11 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 			}
 			return subjectResults, nil
 		},
-		// WriteCSV = nil:per-subject CSV write 摺在 muscle_ratio.Analyzer 內
-		// (batch 變體)。樣板看到 nil 後 outputPath 回空字串、跳過寫檔步驟;
-		// per-subject 寫檔的 outputPath 由 analyzer 自己回填到
-		// SubjectResult.OutputAllPath / OutputPhasePath。Candidate 2 推進時
-		// 把 per-subject write 上移到 csvHandler 後,closure 從 nil 補回實作。
+		// WriteCSV = nil:batch unit-of-work 不適用 single-path closure (ADR-0004 Boundary 3)。
+		// per-subject row layout 已透過 muscle_ratio.Analyzer 內呼叫 csvHandler.WriteMuscleRatioOutputAll
+		// 與 WriteMuscleRatioOutputPhases 落實;outputPath 由 analyzer 回填到
+		// SubjectResult.OutputAllPath / OutputPhasePath。
+		// 詳見 docs/adr/0004-format-aware-write-collapse-boundaries.md。
 		WriteCSV: nil,
 	}
 

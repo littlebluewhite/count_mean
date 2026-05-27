@@ -425,16 +425,17 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	// 輸出結果
 	outputFile := buildOutputFilename(originalFileName, SuffixMaxMean)
 
-	if err := s.csvHandler.WriteMaxMean(
+	outputPath, writeErr := s.csvHandler.WriteMaxMean(
 		io.WriteRequest{Filename: outputFile},
 		records[0], results, startRange, endRange,
-	); err != nil {
-		return nil, fmt.Errorf("寫入輸出檔案失敗: %w", err)
+	)
+	if writeErr != nil {
+		return nil, fmt.Errorf("寫入輸出檔案失敗: %w", writeErr)
 	}
 
 	// 準備回傳結果
 	return &MaxMeanResult{
-		OutputPath: filepath.Join(s.config.OutputDir, outputFile),
+		OutputPath: outputPath,
 		Headers:    records[0],
 		Results:    convertMaxMeanResultsToArray(results),
 	}, nil
@@ -581,7 +582,7 @@ func (a *App) processSingleBatchFile(
 
 	outputFile := buildOutputFilename(fileBaseName, SuffixMaxMean)
 
-	if writeErr := s.csvHandler.WriteMaxMean(
+	if _, writeErr := s.csvHandler.WriteMaxMean(
 		io.WriteRequest{Filename: outputFile, SubDir: ctx.outputDirName},
 		records[0], results, startRange, endRange,
 	); writeErr != nil {
@@ -722,14 +723,12 @@ func (a *App) NormalizeData(params NormalizeParams) (result *NormalizeResult, er
 	mainBaseName := TrimCSVExtension(filepath.Base(params.MainFile))
 	outputName := resolveOutputName(params.OutputPath, mainBaseName, SuffixNormalized)
 
-	if err = s.csvHandler.WriteNormalized(
+	outputPath, err := s.csvHandler.WriteNormalized(
 		io.WriteRequest{Filename: outputName}, normalizedData,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, fmt.Errorf("保存結果失敗: %w", err)
 	}
-
-	// 準備回傳結果
-	outputPath := filepath.Join(s.config.OutputDir, outputName)
 	data := convertNormalizedDataToArray(normalizedData)
 
 	a.logger.Info("資料標準化完成", map[string]any{
@@ -872,13 +871,14 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 			// phaseRows[1:] skip header 與 fullRows[3:] dedup time row, 那層 row
 			// layout leakage 已經消失。
 			outputName := generatePhaseOutputName(params.InputFile, params.OutputPath)
-			if writeErr := handler.WritePhaseAnalysis(
+			outputPath, writeErr := handler.WritePhaseAnalysis(
 				io.WriteRequest{Filename: outputName}, data.records[0], data.analysisResult,
-			); writeErr != nil {
+			)
+			if writeErr != nil {
 				return "", fmt.Errorf("保存結果失敗: %w", writeErr)
 			}
 
-			return filepath.Join(s.config.OutputDir, outputName), nil
+			return outputPath, nil
 		},
 	}
 

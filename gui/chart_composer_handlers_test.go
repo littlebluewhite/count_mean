@@ -82,7 +82,7 @@ func writeChartComposerMinimalForce(t *testing.T, path string, durationSec float
 }
 
 // writeChartComposerMinimalMuscleRatio 建立最小 muscle_ratio CSV(對齊
-// muscle_ratio.writeOutputAll 的 layout — Time + 4 ratio columns)。
+// CSVHandler.WriteMuscleRatioOutputAll 的 layout — Time + 4 ratio columns)。
 func writeChartComposerMinimalMuscleRatio(t *testing.T, path string) {
 	t.Helper()
 

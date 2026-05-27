@@ -4,6 +4,7 @@ package io
 
 import (
 	"bufio"
+	"context"
 	"encoding/csv"
 	stderrors "errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/cci"
 	"count_mean/internal/config"
 	"count_mean/internal/csvutil"
 	"count_mean/internal/errors"
@@ -651,20 +653,28 @@ func (h *CSVHandler) WriteMaxMean(
 	headers []string,
 	results []models.MaxMeanResult,
 	startRange, endRange float64,
-) error {
+) (string, error) {
 	data := h.converter.ConvertMaxMeanResults(headers, results, startRange, endRange)
 
-	return h.writeToTarget(req, data)
+	if err := h.writeToTarget(req, data); err != nil {
+		return "", err
+	}
+
+	return filepath.Join(h.config.OutputDir, req.SubDir, req.Filename), nil
 }
 
 // WriteNormalized 把標準化後的 EMGDataset 寫成 CSV (1 header + N data rows)。
 //
 // Time 欄套用 dataset.OriginalTimePrecision,data 欄套用 config.Precision —
 // 這條「time vs data 不同 precision」的內部規則 caller 不會看到。
-func (h *CSVHandler) WriteNormalized(req WriteRequest, dataset *models.EMGDataset) error {
+func (h *CSVHandler) WriteNormalized(req WriteRequest, dataset *models.EMGDataset) (string, error) {
 	data := h.converter.ConvertNormalizedData(dataset)
 
-	return h.writeToTarget(req, data)
+	if err := h.writeToTarget(req, data); err != nil {
+		return "", err
+	}
+
+	return filepath.Join(h.config.OutputDir, req.SubDir, req.Filename), nil
 }
 
 // WritePhaseAnalysis 把 phase 分析結果寫成 CSV;支援單 phase 與多 phase merge。
@@ -686,9 +696,9 @@ func (h *CSVHandler) WritePhaseAnalysis(
 	req WriteRequest,
 	headers []string,
 	result *calculator.AnalyzeResult,
-) error {
+) (string, error) {
 	if result == nil || len(result.PhaseResults) == 0 {
-		return errEmptyPhaseAnalysis
+		return "", errEmptyPhaseAnalysis
 	}
 
 	var data [][]string
@@ -713,7 +723,11 @@ func (h *CSVHandler) WritePhaseAnalysis(
 		}
 	}
 
-	return h.writeToTarget(req, data)
+	if err := h.writeToTarget(req, data); err != nil {
+		return "", err
+	}
+
+	return filepath.Join(h.config.OutputDir, req.SubDir, req.Filename), nil
 }
 
 // writeToTarget 是 format-aware write 的內部 dispatch 點:依 req.SubDir 走 WriteCSVToOutput
@@ -761,3 +775,344 @@ func (h *CSVHandler) WritePhaseSyncResult(
 
 	return outputPath, nil
 }
+
+// WriteCCIResult 把 CCI 分析結果寫成 CSV。
+//
+// Filename 由 result.Subject 經 SanitizeFileName 後 + "_CCI_Rudolph.csv" suffix
+// 推導 — req.Filename 被忽略,僅 req.SubDir 生效(空字串 → OutputDir 根)。
+// 回傳實際 outputPath 與錯誤。
+//
+// row layout: 1 header row ["Time (s)", "Gait Cycle (%)", PairName...]
+//
+//	+ N data rows,每 row 含 [time, gait_pct, pair_value...]
+//
+// NaN/Inf cell → 空字串;整 row 所有 pair 都 NaN/Inf → skip 整 row(計入 droppedRowCount)。
+//
+// ctx 為第一個參數,sample loop 中每 cciStreamCtxCheckInterval 點檢查一次 ctx.Done()
+// — caller cancel 後立即停寫並回 ctx.Err。csvutil.WriteCSVAtomic 對 emit 回 error 走
+// tmp file abort 路徑,不留下半成品。
+//
+// ADR-0001 invariant 延伸到 CCI: pathValidator 守門覆蓋原 cci.ExportToCSV 缺少的
+// defense-in-depth(原路徑走 security.NewPathValidator(nil) 未整合 CSVHandler 既有
+// allowedPaths;由本 method 統一補上)。
+func (h *CSVHandler) WriteCCIResult(
+	ctx context.Context, req WriteRequest, result *cci.CCIAnalysisResult,
+) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if result == nil {
+		return "", errEmptyCCIResult
+	}
+
+	duration := result.GaitEndTime - result.GaitStartTime
+	if duration <= 0 {
+		return "", fmt.Errorf("%w: start=%v end=%v",
+			cci.ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
+	}
+
+	safeSubject := calculator.SanitizeFileName(result.Subject)
+	filename := fmt.Sprintf("%s_CCI_Rudolph.csv", safeSubject)
+	outputPath, joinErr := h.safeJoinOutput(req.SubDir, filename)
+	if joinErr != nil {
+		return "", fmt.Errorf("CCI 輸出路徑無效: %w", joinErr)
+	}
+
+	// Defense-in-depth: system-dir prefix check via pathValidator(對齊 ADR-0001 守門)。
+	if err := h.pathValidator.ValidateExternalPath(outputPath); err != nil {
+		return "", fmt.Errorf("CCI 輸出路徑無效: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), fsperm.DirPerm); err != nil {
+		return "", fmt.Errorf("CCI 輸出目錄建立失敗: %w", err)
+	}
+
+	header := []string{"Time (s)", "Gait Cycle (%)"}
+	for _, pr := range result.PairResults {
+		header = append(header, pr.PairName)
+	}
+
+	var droppedRowCount int
+	numPoints := len(result.TimeValues)
+
+	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: header,
+		Emit: func(emit func([]string) error) error {
+			for i := 0; i < numPoints; i++ {
+				if i > 0 && i%cciStreamCtxCheckInterval == 0 {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+				}
+
+				t := result.TimeValues[i]
+				pct := (t - result.GaitStartTime) / duration * 100
+
+				pairCells := make([]string, 0, len(result.PairResults))
+				allNonFinite := true
+
+				for _, pr := range result.PairResults {
+					if i >= len(pr.Values) {
+						pairCells = append(pairCells, "")
+						continue
+					}
+					v := pr.Values[i]
+					if math.IsNaN(v) || math.IsInf(v, 0) {
+						pairCells = append(pairCells, "")
+						continue
+					}
+					pairCells = append(pairCells, fmt.Sprintf("%.6f", v))
+					allNonFinite = false
+				}
+
+				if len(result.PairResults) > 0 && allNonFinite {
+					droppedRowCount++
+					continue
+				}
+
+				row := []string{
+					fmt.Sprintf("%.4f", t),
+					fmt.Sprintf("%.2f", pct),
+				}
+				row = append(row, pairCells...)
+
+				if err := emit(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if droppedRowCount > 0 && h.logger != nil {
+		h.logger.Warn("CCI 匯出 CSV 時跳過全 NaN/Inf 的 row", map[string]any{
+			"dropped_rows": droppedRowCount,
+			"total_rows":   numPoints,
+			"output_path":  outputPath,
+		})
+	}
+
+	return outputPath, nil
+}
+
+// cciStreamCtxCheckInterval 是 CCI 寫檔 emit loop 內 ctx 取消檢查間隔,
+// 跟原 cci 套件常數 (cciChartCtxCheckInterval) 對齊,避免每點 select 過熱。
+const cciStreamCtxCheckInterval = 64
+
+// errEmptyCCIResult 標示 WriteCCIResult 收到 nil result。
+var errEmptyCCIResult = stderrors.New("WriteCCIResult: result is nil")
+
+// MuscleRatioOutputAllPayload 是 WriteMuscleRatioOutputAll 的輸入承載結構。
+//
+// 把 muscle_ratio.Analyzer.analyzeSubject 內部計算出的 ratios 與時間軸打包傳給
+// CSVHandler;Subject 給 filename derivation 用,PairLabels 是 ratio pair 的
+// header 名稱 (對齊 muscle_ratio.DefaultRatios() Name 欄位)。
+type MuscleRatioOutputAllPayload struct {
+	Subject    string
+	PairLabels []string
+	Times      []float64
+	Ratios     [][]float64 // 每個 pair 一個 inner slice,長度與 Times 對齊
+}
+
+// MuscleRatioOutputPhasesPayload 是 WriteMuscleRatioOutputPhases 的輸入承載。
+//
+// Points 與 Ratios 由 muscle_ratio.Analyzer 預先 collectPhasePoints 計算得;
+// CSVHandler 只負責照 Point.Time 找 Ratios 切片的對應 cell 並 emit row。
+type MuscleRatioOutputPhasesPayload struct {
+	Subject    string
+	PairLabels []string
+	Times      []float64
+	Ratios     [][]float64
+	Points     []MuscleRatioPhasePoint
+}
+
+// MuscleRatioPhasePoint 是 muscle_ratio.Analyzer 在 collectPhasePoints 階段
+// 算出的 phase / midpoint 條目,Name 為顯示名稱,Time 為 EMG-time-aligned 時間值。
+type MuscleRatioPhasePoint struct {
+	Name string
+	Time float64
+}
+
+// WriteMuscleRatioOutputAll 寫 per-subject Output 1 — full time-series ratio CSV。
+//
+// Filename 由 Subject 經 SanitizeFileName 後 + "_muscle_ratio.csv" 推導;
+// req.Filename 被忽略,僅 req.SubDir 生效。
+//
+// row layout: 1 header ["Time (s)", PairLabels...] + N data rows。
+// NaN/Inf cell → 空字串。
+func (h *CSVHandler) WriteMuscleRatioOutputAll(
+	req WriteRequest, p MuscleRatioOutputAllPayload,
+) (string, error) {
+	if len(p.Times) == 0 {
+		return "", errEmptyMuscleRatioPayload
+	}
+
+	safeSubject := calculator.SanitizeFileName(p.Subject)
+	filename := fmt.Sprintf("%s_muscle_ratio.csv", safeSubject)
+	outputPath, joinErr := h.safeJoinOutput(req.SubDir, filename)
+	if joinErr != nil {
+		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
+	}
+
+	if err := h.validateMuscleRatioOutputDir(req.SubDir); err != nil {
+		return "", err
+	}
+
+	header := make([]string, 0, 1+len(p.PairLabels))
+	header = append(header, "Time (s)")
+	header = append(header, p.PairLabels...)
+
+	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: header,
+		Emit: func(emit func([]string) error) error {
+			for i, t := range p.Times {
+				row := make([]string, 0, 1+len(p.Ratios))
+				row = append(row, fmt.Sprintf("%.4f", t))
+				for k := range p.Ratios {
+					row = append(row, formatMuscleRatioCell(p.Ratios[k], i))
+				}
+				if err := emit(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return outputPath, nil
+}
+
+// WriteMuscleRatioOutputPhases 寫 per-subject Output 2 — phase+midpoint slice CSV。
+//
+// Filename 由 Subject 推導 + "_muscle_ratio_phases.csv";req.Filename 被忽略。
+// Row 數量由 caller (muscle_ratio.Analyzer) 預先決定的 Points 切片長度決定。
+func (h *CSVHandler) WriteMuscleRatioOutputPhases(
+	req WriteRequest, p MuscleRatioOutputPhasesPayload,
+) (string, error) {
+	if len(p.Points) == 0 {
+		return "", errEmptyMuscleRatioPayload
+	}
+	// Points 非空但 Times 空時,nearestTimeIndex 仍會回 0,後面 p.Times[idx]
+	// 會 index 越界 panic — 提早 fail 為 errEmptyMuscleRatioPayload。
+	if len(p.Times) == 0 {
+		return "", errEmptyMuscleRatioPayload
+	}
+
+	safeSubject := calculator.SanitizeFileName(p.Subject)
+	filename := fmt.Sprintf("%s_muscle_ratio_phases.csv", safeSubject)
+	outputPath, joinErr := h.safeJoinOutput(req.SubDir, filename)
+	if joinErr != nil {
+		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
+	}
+
+	if err := h.validateMuscleRatioOutputDir(req.SubDir); err != nil {
+		return "", err
+	}
+
+	header := make([]string, 0, 2+len(p.PairLabels))
+	header = append(header, "Phase", "Time (s)")
+	header = append(header, p.PairLabels...)
+
+	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: header,
+		Emit: func(emit func([]string) error) error {
+			for _, point := range p.Points {
+				idx := nearestTimeIndex(p.Times, point.Time)
+				row := make([]string, 0, 2+len(p.Ratios))
+				row = append(row, point.Name, fmt.Sprintf("%.4f", p.Times[idx]))
+				for k := range p.Ratios {
+					row = append(row, formatMuscleRatioCell(p.Ratios[k], idx))
+				}
+				if err := emit(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return outputPath, nil
+}
+
+// formatMuscleRatioCell formats one ratio value (與 cci.ExportToCSV row-format
+// 同款規則,NaN/Inf → 空字串、否則 %.6f)。
+func formatMuscleRatioCell(values []float64, idx int) string {
+	if idx < 0 || idx >= len(values) {
+		return ""
+	}
+	v := values[idx]
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return ""
+	}
+	return fmt.Sprintf("%.6f", v)
+}
+
+// nearestTimeIndex 是 muscle_ratio.Analyzer 內 synchronizer.FindNearestTimeIndex
+// 的純函式 mirror — 取出最接近 target 的 times slice index。time series 假設
+// 已 ascending sorted (muscle_ratio.Analyzer 上游已保證)。
+func nearestTimeIndex(times []float64, target float64) int {
+	if len(times) == 0 {
+		return 0
+	}
+	best := 0
+	bestDelta := math.Abs(times[0] - target)
+	for i, t := range times[1:] {
+		delta := math.Abs(t - target)
+		if delta < bestDelta {
+			best = i + 1
+			bestDelta = delta
+		}
+	}
+	return best
+}
+
+// validateMuscleRatioOutputDir 是 muscle_ratio write path 共用的 defense-in-depth
+// 守門 — 對齊既有 muscle_ratio.Analyzer 內 ValidateExternalPath 的位置。
+// SubDir 的 traversal 檢查已由 safeJoinOutput 在 caller 端完成;本 helper 只負責
+// system-dir prefix 檢查(/etc 等) + 確保目錄存在。
+func (h *CSVHandler) validateMuscleRatioOutputDir(subDir string) error {
+	checkPath, joinErr := h.safeJoinOutput(subDir, "_validation_marker")
+	if joinErr != nil {
+		return fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
+	}
+	if err := h.pathValidator.ValidateExternalPath(checkPath); err != nil {
+		return fmt.Errorf("muscle_ratio 輸出路徑無效: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(checkPath), fsperm.DirPerm); err != nil {
+		return fmt.Errorf("muscle_ratio 輸出目錄建立失敗: %w", err)
+	}
+	return nil
+}
+
+// safeJoinOutput 把 subDir + filename 安全 join 在 OutputDir 之下,拒絕逸出 OutputDir
+// 的 SubDir(含 traversal 如 "../evil" 或絕對路徑如 "/etc")。
+//
+// ADR-0001 invariant 補課:既有 writeToTarget → WriteCSVToOutputDirectory → WriteCSV
+// 路徑透過 WriteCSV 內部 path containment 守住 OutputDir 邊界;新加的 direct
+// csvutil.WriteCSVAtomic writer(WriteCCIResult / WriteMuscleRatioOutput*)沒走
+// WriteCSV,本 helper 把同款邊界檢查補回來,確保 codex review 抓到的 SubDir traversal
+// 不會把 *.csv 寫到 OutputDir 外面。
+func (h *CSVHandler) safeJoinOutput(subDir, filename string) (string, error) {
+	joined := filepath.Join(h.config.OutputDir, subDir, filename)
+	rel, err := filepath.Rel(h.config.OutputDir, joined)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: SubDir=%q filename=%q (resolved=%q)",
+			errOutputPathEscapesOutputDir, subDir, filename, joined)
+	}
+	return joined, nil
+}
+
+var errEmptyMuscleRatioPayload = stderrors.New("WriteMuscleRatio*: payload 缺 Times/Points")
+
+// errOutputPathEscapesOutputDir 標示 SubDir 含 traversal 或絕對路徑導致 join
+// 後的路徑逸出 OutputDir;供 safeJoinOutput / WriteCCIResult / WriteMuscleRatio* wrap。
+var errOutputPathEscapesOutputDir = stderrors.New("輸出路徑逸出 OutputDir")

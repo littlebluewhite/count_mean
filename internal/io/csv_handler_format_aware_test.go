@@ -1,14 +1,19 @@
 package io
 
 import (
+	"context"
+	"encoding/csv"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/cci"
 	"count_mean/internal/config"
 	"count_mean/internal/models"
 )
@@ -57,11 +62,12 @@ func TestWriteMaxMean_RoundTrip(t *testing.T) {
 		{ColumnIndex: 2, StartTime: 1.5, EndTime: 2.5, MaxMean: 200.0},
 	}
 
-	err := handler.WriteMaxMean(
+	outputPath, err := handler.WriteMaxMean(
 		WriteRequest{Filename: "max_mean.csv"},
 		headers, results, 0.5, 3.0,
 	)
 	require.NoError(t, err)
+	require.Equal(t, filepath.Join(tempDir, "max_mean.csv"), outputPath)
 
 	lines := readRows(t, filepath.Join(tempDir, "max_mean.csv"))
 	require.Len(t, lines, 6, "MaxMean 應產生 6 row (header + 5 data rows)")
@@ -84,7 +90,7 @@ func TestWriteMaxMean_SubDir(t *testing.T) {
 		{ColumnIndex: 1, StartTime: 0.1, EndTime: 0.5, MaxMean: 42.0},
 	}
 
-	err := handler.WriteMaxMean(
+	_, err := handler.WriteMaxMean(
 		WriteRequest{Filename: "batch.csv", SubDir: "run_001"},
 		headers, results, 0.0, 1.0,
 	)
@@ -110,10 +116,11 @@ func TestWriteNormalized_RoundTrip(t *testing.T) {
 		},
 	}
 
-	err := handler.WriteNormalized(
+	outputPath, err := handler.WriteNormalized(
 		WriteRequest{Filename: "norm.csv"}, dataset,
 	)
 	require.NoError(t, err)
+	require.Equal(t, filepath.Join(tempDir, "norm.csv"), outputPath)
 
 	lines := readRows(t, filepath.Join(tempDir, "norm.csv"))
 	require.Len(t, lines, 3, "Normalize 應產生 header + 2 data row")
@@ -138,10 +145,11 @@ func TestWritePhaseAnalysis_SinglePhase(t *testing.T) {
 		MaxTimeIndex: map[int]float64{0: 1.5, 1: 1.8},
 	}
 
-	err := handler.WritePhaseAnalysis(
+	outputPath, err := handler.WritePhaseAnalysis(
 		WriteRequest{Filename: "phase_single.csv"}, headers, result,
 	)
 	require.NoError(t, err)
+	require.Equal(t, filepath.Join(tempDir, "phase_single.csv"), outputPath)
 
 	lines := readRows(t, filepath.Join(tempDir, "phase_single.csv"))
 	require.Len(t, lines, 4, "single phase 含 MaxTimeIndex 應產生 4 row")
@@ -170,7 +178,7 @@ func TestWritePhaseAnalysis_MultiPhase(t *testing.T) {
 		MaxTimeIndex: map[int]float64{0: 1.5, 1: 1.8},
 	}
 
-	err := handler.WritePhaseAnalysis(
+	_, err := handler.WritePhaseAnalysis(
 		WriteRequest{Filename: "phase_multi.csv"}, headers, result,
 	)
 	require.NoError(t, err)
@@ -210,7 +218,7 @@ func TestWritePhaseAnalysis_NoTimeIndex(t *testing.T) {
 		MaxTimeIndex: nil,
 	}
 
-	err := handler.WritePhaseAnalysis(
+	_, err := handler.WritePhaseAnalysis(
 		WriteRequest{Filename: "phase_no_idx.csv"}, headers, result,
 	)
 	require.NoError(t, err)
@@ -225,7 +233,7 @@ func TestWritePhaseAnalysis_Empty(t *testing.T) {
 
 	handler, _ := newFormatAwareTestHandler(t)
 
-	err := handler.WritePhaseAnalysis(
+	_, err := handler.WritePhaseAnalysis(
 		WriteRequest{Filename: "empty.csv"},
 		[]string{"Time", "Ch1"},
 		&calculator.AnalyzeResult{},
@@ -239,7 +247,7 @@ func TestWritePhaseAnalysis_NilResult(t *testing.T) {
 
 	handler, _ := newFormatAwareTestHandler(t)
 
-	err := handler.WritePhaseAnalysis(
+	_, err := handler.WritePhaseAnalysis(
 		WriteRequest{Filename: "nil.csv"},
 		[]string{"Time", "Ch1"},
 		nil,
@@ -409,4 +417,251 @@ func TestWritePhaseSyncResult_RoundTrip(t *testing.T) {
 	require.Contains(t, lines[5], "時間差值")
 	require.Contains(t, lines[6], "平均值")
 	require.Contains(t, lines[7], "最大值")
+}
+
+// readCSVRows 讀檔、剝 BOM，並用 encoding/csv 解析為 [][]string,供 CCI round-trip 精確比對。
+func readCSVRows(t *testing.T, path string) [][]string {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	// 剝掉 UTF-8 BOM 0xEF 0xBB 0xBF
+	if len(content) >= 3 && content[0] == 0xEF && content[1] == 0xBB && content[2] == 0xBF {
+		content = content[3:]
+	}
+
+	r := csv.NewReader(strings.NewReader(string(content)))
+	rows, err := r.ReadAll()
+	require.NoError(t, err)
+
+	return rows
+}
+
+// TestWriteCCIResult_RoundTrip 驗證 WriteCCIResult 寫出的檔可被讀回,
+// row layout (Time / Gait Cycle / N pair columns) 對齊。
+func TestWriteCCIResult_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	result := &cci.CCIAnalysisResult{
+		Subject:       "subj_A",
+		GaitStartTime: 0.0,
+		GaitEndTime:   1.0,
+		TimeValues:    []float64{0.0, 0.5, 1.0},
+		PairResults: []cci.CCIResult{
+			{PairName: "P1_P2", Values: []float64{0.1, 0.2, 0.3}},
+			{PairName: "P3_P4", Values: []float64{0.4, 0.5, 0.6}},
+		},
+	}
+
+	outputPath, err := handler.WriteCCIResult(context.Background(), WriteRequest{}, result)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(tempDir, "subj_A_CCI_Rudolph.csv"), outputPath)
+
+	rows := readCSVRows(t, outputPath)
+	require.Len(t, rows, 4) // 1 header + 3 data rows
+	assert.Equal(t, []string{"Time (s)", "Gait Cycle (%)", "P1_P2", "P3_P4"}, rows[0])
+	assert.Equal(t, []string{"0.0000", "0.00", "0.100000", "0.400000"}, rows[1])
+}
+
+// TestWriteCCIResult_NaNRowSkip 驗證全 NaN/Inf 的 row 被跳過。
+func TestWriteCCIResult_NaNRowSkip(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newFormatAwareTestHandler(t)
+
+	nan := math.NaN()
+	result := &cci.CCIAnalysisResult{
+		Subject:       "subj_B",
+		GaitStartTime: 0.0,
+		GaitEndTime:   1.0,
+		TimeValues:    []float64{0.0, 0.5, 1.0},
+		PairResults: []cci.CCIResult{
+			{PairName: "P1", Values: []float64{0.1, nan, 0.3}},
+			{PairName: "P2", Values: []float64{0.2, nan, 0.4}},
+		},
+	}
+
+	outputPath, err := handler.WriteCCIResult(context.Background(), WriteRequest{}, result)
+	require.NoError(t, err)
+
+	rows := readCSVRows(t, outputPath)
+	require.Len(t, rows, 3) // header + 2 surviving rows (row i=1 全 NaN 被跳過)
+}
+
+// TestWriteCCIResult_CtxCancel 驗證 pre-cancel 不寫檔。
+func TestWriteCCIResult_CtxCancel(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := &cci.CCIAnalysisResult{
+		Subject:       "subj_C",
+		GaitStartTime: 0.0,
+		GaitEndTime:   1.0,
+		TimeValues:    []float64{0.0},
+		PairResults:   []cci.CCIResult{{PairName: "P1", Values: []float64{0.1}}},
+	}
+
+	_, err := handler.WriteCCIResult(ctx, WriteRequest{}, result)
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, statErr := os.Stat(filepath.Join(tempDir, "subj_C_CCI_Rudolph.csv"))
+	require.True(t, os.IsNotExist(statErr), "pre-cancel 不應留下檔案")
+}
+
+// TestWriteMuscleRatioOutputAll_RoundTrip 驗證 Output 1 (per-subject full
+// time-series ratio) 的 round-trip + filename derivation.
+func TestWriteMuscleRatioOutputAll_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	payload := MuscleRatioOutputAllPayload{
+		Subject:    "s1",
+		PairLabels: []string{"R1", "R2"},
+		Times:      []float64{0.0, 0.5, 1.0},
+		Ratios:     [][]float64{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}},
+	}
+
+	outputPath, err := handler.WriteMuscleRatioOutputAll(WriteRequest{}, payload)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(tempDir, "s1_muscle_ratio.csv"), outputPath)
+
+	rows := readCSVRows(t, outputPath)
+	require.Len(t, rows, 4)
+	assert.Equal(t, []string{"Time (s)", "R1", "R2"}, rows[0])
+	assert.Equal(t, []string{"0.0000", "0.100000", "0.400000"}, rows[1])
+}
+
+// TestWriteMuscleRatioOutputPhases_RoundTrip 驗證 Output 2 round-trip.
+func TestWriteMuscleRatioOutputPhases_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	payload := MuscleRatioOutputPhasesPayload{
+		Subject:    "s1",
+		PairLabels: []string{"R1"},
+		Times:      []float64{0.0, 0.5, 1.0},
+		Ratios:     [][]float64{{0.1, 0.2, 0.3}},
+		Points: []MuscleRatioPhasePoint{
+			{Name: "P1", Time: 0.5},
+		},
+	}
+
+	outputPath, err := handler.WriteMuscleRatioOutputPhases(WriteRequest{}, payload)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(tempDir, "s1_muscle_ratio_phases.csv"), outputPath)
+
+	rows := readCSVRows(t, outputPath)
+	require.Len(t, rows, 2)
+	assert.Equal(t, []string{"Phase", "Time (s)", "R1"}, rows[0])
+	assert.Equal(t, []string{"P1", "0.5000", "0.200000"}, rows[1])
+}
+
+// TestWriteMuscleRatioOutputAll_NaNInfCell 驗證 NaN/Inf cell → 空字串.
+func TestWriteMuscleRatioOutputAll_NaNInfCell(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newFormatAwareTestHandler(t)
+
+	payload := MuscleRatioOutputAllPayload{
+		Subject:    "s2",
+		PairLabels: []string{"R1"},
+		Times:      []float64{0.0, 1.0},
+		Ratios:     [][]float64{{math.NaN(), math.Inf(1)}},
+	}
+
+	outputPath, err := handler.WriteMuscleRatioOutputAll(WriteRequest{}, payload)
+	require.NoError(t, err)
+
+	rows := readCSVRows(t, outputPath)
+	require.Len(t, rows, 3)
+	assert.Equal(t, []string{"0.0000", ""}, rows[1])
+	assert.Equal(t, []string{"1.0000", ""}, rows[2])
+}
+
+// TestWriteMuscleRatioOutputPhases_EmptyTimesRejected 驗證 codex review 抓的 P2 —
+// payload 帶 Points 但 Times 空時,nearestTimeIndex 回 0 後 p.Times[0] 會 index
+// 越界 panic。要求 WriteMuscleRatioOutputPhases 提早回 errEmptyMuscleRatioPayload。
+func TestWriteMuscleRatioOutputPhases_EmptyTimesRejected(t *testing.T) {
+	handler, _ := newFormatAwareTestHandler(t)
+
+	_, err := handler.WriteMuscleRatioOutputPhases(WriteRequest{}, MuscleRatioOutputPhasesPayload{
+		Subject:    "empty_times",
+		PairLabels: []string{"R1"},
+		Times:      []float64{}, // 故意空
+		Ratios:     [][]float64{{0.1}},
+		Points: []MuscleRatioPhasePoint{
+			{Name: "P1", Time: 0.5},
+		},
+	})
+	require.ErrorIs(t, err, errEmptyMuscleRatioPayload)
+}
+
+// TestSafeJoinOutput_RejectsTraversal 驗證 codex review Run 2 抓的 P2 — req.SubDir
+// 含 traversal ("../evil") 或絕對路徑 ("/etc") 時,3 個 direct atomic writer
+// (WriteCCIResult / WriteMuscleRatioOutputAll / WriteMuscleRatioOutputPhases)
+// 都要 reject,不能讓 *.csv 寫到 OutputDir 外面。
+func TestSafeJoinOutput_RejectsTraversal(t *testing.T) {
+	traversalCases := []struct {
+		name   string
+		subDir string
+	}{
+		{"relative_traversal", "../evil"},
+		{"absolute_path", "/etc"},
+		{"deep_traversal", "../../etc"},
+	}
+
+	for _, tc := range traversalCases {
+		t.Run(tc.name+"/WriteCCIResult", func(t *testing.T) {
+			handler, _ := newFormatAwareTestHandler(t)
+			_, err := handler.WriteCCIResult(context.Background(),
+				WriteRequest{SubDir: tc.subDir},
+				&cci.CCIAnalysisResult{
+					Subject:       "s",
+					GaitStartTime: 0.0,
+					GaitEndTime:   1.0,
+					TimeValues:    []float64{0.0},
+					PairResults:   []cci.CCIResult{{PairName: "P1", Values: []float64{0.1}}},
+				})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "輸出路徑")
+		})
+
+		t.Run(tc.name+"/WriteMuscleRatioOutputAll", func(t *testing.T) {
+			handler, _ := newFormatAwareTestHandler(t)
+			_, err := handler.WriteMuscleRatioOutputAll(
+				WriteRequest{SubDir: tc.subDir},
+				MuscleRatioOutputAllPayload{
+					Subject:    "s",
+					PairLabels: []string{"R1"},
+					Times:      []float64{0.0, 1.0},
+					Ratios:     [][]float64{{0.1, 0.2}},
+				})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "輸出路徑")
+		})
+
+		t.Run(tc.name+"/WriteMuscleRatioOutputPhases", func(t *testing.T) {
+			handler, _ := newFormatAwareTestHandler(t)
+			_, err := handler.WriteMuscleRatioOutputPhases(
+				WriteRequest{SubDir: tc.subDir},
+				MuscleRatioOutputPhasesPayload{
+					Subject:    "s",
+					PairLabels: []string{"R1"},
+					Times:      []float64{0.0, 1.0},
+					Ratios:     [][]float64{{0.1, 0.2}},
+					Points:     []MuscleRatioPhasePoint{{Name: "P1", Time: 0.5}},
+				})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "輸出路徑")
+		})
+	}
 }

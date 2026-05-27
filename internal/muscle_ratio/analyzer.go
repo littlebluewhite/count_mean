@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,8 +13,8 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"count_mean/internal/calculator"
-	"count_mean/internal/csvutil"
 	"count_mean/internal/i18n"
+	"count_mean/internal/io"
 	"count_mean/internal/logging"
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
@@ -30,6 +29,7 @@ type Params struct {
 	ManifestFile string
 	DataFolder   string
 	OutputDir    string
+	CSVHandler   *io.CSVHandler // ADR-0004 Boundary 1: row layout 透過 CSVHandler 落實
 }
 
 // SubjectResult records one subject's outcome in the batch.
@@ -88,6 +88,12 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 	if params == nil {
 		return nil, fmt.Errorf("params 不能為 nil")
 	}
+	// ADR-0004 Boundary 1: muscle_ratio 寫檔須透過 CSVHandler。如果 caller 沿用舊
+	// Params 結構未填 CSVHandler 欄位,在 analyzeSubject 內取用會 nil-deref panic;
+	// 提早 fail 給 caller 明確訊息。
+	if params.CSVHandler == nil {
+		return nil, fmt.Errorf("params.CSVHandler 不能為 nil (ADR-0004: muscle_ratio 寫檔須透過 CSVHandler)")
+	}
 
 	// Defense-in-depth：config 載入時已驗證 OutputDir，但 GUI file dialog 等繞過
 	// config 的 caller 仍可能傳壞值。附 dummy child 後 ValidateExternalPath 擋
@@ -134,7 +140,7 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 		default:
 		}
 		m := &manifests[i]
-		results = append(results, a.analyzeSubject(m, params.DataFolder, params.OutputDir))
+		results = append(results, a.analyzeSubject(m, params))
 	}
 
 	a.logger.Info("肌肉比值批次分析完成", map[string]any{
@@ -151,7 +157,7 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 // 避免 11 個 return point 各自重複呼叫 time.Since。
 func (a *Analyzer) analyzeSubject(
 	m *models.PhaseManifest,
-	dataFolder, outputDir string,
+	params *Params,
 ) (result SubjectResult) {
 	start := time.Now()
 	defer func() { result.DurationMs = time.Since(start).Milliseconds() }()
@@ -165,7 +171,7 @@ func (a *Analyzer) analyzeSubject(
 		return result
 	}
 
-	emgPath, err := manifest.ResolveEMGFile(dataFolder, m.EMGFile)
+	emgPath, err := manifest.ResolveEMGFile(params.DataFolder, m.EMGFile)
 	if err != nil {
 		result.Error = err.Error()
 		return result
@@ -189,18 +195,27 @@ func (a *Analyzer) analyzeSubject(
 	}
 
 	ratiosAll := ComputeAllRatios(emg, channelMap)
+	pairLabels := defaultRatioLabels()
 
-	safeSubject := calculator.SanitizeFileName(m.Subject)
-
-	outAllPath := filepath.Join(outputDir, fmt.Sprintf("%s_muscle_ratio.csv", safeSubject))
-	if err := writeOutputAll(outAllPath, emg.Time, ratiosAll); err != nil {
-		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectWriteOutput1Failed, err)
+	outAllPath, writeAllErr := params.CSVHandler.WriteMuscleRatioOutputAll(
+		io.WriteRequest{},
+		io.MuscleRatioOutputAllPayload{
+			Subject:    m.Subject,
+			PairLabels: pairLabels,
+			Times:      emg.Time,
+			Ratios:     ratiosAll,
+		},
+	)
+	if writeAllErr != nil {
+		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectWriteOutput1Failed, writeAllErr)
 		return result
 	}
 
 	result.OutputAllPath = outAllPath
 
-	// Output 2 — phases + midpoints. 失敗或跳過時 Output 1 仍視為成功。
+	// Output 2 — phases + midpoints (ADR-0004 Boundary 1: sticky-success 規則
+	// 留在 Analyzer。collectPhasePoints warn-path 與 Output 2 寫檔失敗都讓
+	// Output 1 視為 sticky-success)。
 	points, warn := a.collectPhasePoints(m, emg)
 	if warn != "" {
 		result.Success = true
@@ -208,12 +223,26 @@ func (a *Analyzer) analyzeSubject(
 		return result
 	}
 
-	outPhasePath := filepath.Join(outputDir, fmt.Sprintf("%s_muscle_ratio_phases.csv", safeSubject))
-	if err := writeOutputPhases(outPhasePath, emg.Time, ratiosAll, points); err != nil {
+	ioPhasePoints := make([]io.MuscleRatioPhasePoint, len(points))
+	for i, p := range points {
+		ioPhasePoints[i] = io.MuscleRatioPhasePoint{Name: p.name, Time: p.time}
+	}
+
+	outPhasePath, writePhaseErr := params.CSVHandler.WriteMuscleRatioOutputPhases(
+		io.WriteRequest{},
+		io.MuscleRatioOutputPhasesPayload{
+			Subject:    m.Subject,
+			PairLabels: pairLabels,
+			Times:      emg.Time,
+			Ratios:     ratiosAll,
+			Points:     ioPhasePoints,
+		},
+	)
+	if writePhaseErr != nil {
 		// Output 1 已寫入磁碟，依 SubjectResult 文件契約 Output 1 success 為 sticky：
 		// 與 collectPhasePoints warn-path 對稱（Success=true + Error 解釋為何 Output 2 跳過）。
 		result.Success = true
-		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectWriteOutput2Failed, err)
+		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectWriteOutput2Failed, writePhaseErr)
 		return result
 	}
 
@@ -438,83 +467,12 @@ func assertUniqueSanitizedSubjects(manifests []models.PhaseManifest) error {
 	return nil
 }
 
-// writeOutputAll writes the full time-series ratio CSV (Output 1).
-// 透過 csvutil.WriteCSVAtomic 保證 tmp+rename atomic write：BOM/header/row
-// 任一階段失敗，final path 不會留下截斷檔。NaN/Inf cell → 空字串保留 in formatRatioCell。
-//
-//nolint:err113 // dynamic errors for user-facing output
-func writeOutputAll(outputPath string, times []float64, ratiosAll [][]float64) error {
+// defaultRatioLabels 提取 DefaultRatios() 的 pair name slice,供 CSVHandler payload 用。
+func defaultRatioLabels() []string {
 	pairs := DefaultRatios()
-	header := make([]string, 0, 1+len(pairs))
-	header = append(header, "Time (s)")
-	for _, r := range pairs {
-		header = append(header, r.Name)
+	labels := make([]string, len(pairs))
+	for i, r := range pairs {
+		labels[i] = r.Name
 	}
-
-	return csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header: header,
-		Emit: func(emit func([]string) error) error {
-			for i, t := range times {
-				row := make([]string, 0, 1+len(ratiosAll))
-				row = append(row, fmt.Sprintf("%.4f", t))
-				for k := range ratiosAll {
-					row = append(row, formatRatioCell(ratiosAll[k], i))
-				}
-				if err := emit(row); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
-	})
-}
-
-// writeOutputPhases writes the phase+midpoint slice CSV (Output 2). Row count is
-// determined by collectPhasePoints (up to 2N-1+K rows, where K is the count of
-// biomechanical-interval midpoints with surviving endpoints).
-// 同樣透過 csvutil.WriteCSVAtomic atomic 寫入。
-//
-//nolint:err113 // dynamic errors for user-facing output
-func writeOutputPhases(
-	outputPath string, times []float64, ratiosAll [][]float64, points []phasePoint,
-) error {
-	pairs := DefaultRatios()
-	header := make([]string, 0, 2+len(pairs))
-	header = append(header, "Phase", "Time (s)")
-	for _, r := range pairs {
-		header = append(header, r.Name)
-	}
-
-	return csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header: header,
-		Emit: func(emit func([]string) error) error {
-			for _, p := range points {
-				idx := synchronizer.FindNearestTimeIndex(times, p.time)
-				row := make([]string, 0, 2+len(ratiosAll))
-				row = append(row, p.name, fmt.Sprintf("%.4f", times[idx]))
-				for k := range ratiosAll {
-					row = append(row, formatRatioCell(ratiosAll[k], idx))
-				}
-				if err := emit(row); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
-	})
-}
-
-// formatRatioCell formats one ratio value as a CSV cell. NaN/Inf → empty string
-// (missing-data convention, parallel to cci/analyzer.go writeCSVFile).
-func formatRatioCell(values []float64, idx int) string {
-	if idx < 0 || idx >= len(values) {
-		return ""
-	}
-
-	v := values[idx]
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return ""
-	}
-
-	return fmt.Sprintf("%.6f", v)
+	return labels
 }
