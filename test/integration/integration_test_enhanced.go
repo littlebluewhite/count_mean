@@ -85,7 +85,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 		}
 
 		// Test output generation via format-aware write (WriteMaxMean 透過 cfg.OutputDir 解析)
-		err = csvHandler.WriteMaxMean(
+		_, err = csvHandler.WriteMaxMean(
 			io.WriteRequest{Filename: "test_results.csv"},
 			records[0], results, 0.1, 0.5,
 		)
