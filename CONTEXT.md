@@ -16,6 +16,10 @@ _Avoid_: column, channel data, muscle, signal stream.
 量測時段內由 manifest 標示的一段時間區間（例如「站立期」「擺盪期」），由 PhaseLabel + TimeRange 定義。Phase analysis 對 EMGDataset 按 phase 切片再計算 max/mean。
 _Avoid_: stage, interval, segment, period.
 
+**Phase marker**
+[[Chart Composer]] 與 CCI chart 上對單一 [[Phase]] 渲染的視覺元素 — 一條垂直虛線 + phase 名稱 + 重算百分比 label(`{phaseName}\n({pct}%)`)。Phase 是時間區間的領域概念,phase marker 是它在 chart 上的渲染對應物。CCI / Composer 的 phase 多選 UX 透過 `{adapter}-update-phase-markers` postMessage 觸發 iframe 內 ECharts setOption 重畫 markLine — 詳見 ADR-0003 chart iframe bridge。payload shape `{checkedPhases: [{name, time, pct}]}` 跨兩 adapter 對稱,parent 不持有 chart-internal 知識(targetIdx / nearestLabel 由 iframe customJS 自算)。
+_Avoid_: phase line(舊內部變數名,實際上是 markLine + label 組合)、marker(太泛)、phase indicator.
+
 **Manifest**
 描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析都先解析 manifest 取得 dataset 集合再計算。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有四個 analyzer 不消費此欄位，向後相容。
 _Avoid_: config, batch file, descriptor, sheet.
