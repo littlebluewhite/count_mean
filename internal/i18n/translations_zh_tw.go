@@ -336,4 +336,14 @@ var translationsZhTW = map[string]string{
 	KeyWarnGetVersionFailed: "無法取得版本號",
 	// Phase 2 import config.
 	KeyErrorMsgInvalidConfigFormat: "無效的配置檔案格式",
+	// Chart Composer panel (Slice E i18n sweep follow-up).
+	KeyPanelComposerTitle:                "資料做圖",
+	KeyButtonLoadEMGChannels:             "載入 EMG 欄位",
+	KeyButtonGenerateChart:               "生成圖表",
+	KeyButtonDownloadPNG:                 "下載 PNG",
+	KeyFormLabelComposerChannels:         "EMG 通道(預設全不勾)",
+	KeyFormLabelComposerPhases:           "分期點顯示",
+	KeyFormHelptextLoadChannelsFirst:     "先按「載入 EMG 欄位」",
+	KeyFormHelptextComposerPhasesPending: "圖表生成後可勾選",
+	KeyResultSectionComposerPreview:      "圖表預覽",
 }

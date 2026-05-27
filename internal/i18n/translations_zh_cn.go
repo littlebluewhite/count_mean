@@ -332,4 +332,14 @@ var translationsZhCN = map[string]string{
 	KeyWarnGetVersionFailed: "无法获取版本号",
 	// Phase 2 import config.
 	KeyErrorMsgInvalidConfigFormat: "无效的配置文件格式",
+	// Chart Composer panel (Slice E i18n sweep follow-up).
+	KeyPanelComposerTitle:                "数据作图",
+	KeyButtonLoadEMGChannels:             "加载 EMG 字段",
+	KeyButtonGenerateChart:               "生成图表",
+	KeyButtonDownloadPNG:                 "下载 PNG",
+	KeyFormLabelComposerChannels:         "EMG 通道（默认全不选）",
+	KeyFormLabelComposerPhases:           "分期点显示",
+	KeyFormHelptextLoadChannelsFirst:     "先按「加载 EMG 字段」",
+	KeyFormHelptextComposerPhasesPending: "图表生成后可勾选",
+	KeyResultSectionComposerPreview:      "图表预览",
 }

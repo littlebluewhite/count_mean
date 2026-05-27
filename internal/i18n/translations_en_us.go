@@ -332,4 +332,14 @@ var translationsEnUS = map[string]string{
 	KeyWarnGetVersionFailed: "Unable to retrieve version",
 	// Phase 2 import config.
 	KeyErrorMsgInvalidConfigFormat: "Invalid configuration file format",
+	// Chart Composer panel (Slice E i18n sweep follow-up).
+	KeyPanelComposerTitle:                "Chart Composer",
+	KeyButtonLoadEMGChannels:             "Load EMG Channels",
+	KeyButtonGenerateChart:               "Generate Chart",
+	KeyButtonDownloadPNG:                 "Download PNG",
+	KeyFormLabelComposerChannels:         "EMG Channels (none selected by default)",
+	KeyFormLabelComposerPhases:           "Phase Markers",
+	KeyFormHelptextLoadChannelsFirst:     "Press \"Load EMG Channels\" first",
+	KeyFormHelptextComposerPhasesPending: "Available after the chart is generated",
+	KeyResultSectionComposerPreview:      "Chart Preview",
 }

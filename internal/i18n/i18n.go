@@ -364,6 +364,19 @@ const (
 	KeyResultMuscleSubjectCount  = "result.muscle.subject_count"
 	KeyResultNormalizedHelpText  = "result.normalized.help_text"
 
+	// Chart Composer panel — Slice E i18n sweep 漏網之魚(form labels / buttons /
+	// helptext / result section);對齊 panel.cci / panel.muscleratio 命名慣例,
+	// key 集中宣告以利 review。
+	KeyPanelComposerTitle                = "panel.composer.title"
+	KeyButtonLoadEMGChannels             = "button.load_emg_channels"
+	KeyButtonGenerateChart               = "button.generate_chart"
+	KeyButtonDownloadPNG                 = "button.download_png"
+	KeyFormLabelComposerChannels         = "form.label.composer_channels"
+	KeyFormLabelComposerPhases           = "form.label.composer_phases"
+	KeyFormHelptextLoadChannelsFirst     = "form.helptext.load_channels_first"
+	KeyFormHelptextComposerPhasesPending = "form.helptext.composer_phases_pending"
+	KeyResultSectionComposerPreview      = "result.section.composer_preview"
+
 	// Phase 2 table headers (Normalized & MuscleRatio result tables).
 	KeyTableHeaderMuscle      = "table.header.muscle"
 	KeyTableHeaderNormMax     = "table.header.norm_max"

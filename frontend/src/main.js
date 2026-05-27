@@ -29,6 +29,7 @@ import {
 import { OnFileDrop, OnFileDropOff, EventsOn, EventsOff } from '../wailsjs/runtime/runtime.js';
 import { initI18n, t, tHtml, changeLanguage, onLocaleChange, getCurrentLocale } from './i18n.js';
 import { updatePhaseLines } from './charts/phaseLines.mjs';
+import { buildChartComposerPanelHtml } from './panels/chart_composer_panel.mjs';
 
 // 應用程序主類
 class EMGAnalysisApp {
@@ -1735,73 +1736,11 @@ class EMGAnalysisApp {
         if (!this._composerCheckedPhases) this._composerCheckedPhases = new Set();
         if (!this._composerOriginalPctCell) this._composerOriginalPctCell = { value: null };
 
-        // 對齊 showCCIPanel 寫法:用 template literal 組 HTML 後 assign;
-        // 所有插值 (tHtml) 均經 i18n.escapeHtml,template 內無 user input。
-        const composerHtml = `
-            <div class="panel-header">
-                <h2>資料做圖</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
-
-            <div id="composerWarningBanner" class="result-info"
-                 style="display:none; background:#fff3cd; border-left:4px solid #ffc107; padding:0.5rem 0.75rem; margin-bottom:0.5rem;">
-            </div>
-
-            <div class="form-group">
-                <label>1. 分期總檔案</label>
-                <div class="input-group drop-zone" data-drop-target="composerManifest" style="--wails-drop-target: drop;">
-                    <input type="text" id="composerManifest" class="form-control" placeholder="選擇 V.10 / V.14 分期總檔案" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectComposerManifest()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>2. 資料夾</label>
-                <div class="input-group">
-                    <input type="text" id="composerDataFolder" class="form-control" placeholder="選擇 EMG / motion / muscle_ratio 資料夾" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectComposerDataFolder()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>3. 分析主題</label>
-                <select id="composerSubject" class="form-control" disabled onchange="app.onComposerSubjectChange()">
-                    <option value="">請先載入分期總檔案</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <button class="btn btn-secondary" onclick="app.loadComposerEMGChannels()">載入 EMG 欄位</button>
-                <p class="help-text" id="composerGridInfo" style="margin-top:0.5rem;"></p>
-            </div>
-
-            <div class="form-group">
-                <label>EMG 通道(預設全不勾)</label>
-                <div id="composerChannelSelector" class="checkbox-group" style="display:flex; flex-wrap:wrap; gap:0.5rem;">
-                    <p class="help-text">先按「載入 EMG 欄位」</p>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>分期點顯示</label>
-                <div id="composerPhaseSelector" class="checkbox-group" style="display:flex; flex-wrap:wrap; gap:0.5rem;">
-                    <p class="help-text">圖表生成後可勾選</p>
-                </div>
-            </div>
-
-            <div class="button-group">
-                <button class="btn btn-primary" onclick="app.generateComposerChart()">生成圖表</button>
-                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
-
-            <div id="composerResult" class="result-section" style="display:none;">
-                <h3>圖表預覽</h3>
-                <div id="composerChartContent"></div>
-                <div class="button-group" style="margin-top:0.5rem;">
-                    <button class="btn btn-primary" onclick="app.downloadComposerChart()">下載 PNG</button>
-                </div>
-            </div>
-        `;
+        // HTML template 抽到 panels/chart_composer_panel.mjs:讓 test 能注入
+        // fake translator 走 happy-dom 釘 DOM,不用 import main.js(連帶拉
+        // Wails RPC)。tHtml 此處仍走真實 i18n dictionary,template 內每個
+        // translator() 都會經 i18n.escapeHtml(等同既有 ${tHtml(...)} 行為)。
+        const composerHtml = buildChartComposerPanelHtml(tHtml);
         panel.innerHTML = composerHtml;
         this.showPanel(panel);
     }
@@ -1827,7 +1766,9 @@ class EMGAnalysisApp {
             const file = await SelectFile('選擇分期總檔案', filters, 'open');
             if (file) {
                 document.getElementById('composerManifest').value = file;
-                await this.loadComposerSubjects();
+                if (document.getElementById('composerDataFolder').value) {
+                    await this.loadComposerSubjects();
+                }
             }
         } catch (err) {
             console.error('選擇分期總檔案失敗:', err);

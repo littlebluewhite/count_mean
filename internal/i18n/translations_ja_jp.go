@@ -332,4 +332,14 @@ var translationsJaJP = map[string]string{
 	KeyWarnGetVersionFailed: "バージョンを取得できません",
 	// Phase 2 import config.
 	KeyErrorMsgInvalidConfigFormat: "無効な設定ファイル形式",
+	// Chart Composer panel (Slice E i18n sweep follow-up).
+	KeyPanelComposerTitle:                "データ作図",
+	KeyButtonLoadEMGChannels:             "EMG チャネル読み込み",
+	KeyButtonGenerateChart:               "チャート生成",
+	KeyButtonDownloadPNG:                 "PNG ダウンロード",
+	KeyFormLabelComposerChannels:         "EMG チャネル（既定で全て未選択）",
+	KeyFormLabelComposerPhases:           "フェーズマーカー表示",
+	KeyFormHelptextLoadChannelsFirst:     "先に「EMG チャネル読み込み」を押してください",
+	KeyFormHelptextComposerPhasesPending: "チャート生成後に選択可能",
+	KeyResultSectionComposerPreview:      "チャートプレビュー",
 }
