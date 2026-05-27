@@ -11,6 +11,7 @@ import (
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
 
+	"count_mean/internal/chart/assets"
 	"count_mean/internal/models"
 )
 
@@ -870,7 +871,7 @@ func composerPhaseMarkLineOpts(phase models.PhasePoints) []charts.SeriesOpts {
 // `/* ... */` block comment 在 newline-strip 後仍正確閉合於 `*/`,是唯一安全選項。
 // 任何 future maintainer 想加註解必須用 block comment 形式。
 func addComposerCustomJS(line *charts.Line) {
-	customJS := `
+	customJS := assets.PhaseMarkersJS + `
 		let myChart = %MY_ECHARTS%;
 		const wailsParentOrigins = ["wails://wails","http://wails.localhost","https://wails.localhost"];
 		function postToParent(msg) {
@@ -941,19 +942,31 @@ func addComposerCustomJS(line *charts.Line) {
 							pixelRatio: 2,
 							backgroundColor: '#fff'
 						});
-						postToParent({type: 'composer-png-result', requestId: requestId, dataURL: dataURL});
+						/* ADR-0003 §4 reply envelope: {requestId, payload?, error?}。
+						   bridge.requestReply resolve payload field,parent 端 await 拿到 {dataURL}。 */
+						postToParent({type: 'composer-png-result', requestId: requestId, payload: {dataURL: dataURL}});
 					} catch (err) {
 						postToParent({type: 'composer-png-result', requestId: requestId, error: String(err)});
 					}
 					return;
 				}
 				if (e.data.type === 'composer-update-phase-markers') {
-					/* markData 為 frontend 已算好的 markLine.data items(name 含 baked %、
-					   xAxis 為 numeric phaseTime)。逐 series patch markLine.data — 對每條
-					   原本就帶 markLine 的 series 套用同一份 markData(對齊 Bug B multi-attach
-					   設計:legend 隱藏某條 series 時其他 series 仍顯示 markLine)。 */
+					/* ADR-0003 §5 symmetric payload:parent 寄
+					   {payload: {checkedPhases: [{name, time, pct}]}}。
+					   iframe 自己組 markData(value-axis 直接用 numeric time)
+					   並逐 series patch markLine.data — 對每條原本帶 markLine 的
+					   series 套用同一份 markData(對齊 Bug B multi-attach 設計:
+					   legend 隱藏某條 series 時其他 series 仍顯示 markLine)。
+					   PhaseMarkersJS IIFE 已在前段載入,但 Composer 端不需要
+					   recalcPercents(parent 已算好 pct)。 */
 					try {
-						const markData = Array.isArray(e.data.markData) ? e.data.markData : [];
+						const payload = e.data.payload || {};
+						const checkedPhases = Array.isArray(payload.checkedPhases) ? payload.checkedPhases : [];
+						const markData = checkedPhases.map(function(p) {
+							const pct = (typeof p.pct === 'number') ? p.pct : 0;
+							const pctRounded = Math.round(pct * 10) / 10;
+							return { xAxis: p.time, name: p.name + '\n(' + pctRounded + '%)' };
+						});
 						const currentSeries = myChart.getOption().series || [];
 						const seriesPatch = currentSeries.map(function(s) {
 							if (s && s.markLine) {

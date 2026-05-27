@@ -383,17 +383,20 @@ func TestRenderComposer_NoComposerUpdatePhaseLinesListener(t *testing.T) {
 		"customJS 不應再有舊 `composer-update-phase-lines` 識別字(用 -markers 取代)")
 }
 
-// TestRenderComposer_HasComposerPhaseMarkersListener — Bug 1 fix(2026-05-27 image #12):
+// TestRenderComposer_HasComposerPhaseMarkersListener — Bug 1 fix(2026-05-27 image #12),
+// schema 收乾 by ADR-0003:
 //
 // 修補根因:wails dev 預設 webview(opaque origin enforcement 嚴格)下,parent 跨
 // frame 呼叫 `iframe.contentWindow.echarts.setOption` 被 silent block → phase 勾選
 // 改變毫無反應(user report:只勾 C/T0/T 但 8 個 markLine 仍在)。
 //
-// 修法:frontend updatePhaseLines value mode 改寄 `composer-update-phase-markers`
-// 給 iframe,iframe customJS 接收後本地 setOption — 完全繞開 cross-frame 限制。
+// 修法:frontend bridge.send 寄 `composer-update-phase-markers` + payload
+// `{checkedPhases: [{name, time, pct}]}` 給 iframe,iframe customJS 自己組 markData
+// 後本地 setOption — 完全繞開 cross-frame 限制。Parent 不再持有 chart-internal
+// 知識(markData 形狀、series patch 順序)。
 //
-// 防線:customJS 必須含 `composer-update-phase-markers` listener,且 markData 處理
-// 走 series-level patch(只更新 markLine,不動 series.data)。
+// 防線:customJS 必須含 `composer-update-phase-markers` listener、`checkedPhases`
+// 解構、`__phaseMarkers` IIFE 注入,且仍走 series-level markLine patch。
 func TestRenderComposer_HasComposerPhaseMarkersListener(t *testing.T) {
 	in := ComposerInput{
 		Subject:          "S",
@@ -405,7 +408,11 @@ func TestRenderComposer_HasComposerPhaseMarkersListener(t *testing.T) {
 
 	assert.Contains(t, html, `composer-update-phase-markers`,
 		"customJS 必須含 phase markers postMessage listener(Bug 1 修補)")
-	// 確認 iframe 端有逐 series patch markLine 的 setOption 動作
+	assert.Contains(t, html, `checkedPhases`,
+		"ADR-0003 §5 symmetric payload:iframe handler 必須解構 payload.checkedPhases")
+	assert.Contains(t, html, `__phaseMarkers`,
+		"PhaseMarkersJS IIFE 必須在 customJS 前段注入,attach helpers 到 window.__phaseMarkers")
+	// 確認 iframe 端仍有逐 series patch markLine 的 setOption 動作
 	assert.Contains(t, html, `markLine`,
 		"customJS 應透過 setOption 寫 series[i].markLine.data")
 }
