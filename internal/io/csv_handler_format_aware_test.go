@@ -57,11 +57,12 @@ func TestWriteMaxMean_RoundTrip(t *testing.T) {
 		{ColumnIndex: 2, StartTime: 1.5, EndTime: 2.5, MaxMean: 200.0},
 	}
 
-	err := handler.WriteMaxMean(
+	outputPath, err := handler.WriteMaxMean(
 		WriteRequest{Filename: "max_mean.csv"},
 		headers, results, 0.5, 3.0,
 	)
 	require.NoError(t, err)
+	require.Equal(t, filepath.Join(tempDir, "max_mean.csv"), outputPath)
 
 	lines := readRows(t, filepath.Join(tempDir, "max_mean.csv"))
 	require.Len(t, lines, 6, "MaxMean 應產生 6 row (header + 5 data rows)")
@@ -84,7 +85,7 @@ func TestWriteMaxMean_SubDir(t *testing.T) {
 		{ColumnIndex: 1, StartTime: 0.1, EndTime: 0.5, MaxMean: 42.0},
 	}
 
-	err := handler.WriteMaxMean(
+	_, err := handler.WriteMaxMean(
 		WriteRequest{Filename: "batch.csv", SubDir: "run_001"},
 		headers, results, 0.0, 1.0,
 	)
@@ -110,10 +111,11 @@ func TestWriteNormalized_RoundTrip(t *testing.T) {
 		},
 	}
 
-	err := handler.WriteNormalized(
+	outputPath, err := handler.WriteNormalized(
 		WriteRequest{Filename: "norm.csv"}, dataset,
 	)
 	require.NoError(t, err)
+	require.Equal(t, filepath.Join(tempDir, "norm.csv"), outputPath)
 
 	lines := readRows(t, filepath.Join(tempDir, "norm.csv"))
 	require.Len(t, lines, 3, "Normalize 應產生 header + 2 data row")
@@ -138,10 +140,11 @@ func TestWritePhaseAnalysis_SinglePhase(t *testing.T) {
 		MaxTimeIndex: map[int]float64{0: 1.5, 1: 1.8},
 	}
 
-	err := handler.WritePhaseAnalysis(
+	outputPath, err := handler.WritePhaseAnalysis(
 		WriteRequest{Filename: "phase_single.csv"}, headers, result,
 	)
 	require.NoError(t, err)
+	require.Equal(t, filepath.Join(tempDir, "phase_single.csv"), outputPath)
 
 	lines := readRows(t, filepath.Join(tempDir, "phase_single.csv"))
 	require.Len(t, lines, 4, "single phase 含 MaxTimeIndex 應產生 4 row")
@@ -170,7 +173,7 @@ func TestWritePhaseAnalysis_MultiPhase(t *testing.T) {
 		MaxTimeIndex: map[int]float64{0: 1.5, 1: 1.8},
 	}
 
-	err := handler.WritePhaseAnalysis(
+	_, err := handler.WritePhaseAnalysis(
 		WriteRequest{Filename: "phase_multi.csv"}, headers, result,
 	)
 	require.NoError(t, err)
@@ -210,7 +213,7 @@ func TestWritePhaseAnalysis_NoTimeIndex(t *testing.T) {
 		MaxTimeIndex: nil,
 	}
 
-	err := handler.WritePhaseAnalysis(
+	_, err := handler.WritePhaseAnalysis(
 		WriteRequest{Filename: "phase_no_idx.csv"}, headers, result,
 	)
 	require.NoError(t, err)
@@ -225,7 +228,7 @@ func TestWritePhaseAnalysis_Empty(t *testing.T) {
 
 	handler, _ := newFormatAwareTestHandler(t)
 
-	err := handler.WritePhaseAnalysis(
+	_, err := handler.WritePhaseAnalysis(
 		WriteRequest{Filename: "empty.csv"},
 		[]string{"Time", "Ch1"},
 		&calculator.AnalyzeResult{},
@@ -239,7 +242,7 @@ func TestWritePhaseAnalysis_NilResult(t *testing.T) {
 
 	handler, _ := newFormatAwareTestHandler(t)
 
-	err := handler.WritePhaseAnalysis(
+	_, err := handler.WritePhaseAnalysis(
 		WriteRequest{Filename: "nil.csv"},
 		[]string{"Time", "Ch1"},
 		nil,

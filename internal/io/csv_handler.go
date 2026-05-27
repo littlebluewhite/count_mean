@@ -651,20 +651,28 @@ func (h *CSVHandler) WriteMaxMean(
 	headers []string,
 	results []models.MaxMeanResult,
 	startRange, endRange float64,
-) error {
+) (string, error) {
 	data := h.converter.ConvertMaxMeanResults(headers, results, startRange, endRange)
 
-	return h.writeToTarget(req, data)
+	if err := h.writeToTarget(req, data); err != nil {
+		return "", err
+	}
+
+	return filepath.Join(h.config.OutputDir, req.SubDir, req.Filename), nil
 }
 
 // WriteNormalized 把標準化後的 EMGDataset 寫成 CSV (1 header + N data rows)。
 //
 // Time 欄套用 dataset.OriginalTimePrecision,data 欄套用 config.Precision —
 // 這條「time vs data 不同 precision」的內部規則 caller 不會看到。
-func (h *CSVHandler) WriteNormalized(req WriteRequest, dataset *models.EMGDataset) error {
+func (h *CSVHandler) WriteNormalized(req WriteRequest, dataset *models.EMGDataset) (string, error) {
 	data := h.converter.ConvertNormalizedData(dataset)
 
-	return h.writeToTarget(req, data)
+	if err := h.writeToTarget(req, data); err != nil {
+		return "", err
+	}
+
+	return filepath.Join(h.config.OutputDir, req.SubDir, req.Filename), nil
 }
 
 // WritePhaseAnalysis 把 phase 分析結果寫成 CSV;支援單 phase 與多 phase merge。
@@ -686,9 +694,9 @@ func (h *CSVHandler) WritePhaseAnalysis(
 	req WriteRequest,
 	headers []string,
 	result *calculator.AnalyzeResult,
-) error {
+) (string, error) {
 	if result == nil || len(result.PhaseResults) == 0 {
-		return errEmptyPhaseAnalysis
+		return "", errEmptyPhaseAnalysis
 	}
 
 	var data [][]string
@@ -713,7 +721,11 @@ func (h *CSVHandler) WritePhaseAnalysis(
 		}
 	}
 
-	return h.writeToTarget(req, data)
+	if err := h.writeToTarget(req, data); err != nil {
+		return "", err
+	}
+
+	return filepath.Join(h.config.OutputDir, req.SubDir, req.Filename), nil
 }
 
 // writeToTarget 是 format-aware write 的內部 dispatch 點:依 req.SubDir 走 WriteCSVToOutput
