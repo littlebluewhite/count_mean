@@ -1526,6 +1526,14 @@ class EMGAnalysisApp {
             // updateCCIPhaseLines handler 失效。{once: true} 確保不會 leak。
             iframe.addEventListener('load', () => this.updateCCIPhaseLines(), { once: true });
 
+            // codex review #1 P2:iframe 還在 load echarts.min.js external script 時
+            // customJS message listener 尚未註冊,downloadCCIChart 立即 send
+            // 'cci-request-png' 會被 drop → 10s timeout。記錄 ready promise,
+            // download path 在 bridge.requestReply 前先 await 它。
+            this._cciIframeReady = new Promise((resolve) => {
+                iframe.addEventListener('load', resolve, { once: true });
+            });
+
             // ADR-0003:每次 showCCIResult 都新建 iframe element,bridge subscription
             // 也要重新綁。先 unsubscribe 前一次(避免舊 iframe entry 在 bridge 內
             // 累積 — 跑 N 次分析就 leak N 個 subscription)。
@@ -1617,6 +1625,13 @@ class EMGAnalysisApp {
 
         try {
             this.updateStatus(t('status.cci_chart_downloading'));
+            // codex review #1 P2:iframe customJS message listener 在 iframe 完整 load
+            // (含 echarts.min.js external script)後才註冊。在 ready 前送 requestReply
+            // 會被 drop → 10s timeout。先 await _cciIframeReady promise(若不存在
+            // — 例如 showCCIResult 還沒被 call — 直接走 requestReply 走 timeout 路徑)。
+            if (this._cciIframeReady) {
+                await this._cciIframeReady;
+            }
             const reply = await bridge.requestReply(iframe, 'cci-request-png', {});
             const result = await DownloadCCIChart({
                 imageData: reply.dataURL,
@@ -1940,6 +1955,14 @@ class EMGAnalysisApp {
             // {once: true} 對齊 P2-10 guard。
             iframe.addEventListener('load', () => this._onComposerIframeLoaded(), { once: true });
 
+            // codex review #1 P2:iframe customJS message listener 在完整 load
+            // (含 external echarts.min.js)後才註冊;在 ready 前送 requestReply
+            // 會被 drop → 10s timeout。記錄 ready promise,downloadComposerChart
+            // 在 bridge.requestReply 前先 await 它。
+            this._composerIframeReady = new Promise((resolve) => {
+                iframe.addEventListener('load', resolve, { once: true });
+            });
+
             document.getElementById('composerResult').style.display = 'block';
             this.updateStatus('Chart Composer 生成完成');
         } catch (err) {
@@ -2061,6 +2084,12 @@ class EMGAnalysisApp {
                 return;
             }
 
+            // codex review #1 P2:iframe customJS message listener 在完整 load 後
+            // (含 external echarts.min.js)才註冊;在 ready 前送 requestReply 會
+            // 被 drop → 10s timeout。先 await _composerIframeReady promise。
+            if (this._composerIframeReady) {
+                await this._composerIframeReady;
+            }
             // ADR-0003:走 bridge.requestReply 拿當下 chart dataURL。
             // 內部包 requestId 配對 + 預設 10s timeout + opaque-origin '*' 退路,
             // caller 不再寫 14 行 promise/listener boilerplate。
