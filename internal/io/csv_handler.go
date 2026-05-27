@@ -4,6 +4,7 @@ package io
 
 import (
 	"bufio"
+	"context"
 	"encoding/csv"
 	stderrors "errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/cci"
 	"count_mean/internal/config"
 	"count_mean/internal/csvutil"
 	"count_mean/internal/errors"
@@ -773,3 +775,132 @@ func (h *CSVHandler) WritePhaseSyncResult(
 
 	return outputPath, nil
 }
+
+// WriteCCIResult 把 CCI 分析結果寫成 CSV。
+//
+// Filename 由 result.Subject 經 SanitizeFileName 後 + "_CCI_Rudolph.csv" suffix
+// 推導 — req.Filename 被忽略,僅 req.SubDir 生效(空字串 → OutputDir 根)。
+// 回傳實際 outputPath 與錯誤。
+//
+// row layout: 1 header row ["Time (s)", "Gait Cycle (%)", PairName...]
+//
+//	+ N data rows,每 row 含 [time, gait_pct, pair_value...]
+//
+// NaN/Inf cell → 空字串;整 row 所有 pair 都 NaN/Inf → skip 整 row(計入 droppedRowCount)。
+//
+// ctx 為第一個參數,sample loop 中每 cciStreamCtxCheckInterval 點檢查一次 ctx.Done()
+// — caller cancel 後立即停寫並回 ctx.Err。csvutil.WriteCSVAtomic 對 emit 回 error 走
+// tmp file abort 路徑,不留下半成品。
+//
+// ADR-0001 invariant 延伸到 CCI: pathValidator 守門覆蓋原 cci.ExportToCSV 缺少的
+// defense-in-depth(原路徑走 security.NewPathValidator(nil) 未整合 CSVHandler 既有
+// allowedPaths;由本 method 統一補上)。
+func (h *CSVHandler) WriteCCIResult(
+	ctx context.Context, req WriteRequest, result *cci.CCIAnalysisResult,
+) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if result == nil {
+		return "", errEmptyCCIResult
+	}
+
+	duration := result.GaitEndTime - result.GaitStartTime
+	if duration <= 0 {
+		return "", fmt.Errorf("%w: start=%v end=%v",
+			cci.ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
+	}
+
+	safeSubject := calculator.SanitizeFileName(result.Subject)
+	filename := fmt.Sprintf("%s_CCI_Rudolph.csv", safeSubject)
+	outputPath := filepath.Join(h.config.OutputDir, req.SubDir, filename)
+
+	// Defense-in-depth: 對齊 muscle_ratio.Analyzer / WritePhaseSyncResult 同款守門。
+	checkPath := filepath.Join(h.config.OutputDir, req.SubDir, "_validation_marker")
+	if err := h.pathValidator.ValidateExternalPath(checkPath); err != nil {
+		return "", fmt.Errorf("CCI 輸出路徑無效: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), fsperm.DirPerm); err != nil {
+		return "", fmt.Errorf("CCI 輸出目錄建立失敗: %w", err)
+	}
+
+	header := []string{"Time (s)", "Gait Cycle (%)"}
+	for _, pr := range result.PairResults {
+		header = append(header, pr.PairName)
+	}
+
+	var droppedRowCount int
+	numPoints := len(result.TimeValues)
+
+	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: header,
+		Emit: func(emit func([]string) error) error {
+			for i := 0; i < numPoints; i++ {
+				if i > 0 && i%cciStreamCtxCheckInterval == 0 {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+				}
+
+				t := result.TimeValues[i]
+				pct := (t - result.GaitStartTime) / duration * 100
+
+				pairCells := make([]string, 0, len(result.PairResults))
+				allNonFinite := true
+
+				for _, pr := range result.PairResults {
+					if i >= len(pr.Values) {
+						pairCells = append(pairCells, "")
+						continue
+					}
+					v := pr.Values[i]
+					if math.IsNaN(v) || math.IsInf(v, 0) {
+						pairCells = append(pairCells, "")
+						continue
+					}
+					pairCells = append(pairCells, fmt.Sprintf("%.6f", v))
+					allNonFinite = false
+				}
+
+				if len(result.PairResults) > 0 && allNonFinite {
+					droppedRowCount++
+					continue
+				}
+
+				row := []string{
+					fmt.Sprintf("%.4f", t),
+					fmt.Sprintf("%.2f", pct),
+				}
+				row = append(row, pairCells...)
+
+				if err := emit(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if droppedRowCount > 0 && h.logger != nil {
+		h.logger.Warn("CCI 匯出 CSV 時跳過全 NaN/Inf 的 row", map[string]any{
+			"dropped_rows": droppedRowCount,
+			"total_rows":   numPoints,
+			"output_path":  outputPath,
+		})
+	}
+
+	return outputPath, nil
+}
+
+// cciStreamCtxCheckInterval 是 CCI 寫檔 emit loop 內 ctx 取消檢查間隔,
+// 跟原 cci 套件常數 (cciChartCtxCheckInterval) 對齊,避免每點 select 過熱。
+const cciStreamCtxCheckInterval = 64
+
+// errEmptyCCIResult 標示 WriteCCIResult 收到 nil result。
+var errEmptyCCIResult = stderrors.New("WriteCCIResult: result is nil")

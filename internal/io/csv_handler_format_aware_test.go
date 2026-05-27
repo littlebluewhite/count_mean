@@ -1,14 +1,19 @@
 package io
 
 import (
+	"context"
+	"encoding/csv"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/cci"
 	"count_mean/internal/config"
 	"count_mean/internal/models"
 )
@@ -412,4 +417,100 @@ func TestWritePhaseSyncResult_RoundTrip(t *testing.T) {
 	require.Contains(t, lines[5], "時間差值")
 	require.Contains(t, lines[6], "平均值")
 	require.Contains(t, lines[7], "最大值")
+}
+
+// readCSVRows 讀檔、剝 BOM，並用 encoding/csv 解析為 [][]string,供 CCI round-trip 精確比對。
+func readCSVRows(t *testing.T, path string) [][]string {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	// 剝掉 UTF-8 BOM 0xEF 0xBB 0xBF
+	if len(content) >= 3 && content[0] == 0xEF && content[1] == 0xBB && content[2] == 0xBF {
+		content = content[3:]
+	}
+
+	r := csv.NewReader(strings.NewReader(string(content)))
+	rows, err := r.ReadAll()
+	require.NoError(t, err)
+
+	return rows
+}
+
+// TestWriteCCIResult_RoundTrip 驗證 WriteCCIResult 寫出的檔可被讀回,
+// row layout (Time / Gait Cycle / N pair columns) 對齊。
+func TestWriteCCIResult_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	result := &cci.CCIAnalysisResult{
+		Subject:       "subj_A",
+		GaitStartTime: 0.0,
+		GaitEndTime:   1.0,
+		TimeValues:    []float64{0.0, 0.5, 1.0},
+		PairResults: []cci.CCIResult{
+			{PairName: "P1_P2", Values: []float64{0.1, 0.2, 0.3}},
+			{PairName: "P3_P4", Values: []float64{0.4, 0.5, 0.6}},
+		},
+	}
+
+	outputPath, err := handler.WriteCCIResult(context.Background(), WriteRequest{}, result)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(tempDir, "subj_A_CCI_Rudolph.csv"), outputPath)
+
+	rows := readCSVRows(t, outputPath)
+	require.Len(t, rows, 4) // 1 header + 3 data rows
+	assert.Equal(t, []string{"Time (s)", "Gait Cycle (%)", "P1_P2", "P3_P4"}, rows[0])
+	assert.Equal(t, []string{"0.0000", "0.00", "0.100000", "0.400000"}, rows[1])
+}
+
+// TestWriteCCIResult_NaNRowSkip 驗證全 NaN/Inf 的 row 被跳過。
+func TestWriteCCIResult_NaNRowSkip(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newFormatAwareTestHandler(t)
+
+	nan := math.NaN()
+	result := &cci.CCIAnalysisResult{
+		Subject:       "subj_B",
+		GaitStartTime: 0.0,
+		GaitEndTime:   1.0,
+		TimeValues:    []float64{0.0, 0.5, 1.0},
+		PairResults: []cci.CCIResult{
+			{PairName: "P1", Values: []float64{0.1, nan, 0.3}},
+			{PairName: "P2", Values: []float64{0.2, nan, 0.4}},
+		},
+	}
+
+	outputPath, err := handler.WriteCCIResult(context.Background(), WriteRequest{}, result)
+	require.NoError(t, err)
+
+	rows := readCSVRows(t, outputPath)
+	require.Len(t, rows, 3) // header + 2 surviving rows (row i=1 全 NaN 被跳過)
+}
+
+// TestWriteCCIResult_CtxCancel 驗證 pre-cancel 不寫檔。
+func TestWriteCCIResult_CtxCancel(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := &cci.CCIAnalysisResult{
+		Subject:       "subj_C",
+		GaitStartTime: 0.0,
+		GaitEndTime:   1.0,
+		TimeValues:    []float64{0.0},
+		PairResults:   []cci.CCIResult{{PairName: "P1", Values: []float64{0.1}}},
+	}
+
+	_, err := handler.WriteCCIResult(ctx, WriteRequest{}, result)
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, statErr := os.Stat(filepath.Join(tempDir, "subj_C_CCI_Rudolph.csv"))
+	require.True(t, os.IsNotExist(statErr), "pre-cancel 不應留下檔案")
 }
