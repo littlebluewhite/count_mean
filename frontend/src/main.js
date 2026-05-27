@@ -11,10 +11,8 @@ import {
     ResetConfig,
     CalculateMaxMean,
     NormalizeData,
-    GenerateChart,
     AnalyzePhases,
     GetCSVHeaders,
-    GenerateInteractiveChart,
     LoadPhaseManifest,
     GetAvailablePhases,
     AnalyzePhaseSync,
@@ -42,8 +40,7 @@ class EMGAnalysisApp {
         this.panelDispatch = {
             maxMean: () => this.showMaxMeanPanel(),
             normalize: () => this.showNormalizePanel(),
-            // chart → Chart Composer(PRD #15);舊 showChartPanel 仍保留在 main.js
-            // 內供 Slice E 統一刪除,本 slice 只切換入口 dispatch。
+            // chart → Chart Composer(PRD #15);舊「資料做圖」path 已於 Slice E 刪除。
             chart: () => this.showChartComposerPanel(),
             phase: () => this.showPhasePanel(),
             phaseSync: () => this.showPhaseSyncPanel(),
@@ -244,14 +241,7 @@ class EMGAnalysisApp {
             inputElement.value = filePath;
 
             // 觸發相應的處理邏輯
-            if (targetId === 'chartFile') {
-                this.loadChartColumns(filePath);
-                const btn = document.getElementById('downloadChartBtn');
-                if (btn) {
-                    btn.style.display = '';
-                    btn.disabled = false;
-                }
-            } else if (targetId === 'phaseSyncManifest') {
+            if (targetId === 'phaseSyncManifest') {
                 // 分期同步分析：載入主題
                 this.loadManifestSubjects(filePath);
             } else if (targetId === 'cciManifest') {
@@ -285,8 +275,7 @@ class EMGAnalysisApp {
                 this.showNormalizePanel();
                 break;
             case 'chart':
-                // 入口指向 Chart Composer(PRD #15)— showChartPanel 函式體尚未刪除
-                // (Slice E scope),但 menu action 已不再導向。
+                // 入口指向 Chart Composer(PRD #15);舊「資料做圖」path 已於 Slice E 移除。
                 this.showChartComposerPanel();
                 break;
             case 'phase':
@@ -409,49 +398,6 @@ class EMGAnalysisApp {
             <div class="mt-4">
                 <button class="btn btn-primary" onclick="app.normalizeData()">
                     ${tHtml('button.start_normalize')}
-                </button>
-            </div>
-        `;
-
-        this.showPanel();
-    }
-
-    // 資料做圖面板
-    async showChartPanel() {
-        const panel = document.getElementById('functionPanel');
-        panel.innerHTML = `
-            <div class="panel-header">
-                <h2>${tHtml('panel.chart.title')}</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
-
-            <div class="form-group">
-                <label>${tHtml('form.label.chart_file')}</label>
-                <div class="input-group drop-zone" data-drop-target="chartFile" style="--wails-drop-target: drop;">
-                    <input type="text" id="chartFile" class="form-control" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectChartFile()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>${tHtml('form.label.chart_title')}</label>
-                <input type="text" id="chartTitle" class="form-control" value="${tHtml('form.default.chart_title')}">
-            </div>
-
-            <div class="form-group">
-                <label>${tHtml('form.label.select_columns')}</label>
-                <div id="columnSelector" class="checkbox-group">
-                    <p class="help-text">${tHtml('form.help.select_file_first')}</p>
-                </div>
-            </div>
-            <div id="previewChartContainer" class="chart-preview hidden">
-                <h3>${tHtml('chart.preview.title')}</h3>
-                <div id="previewChartContent"></div>
-            </div>
-            <div class="mt-4">
-                <button id="downloadChartBtn" class="btn btn-primary"
-                    onclick="app.downloadChart()" disabled style="display:none">
-                  ${tHtml('button.download_chart')}
                 </button>
             </div>
         `;
@@ -648,7 +594,7 @@ class EMGAnalysisApp {
     }
 
     // 用 i18n 字典更新 index.html 內寫死的中文字串:document.title、header
-    // h1/subtitle、9 個 menu button 的 title + description、chartTitle placeholder。
+    // h1/subtitle、9 個 menu button 的 title + description。
     // 在 init() 與 onLocaleChange 內呼叫。statusText 不在此處理 — 它由
     // updateStatus() 動態寫入,locale 變更後保留當前狀態(Task 15 將進一步處理)。
     updateStaticTexts() {
@@ -667,12 +613,6 @@ class EMGAnalysisApp {
         const subtitle = document.querySelector('header .subtitle');
         if (subtitle) {
             subtitle.textContent = t('header.subtitle');
-        }
-
-        // chartTitle 是 placeholder;chart panel 開啟後會被 user value 覆寫。
-        const chartTitle = document.getElementById('chartTitle');
-        if (chartTitle) {
-            chartTitle.textContent = t('chart.title.placeholder');
         }
 
         // 9 個 menu button.
@@ -797,23 +737,6 @@ class EMGAnalysisApp {
         }
     }
 
-    async selectChartFile() {
-        try {
-            const file = await SelectFile('選擇資料檔案', [
-                {displayName: 'CSV 檔案', pattern: '*.csv'}
-            ], "input");
-            if (file) {
-                document.getElementById('chartFile').value = file;
-                await this.loadChartColumns(file);
-                const btn = document.getElementById('downloadChartBtn');
-                btn.style.display = '';
-                btn.disabled = false;
-            }
-        } catch (err) {
-            console.error('選擇檔案失敗:', err);
-        }
-    }
-
     async selectPhaseFile() {
         try {
             const file = await SelectFile('選擇資料檔案', [
@@ -890,108 +813,6 @@ class EMGAnalysisApp {
         } catch (err) {
             this.updateStatus(t('status.normalization_failed'));
             await ShowError(t('dialog.error'), t('error.msg.normalization_failed', err));
-        }
-    }
-
-    async generateChart() {
-        const file = document.getElementById('chartFile').value;
-        if (!file) {
-            await ShowError(t('dialog.error'), t('error.msg.select_input_file'));
-            return;
-        }
-
-        const checked = document.querySelectorAll('#columnSelector input[type="checkbox"]:checked');
-        const columns = Array.from(checked).map(cb => parseInt(cb.value));
-        if (columns.length === 0) {
-            await ShowError(t('dialog.error'), t('error.msg.chart_select_columns'));
-            return;
-        }
-
-        const title = document.getElementById('chartTitle').value || 'EMG 資料分析圖表';
-
-        try {
-            this.updateStatus(t('status.chart_generating'));
-
-            const result = await GenerateChart({
-                filePath: file,
-                columns: columns,
-                title: title
-            });
-
-            this.updateStatus(t('status.chart_generated'));
-            await ShowMessage(t('dialog.success'), t('success.msg.chart_generated', result.outputPath));
-        } catch (err) {
-            this.updateStatus(t('status.chart_generation_failed'));
-            await ShowError(t('dialog.error'), t('error.msg.chart_generation_failed', err));
-        }
-    }
-
-    async downloadChart() {
-        const iframe = document.querySelector('#previewChartContent iframe');
-        if (!iframe) {
-            await ShowError(t('dialog.error'), t('error.msg.chart_not_found'));
-            return;
-        }
-
-        const file = document.getElementById('chartFile').value;
-        if (!file) {
-            await ShowError(t('dialog.error'), t('error.msg.select_input_file'));
-            return;
-        }
-
-        try {
-            this.updateStatus(t('status.chart_downloading'));
-
-            // 等待 iframe 完全加載。
-            // P2-10:用 addEventListener('load') 取代 iframe.onload = resolve,
-            // 避免覆寫前一個 onload handler(若有人在外層另設 onload 做 chart
-            // 初始化會被蓋掉)。{once: true} 避免下次 reload 重複觸發。
-            await new Promise(resolve => {
-                if (iframe.contentDocument.readyState === 'complete') {
-                    resolve();
-                } else {
-                    iframe.addEventListener('load', resolve, { once: true });
-                }
-            });
-
-            // 獲取 iframe 中的 ECharts 實例
-            const iframeWindow = iframe.contentWindow;
-            const iframeDocument = iframe.contentDocument;
-
-            if (!iframeWindow.echarts) {
-                throw new Error(t('error.msg.echarts_not_found'));
-            }
-
-            // 尋找 ECharts 實例
-            const chartElement = iframeDocument.querySelector('[_echarts_instance_]');
-            if (!chartElement) {
-                throw new Error(t('error.msg.chart_element_not_found'));
-            }
-
-            const chartInstance = iframeWindow.echarts.getInstanceByDom(chartElement);
-            if (!chartInstance) {
-                throw new Error(t('error.msg.chart_instance_not_found'));
-            }
-
-            // 獲取當前圖表的 PNG 數據
-            const dataURL = chartInstance.getDataURL({
-                type: 'png',
-                pixelRatio: 2,
-                backgroundColor: '#fff'
-            });
-
-            // 呼叫後端保存
-            const result = await GenerateChart({
-                filePath: file,
-                title: document.getElementById('chartTitle').value || 'EMG圖表',
-                imageData: dataURL
-            });
-
-            this.updateStatus(t('status.chart_download_done'));
-            await ShowMessage(t('dialog.success'), t('success.msg.chart_downloaded', result.outputPath));
-        } catch (err) {
-            this.updateStatus(t('status.chart_download_failed'));
-            await ShowError(t('dialog.error'), t('error.msg.chart_download_failed', err.message || err));
         }
     }
 
@@ -1196,123 +1017,6 @@ class EMGAnalysisApp {
         document.getElementById('statusText').textContent = message;
     }
 
-    displayChart(htmlContent, title) {
-        const container = document.getElementById('chartContainer');
-        const content = document.getElementById('chartContent');
-
-        document.getElementById('chartTitle').textContent = title;
-        content.innerHTML = htmlContent;
-        container.classList.remove('hidden');
-    }
-
-    closeChart() {
-        document.getElementById('chartContainer').classList.add('hidden');
-    }
-
-    async loadChartColumns(file) {
-        const selector = document.getElementById('columnSelector');
-        selector.innerHTML = `<p class="help-text">${tHtml('status.loading_columns')}</p>`;
-        try {
-            const headers = await GetCSVHeaders({filePath: file});
-            // 第一個欄位為時間，必選且禁止取消
-            // P0-2: 不可把 raw CSV header 拼進 innerHTML — GetCSVHeaders 沒 escape,
-            // 惡意 header(例: `<img src=x onerror=...>`)會在 Wails WebView 內被當
-            // HTML 解析造成 XSS。改用 createElement + textContent(對齊 line 1311-1316
-            // 與 1541-1546 的安全 pattern)。
-            while (selector.firstChild) {
-                selector.removeChild(selector.firstChild);
-            }
-            headers.forEach((col, index) => {
-                const item = document.createElement('div');
-                item.className = 'checkbox-item';
-
-                const cb = document.createElement('input');
-                cb.type = 'checkbox';
-                cb.id = `col_${index}`;
-                cb.value = String(index);
-                cb.checked = true;
-                if (index === 0) {
-                    cb.disabled = true;
-                }
-
-                const label = document.createElement('label');
-                label.setAttribute('for', `col_${index}`);
-                label.textContent = col;
-
-                item.appendChild(cb);
-                item.appendChild(label);
-                selector.appendChild(item);
-            });
-            // 綁定預覽更新
-            document.querySelectorAll('#columnSelector input[type="checkbox"]').forEach(cb => {
-                cb.addEventListener('change', () => this.previewInteractiveChart());
-            });
-            // 初次顯示預覽
-            this.previewInteractiveChart();
-        } catch (err) {
-            console.error('載入欄位失敗:', err);
-            selector.innerHTML = `<p class="help-text text-danger">${tHtml('status.load_columns_failed')}</p>`;
-            await ShowError(t('dialog.error'), t('error.msg.load_columns_failed', err));
-        }
-    }
-
-    // 生成並顯示互動式圖表預覽
-    async previewInteractiveChart() {
-        const file = document.getElementById('chartFile').value;
-        if (!file) return;
-
-        // 取得勾選欄位
-        const checked = document.querySelectorAll('#columnSelector input[type="checkbox"]:checked');
-        const columns = Array.from(checked).map(cb => parseInt(cb.value));
-        if (columns.length === 0) {
-            document.getElementById('previewChartContainer').classList.add('hidden');
-            return;
-        }
-
-        try {
-            // 從後端取回完整 HTML
-            const html = await GenerateInteractiveChart({
-                filePath: file,
-                columns,
-                title: document.getElementById('chartTitle').value || '',
-                width: '900px',
-                height: '500px'
-            });
-
-            const wrapper = document.getElementById('previewChartContent');
-            wrapper.innerHTML = '';          // 清掉上一張圖
-
-            // 建立 iframe 讓 <script> 正常執行
-            const iframe = document.createElement('iframe');
-            iframe.style.width = '100%';
-            iframe.style.height = '520px';
-            iframe.style.border = 'none';
-            // P1-12:移除 `allow-same-origin` — sandbox 不再是 chart HTML 注入的
-            // 安全邊界。**Go 端 sanitize 是 chart HTML 內容的唯一防線**
-            // (internal/chart/echarts.go::escapeForHTML + internal/cci/chart.go
-            // 的 JSON encoder escape-HTML=true)。
-            //
-            // 取捨:沒有 allow-same-origin → parent 無法跨 frame 讀
-            // iframe.contentWindow.echarts/contentDocument,因此「下載 chart 為 PNG」
-            // 與「更新 CCI phase line」功能會失效。這是接受的 trade-off:
-            //   - 安全收益:即使 Go 端 sanitize 在未來改動中破口,iframe 內 JS
-            //     也無法操作 parent (SOP 隔離),不會升級為 RCE on Wails webview
-            //   - 功能成本:下載 PNG / 動態 phase line 需要改走「iframe 內主動
-            //     postMessage 給 parent」的設計(屬未來 follow-up,本 PR 不做)
-            //
-            // 仍排除:allow-top-navigation / allow-forms / allow-popups / allow-modals /
-            // allow-pointer-lock / allow-plugins / allow-presentation — 即便 chartHTML
-            // 被汙染,也不能跳 top frame、開新視窗、彈 alert 阻塞 UI。
-            iframe.sandbox = 'allow-scripts';
-            iframe.srcdoc = html;            // 直接塞 srcdoc
-
-            wrapper.appendChild(iframe);
-            document.getElementById('previewChartContainer').classList.remove('hidden');
-        } catch (err) {
-            console.error('預覽生成失敗:', err);
-            await ShowError(t('dialog.error'), t('error.msg.chart_preview_failed', err));
-        }
-    }
     // 分期同步分析面板
     showPhaseSyncPanel() {
         const panel = document.getElementById('functionPanel');
@@ -1833,7 +1537,7 @@ class EMGAnalysisApp {
             iframe.style.width = '100%';
             iframe.style.height = '620px';
             iframe.style.border = 'none';
-            // P1-12:移除 `allow-same-origin`(同 previewInteractiveChart)。
+            // P1-12:移除 `allow-same-origin`。
             // sandbox 不再是 CCI chart HTML 注入的安全邊界,**Go 端 sanitize 是
             // 唯一防線**(cci/chart.go 的 JSON encoder + i18n key escape)。
             //

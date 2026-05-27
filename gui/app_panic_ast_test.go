@@ -45,8 +45,8 @@ import (
 // 過去 known-gap 含 `GetTranslations` / `SetLanguage` /
 // `GetAvailablePhases` 三個 i18n / synchronizer dispatch shim,以「邊際效益低」
 // 為由暫緩。本輪補上 defer (defense-in-depth),從 known-gap 移除。
-// `GenerateInteractiveChart` / `GenerateChart` / `savePNGFromBase64` 已在
-// 完成補 defer,亦從 known-gap 移除。
+// 舊「資料做圖」path 的 chart 家族 method 已於 Chart Composer Slice E 移除,
+// 不再需要 panic safety net 條目。
 //
 // # 失敗模式
 //

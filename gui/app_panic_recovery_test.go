@@ -2,15 +2,12 @@ package gui
 
 import (
 	"context"
-	"encoding/base64"
-	"hash/crc32"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/config"
-	"count_mean/internal/logging"
 )
 
 // TestRpcMethods_PanicInBody_RecoveredAsError 守護 修法:9 個原本沒 defer
@@ -135,140 +132,3 @@ func TestApp_CtxAtomicPointer_NonNilAfterStartup(t *testing.T) {
 	require.Equal(t, ctx, *got, "atomic.Pointer round-trip 必須保持 ctx 等價")
 }
 
-// TestGenerateInteractiveChart_NilParams_Recovered 守護 chart_helpers.go
-// 上輪 H4-H5 漏修的 chart 家族 panic safety net。
-//
-// 此 method 對 nil params 走「early-return ErrNoDataFile」graceful 路徑(由
-// 顯式 nil guard 攔截);panic recovery 是 last-resort safety net,由獨立的
-// nil-state injection 路徑 (chartGen=nil) 觸發。兩條 path 都不可 panic 出去。
-//
-// 兩個 subtest:
-//  1. nil params: 期望 ErrNoDataFile (graceful nil guard) 而非 panic。
-//  2. nil chartGen + Startup-state App: 期望 ErrInternalPanic (defer 接住下游
-//     的 deref panic);證明 defer recoverHandlerPanic 真實安裝。
-func TestGenerateInteractiveChart_NilParams_Recovered(t *testing.T) {
-	t.Run("nil_params_returns_graceful_error", func(t *testing.T) {
-		defer assertNoRepanic(t)
-
-		app := NewApp(config.DefaultConfig(), "test-chart-panic")
-
-		htmlOut, err := app.GenerateInteractiveChart(nil)
-		require.Error(t, err, "nil params 必須回 graceful error,不可 panic")
-		require.ErrorIs(t, err, ErrNoDataFile,
-			"nil params 應走顯式 guard 回 ErrNoDataFile,實際 err=%v", err)
-		require.Empty(t, htmlOut, "graceful 路徑 named return 應為 zero value")
-	})
-
-	t.Run("internal_deref_panic_recovered", func(t *testing.T) {
-		defer assertNoRepanic(t)
-
-		// 注入 nil chartGen:happy path 走到 RenderChartToWriter 時 nil method
-		// receiver 即 panic。defer recoverHandlerPanic 必須接住,否則 t.Fatalf。
-		app := NewApp(config.DefaultConfig(), "test-chart-panic-deref")
-		app.chartGen = nil // 故意破壞 dependency,模擬下游 panic 條件
-
-		// 構造一個 valid params 跑過 nil guard,期待 panic 在下游 RenderChartToWriter
-		// 觸發。FilePath 用空字串會走 readCSVWithPathValidation 失敗 path 回 error,
-		// 但不會 panic — 為了真的觸發 panic,改用「合法 file 但 chartGen nil」。
-		// 簡化:由於 readCSVWithPathValidation 對空字串 FilePath 會回 error,
-		// 沒辦法在純 unit-test 環境精準觸發 RenderChartToWriter panic;改以更
-		// 直接的「無 state App」injection 來測 defer 安裝。
-		brokenApp := &App{logger: logging.GetLogger("test-chart-broken")}
-
-		htmlOut, err := brokenApp.GenerateInteractiveChart(&InteractiveChartParams{
-			FilePath: "any.csv",
-		})
-		require.Error(t, err, "nil-state App 應在下游 deref panic 後被 defer 轉成 error")
-		require.ErrorIs(t, err, ErrInternalPanic,
-			"GenerateInteractiveChart 的 panic 必須轉成 ErrInternalPanic,實際 err=%v", err)
-		require.Empty(t, htmlOut, "panic recovery 後 named return 應為 zero value")
-	})
-}
-
-// TestGenerateChart_NilParams_Recovered 守護 GenerateChart 對 nil-state
-// App 必須走 defer recoverHandlerPanic 回 ErrInternalPanic 而非擊潰 process。
-//
-// GenerateChart 沒有 nil params 風險(ChartParams 是 value type 不會 nil deref),
-// happy 攔截走 ErrInvalidImageFormat 路徑(由 wails_binding_test.go 守);這裡
-// 專門驗證 defer 安裝 — 用 nil-state App 觸發 savePNGFromBase64 內部 a.state.Load
-// 後 deref s.config 的 panic。
-func TestGenerateChart_NilParams_Recovered(t *testing.T) {
-	defer assertNoRepanic(t)
-
-	// 故意建構一個 state 未初始化的 App — savePNGFromBase64 內部會 a.state.Load()
-	// 後 deref s.config.OutputDir,此時 nil deref panic。defer 必須接住。
-	app := &App{logger: logging.GetLogger("test-chart-panic")}
-
-	// 用最小 valid PNG payload 跑過 DecodeAndValidatePNG 三層守門,進入 state.Load
-	// 後 deref 區觸發 panic。
-	validPNGBase64 := buildMinimalValidPNGBase64(t)
-
-	result, err := app.GenerateChart(ChartParams{
-		Title:     "panic-test",
-		FilePath:  "irrelevant.csv",
-		ImageData: "data:image/png;base64," + validPNGBase64,
-	})
-	require.Error(t, err, "nil-state App 應在 state.Load() 後 deref panic 並被 defer 轉成 error")
-	require.ErrorIs(t, err, ErrInternalPanic,
-		"GenerateChart 的 panic 必須轉成 ErrInternalPanic,實際 err=%v", err)
-	require.Nil(t, result, "panic recovery 後 named return 應為 nil pointer")
-}
-
-// TestSavePNGFromBase64_NilParams_Recovered 守護 savePNGFromBase64
-// 雖然不直接由 Wails binding expose,但 GenerateChart 內部呼叫;為了讓 defer
-// 安全網真的覆蓋整個 chart family,savePNGFromBase64 也加 defer。
-//
-// 用 nil-state App 注入 panic — savePNGFromBase64 內部 a.state.Load() 後 deref
-// s.config 時 panic;defer 應吞掉並回 ErrInternalPanic。
-func TestSavePNGFromBase64_NilParams_Recovered(t *testing.T) {
-	defer assertNoRepanic(t)
-
-	app := &App{logger: logging.GetLogger("test-chart-panic")}
-
-	validPNGBase64 := buildMinimalValidPNGBase64(t)
-
-	result, err := app.savePNGFromBase64(ChartParams{
-		Title:     "panic-test",
-		FilePath:  "irrelevant.csv",
-		ImageData: "data:image/png;base64," + validPNGBase64,
-	})
-	require.Error(t, err, "nil-state App 應在 state.Load() 後 deref panic 並被 defer 轉成 error")
-	require.ErrorIs(t, err, ErrInternalPanic,
-		"savePNGFromBase64 的 panic 必須轉成 ErrInternalPanic,實際 err=%v", err)
-	require.Nil(t, result, "panic recovery 後 named return 應為 nil pointer")
-}
-
-// buildMinimalValidPNGBase64 建構通過 DecodeAndValidatePNG 三層守門的最小 PNG
-// payload — 8 byte signature + 4 byte IHDR length + 4 byte "IHDR" + width(=1)
-// + height(=1) + 5 byte IHDR depth/colortype/compression/filter/interlace +
-// 4 byte CRC32 = 33 bytes(等於 pngMinValidLen)。讓 chart panic test 走過 PNG
-// validation 進入 state.Load() panic 區。
-//
-// 起 validator 會驗 chunk CRC32 + image.DecodeConfig,fixture 必須計算
-// 真實 IHDR CRC32 (IEEE polynomial,範圍 = "IHDR" + 13 byte data) + bit depth=8
-// + color type=2 (RGB) 否則 DecodeConfig 也會 reject。
-func buildMinimalValidPNGBase64(t *testing.T) string {
-	t.Helper()
-	// PNG signature
-	data := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
-	// IHDR length (13 = 0x0000000D)
-	data = append(data, 0x00, 0x00, 0x00, 0x0D)
-
-	// IHDR chunk type + data,CRC 範圍從這裡開始。
-	ihdrStart := len(data)
-	data = append(data, 'I', 'H', 'D', 'R')
-	// width = 1 (big-endian uint32)
-	data = append(data, 0x00, 0x00, 0x00, 0x01)
-	// height = 1 (big-endian uint32)
-	data = append(data, 0x00, 0x00, 0x00, 0x01)
-	// bit depth=8, color type=2 (RGB), compression=0, filter=0, interlace=0 —
-	// image.DecodeConfig 可識別的最常見 IHDR 組合。
-	data = append(data, 0x08, 0x02, 0x00, 0x00, 0x00)
-	ihdrEnd := len(data)
-
-	// CRC32 (IEEE) over "IHDR" + 13 byte data。
-	crc := crc32.ChecksumIEEE(data[ihdrStart:ihdrEnd])
-	data = append(data, byte(crc>>24), byte(crc>>16), byte(crc>>8), byte(crc))
-
-	return base64.StdEncoding.EncodeToString(data)
-}

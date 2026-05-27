@@ -161,7 +161,7 @@ test('P2-10: 所有 iframe load 等待都用 addEventListener("load", ..., {once
     const lines = src.split('\n');
     const loadLines = lines.filter(l => /iframe\.addEventListener\(\s*['"]load['"]\s*,/.test(l));
     assert.ok(loadLines.length >= 3,
-        `應至少 3 個 iframe.addEventListener("load", ...)(downloadChart + showCCIResult + downloadCCIChart),got ${loadLines.length}\n` +
+        `應至少 3 個 iframe.addEventListener("load", ...)(showCCIResult + downloadCCIChart + Composer iframe / downloadComposerChart),got ${loadLines.length}\n` +
         loadLines.join('\n'));
 
     // 每個都應該帶 { once: true } 避免重複 fire 累積

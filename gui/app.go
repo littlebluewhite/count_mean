@@ -975,15 +975,6 @@ func (a *App) GetCSVHeaders(params CSVHeadersParams) (headers []string, err erro
 	return records[0], nil
 }
 
-// InteractiveChartParams holds parameters for generating interactive ECharts.
-type InteractiveChartParams struct {
-	FilePath string `json:"filePath"`
-	Columns  []int  `json:"columns"`
-	Title    string `json:"title"`
-	Width    string `json:"width"`
-	Height   string `json:"height"`
-}
-
 // Parameter structures
 
 // MaxMeanParams holds parameters for maximum mean calculation.
@@ -1018,14 +1009,6 @@ type NormalizeResult struct {
 	Data       [][]float64 `json:"data"`
 	Success    bool        `json:"success"`
 	Message    string      `json:"message"`
-}
-
-// ChartParams holds parameters for chart generation.
-type ChartParams struct {
-	FilePath  string `json:"filePath"`
-	Columns   []int  `json:"columns"`
-	Title     string `json:"title"`
-	ImageData string `json:"imageData"` // base64 PNG 數據
 }
 
 // ChartResult holds the result of chart generation.
