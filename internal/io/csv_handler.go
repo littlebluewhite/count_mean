@@ -994,6 +994,11 @@ func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 	if len(p.Points) == 0 {
 		return "", errEmptyMuscleRatioPayload
 	}
+	// Points 非空但 Times 空時,nearestTimeIndex 仍會回 0,後面 p.Times[idx]
+	// 會 index 越界 panic — 提早 fail 為 errEmptyMuscleRatioPayload。
+	if len(p.Times) == 0 {
+		return "", errEmptyMuscleRatioPayload
+	}
 
 	safeSubject := calculator.SanitizeFileName(p.Subject)
 	filename := fmt.Sprintf("%s_muscle_ratio_phases.csv", safeSubject)

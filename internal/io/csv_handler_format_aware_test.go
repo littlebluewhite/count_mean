@@ -586,3 +586,21 @@ func TestWriteMuscleRatioOutputAll_NaNInfCell(t *testing.T) {
 	assert.Equal(t, []string{"0.0000", ""}, rows[1])
 	assert.Equal(t, []string{"1.0000", ""}, rows[2])
 }
+
+// TestWriteMuscleRatioOutputPhases_EmptyTimesRejected 驗證 codex review 抓的 P2 —
+// payload 帶 Points 但 Times 空時,nearestTimeIndex 回 0 後 p.Times[0] 會 index
+// 越界 panic。要求 WriteMuscleRatioOutputPhases 提早回 errEmptyMuscleRatioPayload。
+func TestWriteMuscleRatioOutputPhases_EmptyTimesRejected(t *testing.T) {
+	handler, _ := newFormatAwareTestHandler(t)
+
+	_, err := handler.WriteMuscleRatioOutputPhases(WriteRequest{}, MuscleRatioOutputPhasesPayload{
+		Subject:    "empty_times",
+		PairLabels: []string{"R1"},
+		Times:      []float64{}, // 故意空
+		Ratios:     [][]float64{{0.1}},
+		Points: []MuscleRatioPhasePoint{
+			{Name: "P1", Time: 0.5},
+		},
+	})
+	require.ErrorIs(t, err, errEmptyMuscleRatioPayload)
+}

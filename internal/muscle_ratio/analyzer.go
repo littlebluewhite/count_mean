@@ -88,6 +88,12 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 	if params == nil {
 		return nil, fmt.Errorf("params 不能為 nil")
 	}
+	// ADR-0003 Boundary 1: muscle_ratio 寫檔須透過 CSVHandler。如果 caller 沿用舊
+	// Params 結構未填 CSVHandler 欄位,在 analyzeSubject 內取用會 nil-deref panic;
+	// 提早 fail 給 caller 明確訊息。
+	if params.CSVHandler == nil {
+		return nil, fmt.Errorf("params.CSVHandler 不能為 nil (ADR-0003: muscle_ratio 寫檔須透過 CSVHandler)")
+	}
 
 	// Defense-in-depth：config 載入時已驗證 OutputDir，但 GUI file dialog 等繞過
 	// config 的 caller 仍可能傳壞值。附 dummy child 後 ValidateExternalPath 擋

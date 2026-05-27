@@ -1356,3 +1356,18 @@ func TestCollectPhasePoints_NegativeMotionIndex(t *testing.T) {
 	require.NotEqual(t, "", warn, "負 D 走 NoOpt,collectPhasePoints 應跳過")
 	assert.Nil(t, points)
 }
+
+// TestAnalyze_NilCSVHandlerReturnsErr 驗證 codex review 抓的 P2 — 舊式 Params
+// 構造若未填 CSVHandler 欄位,Analyze 必須回乾淨 error 而非 deep 入 analyzeSubject
+// 內 nil-deref panic。對應 ADR-0003 Boundary 1 「Analyzer 依賴 CSVHandler 注入」。
+func TestAnalyze_NilCSVHandlerReturnsErr(t *testing.T) {
+	a := NewAnalyzer()
+	_, err := a.Analyze(context.Background(), &Params{
+		ManifestFile: "/nonexistent.csv", // 不會被讀到 — nil check 在 path validation 前
+		DataFolder:   t.TempDir(),
+		OutputDir:    t.TempDir(),
+		// CSVHandler 故意 omit
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "CSVHandler", "error 應點明 CSVHandler 欄位缺失")
+}
