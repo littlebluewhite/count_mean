@@ -187,6 +187,32 @@ test('bridge bypass guard: main.js 剝註解後不可直接 window.addEventListe
     );
 });
 
+// codex review #1 P2:downloadCCIChart / downloadComposerChart 必須在 send
+// PNG requestReply 之前 await iframe ready promise。否則 iframe customJS
+// (含 external echarts.min.js)還沒 load 完成,listener 尚未註冊,
+// requestReply 訊息被 drop → 10s timeout。
+test('codex#1 P2: downloadCCIChart 在 requestReply 前 await _cciIframeReady', async () => {
+    const src = await readMainJs();
+    const fnStart = src.indexOf('async downloadCCIChart()');
+    assert.ok(fnStart > 0, '找不到 downloadCCIChart');
+    const reqIdx = src.indexOf('cci-request-png', fnStart);
+    assert.ok(reqIdx > 0, 'downloadCCIChart 內必須含 cci-request-png');
+    const beforeReq = src.slice(fnStart, reqIdx);
+    assert.match(beforeReq, /await\s+this\._cciIframeReady/,
+        'downloadCCIChart 必須在 bridge.requestReply 之前 await this._cciIframeReady');
+});
+
+test('codex#1 P2: downloadComposerChart 在 requestReply 前 await _composerIframeReady', async () => {
+    const src = await readMainJs();
+    const fnStart = src.indexOf('async downloadComposerChart()');
+    assert.ok(fnStart > 0, '找不到 downloadComposerChart');
+    const reqIdx = src.indexOf('composer-request-png', fnStart);
+    assert.ok(reqIdx > 0, 'downloadComposerChart 內必須含 composer-request-png');
+    const beforeReq = src.slice(fnStart, reqIdx);
+    assert.match(beforeReq, /await\s+this\._composerIframeReady/,
+        'downloadComposerChart 必須在 bridge.requestReply 之前 await this._composerIframeReady');
+});
+
 // -------------------- Slice D codex P2 #3 + #4 source guards --------------------
 
 // onComposerSubjectChange 必須 clear 上一個 subject 的 _composerEMGMotionOffset
