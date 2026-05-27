@@ -1,17 +1,17 @@
-Subject,motion file,Force Plate file,EMG file,¦P¨B®É¶¡ÂI_MOTION,P0,P1,P2,S±Ò°ÊÀþ¶¡,C¤UÃÛ¥[³t´î³tÂà´«Àþ¶¡,"D¤UÃÛµ²§ôÀþ¶¡
-",T0¥¿½Ä¶qµ²§ôÀþ¶¡,T°_¸õÀþ¶¡,"O®iÅéÀþ¶¡
-",LµÛ¦aÀþ¶¡,¦Ù¦×¤ñ­È file,"¤ÀªR
-²Ä´Xµ§",20Hz.data,¸ê®Æ¶×¥X,,µLMVIC¼Ð·Ç¤ÆÀÉ®×
-NSF1,NSF11_BTS_5_ok_OK_20Hz.csv,NSF11_BTS_5.anc.xlsx,NSF_1_BTS%_5.9_BP30450_RMS0.1_0.09.csv,966,16.645,16.780001,17.224001,17.440001,17.809999,4469,18.134001,18.164,4645,18.775999,NSF1_muscle_ratio.csv,5,v NSF11_BTS5©Ç©Çªº ¦ý«D³ÌÀu¥ý¨Ï¥Îªº¸ê®Æ,v,R,
+Subject,motion file,Force Plate file,EMG file,åŒæ­¥æ™‚é–“é»ž_MOTION,P0,P1,P2,Så•Ÿå‹•çž¬é–“,Cä¸‹è¹²åŠ é€Ÿæ¸›é€Ÿè½‰æ›çž¬é–“,"Dä¸‹è¹²çµæŸçž¬é–“
+",T0æ­£è¡é‡çµæŸçž¬é–“,Tèµ·è·³çž¬é–“,"Oå±•é«”çž¬é–“
+",Lè‘—åœ°çž¬é–“,è‚Œè‚‰æ¯”å€¼ file,"åˆ†æž
+ç¬¬å¹¾ç­†",20Hz.data,è³‡æ–™åŒ¯å‡º,,ç„¡MVICæ¨™æº–åŒ–æª”æ¡ˆ
+NSF1,NSF11_BTS_5_ok_OK_20Hz.csv,NSF11_BTS_5.anc.xlsx,NSF_1_BTS_5.9_BP30450_RMS0.1_0.09.csv,966,16.645,16.780001,17.224001,17.440001,17.809999,4469,18.134001,18.164,4645,18.775999,NSF1_muscle_ratio.csv,5,v NSF11_BTS5æ€ªæ€ªçš„ ä½†éžæœ€å„ªå…ˆä½¿ç”¨çš„è³‡æ–™,v,R,
 NSF2,NSF2_BTS_4_ok_20Hz.csv,NSF2_BTS_4.xlsx,NSF_2_BTS%_4.16_BP30450_RMS0.1_0.09.csv,600,10.667,12.029,12.237,12.384,12.651,3174,12.992,13.025,3363,13.61,NSF2_muscle_ratio.csv,4,v,v,R,
 NSF3,NSF3_BTS_1_ok_20Hz.csv,NSF3_BTS_1.anc.xlsx,NSF_3_BTS%_1.8_BP30450_RMS0.1_0.09.csv,259,13.673,17.613001,17.816999,17.906,18.605,4647,18.872999,18.909,4801,19.464001,NSF3_muscle_ratio.csv,1,v,v,R,
 NSF4,NSF4_BTS_3_ok_20Hz.csv,NSF4_NSF_3.anc.xlsx,NSF_4_BTS%_3.9_BP30450_RMS0.1_0.09.csv,265,x,x,7.469,7.641,7.936,2009,8.333,8.361,2182,8.973,NSF4_muscle_ratio.csv,3,v,v,R,
 NSF5,NSF5_BTS_3_ok_20Hz.csv,NSF5_NSF_3.anc.xlsx,NSF_5_BTS%_2.6_BP30450_RMS0.1_0.09.csv,663,17.695999,17.884001,18.114,18.271,18.587999,4669,18.933001,18.959999,4840,19.556999,NSF5_muscle_ratio.csv,3,v,v,R,
 NSF6,NSF6_BTS_2_ok_20Hz.csv,NSF6_NSF_2.anc.xlsx,NSF_6_BTS%_3.8_BP30450_RMS0.1_0.09.csv,619,12.419,12.62,12.986,13.176,13.528,3408,13.906,13.939,3596,14.56,NSF6_muscle_ratio.csv,2,v,v,R,
-NSF9,NSF9_BTS_3_ok_20Hz.csv,NSF9_BTS_3.anc.xlsx,NSF_9_BTS%_4.8_BP30450_RMS0.1_0.09.csv,1728,16.624001,16.889,16.993999,17.086,17.712,4445,18.066,18.089001,4623,18.754,NSF9_muscle_ratio.csv,3,V NSF9_3_ok¬°¥ç¨°­«·s¸ÉÂIª©,v,R,
-NSF10,NSF10_BTS_3_ok_20Hz.csv,NSF10_BTS_3.anc.xlsx,NSF_10_BTS%_3.5_BP30450_RMS0.1_0.09.csv,1017,16.843,17.853001,18.070999,18.252001,18.695999,4702,19.107,19.129,4890,19.798,NSF10_muscle_ratio.csv,3,V hip¤w­«·s¸ÉÂI³B²z,v,R,
-SF1,SF1_BTS_5_ok_20Hz.csv,SF1_BTS_5.anc.xlsx,SF_1_BTS%_3.2_BP30450_RMS0.1_0.09.csv,627,x,x,15.042,15.214,15.497,3895,15.841,15.863,4066,16.476,SF1_muscle_ratio.csv,5,"V SF1_5_ok½¥Ãö¸`¤º¥~°¼¦³­«¸É¦nÂoªi¦n¤F
-knee angle¥½´Á¨¤«×©Ç©Çªº¡A»Ý¦b½T»{",v,,
+NSF9,NSF9_BTS_3_ok_20Hz.csv,NSF9_BTS_3.anc.xlsx,NSF_9_BTS%_4.8_BP30450_RMS0.1_0.09.csv,1728,16.624001,16.889,16.993999,17.086,17.712,4445,18.066,18.089001,4623,18.754,NSF9_muscle_ratio.csv,3,V NSF9_3_okç‚ºäº¦è¾°é‡æ–°è£œé»žç‰ˆ,v,R,
+NSF10,NSF10_BTS_3_ok_20Hz.csv,NSF10_BTS_3.anc.xlsx,NSF_10_BTS%_3.5_BP30450_RMS0.1_0.09.csv,1017,16.843,17.853001,18.070999,18.252001,18.695999,4702,19.107,19.129,4890,19.798,NSF10_muscle_ratio.csv,3,V hipå·²é‡æ–°è£œé»žè™•ç†,v,R,
+SF1,SF1_BTS_5_ok_20Hz.csv,SF1_BTS_5.anc.xlsx,SF_1_BTS%_3.2_BP30450_RMS0.1_0.09.csv,627,x,x,15.042,15.214,15.497,3895,15.841,15.863,4066,16.476,SF1_muscle_ratio.csv,5,"V SF1_5_okè†é—œç¯€å…§å¤–å´æœ‰é‡è£œå¥½æ¿¾æ³¢å¥½äº†
+knee angleæœ«æœŸè§’åº¦æ€ªæ€ªçš„ï¼Œéœ€åœ¨ç¢ºèª",v,,
 SF2,SF2_BTS_4_ok_20Hz.csv,SF2_BTS_4.anc.xlsx,SF_2_BTS%_4.8_BP30450_RMS0.1_0.09.csv,624,12.051,12.552,12.826,13.018,13.305,3350,13.678,13.703,3527,14.3,SF2_muscle_ratio.csv,4,v,v,B,
 SF3,SF3_BTS_5_ok_20Hz.csv,SF3_BTS_5.anc.xlsx,SF_3_BTS%_6.12_BP30450_RMS0.1_0.09.csv,343,10.53,14.873,15.091,15.204,15.394,3856,15.674,15.696,4009,16.320999,SF3_muscle_ratio.csv,5,v,v,R,
 SF5,SF5_BTS_4_ok_20Hz.csv,SF5_BTS_4.anc.xlsx,SF_5_BTS%_4.12_BP30450_RMS0.1_0.09.csv,721,11.255,11.434,11.617,11.805,12.116,3041,12.403,12.426,3205,13.047,SF5_muscle_ratio.csv,4,v,v,R,
