@@ -63,6 +63,12 @@ class EMGAnalysisApp {
             muscleRatio: () => this._manifestPanel.run(makeMuscleRatioSpec(this)),
             config: () => this.showConfigPanel(),
         };
+        // Composer 跨 re-render / re-generate 持久的 channel/phase 勾選 Set(ADR-0007 §9:
+        // panel state 留 app this 自管)。原本由 showChartComposerPanel lazy-init,M5 刪該
+        // method 後 loadComposerEMGChannels 裸 iterate _composerSelectedChannels 會在首次
+        // 點「載入 EMG 欄位」TypeError — 移到 constructor 確保所有 entry path 安全。
+        this._composerSelectedChannels = new Set();
+        this._composerCheckedPhases = new Set();
         this.config = null;
         this.init();
     }

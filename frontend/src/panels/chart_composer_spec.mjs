@@ -113,9 +113,8 @@ export function composerFormBody(t) {
 export function makeChartComposerSpec(app) {
     return {
         titleKey: 'panel.composer.title',
-        // status.composer_running 暫尚未在 backend i18n 字典加上 — t() 缺 key 時
-        // fallback 為 key 字面字串,讓 M5 wiring 補上 key 後自動生效。
-        // 對齊現有 main.js:1894 `this.updateStatus('Chart Composer 生成中...')` 語意。
+        // status.composer_running 已於 M5 wiring 補進 4 locale(取代舊 hardcoded
+        // 'Chart Composer 生成中...' main.js debt)。
         statusRunningKey: 'status.composer_running',
         runBtnLabelKey: 'button.generate_chart',
         // Composer 的成功訊號是「chart 出現」— ADR-0007 §6 + handoff 鎖定:
