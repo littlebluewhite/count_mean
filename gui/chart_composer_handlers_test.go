@@ -503,36 +503,13 @@ func TestDownloadChartComposerImage_NilParams(t *testing.T) {
 	assert.Contains(t, err.Error(), "參數")
 }
 
-func TestDownloadChartComposerImage_RejectsInvalidPNG(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-
-	result, err := app.DownloadChartComposerImage(&DownloadChartComposerImageParams{
-		Base64Data: "not-a-data-url",
-		OutputPath: filepath.Join(t.TempDir(), "out.png"),
-	})
-
-	require.Error(t, err)
-	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "圖片",
-		"PNG format 失敗應走 ErrInvalidImageFormat path")
-}
-
-func TestDownloadChartComposerImage_RejectsTraversalOutputPath(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-
-	// /etc/ 是系統敏感 prefix,validateExternalPathInputs 必擋。
-	result, err := app.DownloadChartComposerImage(&DownloadChartComposerImageParams{
-		Base64Data: validPNGDataURLForComposer(),
-		OutputPath: "/etc/malicious_composer.png",
-	})
-
-	require.Error(t, err)
-	assert.Nil(t, result)
-	assert.True(t,
-		strings.Contains(err.Error(), "路徑驗證失敗") ||
-			strings.Contains(err.Error(), "輸出路徑"),
-		"err 應含 boundary path validation 標誌: got %v", err)
-}
+// 註:bad-prefix→ErrInvalidImageFormat 與 sensitive-path rejection 這兩個原本
+// 在此的 case，已隨 ADR-0009 Phase 2 把共用 PNG 管線抽到 downloadValidatedPNG，
+// 改由 helper 的 seam test（png_download_test.go:
+// TestDownloadValidatedPNG_RejectsBadPrefix /
+// TestDownloadValidatedPNG_RejectsSensitivePath_NoDoubleLabel）擁有,避免重複覆蓋。
+// 此處僅保留 Composer adapter 行為:nil params guard、base-name sanitize、
+// .png normalization、happy-path 寫到指定 OutputPath。
 
 // TestDownloadChartComposerImage_AddsPNGExtIfMissing 釘住 ext-normalization:
 // 即使 OutputPath 沒帶 .png 副檔名,handler 應自動補上。

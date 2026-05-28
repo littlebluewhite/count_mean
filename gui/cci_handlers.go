@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/cci"
 	"count_mean/internal/io"
-	"count_mean/internal/security/fsperm"
 	"count_mean/internal/security/redact"
 )
 
@@ -149,24 +147,16 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 }
 
 // DownloadCCIChart 下載 CCI 圖表為 PNG 檔案.
+//
+// adapter 職責:從 params.Subject 推導 OutputDir 內的固定檔名
+// ({safeSubject}_CCI_Rudolph.png),sanitize 防 traversal。共用的 PNG 安全
+// 管線（prefix 檢查 → decode/validate → boundary 路徑驗證 → WriteFileNoFollow）
+// 已抽到 downloadValidatedPNG（ADR-0009）— 此 handler 只負責 adapter 邏輯與
+// handler-level logging,不再內聯管線。
 func (a *App) DownloadCCIChart(params CCIDownloadParams) (result *ChartResult, err error) {
 	defer recoverHandlerPanic("DownloadCCIChart", a.logger, &err)
 
 	a.logger.Info("開始下載 CCI 圖表", nil)
-
-	dataURL := params.ImageData
-	if !strings.HasPrefix(dataURL, "data:image/png;base64,") {
-		return nil, ErrInvalidImageFormat
-	}
-
-	base64Data := strings.TrimPrefix(dataURL, "data:image/png;base64,")
-
-	// base64 decode 前先擋 size,decode 後驗 PNG signature + IHDR
-	// dimension。詳見 gui/png_validation.go DecodeAndValidatePNG。
-	pngData, err := DecodeAndValidatePNG(base64Data)
-	if err != nil {
-		return nil, fmt.Errorf("PNG 驗證失敗: %w", err)
-	}
 
 	// params.Subject 來自前端，需先 sanitize 避免路徑穿越（"../x" 之類）。
 	safeSubject := calculator.SanitizeFileName(params.Subject)
@@ -176,41 +166,19 @@ func (a *App) DownloadCCIChart(params CCIDownloadParams) (result *ChartResult, e
 		fmt.Sprintf("%s_CCI_Rudolph.png", safeSubject),
 	)
 
-	// M23(P2)：boundary 路徑驗證 — 對齊 AnalyzeCCI / AnalyzeMuscleRatio /
-	// AnalyzeNormalizedPhaseSync 的 defense-in-depth 模式。
-	//
-	// 為何需要:雖然 OutputDir 來自 config 而非前端直接控,但 config 可能
-	// 被惡意修改(直接編輯 config.json 或舊版 bug 讓 traversal 寫進去),
-	// 而 SanitizeFileName 對 Subject 已做基本處理仍不能保證最終 outputPath
-	// 不落到系統敏感目錄。fsperm.WriteFileNoFollow 雖會擋 symlink follow,
-	// 但 boundary 提早 reject 對 audit log 與錯誤訊息都更友善。
-	//
-	// 為何擋的是組合後的 outputPath:外部攻擊面其實是「OutputDir + Subject」
-	// 的合成結果,單獨驗 OutputDir 不能完全覆蓋(Subject 雖經 sanitize 仍
-	// 可能拼出意外路徑),驗合成後路徑是 strongest invariant。
-	//
-	// label 直接帶 "PNG 輸出路徑" 一次到位,validateExternalPathInputs 已會
-	// 在後面附上「路徑驗證失敗: <reason>」。原本還在 caller 端再 wrap 一層
-	// fmt.Errorf("PNG 輸出 %w", pathErr) 會產生重複 label
-	// 「PNG 輸出 輸出路徑 路徑驗證失敗: ...」— 同樣資訊出現兩次,使用者看了
-	// 還會以為是兩個獨立步驟都失敗。集中在 label 參數,wrap chain 只一次。
-	if pathErr := validateExternalPathInputs("PNG 輸出路徑", outputPath); pathErr != nil {
-		return nil, pathErr
-	}
-
-	if err := fsperm.WriteFileNoFollow(outputPath, pngData); err != nil {
-		return nil, fmt.Errorf("保存圖片失敗: %w", err)
+	result, err = a.downloadValidatedPNG(params.ImageData, outputPath)
+	if err != nil {
+		a.logger.Error("CCI 圖表下載失敗", err, map[string]any{
+			"output": outputPath,
+		})
+		return nil, err
 	}
 
 	a.logger.Info("CCI 圖表下載完成", map[string]any{
 		"output": outputPath,
 	})
 
-	return &ChartResult{
-		OutputPath: outputPath,
-		Success:    true,
-		Message:    fmt.Sprintf("圖表已下載至: %s", outputPath),
-	}, nil
+	return result, nil
 }
 
 // failedCCIResult returns a CCI result indicating failure.
