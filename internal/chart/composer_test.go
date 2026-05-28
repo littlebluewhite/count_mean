@@ -854,3 +854,104 @@ func TestBuildComposerLineData_NaNBreaksLine(t *testing.T) {
 	assert.Nil(t, out[1].Value, "NaN → nil(line gap)")
 	assert.NotNil(t, out[2].Value, "正常值 → [t,v]")
 }
+
+// TestDownsampleSeriesMap_GracefulMismatchSkip 釘住 Composer 的「長度不符 channel
+// graceful skip」策略 — 與 CCI fail-fast 相反：mismatched channel 被靜默過濾，
+// 不會 panic，不會 error，也不會污染 downsampled 結果。
+//
+// 重要：這是 Composer 相對 CCI 的刻意差異；任何把 Composer 改成 fail-fast 的
+// refactor 都應在此 test 失敗前停下來確認語意變更。
+func TestDownsampleSeriesMap_GracefulMismatchSkip(t *testing.T) {
+	const n = 500
+	// 建構 time slice
+	time := make([]float64, n)
+	for i := range time {
+		time[i] = float64(i) * 0.001
+	}
+	// "good": 長度符合，會被 downsample
+	good := make([]float64, n)
+	for i := range good {
+		good[i] = float64(i)*0.1 + float64(i%7) // 非平坦，讓 LTTB 有點選
+	}
+	// "bad": 長度不符，應被 graceful skip（絕對不能 panic 或 error）
+	bad := make([]float64, 200)
+	for i := range bad {
+		bad[i] = float64(i)
+	}
+
+	series := map[string][]float64{
+		"good": good,
+		"bad":  bad,
+	}
+
+	// threshold=50，n=500 > 50 → 觸發 downsampling
+	newTime, newSeries := downsampleSeriesMap(time, series, 50)
+
+	// "good" 必須在結果 map 內，且長度與 newTime 對齊，並確實被壓縮
+	require.Contains(t, newSeries, "good", `"good" channel 長度符合，應保留在結果 map 內`)
+	assert.Len(t, newSeries["good"], len(newTime), `"good" 結果長度應等於 newTime 長度`)
+	assert.Less(t, len(newTime), n, "downsampling 後 newTime 長度應小於原始 500")
+
+	// "bad" 必須從結果 map 中消失（graceful skip — 不是 error，不是 panic）
+	assert.NotContains(t, newSeries, "bad",
+		`"bad" channel 長度不符（200 ≠ 500），應被 graceful skip，不出現於結果 map`)
+
+	// cap 驗證：結果長度不超過 threshold*2 + 1（含末筆保留）
+	assert.LessOrEqual(t, len(newTime), 50*2+1,
+		"downsampled 長度應不超過 threshold*2+1（cap honored）")
+}
+
+// TestDownsampleSeriesMap_AllMismatched_Passthrough 驗證「全部 channel 都長度不符」
+// 時的 passthrough 行為：因為 matrix 為空，kernel 回傳 nil，函式應原封不動回傳
+// 原始 time 和 series（含那些長度不符的 channel）。
+//
+// 這確保 caller（RenderComposer 上層）在全部 channel 都無效時不會拿到空 map，
+// 而是保留原始輸入讓上層決定如何降級處理。
+func TestDownsampleSeriesMap_AllMismatched_Passthrough(t *testing.T) {
+	const n = 500
+	time := make([]float64, n)
+	for i := range time {
+		time[i] = float64(i) * 0.001
+	}
+	// 全部 channel 長度不符
+	a := make([]float64, 100)
+	b := make([]float64, 200)
+	series := map[string][]float64{
+		"a": a,
+		"b": b,
+	}
+
+	// threshold=50，n=500 > 50 → 嘗試 downsampling，但 matrix 為空
+	newTime, newSeries := downsampleSeriesMap(time, series, 50)
+
+	// 應回傳原始 time 和 series（identity passthrough）
+	assert.Len(t, newTime, n, "全部 channel 不符時，newTime 應與原始 time 等長（passthrough）")
+	// 原始 series 的兩個 channel 都應該還在（原始 map 原封不動回傳）
+	require.Contains(t, newSeries, "a", `passthrough 後 "a" 應仍在 map 中`)
+	require.Contains(t, newSeries, "b", `passthrough 後 "b" 應仍在 map 中`)
+	assert.Len(t, newSeries["a"], 100, `"a" 長度應保持原始 100`)
+	assert.Len(t, newSeries["b"], 200, `"b" 長度應保持原始 200`)
+}
+
+// TestDownsampleSeriesMap_BelowThreshold_Passthrough 驗證「time 長度 ≤ threshold」
+// 的 identity passthrough：這是函式頂部的退化條件，直接回傳原始引用，不做任何複製。
+func TestDownsampleSeriesMap_BelowThreshold_Passthrough(t *testing.T) {
+	time := make([]float64, 10)
+	for i := range time {
+		time[i] = float64(i)
+	}
+	vals := make([]float64, 10)
+	for i := range vals {
+		vals[i] = float64(i) * 2
+	}
+	series := map[string][]float64{"ch": vals}
+
+	// threshold=50 > len(time)=10 → 直接 passthrough，不 downsample
+	newTime, newSeries := downsampleSeriesMap(time, series, 50)
+
+	// 回傳的 time 應與輸入等長（identity）
+	assert.Len(t, newTime, 10, "len(time)=10 ≤ threshold=50，應原樣回傳（passthrough）")
+	// channel 應原樣在 map 中且長度不變
+	require.Contains(t, newSeries, "ch")
+	assert.Len(t, newSeries["ch"], 10, "channel 長度應維持 10（passthrough 不截斷）")
+}
