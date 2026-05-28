@@ -46,9 +46,18 @@ _Avoid_: structured write, typed write, formatted output.
 所有 format-aware write 共用的請求外殼，欄位有 Filename（檔名）、SubDir（可選的 OutputDir 子目錄，空字串 = 寫到 OutputDir 根）、Headers、Data（generic payload）。
 _Avoid_: write options, write spec, csv request.
 
+**Domain analyzer**
+`internal/{cci, muscle_ratio, phase_sync}` 三個以 [[Manifest]] + dataFolder 為入口的領域計算 orchestrator。每個 analyzer 載入 manifest → 解析 [[Subject]] → parse EMG → 計算該分析種類的領域結果，math 細節下放給 calculator kernel（[[ADR-0005]] calculator family）/ synchronizer / parsers。位於 [[Analysis pipeline family]]（GUI handler，唯一 caller）之下、calculator kernel 之上。
+三者形狀**刻意分歧**，沿兩條正交軸：
+- **Subject cardinality**：`single-subject`（`cci.AnalyzeCCI` / `phase_sync.AnalyzePhaseSync` 吃 [[Subject]] index、回單一 result struct）｜ `batch`（`muscle_ratio.Analyze` 迴圈整份 manifest、回 `[]SubjectResult` partial-success slice）。
+- **Output ownership**：`compute-only`（cci / phase_sync 只回 compute struct，CSV 由 GUI handler 的 `WriteCSV` closure 寫）｜ `compute+write`（muscle_ratio 在 analyzer 內部寫 CSV 並回填 path，GUI `WriteCSV: nil` — 見 [[ADR-0004]]）。
+membership 判準是 **manifest + dataFolder 驅動**：GUI `AnalyzePhases` 雖在 [[Analysis pipeline family]] 內，但吃單一 raw CSV input file 並委派 `calculator.PhaseAnalyzer`，**不是** domain analyzer — 所以 GUI handler 家族有 4 member、domain analyzer 層只有 3。兩軸上的分歧為何刻意保留（deletion test）見 [[ADR-0012]]。
+_Avoid_: [[Analysis pipeline family]]（GUI caller 層，非 compute 核）、AnalysisHandler[P, R]（GUI 泛型樣板）、calculator family（被委派的 math kernel，[[ADR-0005]]）、把某個 GUI handler 叫 analyzer（analyzer 專指此 internal 層）、analysis engine（engine 一詞 [[ADR-0008]] 已用於已刪的 chart 引擎）.
+
 **Analysis pipeline family**
-四個形狀相近的 GUI handler 家族：`AnalyzePhases`、`AnalyzePhaseSync`、未來的 `AnalyzeCCI`、未來的 `AnalyzeMuscleRatio`。共同形狀為「validate → execute（含 manifest/dataset load）→ CSV write via csvHandler」三步管線，輸入為 manifest 或 dataset、輸出為 result + outputPath。
+四個形狀相近的 GUI handler 家族：`AnalyzePhases`、`AnalyzePhaseSync`、`AnalyzeCCI`、`AnalyzeMuscleRatio`。共同形狀為「validate → execute（含 manifest/dataset load）→ CSV write via csvHandler」三步管線，輸入為 manifest 或 dataset、輸出為 result + outputPath。
 _Not included_: `CalculateMaxMean`（batch loop + file discovery）、`NormalizeData`（雙 input file）── 形狀不同，不屬此家族。
+_Backend 委派_: 四 member 中 `AnalyzeCCI` / `AnalyzePhaseSync` / `AnalyzeMuscleRatio` 的 Execute 委派 [[Domain analyzer]] 層（backend compute 核）；`AnalyzePhases` 委派 `calculator.PhaseAnalyzer`（[[ADR-0005]] calculator family）。本家族是 GUI handler 層，與 [[Domain analyzer]] 不同層。
 _Avoid_: GUI handler, analysis function, analyzer.
 
 **AnalysisHandler[P, R]**
