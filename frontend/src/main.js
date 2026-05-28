@@ -1096,10 +1096,16 @@ class EMGAnalysisApp {
     //   套到 B 的 motion data 上 → motion / phase markers 全錯位。
     //
     //   修法:subject change 時 clear offset 為 0 + clear `_composerLoadedSubject`
-    //   to null。`generateComposerChart` 會在 RPC 前驗 `_composerLoadedSubject` 等於
-    //   當前 subject,否則 ShowError 強制 user 重新按「載入 EMG 欄位」。
+    //   to null。chart_composer_spec.mjs 的 spec.rpc 會在 RPC 前驗
+    //   `_composerLoadedSubject` 等於當前 subject,否則 throw → envelope ShowError
+    //   強制 user 重新按「載入 EMG 欄位」(M5 後 guard 從 main.js 移到 spec rpc)。
+    //
+    // M5:由 chart_composer_spec.mjs 的 onSubjectChange hook 經 ManifestPanel
+    // onMpSubjectChange 委派呼叫。結果區/圖表容器改走 ManifestPanel shell 的
+    // #mpResult(舊 #composerResult 已隨 showChartComposerPanel 刪除);
+    // #composerChartContent 由 spec.onResult render 進 #mpResultContent,id 不變。
     onComposerSubjectChange() {
-        const resultDiv = document.getElementById('composerResult');
+        const resultDiv = document.getElementById('mpResult');
         if (resultDiv) {
             resultDiv.style.display = 'none';
             const wrap = document.getElementById('composerChartContent');
@@ -1182,8 +1188,9 @@ class EMGAnalysisApp {
             }
 
             this._composerEMGMotionOffset = Number(result.emgMotionOffset) || 0;
-            // codex P2#3:記錄成功 load 的 subject,讓 generateComposerChart 能驗證
-            // user 沒有「subject 切了但沒重新 load」就直接 generate。
+            // codex P2#3:記錄成功 load 的 subject,讓 chart_composer_spec.mjs 的
+            // spec.rpc 能驗 user 沒有「subject 切了但沒重新 load」就直接 generate
+            //(M5 後 generate 走 spec rpc,guard 一併移過去)。
             this._composerLoadedSubject = subject;
         } catch (err) {
             console.error('載入 EMG 通道失敗:', err);
