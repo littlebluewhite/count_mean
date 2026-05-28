@@ -362,6 +362,128 @@ test('8. spec.runBtnLabelKey:default 為 button.start_analyze、override 走 spe
     }
 });
 
+// ---------- bindPhaseCheckboxes onUpdate(M3 prep)----------
+
+test('9. bindPhaseCheckboxes 帶 onUpdate callback:checkbox change 後呼叫 (pcts, checkedPhases)', async () => {
+    // M3 prep API extension:CCI 需要 phase checkbox change 觸發後刷新 pct 文字
+    // 面板(對齊既有 main.js _updatePhasePositionDisplay)。bindPhaseCheckboxes
+    // 新增 optional onUpdate(pcts, checkedPhases) callback,在 bridge.send 完成
+    // 後 invoke。本 test 釘:首次 render 一次 + 每次 checkbox change 各一次。
+    const { window, mp } = await setup();
+    try {
+        // container 預備
+        const container = window.document.createElement('div');
+        container.id = 'phasesForTest';
+        window.document.body.appendChild(container);
+
+        // stub bridge.send(避免真的 postMessage)+ recalcPercents
+        const sentMessages = [];
+        const stubBridge = {
+            send: (_iframe, type, payload) => { sentMessages.push({ type, payload }); },
+        };
+        // recalcPercents fake:每個 phase 一個 pct,name → pct map
+        const recalcStub = (checkedPhases) => {
+            const out = {};
+            checkedPhases.forEach((p, i) => { out[p.name] = i * 10; });
+            return out;
+        };
+
+        // onUpdate spy:每次呼叫記下 (pcts, checkedPhases)
+        const updateCalls = [];
+        const onUpdateSpy = (pcts, checkedPhases) => {
+            updateCalls.push({ pcts, checkedPhases });
+        };
+
+        // 用 fake iframe stub(bindPhaseCheckboxes 只把它 forward 給 bridge.send)
+        const fakeIframe = window.document.createElement('iframe');
+
+        mp.bindPhaseCheckboxes({
+            phaseTimes: { P0: 0, P1: 100, P2: 200 },
+            adapter: 'cci',
+            containerId: 'phasesForTest',
+            bridge: stubBridge,
+            iframe: fakeIframe,
+            recalcPercents: recalcStub,
+            checkedSet: new Set(),
+            onUpdate: onUpdateSpy,
+        });
+
+        // 首次 render 後 emitUpdate 應觸發一次
+        assert.equal(updateCalls.length, 1, '首次 render 應觸發一次 onUpdate');
+        const first = updateCalls[0];
+        assert.deepEqual(
+            first.checkedPhases.sort(),
+            ['P0', 'P1', 'P2'],
+            '預設全勾 → checkedPhases 為 [P0, P1, P2]'
+        );
+        assert.equal(typeof first.pcts, 'object', 'pcts 應為 object(name → pct map)');
+
+        // bridge.send 也該被呼叫一次,payload 含 checkedPhases
+        assert.equal(sentMessages.length, 1, 'bridge.send 應呼叫一次');
+        assert.equal(sentMessages[0].type, 'cci-update-phase-markers', 'message type 應為 ${adapter}-update-phase-markers');
+
+        // 模擬 user 點 P0 checkbox(取消勾選)
+        const cb = window.document.getElementById('cci_phase_P0');
+        assert.ok(cb, 'cci_phase_P0 checkbox 應存在於 container');
+        cb.checked = false;
+        cb.dispatchEvent(new window.Event('change'));
+
+        // 第二次 emit:onUpdate 應再被呼叫一次,checkedPhases 為 [P1, P2]
+        assert.equal(updateCalls.length, 2, 'checkbox change 應觸發第二次 onUpdate');
+        assert.deepEqual(
+            updateCalls[1].checkedPhases.sort(),
+            ['P1', 'P2'],
+            '取消勾 P0 後 checkedPhases 為 [P1, P2]'
+        );
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('10. bindPhaseCheckboxes 未傳 onUpdate:change 觸發不應 throw(向後相容)', async () => {
+    // Composer 不需要 onUpdate,呼叫端會省略此參數。?.  guard 必須讓 emitUpdate
+    // 在 onUpdate=undefined 時 silently no-op,不能 throw "is not a function"。
+    const { window, mp } = await setup();
+    try {
+        const container = window.document.createElement('div');
+        container.id = 'phasesForTestNoOnUpdate';
+        window.document.body.appendChild(container);
+
+        const sentMessages = [];
+        const stubBridge = {
+            send: (_iframe, type, payload) => { sentMessages.push({ type, payload }); },
+        };
+        const recalcStub = () => ({});
+        const fakeIframe = window.document.createElement('iframe');
+
+        // 故意省略 onUpdate
+        mp.bindPhaseCheckboxes({
+            phaseTimes: { P0: 0, P1: 100 },
+            adapter: 'composer',
+            containerId: 'phasesForTestNoOnUpdate',
+            bridge: stubBridge,
+            iframe: fakeIframe,
+            recalcPercents: recalcStub,
+            checkedSet: new Set(),
+            // onUpdate omitted
+        });
+
+        // 首次 render 已隱含 emitUpdate;沒 throw 即過
+        assert.equal(sentMessages.length, 1, '首次 emit bridge.send 仍正常');
+
+        // 模擬 change,不應 throw
+        const cb = window.document.getElementById('composer_phase_P0');
+        cb.checked = false;
+        assert.doesNotThrow(() => {
+            cb.dispatchEvent(new window.Event('change'));
+        }, 'change handler 在 onUpdate=undefined 時不應 throw');
+
+        assert.equal(sentMessages.length, 2, 'change 後 bridge.send 仍正常觸發');
+    } finally {
+        await teardown(window);
+    }
+});
+
 // ---------- panel shell hardcoded 中文回歸測試 ----------
 
 test('panel shell 內 user-visible text 均來自 translator(無 hardcoded 繁中)', async () => {

@@ -321,6 +321,12 @@ export class ManifestPanel {
      * @param {HTMLIFrameElement} [opts.iframe] - bridge.send 對象 iframe
      * @param {Function} [opts.recalcPercents] - phaseMarkers.recalcPercents helper(由 caller 注入)
      * @param {Set<string>} [opts.checkedSet] - 跨 re-render 持久的勾選 Set(由 caller 提供)
+     * @param {(pcts: object, checkedPhases: string[]) => void} [opts.onUpdate]
+     *   — Optional callback,在 bridge.send 完成後 invoke。CCI 用來刷新 pct 文字
+     *   顯示(`app._updatePhasePositionDisplay(pcts)`),Composer 不需要省略即可。
+     *   傳入兩個參數:`pcts` 為 phase 名 → 百分比的 map(recalcPercents 結果),
+     *   `checkedPhases` 為當前勾選的 phase 名 array(已過濾 phaseTimes 內存在的)。
+     *   首次 render 完的 emitUpdate 也會 invoke,讓 caller 能初始化 UI。
      */
     bindPhaseCheckboxes({
         phaseTimes,
@@ -331,6 +337,7 @@ export class ManifestPanel {
         iframe,
         recalcPercents,
         checkedSet,
+        onUpdate,
     }) {
         const container = document.getElementById(containerId);
         if (!container) return;
@@ -360,6 +367,12 @@ export class ManifestPanel {
             // 算(用 checkedPhases.length === availableLength)— ADR-0003 §6
             // payload shape symmetric。
             bridge.send(iframe, `${adapter}-update-phase-markers`, { checkedPhases: payload });
+            // onUpdate(M3 prep,CCI-driven):bridge.send 完成後通知 caller。
+            // CCI 用來呼 `app._updatePhasePositionDisplay(pcts)` 刷新 pct 文字面板;
+            // Composer 不傳 onUpdate 等同無 op。`?.` 守 undefined 不 throw,
+            // 並把 checkedPhases 攤平成 string array 對 caller 友善
+            //(不需要再從 payload 物件 array map 出 name)。
+            onUpdate?.(pcts, checkedPhases.map((p) => p.name));
         };
 
         available.forEach((p) => {
