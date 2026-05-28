@@ -116,7 +116,8 @@ func findMaxAreaIndex(
 // threshold*2 cap（由 capUnionIndices 實施）：
 //   - 若 series 很多（例如 CCI 12 對），union 最壞可達 12 × threshold 個索引，
 //     直接送 ECharts 會壓垮互動效能。
-//   - 2× threshold 在保留 LTTB 高 variance 點的同時，限制前端最大渲染點數。
+//   - 2× threshold 在保留 LTTB 高 variance 點的同時，限制前端最大渲染點數
+//     （末筆保留使輸出至多 threshold*2 + 1 個索引）。
 //
 // 退化條件（回傳 nil）：
 //   - len(time) <= threshold：點數不超過閾值，不需要降採樣。
@@ -137,10 +138,6 @@ func UnionLTTBIndices(time []float64, series [][]float64, threshold int) []int {
 		for _, i := range idx {
 			seen[i] = struct{}{}
 		}
-	}
-
-	if len(seen) == 0 {
-		return nil
 	}
 
 	indices := make([]int, 0, len(seen))
