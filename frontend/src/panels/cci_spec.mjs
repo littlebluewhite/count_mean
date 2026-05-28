@@ -156,9 +156,9 @@ export function makeCciSpec(app) {
          *      report / phase selector / pct display / button row)
          *   3. populate info list + report(textContent,XSS-safe)
          *   4. attachIframe(height 620px,CCI default)→ 記 _cciIframeReady
-         *   5. await ready 後:bridge.subscribe(re-draw on chart restore/legend)
-         *      經 registerCleanup 註冊;再 bindPhaseCheckboxes(M1 I1 precondition:
-         *      iframe-side listener 掛好後才送首次 update)
+         *   5. await ready 後:先 bindPhaseCheckboxes(M1 I1 precondition:iframe-side
+         *      listener 掛好後才送首次 update)→ 再 bridge.subscribe(re-draw on chart
+         *      restore/legend)經 registerCleanup 註冊。順序見 code 內 :270 註解。
          *
          * @param {object} result - CCIResult(欄位見 file header,已對 Go struct 驗證)
          * @param {object} _ctx - ManifestPanel _gatherCtx 結果(本 onResult 不用)
