@@ -662,6 +662,89 @@ Index,Series,Series,Series
 	}
 }
 
+// TestMotionParser_SparseSeriesRow 重現 NSF11_BTS_5_ok_OK_20Hz.csv 的 bug:
+// 真實 Motion 檔的 header(Series)列是稀疏的 —— `Index,Series,,,Series`,只有
+// 第 1、4 數據欄標了 "Series",中間兩欄留空。舊版 buildUniqueHeaders 以 header
+// 列為「有幾欄」的真相來源,遇空 cell 即 continue,導致:
+//  1. R.Hip Angle / R.Knee Angle 兩欄被整欄丟棄(少畫兩條線);
+//  2. 更糟:headers 被 compact 後位置對齊斷裂,parseDataRecord 仍按 record[j]
+//     位置餵值,使僅存的 "Ankle Angle" 線吃到 record[2](R.Hip 的數值),
+//     真正的 Ankle 資料(record[4])完全沒被讀 —— 資料錯位。
+//
+// 正確契約:欄名應取自 category 列(四欄都有名),四條 series 與資料欄位位置
+// 對齊。本 test 用 NSF11 前三筆真實資料,並特意斷言 Ankle Angle 的值以抓錯位。
+func TestMotionParser_SparseSeriesRow(t *testing.T) {
+	csvContent := `[Data],,,,
+,Trunk Angle,R.Hip Angle,R.Knee Angle,Ankle Angle
+,Trunk Angle,R.Hip Angle,R.Knee Angle,Ankle Angle
+Index,Series,,,Series
+1,-16.036152,3.376008,-5.568622,-6.885391
+2,-16.119648,3.360193,-5.545166,-6.874992
+3,-16.113022,3.498265,-5.623739,-6.930542`
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "test_motion_sparse_*.csv")
+	require.NoError(t, err)
+	_, err = tmpFile.WriteString(csvContent)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	data, err := NewMotionParser().ParseFile(tmpFile.Name())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	// 四個數據欄都該保留,順序對齊 category 列。
+	assert.Equal(t, []string{"Trunk Angle", "R.Hip Angle", "R.Knee Angle", "Ankle Angle"},
+		data.Headers, "稀疏 Series 列不該丟棄 category 列有名的欄位")
+
+	assert.Equal(t, []int{1, 2, 3}, data.Indices)
+
+	// 每欄的值必須對齊正確的資料欄 —— 特別是 Ankle Angle 不能吃到 R.Hip 的值。
+	assert.InDelta(t, -16.036152, data.Data["Trunk Angle"][0], 0.0001)
+	assert.InDelta(t, 3.376008, data.Data["R.Hip Angle"][0], 0.0001)
+	assert.InDelta(t, -5.568622, data.Data["R.Knee Angle"][0], 0.0001)
+	assert.InDelta(t, -6.885391, data.Data["Ankle Angle"][0], 0.0001,
+		"Ankle Angle 必須讀 record[4],而非錯位讀到 R.Hip 的 record[2]")
+}
+
+// TestMotionParser_BlankSpacerColumnPreservesAlignment 鎖定 codex review P2:
+// 當 Motion CSV 中間有一個「三列(header/category/subcat)皆空」的 spacer 欄,且其後
+// 還有具名欄時,不可把 spacer 欄 compact 抽掉 —— parseDataRecord 按 record[j] 位置
+// 餵值,抽掉中間欄會讓後面的具名欄整個位移、配到 spacer 欄的值(靜默錯位)。
+//
+// 此 fixture 第 2 欄(0-based,即 record[2])是 spacer:category/subcat/header 三列在該
+// 欄皆空,但資料列在該位置有值(99.x)。正確行為:spacer 不成為 series,且 Knee/Ankle
+// 必須讀到 record[3]/record[4] 而非位移後的 record[2]/record[3]。
+func TestMotionParser_BlankSpacerColumnPreservesAlignment(t *testing.T) {
+	csvContent := `[Data],,,,
+,Trunk Angle,,Knee Angle,Ankle Angle
+,,,,
+Index,Series,,Series,Series
+1,-16.0,99.9,-5.5,-6.8
+2,-16.1,99.8,-5.4,-6.7`
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "test_motion_spacer_*.csv")
+	require.NoError(t, err)
+	_, err = tmpFile.WriteString(csvContent)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	data, err := NewMotionParser().ParseFile(tmpFile.Name())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	// spacer 欄不該成為 series;三個具名欄依 CSV 位置保留。
+	assert.Equal(t, []string{"Trunk Angle", "Knee Angle", "Ankle Angle"}, data.Headers,
+		"中間 spacer 欄不該被當成 series,具名欄順序須維持")
+	assert.Equal(t, []int{1, 2}, data.Indices)
+
+	// 關鍵:Knee/Ankle 讀的是 record[3]/record[4],不是位移後的 spacer record[2]。
+	assert.InDelta(t, -16.0, data.Data["Trunk Angle"][0], 0.0001)
+	assert.InDelta(t, -5.5, data.Data["Knee Angle"][0], 0.0001,
+		"Knee Angle 必須讀 record[3],而非錯位讀到 spacer 的 record[2]=99.9")
+	assert.InDelta(t, -6.8, data.Data["Ankle Angle"][0], 0.0001,
+		"Ankle Angle 必須讀 record[4],而非位移讀到 record[3]")
+}
+
 func TestMotionParser_Integration(t *testing.T) {
 	// 集成測試：創建完整的 Motion 文件並測試完整流程
 	t.Run("complete Motion file parsing and validation", func(t *testing.T) {

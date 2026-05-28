@@ -13,7 +13,78 @@ import (
 
 	"count_mean/internal/config"
 	"count_mean/internal/logging"
+	"count_mean/internal/models"
 )
+
+// TestComposerPhaseTimesEMG 鎖定 Chart Composer「少了 D / O 分期點」的修正。
+//
+// manifest 有 10 個分期欄,其中 D(下蹲結束)、O(展體)在 manifest 內存的是
+// **motion frame index**(整數),其餘 8 個是**力板時間**秒值。修正前 handler 只把
+// 8 個力板欄位送進 phaseTimes,D/O 因 domain 不同被略過 → 前端 checkbox 與 markLine
+// 都看不到。修正後 composerPhaseTimesEMG 統一換算全部 10 個到 EMG 時間 domain:
+// 力板走 ForceTimeToEMGTime、motion-index 走 MotionIndexToEMGTime。
+//
+// 用 NSF1 真實數字(EMGMotionOffset=966)驗算,並斷言 D/O 落在生物力學該有的順序
+// 位置(C < D < T0、T < O < L)—— 這同時佐證 motion-index → EMG 秒數的換算正確。
+func TestComposerPhaseTimesEMG(t *testing.T) {
+	const offset = 966 // NSF1 EMGMotionOffset
+
+	t.Run("V14 manifest 換算全部 10 個分期點含 D/O", func(t *testing.T) {
+		src := models.PhasePoints{
+			P0: models.MakeOpt(16.645),
+			P1: models.MakeOpt(16.780001),
+			P2: models.MakeOpt(17.224001),
+			S:  models.MakeOpt(17.440001),
+			C:  models.MakeOpt(17.809999),
+			D:  4469, // motion-index
+			T0: models.MakeOpt(18.134001),
+			T:  models.MakeOpt(18.164),
+			O:  4645, // motion-index
+			L:  models.MakeOpt(18.775999),
+		}
+
+		got := composerPhaseTimesEMG(src, offset)
+
+		// 10 個分期點全到齊,特別是過去被略過的 D / O。
+		require.Len(t, got, 10, "全部 10 個分期點都應換算到 phaseTimes")
+		for _, name := range []string{"P0", "P1", "P2", "S", "C", "D", "T0", "T", "O", "L"} {
+			_, ok := got[name]
+			assert.Truef(t, ok, "分期點 %s 必須出現在 phaseTimes", name)
+		}
+
+		// 力板欄位:emgTime = forceTime - (offset-1)/250 = forceTime - 3.86
+		assert.InDelta(t, 12.785, got["P0"], 0.0001)
+		assert.InDelta(t, 14.915999, got["L"], 0.0001)
+		// motion-index 欄位:emgTime = (idx - offset)/250
+		assert.InDelta(t, 14.012, got["D"], 0.0001) // (4469-966)/250
+		assert.InDelta(t, 14.716, got["O"], 0.0001) // (4645-966)/250
+
+		// 換算後落點符合生物力學順序 —— D 在 C 之後 T0 之前;O 在 T 之後 L 之前。
+		assert.Less(t, got["C"], got["D"], "D(下蹲結束)應在 C 之後")
+		assert.Less(t, got["D"], got["T0"], "D 應在 T0 之前")
+		assert.Less(t, got["T"], got["O"], "O(展體)應在 T 之後")
+		assert.Less(t, got["O"], got["L"], "O 應在 L 之前")
+	})
+
+	t.Run("motion-index sentinel 0 與未設 OptFloat 都 skip", func(t *testing.T) {
+		src := models.PhasePoints{
+			P0: models.MakeOpt(16.645),
+			// P1..L 未設(NoOpt)
+			D: 0, // 未提供 sentinel
+			O: 0,
+		}
+
+		got := composerPhaseTimesEMG(src, offset)
+
+		require.Len(t, got, 1, "只有 P0 被換算")
+		_, hasP0 := got["P0"]
+		assert.True(t, hasP0)
+		_, hasD := got["D"]
+		assert.False(t, hasD, "D=0 sentinel 不該進 phaseTimes")
+		_, hasO := got["O"]
+		assert.False(t, hasO, "O=0 sentinel 不該進 phaseTimes")
+	})
+}
 
 // setupChartComposerTestApp 構造僅含 Chart Composer handler 所需依賴的最小 App.
 // 與 sibling setupMuscleRatioTestApp / setupCCITestApp 對稱 — 不啟動真實 ctx /

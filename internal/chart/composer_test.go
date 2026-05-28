@@ -167,11 +167,11 @@ func TestRenderComposer_PhaseMarkLines(t *testing.T) {
 		EMGDataset:       makeEMGDataset(100, "RA"),
 		SelectedChannels: []string{"RA"},
 		MotionData:       makeMotionData(50, "knee"),
-		PhasePoints: models.PhasePoints{
-			P0: models.MakeOpt(0.010),
-			S:  models.MakeOpt(0.030),
-			T:  models.MakeOpt(0.080),
-			L:  models.MakeOpt(0.095),
+		PhaseTimesEMG: map[string]float64{
+			"P0": 0.010,
+			"S":  0.030,
+			"T":  0.080,
+			"L":  0.095,
 		},
 	}
 	html := renderToString(t, context.Background(), in)
@@ -191,6 +191,29 @@ func TestRenderComposer_PhaseMarkLines(t *testing.T) {
 	// 透過 setOption 補,故出現於 customJS 區段(JS 物件,非 JSON quoted key)。
 	assert.Contains(t, html, `rotate:0`,
 		"markLine label rotate 必須明確設 0,透過 customJS post-init setOption 補")
+}
+
+// TestRenderComposer_PhaseMarkLinesIncludesMotionIndexDO — Chart Composer
+// 「少了 D / O 分期點」修正的 chart-layer regression。D(下蹲結束)、O(展體)
+// 源自 motion-index,caller 換算成 EMG 秒數後放進 PhaseTimesEMG;composerPhaseOrder
+// 已含 D/O,故只要 map 內有就該渲染成 markLine(過去 whitelist 漏掉這兩個)。
+func TestRenderComposer_PhaseMarkLinesIncludesMotionIndexDO(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(100, "RA"),
+		SelectedChannels: []string{"RA"},
+		MotionData:       makeMotionData(50, "knee"),
+		PhaseTimesEMG: map[string]float64{
+			"P0": 0.00,
+			"D":  0.25, // motion-index 換算後落於 P0 與 L 之間
+			"O":  0.75,
+			"L":  1.00,
+		},
+	}
+	html := renderToString(t, context.Background(), in)
+
+	assert.Contains(t, html, `"D\n(25.0%)"`, "D(下蹲結束)分期點應渲染成 markLine")
+	assert.Contains(t, html, `"O\n(75.0%)"`, "O(展體)分期點應渲染成 markLine")
 }
 
 // TestRenderComposer_MarkLineOnEveryGrid — Bug 2 + Bug B regression(2026-05-27):
@@ -215,9 +238,9 @@ func TestRenderComposer_MarkLineOnEveryGrid(t *testing.T) {
 		SelectedChannels: []string{"RA", "ES"},
 		MuscleRatioData:  makeMuscleRatioData(100, "IL_GMax", "RA_ES", "RF_BF", "TAIO_MF"),
 		MotionData:       makeMotionData(50, "knee", "ankle"),
-		PhasePoints: models.PhasePoints{
-			P0: models.MakeOpt(0.010),
-			L:  models.MakeOpt(0.090),
+		PhaseTimesEMG: map[string]float64{
+			"P0": 0.010,
+			"L":  0.090,
 		},
 	}
 	html := renderToString(t, context.Background(), in)
@@ -487,9 +510,9 @@ func TestRenderComposer_CustomJSSyntaxValid(t *testing.T) {
 		EMGDataset:       makeEMGDataset(50, "RA"),
 		SelectedChannels: []string{"RA"},
 		MotionData:       makeMotionData(50, "knee"),
-		PhasePoints: models.PhasePoints{
-			P0: models.MakeOpt(0.010),
-			L:  models.MakeOpt(0.090),
+		PhaseTimesEMG: map[string]float64{
+			"P0": 0.010,
+			"L":  0.090,
 		},
 	}
 	html := renderToString(t, context.Background(), in)
