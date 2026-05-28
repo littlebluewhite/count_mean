@@ -13,24 +13,32 @@ import {
     NormalizeData,
     AnalyzePhases,
     GetCSVHeaders,
-    LoadPhaseManifest,
     GetAvailablePhases,
-    AnalyzePhaseSync,
-    AnalyzeNormalizedPhaseSync,
-    AnalyzeCCI,
     DownloadCCIChart,
-    AnalyzeMuscleRatio,
     GetVersion,
-    LoadChartComposerSubjects,
     LoadChartComposerEMGChannels,
-    GenerateChartComposer,
     DownloadChartComposerImage
 } from '../wailsjs/go/gui/App.js';
 import { OnFileDrop, OnFileDropOff, EventsOn, EventsOff } from '../wailsjs/runtime/runtime.js';
 import { initI18n, t, tHtml, changeLanguage, onLocaleChange, getCurrentLocale } from './i18n.js';
 import { bridge } from './charts/iframeBridge.mjs';
-import { recalcPercents } from './charts/phaseMarkers.mjs';
-import { buildChartComposerPanelHtml } from './panels/chart_composer_panel.mjs';
+// ManifestPanel(ADR-0007):5 個 manifest+dataFolder panel 共用 envelope。
+// 各 panel 差異由 spec object 注入(makeXxxSpec(this))。
+import { ManifestPanel } from './manifestPanel.mjs';
+import { makeCciSpec } from './panels/cci_spec.mjs';
+import { makeChartComposerSpec } from './panels/chart_composer_spec.mjs';
+import { makePhaseSyncSpec } from './panels/phase_sync_spec.mjs';
+import { makeNormalizedPhaseSyncSpec } from './panels/normalized_phase_sync_spec.mjs';
+import { makeMuscleRatioSpec } from './panels/muscle_ratio_spec.mjs';
+
+// globalThis 暴露(M5 critical fix):ManifestPanel envelope + 5 個 spec module 讀
+// globalThis.t / tHtml / ShowMessage / ShowError(它們是獨立 ES module,無法 import
+// main.js 的 binding,否則 circular dep)。main.js 把這 4 個 import binding 掛上
+// globalThis,production 才有值;test 環境由各 test 自行 stub globalThis.*。
+globalThis.t = t;
+globalThis.tHtml = tHtml;
+globalThis.ShowMessage = ShowMessage;
+globalThis.ShowError = ShowError;
 
 // 應用程序主類
 class EMGAnalysisApp {
@@ -39,18 +47,28 @@ class EMGAnalysisApp {
         // i18n locale 變更時,onLocaleChange listener 透過此屬性查表
         // 重新呼叫當前 panel 的 show() 函式以觸發 re-render。
         this.currentPanel = null;
+        // ManifestPanel(ADR-0007):5 個 manifest+dataFolder panel 共用 deep module。
+        this._manifestPanel = new ManifestPanel(this);
         this.panelDispatch = {
             maxMean: () => this.showMaxMeanPanel(),
             normalize: () => this.showNormalizePanel(),
-            // chart → Chart Composer(PRD #15);舊「資料做圖」path 已於 Slice E 刪除。
-            chart: () => this.showChartComposerPanel(),
+            // 5 個 panel 走 ManifestPanel.run(spec)(ADR-0007 §10/§11):各 panel
+            // 差異由 makeXxxSpec(this) 注入,共通 boilerplate(shell + subject load +
+            // RPC envelope + phase-checkbox)由 ManifestPanel own。
+            chart: () => this._manifestPanel.run(makeChartComposerSpec(this)),
             phase: () => this.showPhasePanel(),
-            phaseSync: () => this.showPhaseSyncPanel(),
-            cci: () => this.showCCIPanel(),
-            normalizedPhaseSync: () => this.showNormalizedPhaseSyncPanel(),
-            muscleRatio: () => this.showMuscleRatioPanel(),
+            phaseSync: () => this._manifestPanel.run(makePhaseSyncSpec(this)),
+            cci: () => this._manifestPanel.run(makeCciSpec(this)),
+            normalizedPhaseSync: () => this._manifestPanel.run(makeNormalizedPhaseSyncSpec(this)),
+            muscleRatio: () => this._manifestPanel.run(makeMuscleRatioSpec(this)),
             config: () => this.showConfigPanel(),
         };
+        // Composer 跨 re-render / re-generate 持久的 channel/phase 勾選 Set(ADR-0007 §9:
+        // panel state 留 app this 自管)。原本由 showChartComposerPanel lazy-init,M5 刪該
+        // method 後 loadComposerEMGChannels 裸 iterate _composerSelectedChannels 會在首次
+        // 點「載入 EMG 欄位」TypeError — 移到 constructor 確保所有 entry path 安全。
+        this._composerSelectedChannels = new Set();
+        this._composerCheckedPhases = new Set();
         this.config = null;
         this.init();
     }
@@ -206,16 +224,11 @@ class EMGAnalysisApp {
         if (inputElement) {
             inputElement.value = filePath;
 
-            // 觸發相應的處理邏輯
-            if (targetId === 'phaseSyncManifest') {
-                // 分期同步分析：載入主題
-                this.loadManifestSubjects(filePath);
-            } else if (targetId === 'cciManifest') {
-                // 共同收縮分析：載入主題
-                this.loadCCIManifestSubjects(filePath);
-            } else if (targetId === 'normalizedPhaseSyncManifest') {
-                // 標準化分期同步分析：載入主題
-                this.loadNormalizedPhaseSyncSubjects(filePath);
+            // 觸發相應的處理邏輯。5 個 manifest panel 統一走 ManifestPanel shell 的
+            // #mpManifestPath drop target — drop manifest 後依當前 spec load subject
+            //(對齊 selectMpManifest 的 post-pick subject load,ADR-0007)。
+            if (targetId === 'mpManifestPath') {
+                this._manifestPanel.onMpManifestDropped();
             }
         }
     }
@@ -232,37 +245,11 @@ class EMGAnalysisApp {
 
     handleMenuAction(action) {
         // 紀錄 currentPanel,讓 i18n locale 變更時知道要重 render 哪個 panel。
+        // ADR-0007 §10:原 9-case switch 與 panelDispatch map 完全 1:1 重複
+        //(無 special-case / 無 default),fold 成 panelDispatch lookup。未知 action
+        // 經 `?.()` no-op(對齊舊 switch 無 default 的 fall-through 行為)。
         this.currentPanel = action;
-        switch (action) {
-            case 'maxMean':
-                this.showMaxMeanPanel();
-                break;
-            case 'normalize':
-                this.showNormalizePanel();
-                break;
-            case 'chart':
-                // 入口指向 Chart Composer(PRD #15);舊「資料做圖」path 已於 Slice E 移除。
-                this.showChartComposerPanel();
-                break;
-            case 'phase':
-                this.showPhasePanel();
-                break;
-            case 'phaseSync':
-                this.showPhaseSyncPanel();
-                break;
-            case 'cci':
-                this.showCCIPanel();
-                break;
-            case 'normalizedPhaseSync':
-                this.showNormalizedPhaseSyncPanel();
-                break;
-            case 'muscleRatio':
-                this.showMuscleRatioPanel();
-                break;
-            case 'config':
-                this.showConfigPanel();
-                break;
-        }
+        this.panelDispatch[action]?.();
     }
 
     // 最大平均值計算面板
@@ -983,122 +970,14 @@ class EMGAnalysisApp {
         document.getElementById('statusText').textContent = message;
     }
 
-    // 分期同步分析面板
-    showPhaseSyncPanel() {
-        const panel = document.getElementById('functionPanel');
-        panel.innerHTML = `
-            <div class="panel-header">
-                <h2>${tHtml('panel.phasesync.title')}</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
+    // ManifestPanel delegators(ADR-0007 §M5 wiring):shell 的
+    // onclick="app.selectMpManifest()" / "app.selectMpDataFolder()" /
+    // onchange="app.onMpSubjectChange()" 走這三個 thin forwarder 到
+    // this._manifestPanel.*,維持既有 `app.xxx()` template convention 不動 shell。
+    selectMpManifest() { return this._manifestPanel.selectMpManifest(); }
+    selectMpDataFolder() { return this._manifestPanel.selectMpDataFolder(); }
+    onMpSubjectChange() { return this._manifestPanel.onMpSubjectChange(); }
 
-            <div class="form-group">
-                <label>1. ${tHtml('form.label.manifest')}</label>
-                <div class="input-group drop-zone" data-drop-target="phaseSyncManifest" style="--wails-drop-target: drop;">
-                    <input type="text" id="phaseSyncManifest" class="form-control" placeholder="${tHtml('form.placeholder.manifest')}" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectPhaseSyncManifest()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>2. ${tHtml('form.label.data_folder')}</label>
-                <div class="input-group">
-                    <input type="text" id="phaseSyncDataFolder" class="form-control" placeholder="${tHtml('form.placeholder.data_folder')}" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectPhaseSyncDataFolder()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>3. ${tHtml('form.label.subject')}</label>
-                <select id="phaseSyncSubject" class="form-control" disabled>
-                    <option value="">${tHtml('form.placeholder.load_manifest_first')}</option>
-                </select>
-            </div>
-
-            <div class="form-row">
-                <div class="form-group col-md-6">
-                    <label>4. ${tHtml('form.label.start_phase')}</label>
-                    <select id="phaseSyncStartPhase" class="form-control">
-                        <option value="">${tHtml('form.option.select')}</option>
-                    </select>
-                </div>
-                <div class="form-group col-md-6">
-                    <label>${tHtml('form.label.end_phase')}</label>
-                    <select id="phaseSyncEndPhase" class="form-control">
-                        <option value="">${tHtml('form.option.select')}</option>
-                    </select>
-                </div>
-            </div>
-
-            <div class="button-group">
-                <button class="btn btn-primary" onclick="app.executePhaseSyncAnalysis()">${tHtml('button.start_analyze')}</button>
-                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
-
-            <div id="phaseSyncResult" class="result-section" style="display: none;">
-                <h3>${tHtml('result.section.title')}</h3>
-                <div id="phaseSyncResultContent"></div>
-            </div>
-        `;
-        
-        this.showPanel(panel);
-        this.loadAvailablePhases();
-    }
-    
-    // 選擇分期總檔案
-    async selectPhaseSyncManifest() {
-        try {
-            const filters = [{
-                displayName: 'CSV Files (*.csv)',
-                pattern: '*.csv'
-            }];
-            const file = await SelectFile('選擇分期總檔案', filters, 'open');
-            
-            if (file) {
-                document.getElementById('phaseSyncManifest').value = file;
-                await this.loadManifestSubjects(file);
-            }
-        } catch (err) {
-            console.error('選擇檔案失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
-    }
-    
-    // 載入分期總檔案的主題
-    async loadManifestSubjects(manifestPath) {
-        try {
-            const subjects = await LoadPhaseManifest(manifestPath);
-            const select = document.getElementById('phaseSyncSubject');
-            
-            select.innerHTML = `<option value="">${tHtml('form.option.select_subject')}</option>`;
-            subjects.forEach((subject, index) => {
-                const option = document.createElement('option');
-                option.value = index;
-                option.textContent = subject;
-                select.appendChild(option);
-            });
-            
-            select.disabled = false;
-            this.updateStatus(t('status.subjects_loaded', subjects.length));
-        } catch (err) {
-            console.error('載入主題失敗:', err);
-            await ShowError(t('dialog.error'), t('error.msg.load_subjects_failed', err));
-        }
-    }
-    
-    // 選擇數據資料夾
-    async selectPhaseSyncDataFolder() {
-        try {
-            const folder = await SelectDirectory('選擇數據資料夾');
-            if (folder) {
-                document.getElementById('phaseSyncDataFolder').value = folder;
-            }
-        } catch (err) {
-            console.error('選擇資料夾失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
-    }
-    
     // 載入可用的分期點
     async loadAvailablePhases() {
         try {
@@ -1126,455 +1005,6 @@ class EMGAnalysisApp {
         } catch (err) {
             console.error('載入分期點失敗:', err);
         }
-    }
-    
-    // 執行分期同步分析
-    async executePhaseSyncAnalysis() {
-        try {
-            const manifestFile = document.getElementById('phaseSyncManifest').value;
-            const dataFolder = document.getElementById('phaseSyncDataFolder').value;
-            const subjectIndex = parseInt(document.getElementById('phaseSyncSubject').value);
-            const startPhase = document.getElementById('phaseSyncStartPhase').value;
-            const endPhase = document.getElementById('phaseSyncEndPhase').value;
-            
-            // 驗證輸入
-            if (!manifestFile || !dataFolder || isNaN(subjectIndex) || !startPhase || !endPhase) {
-                await ShowError(t('dialog.error'), t('error.msg.fill_required_fields'));
-                return;
-            }
-            
-            this.updateStatus(t('status.phasesync_running'));
-            
-            const result = await AnalyzePhaseSync({
-                manifestFile,
-                dataFolder,
-                subjectIndex,
-                startPhase,
-                endPhase
-            });
-            
-            if (result.success) {
-                await this.showPhaseSyncResult(result);
-                await ShowMessage(t('dialog.success'), t('success.msg.analysis_done', result.outputPath));
-            } else {
-                await ShowError(t('dialog.error'), result.message);
-            }
-            
-            this.updateStatus(t('status.analysis_done'));
-        } catch (err) {
-            console.error('分期同步分析失敗:', err);
-            await ShowError(t('dialog.error'), t('error.msg.analysis_failed_dynamic', err));
-            this.updateStatus(t('status.analysis_failed'));
-        }
-    }
-    
-    // 顯示分期同步分析結果
-    //
-    // P0-A H2 修補:result.subject / startPhase / endPhase / outputPath / report
-    // 來自後端 manifest CSV(user-controlled),舊版以 innerHTML 字串拼接寫入,
-    // 例如 subject = `<img src=x onerror=alert(1)>` 即 XSS。改全 DOM API +
-    // textContent,結構與舊版一致。設計樣式參考同檔 showNormalizedPhaseSyncResult。
-    async showPhaseSyncResult(result) {
-        const resultDiv = document.getElementById('phaseSyncResult');
-        const contentDiv = document.getElementById('phaseSyncResultContent');
-        contentDiv.textContent = '';
-
-        const fmtTime = t => (typeof t === 'number' ? t.toFixed(3) : '—');
-
-        // result-info(全 user-controlled 字串走 textContent)
-        const info = document.createElement('div');
-        info.className = 'result-info';
-        const lines = [
-            ['主題:', result.subject],
-            ['分析區間:',
-                `${result.startPhase} (${fmtTime(result.startTime)}s) → ${result.endPhase} (${fmtTime(result.endTime)}s)`],
-            ['輸出檔案:', result.outputPath],
-        ];
-        lines.forEach(([label, value]) => {
-            const p = document.createElement('p');
-            const strong = document.createElement('strong');
-            strong.textContent = label;
-            p.appendChild(strong);
-            p.appendChild(document.createTextNode(value != null ? String(value) : ''));
-            info.appendChild(p);
-        });
-        contentDiv.appendChild(info);
-
-        // 分析報告(report 來自後端拼接含 user-controlled subject;textContent)
-        if (result.report) {
-            const reportWrap = document.createElement('div');
-            reportWrap.className = 'result-report';
-            const h4 = document.createElement('h4');
-            h4.textContent = '分析報告';
-            reportWrap.appendChild(h4);
-            const pre = document.createElement('pre');
-            pre.className = 'result-pre';
-            pre.textContent = result.report;
-            reportWrap.appendChild(pre);
-            contentDiv.appendChild(reportWrap);
-        }
-
-        // 開啟輸出資料夾按鈕
-        const btnGroup = document.createElement('div');
-        btnGroup.className = 'button-group';
-        const btn = document.createElement('button');
-        btn.className = 'btn btn-primary';
-        btn.textContent = '開啟輸出資料夾';
-        btn.addEventListener('click', () => this.openOutputFolder());
-        btnGroup.appendChild(btn);
-        contentDiv.appendChild(btnGroup);
-
-        resultDiv.style.display = 'block';
-    }
-
-    // ==================== 共同收縮分析 (CCI Rudolph) ====================
-
-    // 共同收縮分析面板
-    showCCIPanel() {
-        const panel = document.getElementById('functionPanel');
-        panel.innerHTML = `
-            <div class="panel-header">
-                <h2>${tHtml('panel.cci.title')}</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
-
-            <div class="form-group">
-                <label>1. ${tHtml('form.label.manifest')}</label>
-                <div class="input-group drop-zone" data-drop-target="cciManifest" style="--wails-drop-target: drop;">
-                    <input type="text" id="cciManifest" class="form-control" placeholder="${tHtml('form.placeholder.manifest')}" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectCCIManifest()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>2. ${tHtml('form.label.data_folder')}</label>
-                <div class="input-group">
-                    <input type="text" id="cciDataFolder" class="form-control" placeholder="${tHtml('form.placeholder.data_folder_emg')}" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectCCIDataFolder()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>3. ${tHtml('form.label.subject')}</label>
-                <select id="cciSubject" class="form-control" disabled>
-                    <option value="">${tHtml('form.placeholder.load_manifest_first')}</option>
-                </select>
-            </div>
-
-            <div class="button-group">
-                <button class="btn btn-primary" onclick="app.executeCCIAnalysis()">${tHtml('button.start_analyze')}</button>
-                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
-
-            <div id="cciResult" class="result-section" style="display: none;">
-                <h3>${tHtml('result.section.title')}</h3>
-                <div id="cciResultContent"></div>
-            </div>
-        `;
-
-        this.showPanel(panel);
-    }
-
-    // 選擇 CCI 分期總檔案
-    async selectCCIManifest() {
-        try {
-            const filters = [{
-                displayName: 'CSV Files (*.csv)',
-                pattern: '*.csv'
-            }];
-            const file = await SelectFile('選擇分期總檔案', filters, 'open');
-
-            if (file) {
-                document.getElementById('cciManifest').value = file;
-                await this.loadCCIManifestSubjects(file);
-            }
-        } catch (err) {
-            console.error('選擇檔案失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
-    }
-
-    // 載入 CCI 分期總檔案的主題
-    async loadCCIManifestSubjects(manifestPath) {
-        try {
-            const subjects = await LoadPhaseManifest(manifestPath);
-            const select = document.getElementById('cciSubject');
-
-            select.innerHTML = `<option value="">${tHtml('form.option.select_subject')}</option>`;
-            subjects.forEach((subject, index) => {
-                const option = document.createElement('option');
-                option.value = index;
-                option.textContent = subject;
-                select.appendChild(option);
-            });
-
-            select.disabled = false;
-            this.updateStatus(t('status.subjects_loaded', subjects.length));
-        } catch (err) {
-            console.error('載入主題失敗:', err);
-            await ShowError(t('dialog.error'), t('error.msg.load_subjects_failed', err));
-        }
-    }
-
-    // 選擇 CCI 數據資料夾
-    async selectCCIDataFolder() {
-        try {
-            const folder = await SelectDirectory('選擇數據資料夾');
-            if (folder) {
-                document.getElementById('cciDataFolder').value = folder;
-            }
-        } catch (err) {
-            console.error('選擇資料夾失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
-    }
-
-    // 執行 CCI 分析
-    async executeCCIAnalysis() {
-        try {
-            const manifestFile = document.getElementById('cciManifest').value;
-            const dataFolder = document.getElementById('cciDataFolder').value;
-            const subjectIndex = parseInt(document.getElementById('cciSubject').value);
-
-            if (!manifestFile || !dataFolder || isNaN(subjectIndex)) {
-                await ShowError(t('dialog.error'), t('error.msg.fill_required_fields'));
-                return;
-            }
-
-            this.updateStatus(t('status.cci_running'));
-
-            const result = await AnalyzeCCI({
-                manifestFile,
-                dataFolder,
-                subjectIndex
-            });
-
-            if (result.success) {
-                this.showCCIResult(result);
-                await ShowMessage(t('dialog.success'), t('success.msg.cci_analysis_done', result.outputCSVPath));
-            } else {
-                await ShowError(t('dialog.error'), result.message);
-            }
-
-            this.updateStatus(t('status.analysis_done'));
-        } catch (err) {
-            console.error('CCI 分析失敗:', err);
-            await ShowError(t('dialog.error'), t('error.msg.analysis_failed_dynamic', err));
-            this.updateStatus(t('status.analysis_failed'));
-        }
-    }
-
-    // 顯示 CCI 分析結果
-    //
-    // P0-A H2 修補:result.subject / pairNames / outputCSVPath / report 來自後端
-    // CSV / 分析輸出(user-controlled),舊版以 innerHTML 字串拼接直接寫入,
-    // 含 `<img src=x onerror=alert(1)>` 之 subject 會在 Wails WebView 內觸發
-    // XSS(等同 RPC 任意執行)。改為全 DOM API + textContent(safe DOM 樹建構),
-    // 結構保持與舊版一致以避免破壞 CSS。
-    //
-    // phase checkbox / chart wrapper 等 static template 仍走 DOM API 維持單一風格;
-    // phase 名稱(P0/P1/.../L)是 hard-coded whitelist 過濾後的固定字串,非 user
-    // input;chart iframe 內容由 srcdoc 安全注入(已在 Go 端 sanitize)。
-    //
-    // P0-A H1 修補:postMessage listener 已在 init() 註冊一次,此處不再 inline
-    // addEventListener,避免每跑一次分析就累積一個 listener。
-    showCCIResult(result) {
-        const resultDiv = document.getElementById('cciResult');
-        const contentDiv = document.getElementById('cciResultContent');
-        contentDiv.textContent = '';
-
-        // ---- 1. result-info(全 user-controlled 字串,走 textContent)----
-        const info = document.createElement('div');
-        info.className = 'result-info';
-        const pairNamesText = Array.isArray(result.pairNames) ? result.pairNames.join(', ') : '';
-        const infoRows = [
-            ['主題:', result.subject],
-            ['肌肉配對:', pairNamesText],
-            ['CSV 輸出:', result.outputCSVPath],
-        ];
-        infoRows.forEach(([label, value]) => {
-            const p = document.createElement('p');
-            const strong = document.createElement('strong');
-            strong.textContent = label;
-            p.appendChild(strong);
-            p.appendChild(document.createTextNode(value != null ? String(value) : ''));
-            info.appendChild(p);
-        });
-        contentDiv.appendChild(info);
-
-        // ---- 2. chart section + phase checkboxes(phase 名 whitelisted)----
-        if (result.chartHTML) {
-            const chartWrap = document.createElement('div');
-            chartWrap.style.margin = '1rem 0';
-
-            const chartContent = document.createElement('div');
-            chartContent.id = 'cciChartContent';
-            chartWrap.appendChild(chartContent);
-
-            if (result.phasePercents) {
-                const phaseOrder = ['P0','P1','P2','S','C','D','T0','T','O','L'];
-                const available = phaseOrder.filter(p => result.phasePercents[p] !== undefined);
-                if (available.length > 0) {
-                    const formGroup = document.createElement('div');
-                    formGroup.className = 'form-group';
-                    formGroup.style.marginTop = '0.5rem';
-                    const label = document.createElement('label');
-                    const strong = document.createElement('strong');
-                    strong.textContent = '分期點顯示:';
-                    label.appendChild(strong);
-                    formGroup.appendChild(label);
-
-                    const checkboxGroup = document.createElement('div');
-                    checkboxGroup.className = 'checkbox-group';
-                    checkboxGroup.style.display = 'flex';
-                    checkboxGroup.style.flexWrap = 'wrap';
-                    checkboxGroup.style.gap = '0.5rem';
-                    available.forEach(p => {
-                        // phase 名來自 phaseOrder whitelist(P0/P1/.../L),非 user input;
-                        // 但這裡仍用 textContent + 屬性 setter 維持 single-style。
-                        const item = document.createElement('div');
-                        item.className = 'checkbox-item';
-                        const cb = document.createElement('input');
-                        cb.type = 'checkbox';
-                        cb.id = 'phase_' + p;
-                        cb.value = p;
-                        cb.checked = true;
-                        cb.addEventListener('change', () => this.updateCCIPhaseLines());
-                        const cbLabel = document.createElement('label');
-                        cbLabel.setAttribute('for', 'phase_' + p);
-                        cbLabel.textContent = p;
-                        item.appendChild(cb);
-                        item.appendChild(cbLabel);
-                        checkboxGroup.appendChild(item);
-                    });
-                    formGroup.appendChild(checkboxGroup);
-                    chartWrap.appendChild(formGroup);
-                }
-            }
-
-            const phasePositions = document.createElement('div');
-            phasePositions.id = 'cciPhasePositions';
-            phasePositions.style.marginTop = '0.5rem';
-            chartWrap.appendChild(phasePositions);
-
-            const btnGroup = document.createElement('div');
-            btnGroup.className = 'button-group';
-            btnGroup.style.marginTop = '0.5rem';
-            const downloadBtn = document.createElement('button');
-            downloadBtn.className = 'btn btn-primary';
-            downloadBtn.textContent = '下載圖表';
-            downloadBtn.addEventListener('click', () => this.downloadCCIChart());
-            btnGroup.appendChild(downloadBtn);
-            chartWrap.appendChild(btnGroup);
-
-            contentDiv.appendChild(chartWrap);
-        }
-
-        // ---- 3. 分析報告(report 來自後端拼接,含 subject;走 textContent)----
-        if (result.report) {
-            const reportWrap = document.createElement('div');
-            reportWrap.className = 'result-report';
-            const h4 = document.createElement('h4');
-            h4.textContent = '分析報告';
-            reportWrap.appendChild(h4);
-            const pre = document.createElement('pre');
-            pre.className = 'result-pre';
-            pre.textContent = result.report;
-            reportWrap.appendChild(pre);
-            contentDiv.appendChild(reportWrap);
-        }
-
-        // ---- 4. 開啟輸出資料夾按鈕 ----
-        const openBtnGroup = document.createElement('div');
-        openBtnGroup.className = 'button-group';
-        const openBtn = document.createElement('button');
-        openBtn.className = 'btn btn-primary';
-        openBtn.textContent = '開啟輸出資料夾';
-        openBtn.addEventListener('click', () => this.openOutputFolder());
-        openBtnGroup.appendChild(openBtn);
-        contentDiv.appendChild(openBtnGroup);
-
-        resultDiv.style.display = 'block';
-
-        // Load interactive chart in iframe(srcdoc 安全注入 — Go 端 sanitize 已防 XSS)
-        if (result.chartHTML) {
-            const wrapper = document.getElementById('cciChartContent');
-            const iframe = document.createElement('iframe');
-            iframe.style.width = '100%';
-            iframe.style.height = '620px';
-            iframe.style.border = 'none';
-            // P1-12:移除 `allow-same-origin`。
-            // sandbox 不再是 CCI chart HTML 注入的安全邊界,**Go 端 sanitize 是
-            // 唯一防線**(cci/chart.go 的 JSON encoder + i18n key escape)。
-            //
-            // 取捨:跨 frame 讀 iframe.contentWindow.echarts / contentDocument 失效,
-            // 因此 updateCCIPhaseLines 與 downloadCCIChart 功能會在此版本失效。
-            // 這是 deliberate trade-off:
-            //   - 安全收益:Go-side sanitize 破口時,iframe JS 也無法操作 parent
-            //   - 功能成本:phase line 動態更新 / PNG 下載需要重寫為「iframe 主動
-            //     postMessage(...) 給 parent」的設計(屬未來 follow-up,本 PR 不做)
-            //
-            // 仍排除:top-navigation / forms / popups / modals / pointer-lock /
-            // plugins / presentation。
-            iframe.sandbox = 'allow-scripts';
-            iframe.srcdoc = result.chartHTML;
-            wrapper.appendChild(iframe);
-
-            // Draw phase lines once iframe loads。
-            // P2-10:用 addEventListener('load') 取代 iframe.onload = ...,
-            // 避免被後續(例如 downloadCCIChart 等待 iframe ready)的賦值蓋掉造成
-            // updateCCIPhaseLines handler 失效。{once: true} 確保不會 leak。
-            iframe.addEventListener('load', () => this.updateCCIPhaseLines(), { once: true });
-
-            // codex review #1 P2:iframe 還在 load echarts.min.js external script 時
-            // customJS message listener 尚未註冊,downloadCCIChart 立即 send
-            // 'cci-request-png' 會被 drop → 10s timeout。記錄 ready promise,
-            // download path 在 bridge.requestReply 前先 await 它。
-            this._cciIframeReady = new Promise((resolve) => {
-                iframe.addEventListener('load', resolve, { once: true });
-            });
-
-            // ADR-0003:每次 showCCIResult 都新建 iframe element,bridge subscription
-            // 也要重新綁。先 unsubscribe 前一次(避免舊 iframe entry 在 bridge 內
-            // 累積 — 跑 N 次分析就 leak N 個 subscription)。
-            this._cciBridgeUnsub?.();
-            this._cciBridgeUnsub = bridge.subscribe(iframe, 'cci-chart-*', (_payload, type) => {
-                if (!this._cciResult) return;
-                if (type === 'cci-chart-restored' || type === 'cci-chart-legend-changed') {
-                    setTimeout(() => this.updateCCIPhaseLines(), 100);
-                }
-            });
-        }
-
-        // Store for download and phase line updates。
-        // bridge.subscribe 已在上方 if-block 內針對該 iframe 註冊,handler 會在
-        // 收到 iframe 事件時透過 this._cciResult 取 context。ADR-0003 後
-        // originalPctLabels 快取改在 iframe customJS 內部維護
-        // (window.__cciOriginalPctLabels),parent 不再持有 chart-internal state。
-        this._cciResult = result;
-    }
-
-    // ADR-0003:走 bridge.send 寄 'cci-update-phase-markers' 給 iframe,
-    // iframe customJS 自己用 findNearestLabel + setOption 重畫 markLine。
-    // parent 只負責讀 checkbox state、algorithm helper(recalcPercents)算 pct、
-    // 送 checkedPhases payload。pct 仍在 parent 算一次以供 _updatePhasePositionDisplay
-    // 直接顯示(iframe 端用同個 pct 組 markLine label,不會 drift)。
-    updateCCIPhaseLines() {
-        const iframe = document.querySelector('#cciChartContent iframe');
-        if (!iframe || !this._cciResult) return;
-        const phaseTimes = this._cciResult.phaseTimes || {};
-        const allCheckboxes = document.querySelectorAll('[id^="phase_"]');
-        const checkedNames = Array.from(
-            document.querySelectorAll('[id^="phase_"]:checked')
-        ).map((cb) => cb.value);
-        const checkedPhases = checkedNames
-            .filter((n) => phaseTimes[n] !== undefined)
-            .map((n) => ({ name: n, time: phaseTimes[n] }));
-        const pcts = recalcPercents(checkedPhases);
-        const payload = checkedPhases.map((p) => ({ ...p, pct: pcts[p.name] }));
-        const allChecked = checkedPhases.length === allCheckboxes.length && checkedPhases.length > 0;
-        bridge.send(iframe, 'cci-update-phase-markers', { checkedPhases: payload, allChecked });
-        this._updatePhasePositionDisplay(pcts);
     }
 
     // 更新分期點位置顯示
@@ -1645,37 +1075,6 @@ class EMGAnalysisApp {
         }
     }
 
-    // ==================== Chart Composer(PRD #15)====================
-    //
-    // 對齊 showCCIPanel 結構:manifest + data folder picker、subject dropdown、
-    // 載入 EMG 通道、checkbox 多選、phase line 多選(沿用 CCI 樣式)、chart
-    // iframe、PNG 下載。
-    //
-    // i18n keys 在 Slice E 才補,本 slice 對 user-facing 中文字串走 hardcoded
-    // (對齊 showCCIPanel 既有風格,如 `'下載圖表'` / `'分析報告'`)。template
-    // 內全部 hardcoded 文字 + tHtml(button.back) — 不引入外部 user input,
-    // 風險面與既有 showCCIPanel innerHTML template 相同。
-    //
-    // **State preservation 設計**:
-    //   - this._composerSelectedChannels    : Set<string>  切 subject 時保留勾選
-    //   - this._composerCheckedPhases       : Set<string>  phase checkbox 勾選保留
-    //   - this._composerPhaseTimes          : map  從 iframe ECharts option 反推
-    //                                          (composer handler 不額外回傳 phaseTimes,
-    //                                          已把 markLine bake 進 HTML)
-    showChartComposerPanel() {
-        const panel = document.getElementById('functionPanel');
-        if (!this._composerSelectedChannels) this._composerSelectedChannels = new Set();
-        if (!this._composerCheckedPhases) this._composerCheckedPhases = new Set();
-
-        // HTML template 抽到 panels/chart_composer_panel.mjs:讓 test 能注入
-        // fake translator 走 happy-dom 釘 DOM,不用 import main.js(連帶拉
-        // Wails RPC)。tHtml 此處仍走真實 i18n dictionary,template 內每個
-        // translator() 都會經 i18n.escapeHtml(等同既有 ${tHtml(...)} 行為)。
-        const composerHtml = buildChartComposerPanelHtml(tHtml);
-        panel.innerHTML = composerHtml;
-        this.showPanel(panel);
-    }
-
     // 顯示頂部 warning banner(channel 缺漏 reconcile 時觸發);
     // 傳空 array 隱藏。banner 內容走 textContent — 任何來自後端的 channel name
     // 都當外部輸入處理(對齊 P0-A H2 XSS hardening 慣例)。
@@ -1691,71 +1090,6 @@ class EMGAnalysisApp {
         banner.style.display = 'block';
     }
 
-    async selectComposerManifest() {
-        try {
-            const filters = [{ displayName: 'CSV Files (*.csv)', pattern: '*.csv' }];
-            const file = await SelectFile('選擇分期總檔案', filters, 'open');
-            if (file) {
-                document.getElementById('composerManifest').value = file;
-                if (document.getElementById('composerDataFolder').value) {
-                    await this.loadComposerSubjects();
-                }
-            }
-        } catch (err) {
-            console.error('選擇分期總檔案失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
-    }
-
-    async selectComposerDataFolder() {
-        try {
-            const folder = await SelectDirectory('選擇資料夾');
-            if (folder) {
-                document.getElementById('composerDataFolder').value = folder;
-                if (document.getElementById('composerManifest').value) {
-                    await this.loadComposerSubjects();
-                }
-            }
-        } catch (err) {
-            console.error('選擇資料夾失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
-    }
-
-    // 載入 manifest 對應的 subject dropdown。
-    async loadComposerSubjects() {
-        const manifestPath = document.getElementById('composerManifest').value;
-        const dataFolder = document.getElementById('composerDataFolder').value;
-        if (!manifestPath) return;
-
-        try {
-            const result = await LoadChartComposerSubjects({
-                manifestPath,
-                dataFolder,
-            });
-            if (!result.success) {
-                await ShowError(t('dialog.error'), result.message);
-                return;
-            }
-            const select = document.getElementById('composerSubject');
-            select.innerHTML = '';
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = '請選擇主題';
-            select.appendChild(placeholder);
-            (result.subjects || []).forEach((subject) => {
-                const opt = document.createElement('option');
-                opt.value = subject;
-                opt.textContent = subject;
-                select.appendChild(opt);
-            });
-            select.disabled = false;
-        } catch (err) {
-            console.error('載入主題失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
-    }
-
     // 切 subject 時:zoom reset(清除 iframe)+ 保留 channel / phase 勾選 Set;
     // 不自動重新呼叫 loadComposerEMGChannels — 對齊 spec「manual 觸發」設計,使用者
     // 仍需按「載入 EMG 欄位」才更新 checkbox 列表(channel reconcile 在那時統一發生)。
@@ -1768,10 +1102,16 @@ class EMGAnalysisApp {
     //   套到 B 的 motion data 上 → motion / phase markers 全錯位。
     //
     //   修法:subject change 時 clear offset 為 0 + clear `_composerLoadedSubject`
-    //   to null。`generateComposerChart` 會在 RPC 前驗 `_composerLoadedSubject` 等於
-    //   當前 subject,否則 ShowError 強制 user 重新按「載入 EMG 欄位」。
+    //   to null。chart_composer_spec.mjs 的 spec.rpc 會在 RPC 前驗
+    //   `_composerLoadedSubject` 等於當前 subject,否則 throw → envelope ShowError
+    //   強制 user 重新按「載入 EMG 欄位」(M5 後 guard 從 main.js 移到 spec rpc)。
+    //
+    // M5:由 chart_composer_spec.mjs 的 onSubjectChange hook 經 ManifestPanel
+    // onMpSubjectChange 委派呼叫。結果區/圖表容器改走 ManifestPanel shell 的
+    // #mpResult(舊 #composerResult 已隨 showChartComposerPanel 刪除);
+    // #composerChartContent 由 spec.onResult render 進 #mpResultContent,id 不變。
     onComposerSubjectChange() {
-        const resultDiv = document.getElementById('composerResult');
+        const resultDiv = document.getElementById('mpResult');
         if (resultDiv) {
             resultDiv.style.display = 'none';
             const wrap = document.getElementById('composerChartContent');
@@ -1789,9 +1129,12 @@ class EMGAnalysisApp {
     // Channel reconcile:本次新主題 channel 列表 ∩ this._composerSelectedChannels
     // 為「保留勾選」;落差的舊勾選 channel 走 silent drop + 頂部 warning banner。
     async loadComposerEMGChannels() {
-        const manifestPath = document.getElementById('composerManifest').value;
-        const dataFolder = document.getElementById('composerDataFolder').value;
-        const subject = document.getElementById('composerSubject').value;
+        // M5:DOM ids 改走 ManifestPanel shell 共用 id(mpManifestPath/mpDataFolder/
+        // mpSubject)。Composer subject 為 name-mode(option.value=subject 字串,
+        // ADR-0007 §4),故 #mpSubject.value 直接是 subject 名。
+        const manifestPath = document.getElementById('mpManifestPath').value;
+        const dataFolder = document.getElementById('mpDataFolder').value;
+        const subject = document.getElementById('mpSubject').value;
         if (!manifestPath || !dataFolder || !subject) {
             await ShowError(t('dialog.error'), '請先選擇分期總檔案、資料夾與主題');
             return;
@@ -1851,200 +1194,14 @@ class EMGAnalysisApp {
             }
 
             this._composerEMGMotionOffset = Number(result.emgMotionOffset) || 0;
-            // codex P2#3:記錄成功 load 的 subject,讓 generateComposerChart 能驗證
-            // user 沒有「subject 切了但沒重新 load」就直接 generate。
+            // codex P2#3:記錄成功 load 的 subject,讓 chart_composer_spec.mjs 的
+            // spec.rpc 能驗 user 沒有「subject 切了但沒重新 load」就直接 generate
+            //(M5 後 generate 走 spec rpc,guard 一併移過去)。
             this._composerLoadedSubject = subject;
         } catch (err) {
             console.error('載入 EMG 通道失敗:', err);
             await ShowError(t('dialog.error'), err.toString());
         }
-    }
-
-    // 生成圖表 — 呼叫 GenerateChartComposer → 把回傳 HTML 塞進 iframe srcdoc,
-    // iframe load 後從 ECharts option 抽 phase markLine data 反推 phaseTimes,
-    // 然後 render phase checkbox 並更新 markLine 顯示。
-    async generateComposerChart() {
-        const manifestPath = document.getElementById('composerManifest').value;
-        const dataFolder = document.getElementById('composerDataFolder').value;
-        const subject = document.getElementById('composerSubject').value;
-        const selectedChannels = Array.from(this._composerSelectedChannels);
-        if (!manifestPath || !dataFolder || !subject) {
-            await ShowError(t('dialog.error'), '請先選擇分期總檔案、資料夾與主題');
-            return;
-        }
-        if (selectedChannels.length === 0) {
-            await ShowError(t('dialog.error'), '請至少選擇一個 EMG 通道');
-            return;
-        }
-
-        // codex P2#3 guard:_composerLoadedSubject 必須與當前 subject 一致,
-        // 否則 `_composerEMGMotionOffset` 是上個 subject 的值 — silent 套用會讓
-        // motion / phase markers 錯位。強制 user 重按「載入 EMG 欄位」對齊一致性。
-        if (this._composerLoadedSubject !== subject) {
-            await ShowError(
-                t('dialog.error'),
-                '主題已變更但未重新載入 EMG 欄位 — 請先按「載入 EMG 欄位」再生成圖表'
-            );
-            return;
-        }
-
-        const emgMotionOffset = this._composerEMGMotionOffset || 0;
-
-        try {
-            this.updateStatus('Chart Composer 生成中...');
-            const result = await GenerateChartComposer({
-                manifestPath,
-                dataFolder,
-                subject,
-                selectedChannels,
-                emgMotionOffset,
-            });
-            if (!result.success) {
-                await ShowError(t('dialog.error'), result.message);
-                this.updateStatus('Chart Composer 生成失敗');
-                return;
-            }
-
-            const wrapper = document.getElementById('composerChartContent');
-            wrapper.textContent = '';
-            const iframe = document.createElement('iframe');
-            iframe.style.width = '100%';
-            // Bug 4 + Bug D fix + Bug 2 第二輪 fix(2026-05-27 image #2/#5/#7/#16/#18):
-            // iframe.style.height **必須大於** backend composerContainerHeight(=1200)。
-            //
-            // 為何不是 1:1 對齊:user 實測 (2026-05-27 image #18) 1200px 仍會把 dataZoom
-            // slider bottom 切掉,需要加大到 ~1400px slider 才完整顯示。推測根因:
-            //   - ECharts 渲染 slider 時 handles + dataBackground 邊距會擴張到配置
-            //     `height:30` 之外(總視覺占用 ~50-60px)
-            //   - 加上 wails webview 對 srcdoc iframe inline style.height 的默認
-            //     reservation(觀察:~50-100px clip)
-            //   - 兩個誤差堆疊起來,1200 viewport 顯示不下完整 chart
-            //
-            // 1300 = 1200 (chart canvas) + 100 (buffer)。多出的 100px 視覺上是 chart
-            // 下方少量留白,user 實測 (2026-05-27) 1300 比 1400 layout 更舒服(1400 留白
-            // 太多)。試過 chart-internal 推 slider 往上(reservedBottom 100 → 150 +
-            // slider bottom:30 → 80)無效 — 真正 bottleneck 在 iframe 而非 chart 內部
-            // 佈局,所以解法只能加 iframe 高度。
-            iframe.style.height = '1300px';
-            iframe.style.border = 'none';
-            // 顯式關閉 iframe 預設 scrollbar — 即便 height 算錯也不會出現雙重 scroll。
-            iframe.scrolling = 'no';
-            // 對齊 P2-7 / P1-12 iframe security guard:sandbox=allow-scripts 無
-            // allow-same-origin。Go-side sanitize 是唯一防線(internal/chart/composer.go
-            // 的 JSON encoder)。
-            //
-            // 跨 frame access 限制下的設計:
-            //   - phaseTimes 由 `GenerateChartComposer` RPC 一併 return,
-            //     `_renderComposerPhaseCheckboxes` 直接讀 `this._composerPhaseTimes`,
-            //     不再嘗試從 `iframe.contentWindow.echarts` 反推(sandbox 下為 opaque
-            //     origin,讀取 silent fail)。對齊 CCI `result.phaseTimes` 既有 pattern。
-            //   - PNG 下載走 `composer-request-png` / `composer-png-result` postMessage
-            //     雙向通訊(由 backend `addComposerCustomJS` 注入 iframe 內 listener)。
-            //     parent → iframe `postMessage` 對 sandboxed iframe 仍可用(spec
-            //     bypass same-origin policy),取代過去直接讀 `chart.getDataURL`。
-            iframe.sandbox = 'allow-scripts';
-            iframe.srcdoc = result.html;
-            wrapper.appendChild(iframe);
-
-            // 保存 phaseTimes 給 _renderComposerPhaseCheckboxes / _updateComposerPhaseLines。
-            // Go-side `convertPhasePointsToEMGTime` 已將 PhasePoints 換到 EMG 時間 domain,
-            // 與 markLine.xAxis 同一座標系,無需前端再次轉換。
-            this._composerPhaseTimes = result.phaseTimes || {};
-
-            // iframe load 後 _onComposerIframeLoaded 走 bridge.send 重畫 markers。
-            // {once: true} 對齊 P2-10 guard。
-            iframe.addEventListener('load', () => this._onComposerIframeLoaded(), { once: true });
-
-            // codex review #1 P2:iframe customJS message listener 在完整 load
-            // (含 external echarts.min.js)後才註冊;在 ready 前送 requestReply
-            // 會被 drop → 10s timeout。記錄 ready promise,downloadComposerChart
-            // 在 bridge.requestReply 前先 await 它。
-            this._composerIframeReady = new Promise((resolve) => {
-                iframe.addEventListener('load', resolve, { once: true });
-            });
-
-            document.getElementById('composerResult').style.display = 'block';
-            this.updateStatus('Chart Composer 生成完成');
-        } catch (err) {
-            console.error('Chart Composer 生成失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-            this.updateStatus('Chart Composer 生成失敗');
-        }
-    }
-
-    // iframe load 完成後渲染 phase checkbox + 套用初始 phase line。
-    //
-    // phaseTimes 已在 generateComposerChart 從 `GenerateChartComposer` RPC return 保存
-    // 到 `this._composerPhaseTimes`,此 handler 不再嘗試跨 frame 讀 iframe.contentWindow
-    // .echarts 反推 — 那條路徑在 sandbox=allow-scripts(opaque origin)下 silent fail,
-    // 是過去 phase checkbox / phase markLine 失效的根因。
-    //
-    // 仍綁 iframe `load` event 而非直接同步呼叫,原因:_updateComposerPhaseLines 內部
-    // 透過 postMessage / `chart.setOption` 動態替換 markLine 的 path 需要 iframe ECharts
-    // instance 已掛 — 等 load 後再觸發,避免初次 render 時 ECharts 尚未 ready。
-    _onComposerIframeLoaded() {
-        const phaseTimes = this._composerPhaseTimes || {};
-        this._renderComposerPhaseCheckboxes(phaseTimes);
-        this._updateComposerPhaseLines();
-    }
-
-    // 渲染 phase checkbox。phase 名走既有 phaseOrder whitelist,phaseTimes 內無對
-    // 應 phase value 的 silent skip(對齊 CCI 既有 `available` filter 邏輯)。
-    //
-    // 勾選狀態保留 — `this._composerCheckedPhases` 為跨 generate 持久化的 Set;
-    // 若 set 為空(初次 render)預設全勾。
-    _renderComposerPhaseCheckboxes(phaseTimes) {
-        const container = document.getElementById('composerPhaseSelector');
-        if (!container) return;
-        container.textContent = '';
-
-        const phaseOrder = ['P0', 'P1', 'P2', 'S', 'C', 'D', 'T0', 'T', 'O', 'L'];
-        const available = phaseOrder.filter((p) => phaseTimes[p] !== undefined);
-
-        const useDefaultAllChecked = this._composerCheckedPhases.size === 0;
-
-        available.forEach((p) => {
-            const item = document.createElement('div');
-            item.className = 'checkbox-item';
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.id = 'composer_phase_' + p;
-            cb.value = p;
-            cb.checked = useDefaultAllChecked || this._composerCheckedPhases.has(p);
-            if (cb.checked) {
-                this._composerCheckedPhases.add(p);
-            }
-            cb.addEventListener('change', () => {
-                if (cb.checked) this._composerCheckedPhases.add(p);
-                else this._composerCheckedPhases.delete(p);
-                this._updateComposerPhaseLines();
-            });
-            const label = document.createElement('label');
-            label.setAttribute('for', cb.id);
-            label.textContent = p;
-            item.appendChild(cb);
-            item.appendChild(label);
-            container.appendChild(item);
-        });
-    }
-
-    // ADR-0003:走 bridge.send 寄 'composer-update-phase-markers' 給 iframe,
-    // iframe customJS 自己組 markData 並 setOption。parent 只算 pct(via
-    // recalcPercents)送出 checkedPhases,不持有 chart-internal 知識(series
-    // patch / markLine 形狀都在 composer.go customJS 內)。
-    _updateComposerPhaseLines() {
-        const iframe = document.querySelector('#composerChartContent iframe');
-        if (!iframe) return;
-        const phaseTimes = this._composerPhaseTimes || {};
-        const checkedNames = Array.from(
-            document.querySelectorAll('[id^="composer_phase_"]:checked')
-        ).map((cb) => cb.value);
-        const checkedPhases = checkedNames
-            .filter((n) => phaseTimes[n] !== undefined)
-            .map((n) => ({ name: n, time: phaseTimes[n] }));
-        const pcts = recalcPercents(checkedPhases);
-        const payload = checkedPhases.map((p) => ({ ...p, pct: pcts[p.name] }));
-        bridge.send(iframe, 'composer-update-phase-markers', { checkedPhases: payload });
     }
 
     // 下載 PNG — 從 iframe 抓 ECharts dataURL(反映當下 zoom / phase / legend 狀態)
@@ -2099,7 +1256,8 @@ class EMGAnalysisApp {
             // 拼 outputDir + `<subject>_chart_composer.png`(對齊 CCI 用 `_CCI_Rudolph.png`)。
             // backend 會再 SanitizeFileName(filepath.Base(...)) 做最終 sanitize +
             // path validation(prefix '/' 視 OS 而定,前端只負責 join,不裸接受 user input)。
-            const subject = document.getElementById('composerSubject').value || 'chart_composer';
+            // M5:#composerSubject → 共用 #mpSubject(name-mode value=subject 字串)。
+            const subject = document.getElementById('mpSubject').value || 'chart_composer';
             const sep = outputDir.endsWith('/') || outputDir.endsWith('\\') ? '' : '/';
             const outputPath = outputDir + sep + subject + '_chart_composer.png';
 
@@ -2115,126 +1273,6 @@ class EMGAnalysisApp {
         } catch (err) {
             console.error('下載 PNG 失敗:', err);
             await ShowError(t('dialog.error'), err.message || String(err));
-        }
-    }
-
-    // ==================== 標準化分期同步分析 ====================
-
-    showNormalizedPhaseSyncPanel() {
-        const panel = document.getElementById('functionPanel');
-        const html = `
-            <div class="panel-header">
-                <h2>${tHtml('panel.normalizedphasesync.title')}</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
-            <p class="help-text" style="margin-bottom: 1rem;">${tHtml('panel.normalizedphasesync.description')}</p>
-            <div class="form-group">
-                <label>1. ${tHtml('form.label.manifest')}</label>
-                <div class="input-group drop-zone" data-drop-target="normalizedPhaseSyncManifest" style="--wails-drop-target: drop;">
-                    <input type="text" id="normalizedPhaseSyncManifest" class="form-control" placeholder="${tHtml('form.placeholder.manifest')}" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectNormalizedPhaseSyncManifest()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-            <div class="form-group">
-                <label>2. ${tHtml('form.label.data_folder')}</label>
-                <div class="input-group">
-                    <input type="text" id="normalizedPhaseSyncDataFolder" class="form-control" placeholder="${tHtml('form.placeholder.data_folder_emg')}" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectNormalizedPhaseSyncDataFolder()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-            <div class="form-group">
-                <label>3. ${tHtml('form.label.subject')}</label>
-                <select id="normalizedPhaseSyncSubject" class="form-control" disabled>
-                    <option value="">${tHtml('form.placeholder.load_manifest_first')}</option>
-                </select>
-            </div>
-            <div class="form-row">
-                <div class="form-group col-md-6">
-                    <label>4. ${tHtml('form.label.norm_start_phase')}</label>
-                    <select id="normalizedPhaseSyncNormStartPhase" class="form-control" data-touched="false">
-                        <option value="">${tHtml('form.option.select')}</option>
-                    </select>
-                </div>
-                <div class="form-group col-md-6">
-                    <label>${tHtml('form.label.norm_end_phase')}</label>
-                    <select id="normalizedPhaseSyncNormEndPhase" class="form-control" data-touched="false">
-                        <option value="">${tHtml('form.option.select')}</option>
-                    </select>
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group col-md-6">
-                    <label>5. ${tHtml('form.label.stats_start_phase')}</label>
-                    <select id="normalizedPhaseSyncStatsStartPhase" class="form-control" data-touched="false">
-                        <option value="">${tHtml('form.option.select')}</option>
-                    </select>
-                </div>
-                <div class="form-group col-md-6">
-                    <label>${tHtml('form.label.stats_end_phase')}</label>
-                    <select id="normalizedPhaseSyncStatsEndPhase" class="form-control" data-touched="false">
-                        <option value="">${tHtml('form.option.select')}</option>
-                    </select>
-                </div>
-            </div>
-            <div class="button-group">
-                <button class="btn btn-primary" onclick="app.executeNormalizedPhaseSyncAnalysis()">${tHtml('button.start_analyze')}</button>
-                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
-            <div id="normalizedPhaseSyncResult" class="result-section" style="display: none;">
-                <h3>${tHtml('result.section.title')}</h3>
-                <div id="normalizedPhaseSyncResultContent"></div>
-            </div>`;
-        panel.innerHTML = html;
-        this.showPanel(panel);
-        this.loadNormalizedPhaseSyncPhases();
-    }
-
-    async selectNormalizedPhaseSyncManifest() {
-        try {
-            const filters = [{ displayName: 'CSV Files (*.csv)', pattern: '*.csv' }];
-            const file = await SelectFile('選擇分期總檔案', filters, 'open');
-            if (file) {
-                document.getElementById('normalizedPhaseSyncManifest').value = file;
-                await this.loadNormalizedPhaseSyncSubjects(file);
-            }
-        } catch (err) {
-            console.error('選擇檔案失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
-    }
-
-    async loadNormalizedPhaseSyncSubjects(manifestPath) {
-        try {
-            const subjects = await LoadPhaseManifest(manifestPath);
-            const select = document.getElementById('normalizedPhaseSyncSubject');
-            select.innerHTML = '';
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = t('form.option.select_subject');
-            select.appendChild(placeholder);
-            subjects.forEach((subject, index) => {
-                const option = document.createElement('option');
-                option.value = index;
-                option.textContent = subject;
-                select.appendChild(option);
-            });
-            select.disabled = false;
-            this.updateStatus(t('status.subjects_loaded', subjects.length));
-        } catch (err) {
-            console.error('載入主題失敗:', err);
-            await ShowError(t('dialog.error'), t('error.msg.load_subjects_failed', err));
-        }
-    }
-
-    async selectNormalizedPhaseSyncDataFolder() {
-        try {
-            const folder = await SelectDirectory('選擇數據資料夾');
-            if (folder) {
-                document.getElementById('normalizedPhaseSyncDataFolder').value = folder;
-            }
-        } catch (err) {
-            console.error('選擇資料夾失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
         }
     }
 
@@ -2290,360 +1328,6 @@ class EMGAnalysisApp {
         const markTouched = el => () => { el.dataset.touched = 'true'; };
         statsStart.addEventListener('change', markTouched(statsStart));
         statsEnd.addEventListener('change', markTouched(statsEnd));
-    }
-
-    async executeNormalizedPhaseSyncAnalysis() {
-        try {
-            const manifestFile = document.getElementById('normalizedPhaseSyncManifest').value;
-            const dataFolder = document.getElementById('normalizedPhaseSyncDataFolder').value;
-            const subjectIndex = parseInt(document.getElementById('normalizedPhaseSyncSubject').value);
-            const normStartPhase = document.getElementById('normalizedPhaseSyncNormStartPhase').value;
-            const normEndPhase = document.getElementById('normalizedPhaseSyncNormEndPhase').value;
-            const statsStartPhase = document.getElementById('normalizedPhaseSyncStatsStartPhase').value;
-            const statsEndPhase = document.getElementById('normalizedPhaseSyncStatsEndPhase').value;
-
-            if (!manifestFile || !dataFolder || isNaN(subjectIndex)
-                || !normStartPhase || !normEndPhase
-                || !statsStartPhase || !statsEndPhase) {
-                await ShowError(t('dialog.error'), t('error.msg.fill_required_fields'));
-                return;
-            }
-
-            this.updateStatus(t('status.normalized_running'));
-            const result = await AnalyzeNormalizedPhaseSync({
-                manifestFile, dataFolder, subjectIndex,
-                normStartPhase, normEndPhase,
-                statsStartPhase, statsEndPhase
-            });
-
-            if (result.success) {
-                this.showNormalizedPhaseSyncResult(result);
-                await ShowMessage(
-                    t('dialog.success'),
-                    t('success.msg.normalized_analysis_done', result.normalizedEMGPath, result.phaseSyncCSVPath)
-                );
-            } else {
-                await ShowError(t('dialog.error'), result.message);
-            }
-            this.updateStatus(t('status.analysis_done'));
-        } catch (err) {
-            console.error('標準化分期同步分析失敗:', err);
-            await ShowError(t('dialog.error'), t('error.msg.analysis_failed_dynamic', err));
-            this.updateStatus(t('status.analysis_failed'));
-        }
-    }
-
-    showNormalizedPhaseSyncResult(result) {
-        const resultDiv = document.getElementById('normalizedPhaseSyncResult');
-        const contentDiv = document.getElementById('normalizedPhaseSyncResultContent');
-        contentDiv.textContent = '';
-
-        const info = document.createElement('div');
-        info.className = 'result-info';
-        const fmtTime = t => (typeof t === 'number' ? t.toFixed(3) : '—');
-        const lines = [
-            [t('result.label.subject'), result.subject],
-            [t('result.label.norm_range'),
-                `${result.normStartPhase} (${fmtTime(result.normStartTime)}s) → ${result.normEndPhase} (${fmtTime(result.normEndTime)}s)`],
-            [t('result.label.stats_range'),
-                `${result.statsStartPhase} (${fmtTime(result.statsStartTime)}s) → ${result.statsEndPhase} (${fmtTime(result.statsEndTime)}s)`],
-            [t('result.label.output_normalized'), result.normalizedEMGPath],
-            [t('result.label.output_stats'), result.phaseSyncCSVPath]
-        ];
-        lines.forEach(([label, value]) => {
-            const p = document.createElement('p');
-            const strong = document.createElement('strong');
-            strong.textContent = label;
-            p.appendChild(strong);
-            p.appendChild(document.createTextNode(value != null ? String(value) : ''));
-            info.appendChild(p);
-        });
-        contentDiv.appendChild(info);
-
-        if (result.channelNames && result.channelMaxes) {
-            const wrap = document.createElement('div');
-            wrap.style.marginTop = '1rem';
-            const h4 = document.createElement('h4');
-            h4.textContent = t('result.label.muscles');
-            wrap.appendChild(h4);
-            const note = document.createElement('p');
-            note.className = 'help-text';
-            note.style.marginBottom = '0.5rem';
-            note.textContent = t('result.normalized.help_text');
-            wrap.appendChild(note);
-
-            const table = document.createElement('table');
-            table.className = 'result-table';
-            table.style.width = '100%';
-            table.style.borderCollapse = 'collapse';
-            const thead = document.createElement('thead');
-            const headRow = document.createElement('tr');
-            [t('table.header.muscle'), t('table.header.norm_max'), t('table.header.norm_mean')].forEach((h, i) => {
-                const th = document.createElement('th');
-                th.textContent = h;
-                th.style.padding = '0.25rem 0.5rem';
-                th.style.textAlign = i === 0 ? 'left' : 'right';
-                headRow.appendChild(th);
-            });
-            thead.appendChild(headRow);
-            table.appendChild(thead);
-
-            const tbody = document.createElement('tbody');
-            result.channelNames.forEach(name => {
-                const tr = document.createElement('tr');
-                const tdName = document.createElement('td');
-                tdName.textContent = name;
-                tdName.style.padding = '0.25rem 0.5rem';
-                const tdMax = document.createElement('td');
-                const maxVal = result.channelMaxes[name];
-                tdMax.textContent = typeof maxVal === 'number' ? maxVal.toFixed(6) : '—';
-                tdMax.style.textAlign = 'right';
-                tdMax.style.fontFamily = 'monospace';
-                tdMax.style.padding = '0.25rem 0.5rem';
-                const tdMean = document.createElement('td');
-                const meanVal = result.channelMeans ? result.channelMeans[name] : undefined;
-                tdMean.textContent = typeof meanVal === 'number' ? meanVal.toFixed(6) : '—';
-                tdMean.style.textAlign = 'right';
-                tdMean.style.fontFamily = 'monospace';
-                tdMean.style.padding = '0.25rem 0.5rem';
-                tr.appendChild(tdName);
-                tr.appendChild(tdMax);
-                tr.appendChild(tdMean);
-                tbody.appendChild(tr);
-            });
-            table.appendChild(tbody);
-            wrap.appendChild(table);
-            contentDiv.appendChild(wrap);
-        }
-
-        if (result.report) {
-            const reportWrap = document.createElement('div');
-            reportWrap.className = 'result-report';
-            reportWrap.style.marginTop = '1rem';
-            const h4 = document.createElement('h4');
-            h4.textContent = t('result.label.analysis_report');
-            reportWrap.appendChild(h4);
-            const pre = document.createElement('pre');
-            pre.className = 'result-pre';
-            pre.textContent = result.report;
-            reportWrap.appendChild(pre);
-            contentDiv.appendChild(reportWrap);
-        }
-
-        const btnGroup = document.createElement('div');
-        btnGroup.className = 'button-group';
-        const btn = document.createElement('button');
-        btn.className = 'btn btn-primary';
-        btn.textContent = t('button.open_output_folder');
-        btn.onclick = () => this.openOutputFolder();
-        btnGroup.appendChild(btn);
-        contentDiv.appendChild(btnGroup);
-
-        resultDiv.style.display = 'block';
-    }
-
-    // ==================== 肌肉比值分析 ====================
-
-    // 肌肉比值分析面板：兩步驟批次處理
-    showMuscleRatioPanel() {
-        const panel = document.getElementById('functionPanel');
-        // 純靜態模板（無 dynamic user input），與既有 showCCIPanel / showPhaseSyncPanel 對稱
-        panel.innerHTML = `
-            <div class="panel-header">
-                <h2>${tHtml('panel.muscleratio.title')}</h2>
-                <button class="btn-back" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
-
-            <p class="help-text">${tHtml('panel.muscleratio.description')}</p>
-
-            <div class="form-group">
-                <label>1. ${tHtml('form.label.manifest')}</label>
-                <div class="input-group drop-zone" data-drop-target="muscleRatioManifest" style="--wails-drop-target: drop;">
-                    <input type="text" id="muscleRatioManifest" class="form-control" placeholder="${tHtml('form.placeholder.manifest')}" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectMuscleRatioManifest()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>2. ${tHtml('form.label.data_folder')}</label>
-                <div class="input-group">
-                    <input type="text" id="muscleRatioDataFolder" class="form-control" placeholder="${tHtml('form.placeholder.data_folder_emg')}" readonly>
-                    <button class="btn btn-secondary" onclick="app.selectMuscleRatioDataFolder()">${tHtml('button.browse')}</button>
-                </div>
-            </div>
-
-            <div class="button-group">
-                <button class="btn btn-primary" onclick="app.executeMuscleRatioAnalysis()">${tHtml('button.start_batch_analyze')}</button>
-                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tHtml('button.back')}</button>
-            </div>
-
-            <div id="muscleRatioResult" class="result-section" style="display: none;">
-                <h3>${tHtml('result.section.title')}</h3>
-                <div id="muscleRatioResultContent"></div>
-            </div>
-        `;
-
-        this.showPanel(panel);
-    }
-
-    // 選擇肌肉比值分期總檔案
-    async selectMuscleRatioManifest() {
-        try {
-            const filters = [{
-                displayName: 'CSV Files (*.csv)',
-                pattern: '*.csv'
-            }];
-            const file = await SelectFile('選擇分期總檔案', filters, 'open');
-
-            if (file) {
-                document.getElementById('muscleRatioManifest').value = file;
-            }
-        } catch (err) {
-            console.error('選擇檔案失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
-    }
-
-    // 選擇肌肉比值數據資料夾
-    async selectMuscleRatioDataFolder() {
-        try {
-            const folder = await SelectDirectory('選擇數據資料夾');
-            if (folder) {
-                document.getElementById('muscleRatioDataFolder').value = folder;
-            }
-        } catch (err) {
-            console.error('選擇資料夾失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
-    }
-
-    // 執行肌肉比值批次分析
-    async executeMuscleRatioAnalysis() {
-        // 找到呼叫此函式的按鈕並 disable，避免雙擊產生兩個並發 RPC（會搶寫同一個輸出檔）
-        const btn = document.querySelector('#functionPanel .btn-primary');
-        if (btn) btn.disabled = true;
-
-        try {
-            const manifestFile = document.getElementById('muscleRatioManifest').value;
-            const dataFolder = document.getElementById('muscleRatioDataFolder').value;
-
-            if (!manifestFile || !dataFolder) {
-                await ShowError(t('dialog.error'), t('error.msg.muscle_fill_fields'));
-                return;
-            }
-
-            this.updateStatus(t('status.muscle_running'));
-
-            const result = await AnalyzeMuscleRatio({ manifestFile, dataFolder });
-
-            this.showMuscleRatioResult(result);
-
-            // status 必須與 success 一致；部分失敗時顯示「分析完成」會誤導
-            if (result.success) {
-                this.updateStatus(t('status.analysis_done'));
-                await ShowMessage(t('dialog.title.complete'), result.message);
-            } else {
-                this.updateStatus(t('dialog.title.partial_failed'));
-                await ShowError(t('dialog.title.partial_failed'), result.message);
-            }
-        } catch (err) {
-            console.error('肌肉比值分析失敗:', err);
-            await ShowError(t('dialog.error'), t('error.msg.analysis_failed_dynamic', err));
-            this.updateStatus(t('status.analysis_failed'));
-        } finally {
-            if (btn) btn.disabled = false;
-        }
-    }
-
-    // 顯示肌肉比值批次結果（用 DOM API 避免 XSS：subject / error 可能來自外部 manifest 內容）
-    showMuscleRatioResult(result) {
-        const resultDiv = document.getElementById('muscleRatioResult');
-        const contentDiv = document.getElementById('muscleRatioResultContent');
-        contentDiv.textContent = '';
-
-        const summary = document.createElement('p');
-        const strong = document.createElement('strong');
-        const count = result.subjects ? result.subjects.length : 0;
-        strong.textContent = t('result.muscle.subject_count', count);
-        summary.appendChild(strong);
-        summary.appendChild(document.createTextNode(`：${result.message || ''}`));
-        contentDiv.appendChild(summary);
-
-        if (!result.subjects || result.subjects.length === 0) {
-            resultDiv.style.display = '';
-            return;
-        }
-
-        const table = document.createElement('table');
-        table.className = 'result-table';
-        table.style.width = '100%';
-        table.style.borderCollapse = 'collapse';
-        table.style.marginTop = '0.5rem';
-
-        const thead = document.createElement('thead');
-        const headRow = document.createElement('tr');
-        [t('table.header.subject'), t('table.header.status'), t('table.header.output_all'), t('table.header.output_phase'), t('table.header.duration'), t('table.header.message')].forEach(h => {
-            const th = document.createElement('th');
-            th.textContent = h;
-            th.style.padding = '0.25rem 0.5rem';
-            th.style.textAlign = 'left';
-            th.style.borderBottom = '1px solid #ddd';
-            headRow.appendChild(th);
-        });
-        thead.appendChild(headRow);
-        table.appendChild(thead);
-
-        const tbody = document.createElement('tbody');
-        result.subjects.forEach(sr => {
-            const tr = document.createElement('tr');
-
-            const tdName = document.createElement('td');
-            tdName.textContent = sr.subject;
-            tdName.style.padding = '0.25rem 0.5rem';
-            tr.appendChild(tdName);
-
-            const tdStatus = document.createElement('td');
-            tdStatus.textContent = sr.success ? '✓' : '✗';
-            tdStatus.style.padding = '0.25rem 0.5rem';
-            tdStatus.style.color = sr.success ? '#2a9d3f' : '#c0392b';
-            tdStatus.style.fontWeight = 'bold';
-            tr.appendChild(tdStatus);
-
-            const tdAll = document.createElement('td');
-            tdAll.textContent = sr.outputAllPath || '—';
-            tdAll.style.padding = '0.25rem 0.5rem';
-            tdAll.style.fontFamily = 'monospace';
-            tdAll.style.fontSize = '0.85em';
-            tr.appendChild(tdAll);
-
-            const tdPhase = document.createElement('td');
-            tdPhase.textContent = sr.outputPhasePath || '—';
-            tdPhase.style.padding = '0.25rem 0.5rem';
-            tdPhase.style.fontFamily = 'monospace';
-            tdPhase.style.fontSize = '0.85em';
-            tr.appendChild(tdPhase);
-
-            const tdDuration = document.createElement('td');
-            tdDuration.textContent = sr.durationMs > 0 ? sr.durationMs.toString() : '—';
-            tdDuration.style.padding = '0.25rem 0.5rem';
-            tdDuration.style.fontFamily = 'monospace';
-            tdDuration.style.fontSize = '0.85em';
-            tdDuration.style.textAlign = 'right';
-            tr.appendChild(tdDuration);
-
-            const tdErr = document.createElement('td');
-            tdErr.textContent = sr.error || '';
-            tdErr.style.padding = '0.25rem 0.5rem';
-            tdErr.style.fontSize = '0.85em';
-            tdErr.style.color = sr.error ? '#c0392b' : 'inherit';
-            tr.appendChild(tdErr);
-
-            tbody.appendChild(tr);
-        });
-        table.appendChild(tbody);
-        contentDiv.appendChild(table);
-
-        resultDiv.style.display = '';
     }
 
     // 開啟輸出資料夾
