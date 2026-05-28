@@ -146,7 +146,7 @@ func recoverHandlerPanicVoid(handlerName string, logger *logging.Logger) {
 }
 
 // recoverHandlerPanicValue 是給「只回單一 value(沒 error)」的 RPC method 安全網。
-// 適用於 GetVersion (string) / GetConfig (*AppConfig) / GetBackpressureStats (struct)
+// 適用於 GetVersion (string) / GetConfig (*AppConfig) / GetTranslations (map)
 // 等沒 error return 的 getter — panic 時把 T zero value 寫回,避免 Wails runtime
 // 收到 unrecovered panic 把 desktop process 擊潰。
 //

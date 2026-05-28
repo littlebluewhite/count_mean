@@ -14,11 +14,17 @@ import (
 )
 
 // TestCalculate_PreCancelledContext_DoesNotStartWorkers exercises the explicit
-// ctx.Err() guard added at the top of execute. The previous race-y select had
-// 1/N chance of letting one worker job slip through on a fast machine before
-// ctx.Done() was observed; this test asserts deterministic short-circuit:
-// 收到 already-cancelled ctx 時，所有 backpressure 計數應維持 0
-// （等同 worker pool 從未啟動）。
+// ctx.Err() guard at the top of execute. The previous race-y select had a 1/N
+// chance of letting one worker job slip through on a fast machine before
+// ctx.Done() was observed; this test asserts deterministic short-circuit by
+// pinning the returned error to context.Canceled.
+//
+// Pre-ADR-0006 version of this test additionally asserted
+// backpressureController.ActiveJobs() == 0 to prove no worker started, but the
+// counter was self-referential — only this test read it. After collapsing the
+// controller (ADR-0006) the user-facing contract is fully expressed by the
+// errors.Is(context.Canceled) check; the internal counter probe was removed
+// per ADR-0006 process note item 5.
 func TestCalculate_PreCancelledContext_DoesNotStartWorkers(t *testing.T) {
 	calc := NewMaxMeanCalculator(10)
 	dataset := buildLargeDataset(10000, 8)
@@ -30,50 +36,6 @@ func TestCalculate_PreCancelledContext_DoesNotStartWorkers(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, context.Canceled),
 		"expected context.Canceled, got %v", err)
-
-	// 顯式契約：pre-cancelled ctx 進入 execute 時就回傳，
-	// worker pool 從未啟動，所以 backpressure 從未 RecordJobStart。
-	assert.Equal(t, 0, calc.backpressureController.ActiveJobs(),
-		"no jobs should have started under pre-cancelled context")
-}
-
-// TestProcessJob_PanicResetsActiveJobs verifies that even when the sliding
-// window calculation panics mid-flight, the deferred RecordJobComplete still
-// fires and activeJobs returns to zero.
-//
-// 注入 panicking provider 的手法：EMGDatasetProvider.GetValue 在 dataset == nil
-// 時會 nil-pointer panic（len(p.dataset.Data) 解 nil pointer）。利用這點驅動
-// SlidingWindowCalculator 在 RecordJobStart 之後 panic，期望 defer 守住
-// activeJobs 計數對稱性。
-func TestProcessJob_PanicResetsActiveJobs(t *testing.T) {
-	calc := NewMaxMeanCalculator(10)
-	calc.backpressureController.Reset()
-
-	// 真實 dataset 用來建 orchestrator（execute 走不到，但 newOrchestrator 需要
-	// dataset.Data[0].Channels 取 channelCount）。
-	realDataset := buildLargeDataset(10, 1)
-
-	// 直接組 orchestrator，繞過 Calculate 的合法性驗證；
-	// 此測試專注 processJob 的 panic-safe 計數對稱性。
-	orch := calc.newOrchestrator(realDataset, 5, 0, 9, false)
-
-	// 注入會 panic 的 provider（dataset == nil → GetValue 解 nil dataset.Data）。
-	panickyJob := calculationJob{
-		channelIdx: 0,
-		provider:   &EMGDatasetProvider{dataset: nil},
-		windowSize: 5,
-		startIdx:   0,
-		endIdx:     9,
-	}
-
-	require.Panics(t, func() {
-		_ = orch.processJob(context.Background(), panickyJob)
-	}, "panicky provider should panic processJob mid-flight")
-
-	// 關鍵斷言：即使 panic，defer RecordJobComplete 仍須執行，
-	// activeJobs 應回到 0；若回 0 之前的實作（非 defer）則此處會卡 1。
-	assert.Equal(t, 0, calc.backpressureController.ActiveJobs(),
-		"deferred RecordJobComplete must restore activeJobs to zero after panic")
 }
 
 // TestCalculate_HasStartRange_ZeroIsExplicit 守護
@@ -124,37 +86,6 @@ func TestCalculate_HasStartRange_ZeroIsExplicit(t *testing.T) {
 	require.Len(t, resultsBypass, 1)
 	assert.InDelta(t, 100.0, resultsBypass[0].MaxMean, 1e-9,
 		"HasStartRange=false 應從資料起點開始,MaxMean=100 (高值區);實際=%v", resultsBypass[0].MaxMean)
-}
-
-// TestProcessJob_PreCancelledCtx_NoCountLeak 驗證 WaitForCapacity 因 ctx 取消
-// 提早回傳時，因尚未 RecordJobStart，activeJobs 應始終為 0。
-// 這條 invariant 保護「RecordJobStart 必須與 RecordJobComplete 配對」的契約。
-func TestProcessJob_PreCancelledCtx_NoCountLeak(t *testing.T) {
-	calc := NewMaxMeanCalculator(10)
-	calc.backpressureController.Reset()
-
-	dataset := buildLargeDataset(100, 2)
-	orch := calc.newOrchestrator(dataset, 5, 0, 99, false)
-
-	// WaitForCapacity 在記憶體壓力不大時會立即回傳 nil，所以這個測試其實
-	// 走的是「正常完成 → defer 後 activeJobs 歸零」路徑，搭配上面 panic
-	// 測試構成完整不變式（symmetric RecordJobStart/Complete）。
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	job := calculationJob{
-		channelIdx: 0,
-		provider:   NewEMGDatasetProvider(dataset),
-		windowSize: 5,
-		startIdx:   0,
-		endIdx:     99,
-	}
-
-	result := orch.processJob(ctx, job)
-	require.NoError(t, result.err)
-
-	assert.Equal(t, 0, calc.backpressureController.ActiveJobs(),
-		"after normal processJob, activeJobs must be zero")
 }
 
 // TestMaxMean_NaNInf_Invariants 鎖定 的 fail-fast 契約:含 NaN / ±Inf 的

@@ -1243,11 +1243,3 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 	return result, nil
 }
 
-// GetBackpressureStats 獲取背壓控制統計信息;defer recoverHandlerPanicValue 防
-// nil maxMeanCalc (測試場景或 state 未初始化)導致的 nil deref panic 擊潰 process。
-func (a *App) GetBackpressureStats() (stats models.BackpressureStats) {
-	defer recoverHandlerPanicValue("GetBackpressureStats", a.logger, &stats)
-
-	s := a.state.Load()
-	return s.maxMeanCalc.GetBackpressureStats()
-}

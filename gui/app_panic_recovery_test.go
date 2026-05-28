@@ -83,11 +83,6 @@ func TestRpcMethods_HappyPath_NoRePanic(t *testing.T) {
 		defer assertNoRepanic(t)
 		app.ShowError("title", "msg")
 	})
-
-	t.Run("GetBackpressureStats", func(t *testing.T) {
-		defer assertNoRepanic(t)
-		_ = app.GetBackpressureStats()
-	})
 }
 
 // TestApp_AllMethodsHaveDefer_StaticGuarantee 用編譯期型別守護證實 9 個 method

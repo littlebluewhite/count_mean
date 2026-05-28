@@ -381,13 +381,13 @@ func TestRecoverHandlerPanicValue_Pointer_PanicResetsToNil(t *testing.T) {
 }
 
 func TestRecoverHandlerPanicValue_Struct_PanicResetsToZero(t *testing.T) {
-	out := models.BackpressureStats{ThroughputJobsPerSec: 42.5}
+	out := models.MaxMeanResult{MaxMean: 42.5}
 	func() {
 		defer recoverHandlerPanicValue("StructHandler", nil, &out)
 		panic("simulated panic in struct handler")
 	}()
 
-	if out.ThroughputJobsPerSec != 0 {
+	if out.MaxMean != 0 {
 		t.Errorf("expected zero struct after panic, got %+v", out)
 	}
 }

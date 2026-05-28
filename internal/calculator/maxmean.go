@@ -46,13 +46,12 @@ type CalculationOptions struct {
 
 // MaxMeanCalculator 處理最大平均值計算.
 type MaxMeanCalculator struct {
-	scalingFactor          int
-	logger                 *logging.Logger
-	workerCount            int
-	progressCallback       models.ProgressCallback
-	backpressureController *models.BackpressureController
-	dataParser             *parsers.DataParser
-	slidingWindow          *SlidingWindowCalculator
+	scalingFactor    int
+	logger           *logging.Logger
+	workerCount      int
+	progressCallback models.ProgressCallback
+	dataParser       *parsers.DataParser
+	slidingWindow    *SlidingWindowCalculator
 }
 
 // calculationJob 表示一個通道計算任務.
@@ -91,18 +90,14 @@ func NewMaxMeanCalculator(scalingFactor int) *MaxMeanCalculator {
 		workerCount = MaxWorkerCount
 	}
 
-	backpressureConfig := models.DefaultBackpressureConfig()
-	backpressureConfig.MaxWorkers = workerCount
-
 	logger := logging.GetLogger("max_mean_calculator")
 
 	return &MaxMeanCalculator{
-		scalingFactor:          scalingFactor,
-		logger:                 logger,
-		workerCount:            workerCount,
-		backpressureController: models.NewBackpressureController(backpressureConfig),
-		dataParser:             parsers.NewDataParserWithLogger(scalingFactor, logger),
-		slidingWindow:          NewSlidingWindowCalculator(),
+		scalingFactor: scalingFactor,
+		logger:        logger,
+		workerCount:   workerCount,
+		dataParser:    parsers.NewDataParserWithLogger(scalingFactor, logger),
+		slidingWindow: NewSlidingWindowCalculator(),
 	}
 }
 
@@ -122,30 +117,24 @@ func (c *MaxMeanCalculator) SetProgressCallback(callback models.ProgressCallback
 	c.progressCallback = callback
 }
 
-// GetBackpressureStats 獲取背壓統計信息.
-func (c *MaxMeanCalculator) GetBackpressureStats() models.BackpressureStats {
-	if c.backpressureController != nil {
-		return c.backpressureController.GetStats()
-	}
-
-	return models.BackpressureStats{}
-}
-
-// getMemoryUsageInfo 獲取記憶體使用信息（委託給 BackpressureController）.
-func (c *MaxMeanCalculator) getMemoryUsageInfo() map[string]any {
-	if c.backpressureController != nil {
-		return c.backpressureController.GetMemoryUsageInfo()
-	}
-	// 如果沒有背壓控制器，返回基本記憶體信息
+// memoryUsageInfo 獲取記憶體使用信息(供 logging 使用)。
+// 內聯自原本透過 BackpressureController 的 GetMemoryUsageInfo wrapper;collapse 後
+// 直接 read runtime.MemStats 並補上 usage_ratio / is_throttled 兩個欄位以維持
+// 原本 logging payload 形狀。
+func (c *MaxMeanCalculator) memoryUsageInfo() map[string]any {
 	var memStats runtime.MemStats
 
 	runtime.ReadMemStats(&memStats)
+
+	ratio := memoryUsageRatio(&memStats)
 
 	return map[string]any{
 		"alloc_mb":       memStats.Alloc / 1024 / 1024,
 		"total_alloc_mb": memStats.TotalAlloc / 1024 / 1024,
 		"sys_mb":         memStats.Sys / 1024 / 1024,
 		"num_gc":         memStats.NumGC,
+		"usage_ratio":    ratio,
+		"is_throttled":   ratio >= defaultMemoryThreshold,
 	}
 }
 
@@ -561,13 +550,7 @@ func (o *orchestrator) execute(ctx context.Context) ([]models.MaxMeanResult, err
 
 	results := make([]models.MaxMeanResult, o.channelCount)
 
-	// 調整工作協程數
 	actualWorkerCount := o.calc.workerCount
-
-	if o.calc.backpressureController != nil {
-		o.calc.backpressureController.Reset()
-		actualWorkerCount = o.calc.backpressureController.GetOptimalWorkerCount()
-	}
 
 	initStatus := "初始化並行計算"
 	if o.isRanged {
@@ -580,7 +563,7 @@ func (o *orchestrator) execute(ctx context.Context) ([]models.MaxMeanResult, err
 		"channel_count":       o.channelCount,
 		"start_idx":           o.startIdx,
 		"end_idx":             o.endIdx,
-		"memory_usage":        o.calc.getMemoryUsageInfo(),
+		"memory_usage":        o.calc.memoryUsageInfo(),
 	})
 
 	// 初始化進度報告
@@ -676,22 +659,18 @@ func (o *orchestrator) worker(
 
 // processJob 處理單個計算任務.
 func (o *orchestrator) processJob(ctx context.Context, job calculationJob) channelResult {
-	// 背壓控制；ctx 取消時 WaitForCapacity 立即回傳，processJob 也帶錯誤退出。
-	if o.calc.backpressureController != nil {
-		if err := o.calc.backpressureController.WaitForCapacity(ctx); err != nil {
-			return channelResult{channelIdx: job.channelIdx, err: err}
-		}
-		o.calc.backpressureController.RecordJobStart()
-		// 用 defer 保護 RecordJobComplete，確保 panic / early return
-		// 路徑下 activeJobs 對稱遞減。過去裸呼叫位於函式底部，slidingWindow
-		// panic 會繞過它，導致 activeJobs 計數永久偏高，背壓判斷失準。
-		defer o.calc.backpressureController.RecordJobComplete()
+	// Admission gate:ctx 取消時 waitForMemoryCapacity 立即回傳 ctx.Err(),
+	// processJob 也帶錯誤退出。collapse 後不再追蹤 activeJobs counter
+	// (Wave 6 已移除 monitor + 對外 zero reader),純 memory ratio
+	// 守 ThrottleThreshold 即可。
+	if err := o.calc.waitForMemoryCapacity(ctx); err != nil {
+		return channelResult{channelIdx: job.channelIdx, err: err}
 	}
 
 	// 日誌記錄
 	logContext := map[string]any{
 		"channel_index": job.channelIdx + 1,
-		"memory_usage":  o.calc.getMemoryUsageInfo(),
+		"memory_usage":  o.calc.memoryUsageInfo(),
 	}
 	if o.isRanged {
 		logContext["start_idx"] = job.startIdx
@@ -809,25 +788,6 @@ func (o *orchestrator) finalize(results []models.MaxMeanResult) {
 	} else {
 		o.calc.logger.Info("最大平均值計算完成", logCtx)
 	}
-
-	// 記錄背壓控制統計。
-	// 注意：peak_memory_mb / average_workers / throttle_events 在 391f347 Wave 4 PR8
-	// 移除 backpressure monitor 後就沒有 writer 了，會永遠是 0 — cross-compare review
-	// P2 抓到這個 misleading observability，這次清掉避免假象。
-	if o.calc.backpressureController != nil {
-		stats := o.calc.backpressureController.GetStats()
-
-		statsLogCtx := map[string]any{
-			"processing_time_ms":  stats.TotalProcessingTime.Milliseconds(),
-			"throughput_jobs_sec": stats.ThroughputJobsPerSec,
-		}
-		if o.isRanged {
-			o.calc.logger.Info("範圍計算背壓控制統計", statsLogCtx)
-		} else {
-			o.calc.logger.Info("背壓控制統計", statsLogCtx)
-		}
-	}
-
 }
 
 // CalculateFromRawData 從原始字符串數據計算.
