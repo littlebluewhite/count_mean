@@ -87,6 +87,9 @@ export class ManifestPanel {
      * @param {(ctx: object) => Promise<object>} spec.rpc - Wails backend call
      * @param {(result: object, ctx: object, mp: ManifestPanel) => Promise<void>} spec.onResult
      * @param {boolean} [spec.silentSuccess=false] - true 略過 ShowMessage(Composer 用)
+     * @param {boolean} [spec.hideSubject=false] - true 時 shell 省略 subject `<select>`
+     *   區塊。MuscleRatio 只吃 manifest + dataFolder(無 subject,ADR-0007 §2 入口
+     *   定義),設此旗標;其他 4 panel 省略走 default(顯示 subject select)。
      */
     run(spec) {
         this._currentSpec = spec;
@@ -188,6 +191,11 @@ export class ManifestPanel {
      * manifest / dataFolder / subject 三個 input + spec.formBody 注入 +
      * run button + 結果區。
      *
+     * `spec.hideSubject === true` 時省略 subject `<select>` 區塊(MuscleRatio
+     * 只吃 manifest + dataFolder,ADR-0007 §2 入口定義 — 無 subject)。此時
+     * _gatherCtx 的 `#mpSubject` lookup 回 null → subjectIdx=NaN / subjectName=''
+     *(spec.rpc 不讀這兩欄即可)。其他 4 panel 省略 hideSubject 走 default。
+     *
      * `formBody` 為 builder function 而非 string(ADR-0007 §6 + reversibility:
      * locale change 時 frozen string 無法 retranslate,builder fn 走 onLocaleChange
      * 自然 re-render)。
@@ -225,12 +233,13 @@ export class ManifestPanel {
                 </div>
             </div>
 
+            ${spec.hideSubject ? '' : `
             <div class="form-group">
                 <label>3. ${tH('form.label.subject')}</label>
                 <select id="mpSubject" class="form-control" disabled onchange="app.onMpSubjectChange()">
                     <option value="">${tH('form.placeholder.load_manifest_first')}</option>
                 </select>
-            </div>
+            </div>`}
 
             ${spec.formBody(tH)}
 

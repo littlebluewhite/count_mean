@@ -362,6 +362,41 @@ test('8. spec.runBtnLabelKey:default 為 button.start_analyze、override 走 spe
     }
 });
 
+// ---------- spec.hideSubject(M4 prep)----------
+
+test('8b. spec.hideSubject 省略(default):shell render subject select(#mpSubject 存在)', async () => {
+    // M4 prep API extension(ADR-0007 §2 入口定義):4 個吃 subject 的 panel
+    //(CCI / PhaseSync / NormalizedPhaseSync / Composer)走 default,subject
+    // select 必須 render。此 test 釘 default 行為不被 hideSubject 引入破壞。
+    const { window, mp } = await setup();
+    try {
+        mp.run(minimalSpec()); // 不傳 hideSubject → default
+        const select = window.document.getElementById('mpSubject');
+        assert.ok(select, 'default(hideSubject 省略)時 #mpSubject select 必須 render');
+        assert.equal(select.tagName.toLowerCase(), 'select', '#mpSubject 應為 <select>');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('8c. spec.hideSubject=true:shell 省略 subject select(#mpSubject 不存在)', async () => {
+    // MuscleRatio 只吃 manifest + dataFolder(無 subject),設 hideSubject=true。
+    // 此時 shell 不得 render subject select — 避免出現一個無 caller 讀取、永遠
+    // disabled 的孤兒 select。manifest / dataFolder input 仍須存在。
+    const { window, mp } = await setup();
+    try {
+        mp.run(minimalSpec({ hideSubject: true }));
+        const select = window.document.getElementById('mpSubject');
+        assert.equal(select, null, 'hideSubject=true 時 #mpSubject select 不應 render');
+        // 其餘 shell 結構(manifest / dataFolder / run button)仍在。
+        assert.ok(window.document.getElementById('mpManifestPath'), 'manifest input 仍須 render');
+        assert.ok(window.document.getElementById('mpDataFolder'), 'dataFolder input 仍須 render');
+        assert.ok(window.document.getElementById('mpRunBtn'), 'run button 仍須 render');
+    } finally {
+        await teardown(window);
+    }
+});
+
 // ---------- bindPhaseCheckboxes onUpdate(M3 prep)----------
 
 test('9. bindPhaseCheckboxes 帶 onUpdate callback:checkbox change 後呼叫 (pcts, checkedPhases)', async () => {
