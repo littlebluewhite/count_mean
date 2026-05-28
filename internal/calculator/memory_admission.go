@@ -32,10 +32,18 @@ func memoryUsageRatio(memStats *runtime.MemStats) float64 {
 // Otherwise polls every memoryCheckInterval until either the ratio drops or ctx
 // is cancelled (in which case ctx.Err() is returned).
 func (c *MaxMeanCalculator) waitForMemoryCapacity(ctx context.Context) error {
+	return c.waitForMemoryCapacityWithThreshold(ctx, defaultThrottleThreshold)
+}
+
+// waitForMemoryCapacityWithThreshold is the threshold-injectable form of
+// waitForMemoryCapacity. Tests pass threshold=0 to force the ticker-loop path
+// (so cancellation semantics under contention can be exercised without a
+// real memory-pressure setup that would perturb parallel tests).
+func (c *MaxMeanCalculator) waitForMemoryCapacityWithThreshold(ctx context.Context, threshold float64) error {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
-	if memoryUsageRatio(&memStats) < defaultThrottleThreshold {
+	if memoryUsageRatio(&memStats) < threshold {
 		return nil
 	}
 
@@ -48,7 +56,7 @@ func (c *MaxMeanCalculator) waitForMemoryCapacity(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			runtime.ReadMemStats(&memStats)
-			if memoryUsageRatio(&memStats) < defaultThrottleThreshold {
+			if memoryUsageRatio(&memStats) < threshold {
 				return nil
 			}
 			runtime.Gosched()

@@ -33,32 +33,43 @@ func TestWaitForMemoryCapacity_ReturnsImmediatelyBelowThreshold(t *testing.T) {
 }
 
 // TestWaitForMemoryCapacity_RespectsCtxCancellation pins the cancellation
-// contract: a ctx cancelled while waitForMemoryCapacity is in its ticker loop
-// must return ctx.Err() promptly (within ~1 ticker tick).
+// contract: when the helper is forced into the ticker-loop path (threshold=0
+// so memoryUsageRatio >= threshold trivially) and ctx is cancelled, the call
+// must return ctx.Err() promptly (within ~1 ticker tick = 100ms).
 //
-// We cannot deterministically force heap usage above the throttle threshold
-// without large allocations that would perturb other parallel tests; instead we
-// verify the cancellation responsiveness on the fast-path-already-returned
-// case: a ctx cancelled before the call returns ctx.Err() (mirroring the
-// pre-cancelled ctx semantics tested at the calculator-level in
-// maxmean_invariants_test.go).
+// Round-2 codex review pointed out that the earlier version of this test
+// called waitForMemoryCapacity with default threshold (0.9), which on a
+// normal CI heap falls into the fast-path `< threshold` branch and returns
+// nil before inspecting ctx. The previous assertion accepted nil-or-Canceled
+// — so the test would still pass even if production code dropped the
+// `<-ctx.Done()` case from the ticker-loop select.
 //
-// This is sufficient to lock the contract because the ticker loop branch is
-// also gated on `<-ctx.Done()` in the same select, so the cancellation
-// pathway code is exercised either way.
+// Fix: use threshold=0 to deterministically enter the ticker loop without
+// allocating real memory pressure (which would perturb sibling parallel
+// tests). Now the only path that satisfies the assertion is the
+// `<-ctx.Done()` branch returning context.Canceled.
 func TestWaitForMemoryCapacity_RespectsCtxCancellation(t *testing.T) {
 	calc := NewMaxMeanCalculator(10)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
 
-	err := calc.waitForMemoryCapacity(ctx)
+	// Cancel slightly after entering the ticker loop. We use a goroutine + a
+	// small sleep so the test exercises the contended-loop cancellation
+	// (rather than the pre-cancelled ctx shortcut, which is already locked
+	// down by TestCalculate_PreCancelledContext_DoesNotStartWorkers).
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
 
-	// Fast path will likely take the `< threshold` branch and return nil before
-	// inspecting ctx (matches WaitForCapacity historic behaviour). Either nil
-	// or ctx.Canceled is acceptable — both mean the call did not hang.
-	if err != nil {
-		assert.ErrorIs(t, err, context.Canceled,
-			"cancellation should surface as context.Canceled, got %v", err)
-	}
+	start := time.Now()
+	err := calc.waitForMemoryCapacityWithThreshold(ctx, 0)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "ticker-loop path must surface ctx cancellation")
+	assert.ErrorIs(t, err, context.Canceled,
+		"expected context.Canceled from ticker-loop cancellation, got %v", err)
+	// 1 ticker tick is 100ms; allow up to 2× plus scheduling slack.
+	assert.Less(t, elapsed, 250*time.Millisecond,
+		"cancellation must be observed within ~1 ticker tick; elapsed = %v", elapsed)
 }
