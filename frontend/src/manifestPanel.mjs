@@ -245,8 +245,10 @@ export class ManifestPanel {
      * + ADR-0007 §8):那會在 bridge 上加 third layer。closure 直接呼:
      *
      *   const { iframe, ready } = mp.attachIframe({ containerId, html, height });
-     *   await ready;
+     *   await ready;  // 必須 await,iframe-side listener 此刻才掛好
      *   mp.registerCleanup(bridge.subscribe(iframe, 'cci-chart-*', handler));
+     *   mp.bindPhaseCheckboxes({ iframe, bridge, ... }); // 內部會 emitUpdate(),
+     *                                                     // 沒 await ready 會 silent drop
      *   bridge.send(iframe, 'cci-update-phase-markers', payload);
      *
      * @param {object} opts
@@ -292,6 +294,11 @@ export class ManifestPanel {
      *   - 若 `checkedSet` 為空或未傳:預設全勾並寫回 set
      *   - 否則:已存在於 set 內的 phase 勾選
      * 對齊 ADR-0007 §9「panel state 留 app this」。
+     *
+     * @precondition iframe 必須先 await attachIframe().ready,否則首次 emitUpdate()
+     *   的 bridge.send() postMessage 會 silent drop(iframe-side listener 尚未掛載)。
+     *   後續 user 點 checkbox 才會正常 send,但首次 render 的同步 update 會丟失,
+     *   結果就是 chart 載入時沒帶到 phase markers。
      *
      * @param {object} opts
      * @param {object} opts.phaseTimes - { P0: number, P1: number, ... } phase 名 → 時間

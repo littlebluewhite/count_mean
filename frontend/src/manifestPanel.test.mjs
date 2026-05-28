@@ -282,14 +282,12 @@ test('6. attachIframe ready promise:iframe load event 觸發後 ready resolve', 
         assert.equal(iframe.style.height, '500px', '高度套用 spec');
         assert.equal(container.querySelector('iframe'), iframe, 'iframe append 進 containerId 容器');
 
-        // 模擬 iframe load 完成
-        let resolved = false;
-        ready.then(() => { resolved = true; });
+        // 模擬 iframe load 完成 — 直接 await ready 是最 honest 的 behavior assertion:
+        // 若 ready 永遠不 resolve,test 會 hang 被 node:test timeout 抓到,
+        // 而不是靠 resolved flag 微秒級 microtask 計數來偽證。
         iframe.dispatchEvent(new window.Event('load'));
-        // 給 microtask 跑
-        await Promise.resolve();
-        await Promise.resolve();
-        assert.equal(resolved, true, 'ready 應在 iframe load event 後 resolve');
+        await ready;
+        assert.ok(true, 'attachIframe ready promise 在 iframe load event 後 resolve');
     } finally {
         await teardown(window);
     }
