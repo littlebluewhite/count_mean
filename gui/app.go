@@ -15,7 +15,6 @@ import (
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/cci"
-	"count_mean/internal/chart"
 	"count_mean/internal/config"
 	"count_mean/internal/i18n"
 	"count_mean/internal/io"
@@ -70,7 +69,6 @@ type App struct {
 	ctx                 atomic.Pointer[context.Context] //nolint:containedctx // Required by Wails framework
 	state               atomic.Pointer[appState]        // 取代原 5 個 mutable 欄位,保證 swap 原子性
 	logger              *logging.Logger
-	chartGen            *chart.EChartsGenerator
 	validator           *validation.InputValidator
 	phaseSyncAnalyzer   *phase_sync.PhaseSyncAnalyzer
 	cciAnalyzer         *cci.CCIAnalyzer
@@ -125,7 +123,6 @@ func NewApp(cfg *config.AppConfig, version string) *App {
 func NewAppWithConfigPath(cfg *config.AppConfig, version, configPath string) *App {
 	a := &App{
 		logger:              logging.GetLogger("app"),
-		chartGen:            chart.NewEChartsGenerator(),
 		validator:           validation.NewInputValidator(),
 		phaseSyncAnalyzer:   phase_sync.NewPhaseSyncAnalyzer(),
 		cciAnalyzer:         cci.NewCCIAnalyzer(),

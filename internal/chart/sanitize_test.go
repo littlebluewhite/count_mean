@@ -139,40 +139,6 @@ func TestSanitizeForJSString_QuoteSafe(t *testing.T) {
 	}
 }
 
-func TestNormalizeExportFormat_Whitelist(t *testing.T) {
-	tests := []struct {
-		in, want string
-	}{
-		{"png", "png"},
-		{"svg", "svg"},
-		{"pdf", "pdf"},
-		{"jpeg", "jpeg"},
-		{"javascript:alert(1)", "png"},
-		{"", "png"},
-		{"GIF", "png"},
-	}
-	for _, tc := range tests {
-		got := normalizeExportFormat(tc.in)
-		if got != tc.want {
-			t.Errorf("normalizeExportFormat(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
-func TestGenerateExportScript_RejectsXSS(t *testing.T) {
-	cfg := ExportConfig{
-		Format:   "png",
-		Width:    1920,
-		Height:   1080,
-		DPI:      200,
-		FileName: "evil</script><script>alert(1)</script>x.png",
-	}
-	got := GenerateExportScript(cfg)
-	if strings.Contains(got, "</script><script>") {
-		t.Errorf("export script must not allow script-close XSS, got:\n%s", got)
-	}
-}
-
 // TestSanitizeChartString_HTMLCommentInjection 釘住 sanitize 必須
 // 把 `<!--` 中的 `<!` 字串改寫，否則嵌進 <script> 後 HTML parser 會以為
 // script body 進入 comment 狀態，攻擊者可挾帶任意 payload 到 `-->` 為止。

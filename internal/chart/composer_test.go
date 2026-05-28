@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -816,4 +817,17 @@ func TestRenderComposer_OffsetMisalignmentRegression(t *testing.T) {
 	// 透過「motion data 中不該存在 [0,100] pair」做 negative assert。
 	assert.NotContains(t, html, `[0,100]`,
 		"motion v=100 不該 anchor 到 t=0 — 那是 category-axis bug 的 fingerprint")
+}
+
+func TestBuildComposerLineData_NaNBreaksLine(t *testing.T) {
+	times := []float64{0.0, 0.1, 0.2}
+	vals := []float64{1.0, math.NaN(), 3.0}
+
+	out, err := buildComposerLineData(context.Background(), times, vals)
+	require.NoError(t, err)
+	require.Len(t, out, 3)
+
+	assert.NotNil(t, out[0].Value, "正常值 → [t,v]")
+	assert.Nil(t, out[1].Value, "NaN → nil(line gap)")
+	assert.NotNil(t, out[2].Value, "正常值 → [t,v]")
 }
