@@ -9,10 +9,11 @@
 //     family（ADR-0002）— 不寫 CSV、無多步驟 pipeline，只做 manifest load / EMG
 //     load / chart render，因此不走 [[AnalysisHandler[P, R]]] Tier 2。
 //   - Handler 4（DownloadChartComposerImage）鏡像既有 `DownloadCCIChart` 模式
-//     — base64 → DecodeAndValidatePNG → SanitizeFileName → validateExternalPathInputs
-//     → fsperm.WriteFileNoFollow，自己加 recoverHandlerPanic defer。**不**走
-//     HandlerRun 因為 download 路徑的特殊安全鏈（base64 + path validation）需要
-//     精確控制 short-circuit 順序。
+//     — adapter 端做 SanitizeFileName + .png normalization 推導 outputPath,再把
+//     共用 PNG 安全管線（base64 → DecodeAndValidatePNG → validateExternalPathInputs
+//     → fsperm.WriteFileNoFollow）委派給 downloadValidatedPNG（ADR-0009），自己加
+//     recoverHandlerPanic defer。**不**走 HandlerRun 因為 download 路徑的特殊安全鏈
+//     （base64 + path validation）需要精確控制 short-circuit 順序。
 //
 // 錯誤通道契約：
 //
@@ -41,7 +42,6 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security"
-	"count_mean/internal/security/fsperm"
 	"count_mean/internal/security/redact"
 	"count_mean/internal/synchronizer"
 )
@@ -457,12 +457,11 @@ func (a *App) GenerateChartComposer(
 // path validation，避免在合法路徑寫進非 PNG 內容）,鏡像 `DownloadCCIChart`
 // 既有獨立模式而非走 template wrap。
 //
-// 安全鏈(依序):
-//  1. nil params guard
-//  2. base64 → DecodeAndValidatePNG(三層守門:size cap / magic signature / IHDR)
-//  3. SanitizeFileName 對 OutputPath 的 base 部分(防 traversal segment 滲入)
-//  4. validateExternalPathInputs 對完整 OutputPath(防 sensitive dir prefix)
-//  5. fsperm.WriteFileNoFollow(防 symlink follow)
+// adapter 職責:nil params guard、對 filepath.Base(OutputPath) sanitize（防
+// traversal segment 滲入,目錄部分保留原樣供 path validator）、empty-name
+// guard、.png 副檔名 normalization、最終 outputPath 推導。共用的 PNG 安全管線
+// (prefix 檢查 → DecodeAndValidatePNG → boundary 路徑驗證 → WriteFileNoFollow)
+// 已抽到 downloadValidatedPNG（ADR-0009）。
 //
 // 與 DownloadCCIChart 的差異:OutputPath 由前端 file dialog 完整給出(包含
 // 目錄 + 檔名),不是「OutputDir + sanitize(Subject) + ext」;因此 sanitize
@@ -476,18 +475,6 @@ func (a *App) DownloadChartComposerImage(
 
 	if params == nil {
 		return nil, ErrChartComposerNilParams
-	}
-
-	dataURL := params.Base64Data
-	if !strings.HasPrefix(dataURL, "data:image/png;base64,") {
-		return nil, ErrInvalidImageFormat
-	}
-
-	base64Data := strings.TrimPrefix(dataURL, "data:image/png;base64,")
-
-	pngData, decodeErr := DecodeAndValidatePNG(base64Data)
-	if decodeErr != nil {
-		return nil, fmt.Errorf("PNG 驗證失敗: %w", decodeErr)
 	}
 
 	// SanitizeFileName 只處理 base file 名稱,目錄部分保留原樣供 path validator
@@ -504,25 +491,19 @@ func (a *App) DownloadChartComposerImage(
 	}
 	outputPath := filepath.Join(outputDir, outputBase)
 
-	// boundary 路徑驗證 — 對齊 DownloadCCIChart:label 一次到位帶
-	// "PNG 輸出路徑",caller 不再外層 wrap,避免重複 label。
-	if pathErr := validateExternalPathInputs("PNG 輸出路徑", outputPath); pathErr != nil {
-		return nil, pathErr
-	}
-
-	if writeErr := fsperm.WriteFileNoFollow(outputPath, pngData); writeErr != nil {
-		return nil, fmt.Errorf("保存圖片失敗: %w", writeErr)
+	result, err = a.downloadValidatedPNG(params.Base64Data, outputPath)
+	if err != nil {
+		a.logger.Error("Chart Composer 圖表下載失敗", err, map[string]any{
+			"output": outputPath,
+		})
+		return nil, err
 	}
 
 	a.logger.Info("Chart Composer 圖表下載完成", map[string]any{
 		"output": outputPath,
 	})
 
-	return &ChartResult{
-		OutputPath: outputPath,
-		Success:    true,
-		Message:    fmt.Sprintf("圖表已下載至: %s", outputPath),
-	}, nil
+	return result, nil
 }
 
 // findManifestBySubject 在 manifest list 內找第一個 Subject 等於 target 的 row。

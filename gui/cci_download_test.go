@@ -109,63 +109,10 @@ func TestDownloadCCIChart_AcceptsLegitimatePath(t *testing.T) {
 	require.NoError(t, statErr, "PNG 必須真的被寫入 disk")
 }
 
-// TestDownloadCCIChart_RejectsInvalidPNGBeforeBoundary 守 short-circuit 順序:
-// PNG 驗證錯誤應在 boundary validation 之前 reject(因為 OutputDir 即使合法,
-// 也不該寫非 PNG 內容)。此 test 確認 PNG check 仍在最前面,沒被
-// boundary validation 重排到 PNG check 之前。
-func TestDownloadCCIChart_RejectsInvalidPNGBeforeBoundary(t *testing.T) {
-	app := setupDownloadCCIChartTestApp(t, t.TempDir())
-
-	result, err := app.DownloadCCIChart(CCIDownloadParams{
-		ImageData: "not-a-data-url",
-		Subject:   "S1",
-	})
-
-	require.Error(t, err, "非 data URL 必須 reject")
-	assert.Nil(t, result)
-	// 應該是 ErrInvalidImageFormat,不是 boundary error
-	assert.Contains(t, err.Error(), "圖片",
-		"reject reason 應為 PNG format 相關: got %v", err)
-}
-
-// TestDownloadCCIChart_ErrorMessage_NoDuplicateLabel 釘住 過去的 wrap 鏈
-// 會在邊界路徑驗證失敗時產生「PNG 輸出 輸出路徑 路徑驗證失敗: ...」這種
-// 重複 label 的字串(來源:validateExternalPathInputs 已加 "輸出路徑 路徑驗證
-// 失敗: ..." 前綴,DownloadCCIChart 又在外層 fmt.Errorf("PNG 輸出 %w", ...) 再
-// 包一次,於是 "PNG 輸出" 與 "輸出路徑" 同時出現)。
-//
-// 修法:label 改在 validateExternalPathInputs 一次帶 "PNG 輸出路徑",caller
-// 不再外層 wrap。本測試在錯誤訊息中強制要求:
-//   - 「輸出路徑 路徑驗證失敗」字串只能出現一次
-//   - 不再出現「PNG 輸出 輸出路徑」這種重複 label 拼接
-//   - 仍含「PNG」與「路徑驗證失敗」兩個語義 token,讓 audit log 可定位
-func TestDownloadCCIChart_ErrorMessage_NoDuplicateLabel(t *testing.T) {
-	// 用 "/etc" 當 outputDir 觸發 sensitive path → 一定走到
-	// validateExternalPathInputs failure 分支
-	app := setupDownloadCCIChartTestApp(t, "/etc")
-
-	result, err := app.DownloadCCIChart(CCIDownloadParams{
-		ImageData: validPNGBase64DataURL(),
-		Subject:   "S1",
-	})
-
-	require.Error(t, err, "/etc outputDir 必須被 boundary 擋下")
-	assert.Nil(t, result)
-
-	msg := err.Error()
-	t.Logf("DownloadCCIChart 邊界錯誤訊息: %q", msg)
-
-	// 1. 不可再有重複 label「PNG 輸出 輸出路徑」(空格分隔的舊版 wrap)
-	assert.NotContains(t, msg, "PNG 輸出 輸出路徑",
-		"重複 label 已修(P2-8):不應再出現「PNG 輸出 輸出路徑」拼接")
-
-	// 2. 「路徑驗證失敗」應該只出現一次(過去 nested wrap 會出現多次)
-	occurrences := strings.Count(msg, "路徑驗證失敗")
-	assert.Equal(t, 1, occurrences,
-		"「路徑驗證失敗」label 在 wrap chain 中應只出現一次,got %d 次: %q",
-		occurrences, msg)
-
-	// 3. 仍包含關鍵 context — PNG / 路徑驗證 兩語義 token 都還在
-	assert.Contains(t, msg, "PNG", "audit 仍需指出失敗於 PNG 流程")
-	assert.Contains(t, msg, "路徑驗證失敗", "audit 仍需指出失敗類別")
-}
+// 註:bad-prefix→ErrInvalidImageFormat（含 short-circuit 順序）與 sensitive-path
+// rejection + no-double-label 這兩個原本在此的 case，已隨 ADR-0009 Phase 2 把
+// 共用 PNG 管線抽到 downloadValidatedPNG，改由 helper 的 seam test
+// （png_download_test.go: TestDownloadValidatedPNG_RejectsBadPrefix /
+// TestDownloadValidatedPNG_RejectsSensitivePath_NoDoubleLabel）擁有，避免重複覆蓋。
+// 此檔僅保留 CCI adapter 行為:OutputDir + sanitize(Subject) 推導檔名 + boundary
+// 對 derived path 生效。
