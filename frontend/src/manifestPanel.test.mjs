@@ -293,6 +293,48 @@ test('6. attachIframe ready promise:iframe load event 觸發後 ready resolve', 
     }
 });
 
+test('7. spec.runBtnLabelKey:default 為 button.start_analyze、override 走 spec 覆蓋值', async () => {
+    // M2 prep API extension(ADR-0007 §6 spec shape):
+    //   - Composer 的 run button label 是「生成圖表」而非「開始分析」,
+    //     需要 spec 端可 override 而不擴 i18n schema。
+    //   - 其他 4 panel 維持 default `button.start_analyze`。
+    //
+    // 此 test 釘 default + override 兩種行為,確保未來 spec 改動不會破默契。
+    const { window: w1, mp: mp1 } = await setup();
+    try {
+        // 不傳 runBtnLabelKey → fallback default
+        mp1.run(minimalSpec());
+        const btn = w1.document.getElementById('mpRunBtn');
+        assert.ok(btn, 'run button 必須存在');
+        assert.match(
+            btn.textContent,
+            /button\.start_analyze/,
+            'default 為 button.start_analyze(fake translator 回 __T:<key>__,assert 含 key)'
+        );
+    } finally {
+        await teardown(w1);
+    }
+
+    const { window: w2, mp: mp2 } = await setup();
+    try {
+        mp2.run(minimalSpec({ runBtnLabelKey: 'button.generate_chart' }));
+        const btn = w2.document.getElementById('mpRunBtn');
+        assert.ok(btn, 'run button 必須存在');
+        assert.match(
+            btn.textContent,
+            /button\.generate_chart/,
+            'override 後 button label 走 spec.runBtnLabelKey'
+        );
+        assert.doesNotMatch(
+            btn.textContent,
+            /button\.start_analyze/,
+            'override 後 default key 不應出現'
+        );
+    } finally {
+        await teardown(w2);
+    }
+});
+
 // ---------- panel shell hardcoded 中文回歸測試 ----------
 
 test('panel shell 內 user-visible text 均來自 translator(無 hardcoded 繁中)', async () => {

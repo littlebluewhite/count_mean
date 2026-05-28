@@ -15,6 +15,8 @@
 //   ManifestPanel.run({
 //     titleKey: 'panel.cci.title',
 //     statusRunningKey: 'status.cci_running',
+//     runBtnLabelKey: 'button.start_analyze',  // optional, default 'button.start_analyze'
+//                                              // Composer override 為 'button.generate_chart'
 //     formBody: (t) => `<div>... ${t('form.label.muscleratio_layout')} ...</div>`,
 //     rpc: async (ctx) => AnalyzeCCI(ctx.manifestPath, ctx.dataFolder, ctx.subjectIdx),
 //     onResult: async (result, ctx, mp) => { mp.attachIframe(...); mp.bindPhaseCheckboxes(...); },
@@ -73,6 +75,16 @@ export class ManifestPanel {
      * spec.formBody(translator) 被注入 panel 中段。
      *
      * 同步操作 — DOM render + button binding,不 await RPC。
+     *
+     * @param {object} spec
+     * @param {string} spec.titleKey - panel header i18n key
+     * @param {string} spec.statusRunningKey - rpc 執行中 status bar i18n key
+     * @param {string} [spec.runBtnLabelKey='button.start_analyze'] - run button
+     *   label i18n key。其他 4 panel 省略走 default;Composer 寫 'button.generate_chart'。
+     * @param {(t: (k:string)=>string) => string} spec.formBody - panel 中段 HTML builder
+     * @param {(ctx: object) => Promise<object>} spec.rpc - Wails backend call
+     * @param {(result: object, ctx: object, mp: ManifestPanel) => Promise<void>} spec.onResult
+     * @param {boolean} [spec.silentSuccess=false] - true 略過 ShowMessage(Composer 用)
      */
     run(spec) {
         this._currentSpec = spec;
@@ -223,7 +235,7 @@ export class ManifestPanel {
             ${spec.formBody(tH)}
 
             <div class="button-group">
-                <button id="mpRunBtn" class="btn btn-primary">${tH('button.start_analyze')}</button>
+                <button id="mpRunBtn" class="btn btn-primary">${tH(spec.runBtnLabelKey || 'button.start_analyze')}</button>
                 <button class="btn btn-secondary" onclick="app.showMainMenu()">${tH('button.back')}</button>
             </div>
 
