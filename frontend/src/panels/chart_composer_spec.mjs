@@ -142,6 +142,15 @@ export function makeChartComposerSpec(app) {
          * @returns {Promise<{subjects: string[], valueMode: 'name'}>}
          */
         loadSubjects: async (manifestPath, dataFolder) => {
+            // 對齊舊 selectComposerManifest/DataFolder(main.js:1700/1715):只有在
+            // manifest + dataFolder 都齊時才打 RPC(backend LoadChartComposerSubjects
+            // RejectsEmptyDataFolder)。dataFolder 缺時回空 subjects(不 throw、不打
+            // RPC)— ManifestPanel 此時保留 placeholder + 不 enable,等使用者選完
+            // dataFolder 後 selectMpDataFolder 會 re-load。index-mode 3 panel 無此
+            // 限制(LoadPhaseManifest 不需 dataFolder),故只 Composer loadSubjects 設此 guard。
+            if (!dataFolder) {
+                return { subjects: [], valueMode: 'name' };
+            }
             const result = await LoadChartComposerSubjects({ manifestPath, dataFolder });
             if (!result.success) {
                 // 升 throw 讓 ManifestPanel caller catch → ShowError(對齊舊路徑語意)。

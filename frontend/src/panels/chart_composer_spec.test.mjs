@@ -89,6 +89,33 @@ test('Composer spec.loadSubjects 走 LoadChartComposerSubjects 且 valueMode=nam
     }
 });
 
+test('Composer spec.loadSubjects 在 dataFolder 缺時回空(不打 RPC,對齊舊「兩者齊才 load」)', async () => {
+    // 舊 selectComposerManifest 只在 dataFolder 已設時才 loadComposerSubjects;
+    // backend LoadChartComposerSubjects RejectsEmptyDataFolder。故 dataFolder 缺時
+    // loadSubjects 必須回空 subjects、不打 RPC、不 throw。
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    try {
+        let rpcCalled = false;
+        window.go = {
+            gui: {
+                App: {
+                    LoadChartComposerSubjects: async () => { rpcCalled = true; return { success: true, subjects: ['X'] }; },
+                },
+            },
+        };
+        const spec = makeChartComposerSpec({});
+        const out = await spec.loadSubjects('/tmp/manifest.csv', ''); // dataFolder 空
+
+        assert.equal(rpcCalled, false, 'dataFolder 缺時不應打 LoadChartComposerSubjects RPC');
+        assert.deepEqual(out.subjects, [], 'dataFolder 缺時回空 subjects');
+        assert.equal(out.valueMode, 'name', 'valueMode 仍為 name');
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+    }
+});
+
 test('Composer spec.loadSubjects 在 result.success=false 時 throw(對齊舊 loadComposerSubjects)', async () => {
     // 升 throw 讓 ManifestPanel selectMpManifest/DataFolder 的 catch 統一 ShowError。
     const window = new Window({ url: 'http://localhost:34115/' });

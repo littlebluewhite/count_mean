@@ -567,7 +567,8 @@ export class ManifestPanel {
         placeholder.textContent = globalThis.tHtml('form.option.select_subject');
         select.appendChild(placeholder);
 
-        (subjects || []).forEach((subject, index) => {
+        const list = subjects || [];
+        list.forEach((subject, index) => {
             const opt = document.createElement('option');
             // index-mode 寫 0-based 索引;name-mode 寫 subject 字串。subject text 一律
             // 顯示 subject 名(textContent 防 XSS — subject 來自 manifest CSV)。
@@ -575,8 +576,13 @@ export class ManifestPanel {
             opt.textContent = subject;
             select.appendChild(opt);
         });
-        select.disabled = false;
-        this._app.updateStatus(globalThis.t('status.subjects_loaded', (subjects || []).length));
+        // 空 subjects(例如 Composer 在 dataFolder 尚未選時 loadSubjects 回空)→
+        // 保留 placeholder + 不 enable(對齊舊 Composer「兩者齊才 load」UX),不發
+        // status。有 subjects 才 enable + 報「已載入 N 個主題」。
+        if (list.length > 0) {
+            select.disabled = false;
+            this._app.updateStatus(globalThis.t('status.subjects_loaded', list.length));
+        }
     }
 
     /**

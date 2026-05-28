@@ -714,6 +714,31 @@ test('17. selectMpDataFolder:manifest 未選時不 re-load subjects', async () =
     }
 });
 
+test('17b. selectMpManifest:loadSubjects 回空 subjects → select 保留 disabled(Composer dataFolder 未選)', async () => {
+    // Composer 在 dataFolder 未選時 loadSubjects 回空(不打 RPC)。此時 _loadMpSubjects
+    // 應保留 placeholder + 不 enable select(對齊舊「兩者齊才 load」UX),不報 status。
+    const { window, mp, calls } = await setup();
+    try {
+        stubWails(window, { file: '/tmp/manifest.csv' });
+        const spec = minimalSpec({
+            loadSubjects: async () => ({ subjects: [], valueMode: 'name' }),
+        });
+        mp.run(spec);
+
+        await mp.selectMpManifest();
+
+        const select = window.document.getElementById('mpSubject');
+        assert.equal(select.disabled, true, '空 subjects 時 select 應保留 disabled');
+        // placeholder 仍在(1 個 option)
+        assert.equal(select.options.length, 1, '只剩 placeholder option');
+        // 不應發「已載入 N 個主題」status(N=0 無意義)
+        const loadedStatus = calls.statusUpdates.find((s) => /subjects_loaded/.test(s));
+        assert.equal(loadedStatus, undefined, '空 subjects 不應報 subjects_loaded status');
+    } finally {
+        await teardown(window);
+    }
+});
+
 test('18. afterRender:run() render + showPanel 後呼叫一次,收到 mp', async () => {
     const { window, mp } = await setup();
     try {
