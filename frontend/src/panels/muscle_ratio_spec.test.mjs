@@ -60,6 +60,12 @@ test('muscleRatioSpec 必須暴露 ADR-0007 §6 spec shape + hideSubject/silentS
     assert.equal(typeof spec.formBody, 'function', 'formBody 應為 builder function');
     assert.equal(typeof spec.rpc, 'function', 'rpc 應為 async function');
     assert.equal(typeof spec.onResult, 'function', 'onResult 應為 async function');
+
+    // M5:MuscleRatio 三個新 optional 欄位全省略 — hideSubject=true 無 subject load,
+    // 無 phase 下拉,subject change 不存在。
+    assert.equal(spec.loadSubjects, undefined, 'MuscleRatio 省略 loadSubjects(hideSubject 無 subject)');
+    assert.equal(spec.afterRender, undefined, 'MuscleRatio 省略 afterRender(無 phase 下拉)');
+    assert.equal(spec.onSubjectChange, undefined, 'MuscleRatio 省略 onSubjectChange(無 subject)');
 });
 
 // ---------- formBody i18n 防回歸 ----------

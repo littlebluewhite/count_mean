@@ -69,6 +69,40 @@ test('cciSpec 必須暴露 ADR-0007 §6 spec shape 所有必填欄位(CCI 標準
     assert.equal(typeof spec.formBody, 'function', 'formBody 應為 builder function');
     assert.equal(typeof spec.rpc, 'function', 'rpc 應為 async function');
     assert.equal(typeof spec.onResult, 'function', 'onResult 應為 async function');
+
+    // M5:loadSubjects(index-mode)必填;afterRender / onSubjectChange 省略
+    //(CCI 無 phase 下拉、subject change 無特殊行為)。
+    assert.equal(typeof spec.loadSubjects, 'function', 'CCI 有 loadSubjects(index-mode)');
+    assert.equal(spec.afterRender, undefined, 'CCI 省略 afterRender(無 phase 下拉)');
+    assert.equal(spec.onSubjectChange, undefined, 'CCI 省略 onSubjectChange');
+});
+
+// ---------- spec.loadSubjects(M5,index-mode)----------
+
+test('CCI spec.loadSubjects 走 LoadPhaseManifest 且 valueMode=index', async () => {
+    // CCI/PhaseSync/Normalized subject 用 0-based 索引(ADR-0007 §4 index-mode)。
+    // loadSubjects 呼 LoadPhaseManifest(manifestPath) → window.go.gui.App。
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    try {
+        let manifestArg = null;
+        window.go = {
+            gui: {
+                App: {
+                    LoadPhaseManifest: async (m) => { manifestArg = m; return ['S1', 'S2']; },
+                },
+            },
+        };
+        const spec = makeCciSpec({});
+        const out = await spec.loadSubjects('/tmp/manifest.csv', '/tmp/data');
+
+        assert.equal(manifestArg, '/tmp/manifest.csv', 'loadSubjects 把 manifestPath 傳給 LoadPhaseManifest');
+        assert.deepEqual(out.subjects, ['S1', 'S2'], 'subjects 為 LoadPhaseManifest 結果');
+        assert.equal(out.valueMode, 'index', 'CCI valueMode=index(subject 用索引)');
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+    }
 });
 
 // ---------- formBody i18n 防回歸 ----------

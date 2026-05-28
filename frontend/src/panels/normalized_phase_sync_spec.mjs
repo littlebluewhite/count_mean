@@ -41,7 +41,7 @@
 //   * spec.formBody 為 builder function 且不洩漏 hardcoded 繁中(4 個 phase 下拉)
 //   * rpc 在 manifestPath / dataFolder 缺、subjectIdx NaN/<0、任一 phase 缺時 throw
 
-import { AnalyzeNormalizedPhaseSync } from '../../wailsjs/go/gui/App.js';
+import { AnalyzeNormalizedPhaseSync, LoadPhaseManifest } from '../../wailsjs/go/gui/App.js';
 
 /**
  * 標準化分期同步 panel HTML body(注入 ManifestPanel shell 的 spec.formBody)。
@@ -100,13 +100,13 @@ export function normalizedPhaseSyncFormBody(t) {
  * 標準化分期同步 spec object — 給 ManifestPanel.run(spec) 消費。
  *
  * Factory 接 `app` 注入(對齊 cci / composer spec)。onResult 走 mp.openOutputFolder()
- *(不直接讀 app);`app` 目前未被 closure 直接使用 — 仍保留 factory 簽名以對齊其他
- * 4 panel 一致性。
+ *(不直接讀 app);afterRender 走 app.loadNormalizedPhaseSyncPhases() 填 4 個 phase
+ * 下拉 + 綁 mirror。
  *
- * @param {object} _app - EMGAnalysisApp 實例(目前未用,保留簽名一致性)
+ * @param {object} app - EMGAnalysisApp 實例(afterRender 呼 loadNormalizedPhaseSyncPhases)
  * @returns {object} spec for ManifestPanel.run(spec)
  */
-export function makeNormalizedPhaseSyncSpec(_app) {
+export function makeNormalizedPhaseSyncSpec(app) {
     return {
         titleKey: 'panel.normalizedphasesync.title',
         statusRunningKey: 'status.normalized_running',
@@ -116,6 +116,29 @@ export function makeNormalizedPhaseSyncSpec(_app) {
         silentSuccess: true,
 
         formBody: normalizedPhaseSyncFormBody,
+
+        /**
+         * Subject load(ADR-0007 §4 index-mode):同 CCI/PhaseSync 走 LoadPhaseManifest,
+         * valueMode='index'(對齊舊 loadNormalizedPhaseSyncSubjects main.js:2215-2219)。
+         *
+         * @param {string} manifestPath - #mpManifestPath value
+         * @returns {Promise<{subjects: string[], valueMode: 'index'}>}
+         */
+        loadSubjects: async (manifestPath) => ({
+            subjects: await LoadPhaseManifest(manifestPath),
+            valueMode: 'index',
+        }),
+
+        /**
+         * afterRender:panel render 完後 load 4 個 phase 下拉
+         *(loadNormalizedPhaseSyncPhases,內部填 normStart/normEnd/statsStart/statsEnd
+         * 並呼 _bindNormalizedPhaseSyncMirror 綁 mirror)。對齊舊
+         * showNormalizedPhaseSyncPanel:2189 的 `this.loadNormalizedPhaseSyncPhases()`。
+         * 兩個 method 仍掛 app this(M5 wiring 保留)。
+         *
+         * @param {object} _mp - ManifestPanel 實例(本 hook 不用)
+         */
+        afterRender: (_mp) => app.loadNormalizedPhaseSyncPhases(),
 
         /**
          * 呼 AnalyzeNormalizedPhaseSync RPC。

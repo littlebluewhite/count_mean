@@ -49,6 +49,81 @@ test('chartComposerSpec 必須暴露 ADR-0007 §6 spec shape 所有必填欄位'
     assert.equal(typeof spec.formBody, 'function', 'formBody 應為 builder function');
     assert.equal(typeof spec.rpc, 'function', 'rpc 應為 async function');
     assert.equal(typeof spec.onResult, 'function', 'onResult 應為 async function');
+
+    // M5:loadSubjects(**name-mode**)+ onSubjectChange(reset state)必填;
+    // afterRender 省略(Composer 無 phase 下拉,phase checkbox 在 onResult 內 render)。
+    assert.equal(typeof spec.loadSubjects, 'function', 'Composer 有 loadSubjects(name-mode)');
+    assert.equal(typeof spec.onSubjectChange, 'function', 'Composer 有 onSubjectChange(reset state)');
+    assert.equal(spec.afterRender, undefined, 'Composer 省略 afterRender(無 phase 下拉)');
+});
+
+// ---------- spec.loadSubjects(M5,name-mode)+ onSubjectChange ----------
+
+test('Composer spec.loadSubjects 走 LoadChartComposerSubjects 且 valueMode=name', async () => {
+    // Composer subject 用 string(ADR-0002 canonical-key / ADR-0007 §4 name-mode)。
+    // loadSubjects 呼 LoadChartComposerSubjects({manifestPath, dataFolder}) → result.subjects。
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    try {
+        let argObj = null;
+        window.go = {
+            gui: {
+                App: {
+                    LoadChartComposerSubjects: async (o) => {
+                        argObj = o;
+                        return { success: true, subjects: ['Rudolph', 'Donner'] };
+                    },
+                },
+            },
+        };
+        const spec = makeChartComposerSpec({});
+        const out = await spec.loadSubjects('/tmp/manifest.csv', '/tmp/data');
+
+        assert.equal(argObj.manifestPath, '/tmp/manifest.csv', 'loadSubjects forward manifestPath');
+        assert.equal(argObj.dataFolder, '/tmp/data', 'loadSubjects forward dataFolder(Composer 需要)');
+        assert.deepEqual(out.subjects, ['Rudolph', 'Donner']);
+        assert.equal(out.valueMode, 'name', 'Composer valueMode=name(subject 用字串)');
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+    }
+});
+
+test('Composer spec.loadSubjects 在 result.success=false 時 throw(對齊舊 loadComposerSubjects)', async () => {
+    // 升 throw 讓 ManifestPanel selectMpManifest/DataFolder 的 catch 統一 ShowError。
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    try {
+        window.go = {
+            gui: {
+                App: {
+                    LoadChartComposerSubjects: async () => ({ success: false, message: '主題載入失敗訊息' }),
+                },
+            },
+        };
+        const spec = makeChartComposerSpec({});
+        await assert.rejects(
+            async () => { await spec.loadSubjects('/tmp/m.csv', '/tmp/d'); },
+            (err) => {
+                assert.match(err.message, /主題載入失敗訊息|載入主題失敗/, 'throw 帶 backend message 或 fallback');
+                return true;
+            },
+            'success=false 時 loadSubjects 應 throw'
+        );
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+    }
+});
+
+test('Composer spec.onSubjectChange 呼叫 app.onComposerSubjectChange()', () => {
+    // onSubjectChange 對齊舊 onComposerSubjectChange(reset _composerEMGMotionOffset /
+    // _composerLoadedSubject + 清 chart)。
+    let changeCalled = 0;
+    const app = { onComposerSubjectChange: () => { changeCalled += 1; } };
+    const spec = makeChartComposerSpec(app);
+    spec.onSubjectChange(/* mp */ {});
+    assert.equal(changeCalled, 1, 'onSubjectChange 應呼叫 app.onComposerSubjectChange 一次');
 });
 
 // ---------- formBody i18n 防回歸 ----------

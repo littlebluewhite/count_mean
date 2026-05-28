@@ -84,6 +84,40 @@ test('phaseSyncSpec 必須暴露 ADR-0007 §6 spec shape + silentSuccess 特例'
     assert.equal(typeof spec.formBody, 'function', 'formBody 應為 builder function');
     assert.equal(typeof spec.rpc, 'function', 'rpc 應為 async function');
     assert.equal(typeof spec.onResult, 'function', 'onResult 應為 async function');
+
+    // M5:loadSubjects(index-mode)+ afterRender(phase 下拉 load)必填;
+    // onSubjectChange 省略(subject change 無特殊行為)。
+    assert.equal(typeof spec.loadSubjects, 'function', 'PhaseSync 有 loadSubjects(index-mode)');
+    assert.equal(typeof spec.afterRender, 'function', 'PhaseSync 有 afterRender(load phase 下拉)');
+    assert.equal(spec.onSubjectChange, undefined, 'PhaseSync 省略 onSubjectChange');
+});
+
+// ---------- spec.loadSubjects + afterRender(M5)----------
+
+test('PhaseSync spec.loadSubjects 走 LoadPhaseManifest 且 valueMode=index', async () => {
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    try {
+        window.go = {
+            gui: { App: { LoadPhaseManifest: async () => ['A', 'B', 'C'] } },
+        };
+        const spec = makePhaseSyncSpec({});
+        const out = await spec.loadSubjects('/tmp/m.csv', '');
+        assert.deepEqual(out.subjects, ['A', 'B', 'C']);
+        assert.equal(out.valueMode, 'index', 'PhaseSync valueMode=index');
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+    }
+});
+
+test('PhaseSync spec.afterRender 呼叫 app.loadAvailablePhases()', () => {
+    // afterRender 對齊舊 showPhaseSyncPanel:1045 的 loadAvailablePhases() 呼叫時機。
+    let loadCalled = 0;
+    const app = { loadAvailablePhases: () => { loadCalled += 1; } };
+    const spec = makePhaseSyncSpec(app);
+    spec.afterRender(/* mp */ {});
+    assert.equal(loadCalled, 1, 'afterRender 應呼叫 app.loadAvailablePhases 一次');
 });
 
 // ---------- formBody i18n 防回歸 ----------

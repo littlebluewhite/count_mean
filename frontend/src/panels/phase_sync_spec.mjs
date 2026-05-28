@@ -38,7 +38,7 @@
 //   * spec.formBody 為 builder function 且不洩漏 hardcoded 繁中(start/end phase 下拉)
 //   * rpc 在 manifestPath / dataFolder 缺、subjectIdx NaN/<0、startPhase/endPhase 缺時 throw
 
-import { AnalyzePhaseSync } from '../../wailsjs/go/gui/App.js';
+import { AnalyzePhaseSync, LoadPhaseManifest } from '../../wailsjs/go/gui/App.js';
 
 /**
  * 分期同步 panel HTML body(注入 ManifestPanel shell 的 spec.formBody)。
@@ -80,13 +80,13 @@ export function phaseSyncFormBody(t) {
  * 分期同步 spec object — 給 ManifestPanel.run(spec) 消費。
  *
  * Factory 接 `app` 注入(對齊 cci / composer spec)。PhaseSync onResult 走
- * mp.openOutputFolder()(不直接讀 app);`app` 目前未被 closure 直接使用 — 仍保留
- * factory 簽名以對齊其他 4 panel 一致性。
+ * mp.openOutputFolder()(不直接讀 app);afterRender 走 app.loadAvailablePhases()
+ * 填 phase 下拉。
  *
- * @param {object} _app - EMGAnalysisApp 實例(PhaseSync 目前未用,保留簽名一致性)
+ * @param {object} app - EMGAnalysisApp 實例(afterRender 呼 loadAvailablePhases)
  * @returns {object} spec for ManifestPanel.run(spec)
  */
-export function makePhaseSyncSpec(_app) {
+export function makePhaseSyncSpec(app) {
     return {
         titleKey: 'panel.phasesync.title',
         statusRunningKey: 'status.phasesync_running',
@@ -96,6 +96,29 @@ export function makePhaseSyncSpec(_app) {
         silentSuccess: true,
 
         formBody: phaseSyncFormBody,
+
+        /**
+         * Subject load(ADR-0007 §4 index-mode):同 CCI 走 LoadPhaseManifest,
+         * valueMode='index'(對齊舊 loadManifestSubjects main.js:1074-1078)。
+         *
+         * @param {string} manifestPath - #mpManifestPath value
+         * @returns {Promise<{subjects: string[], valueMode: 'index'}>}
+         */
+        loadSubjects: async (manifestPath) => ({
+            subjects: await LoadPhaseManifest(manifestPath),
+            valueMode: 'index',
+        }),
+
+        /**
+         * afterRender:panel render 完後 load phase 下拉(GetAvailablePhases,
+         * manifest-independent)。對齊舊 showPhaseSyncPanel:1045 的
+         * `this.loadAvailablePhases()`(在 panel render 尾端呼叫)。loadAvailablePhases
+         * 仍掛 app this(M5 wiring 保留),填 #phaseSyncStartPhase / #phaseSyncEndPhase
+         *(formBody render 的下拉)。
+         *
+         * @param {object} _mp - ManifestPanel 實例(本 hook 不用,走 app.loadAvailablePhases)
+         */
+        afterRender: (_mp) => app.loadAvailablePhases(),
 
         /**
          * 呼 AnalyzePhaseSync RPC。

@@ -49,7 +49,7 @@
 
 import { bridge } from '../charts/iframeBridge.mjs';
 import { recalcPercents } from '../charts/phaseMarkers.mjs';
-import { AnalyzeCCI } from '../../wailsjs/go/gui/App.js';
+import { AnalyzeCCI, LoadPhaseManifest } from '../../wailsjs/go/gui/App.js';
 
 /**
  * CCI panel HTML body(注入 ManifestPanel shell 的 spec.formBody)。
@@ -94,6 +94,21 @@ export function makeCciSpec(app) {
         //   (對齊 executeCCIAnalysis main.js:1354 既有 ShowMessage(success) 行為)。
 
         formBody: cciFormBody,
+
+        /**
+         * Subject load(ADR-0007 §4 index-mode):manifest 選好後 ManifestPanel
+         * selectMpManifest 呼此 fn 取 subject 列表填 #mpSubject。CCI 走
+         * LoadPhaseManifest(主題字串陣列),valueMode='index' → option.value 寫
+         * 0-based 索引(對齊舊 loadCCIManifestSubjects main.js:1304-1308 `option.value
+         * = index`)。_gatherCtx 的 subjectIdx = parseInt(value) 對應後端 subjectIndex。
+         *
+         * @param {string} manifestPath - #mpManifestPath value
+         * @returns {Promise<{subjects: string[], valueMode: 'index'}>}
+         */
+        loadSubjects: async (manifestPath) => ({
+            subjects: await LoadPhaseManifest(manifestPath),
+            valueMode: 'index',
+        }),
 
         /**
          * 呼 AnalyzeCCI RPC。在 envelope 包之內 — throw 後 envelope 統一接

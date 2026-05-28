@@ -45,7 +45,7 @@
 
 import { bridge } from '../charts/iframeBridge.mjs';
 import { recalcPercents } from '../charts/phaseMarkers.mjs';
-import { GenerateChartComposer } from '../../wailsjs/go/gui/App.js';
+import { GenerateChartComposer, LoadChartComposerSubjects } from '../../wailsjs/go/gui/App.js';
 
 /**
  * Chart Composer panel HTML body(注入 ManifestPanel shell 的 spec.formBody)。
@@ -123,6 +123,43 @@ export function makeChartComposerSpec(app) {
         silentSuccess: true,
 
         formBody: composerFormBody,
+
+        /**
+         * Subject load(ADR-0007 §4 **name-mode**):Composer 走
+         * LoadChartComposerSubjects({manifestPath, dataFolder}) → result.subjects,
+         * valueMode='name' → option.value 寫 subject **字串**(ADR-0002 §1
+         * canonical-key:manifest 升版時 idx 位移、name 不變,故 Composer 用 name)。
+         * 對齊舊 loadComposerSubjects(main.js:1746-1750 `opt.value = subject`)。
+         *
+         * Composer 的 loadSubjects 需要 dataFolder(LoadChartComposerSubjects 帶它),
+         * 故 ManifestPanel selectMpDataFolder 寫完 dataFolder 後會 re-load(見
+         * manifestPanel.mjs selectMpDataFolder 註解)。result.success=false 時 throw,
+         * 讓 ManifestPanel selectMpManifest/DataFolder 的 catch 統一 ShowError
+         *(對齊舊 loadComposerSubjects:1736-1738 的 `if (!success) ShowError + return`)。
+         *
+         * @param {string} manifestPath - #mpManifestPath value
+         * @param {string} dataFolder - #mpDataFolder value
+         * @returns {Promise<{subjects: string[], valueMode: 'name'}>}
+         */
+        loadSubjects: async (manifestPath, dataFolder) => {
+            const result = await LoadChartComposerSubjects({ manifestPath, dataFolder });
+            if (!result.success) {
+                // 升 throw 讓 ManifestPanel caller catch → ShowError(對齊舊路徑語意)。
+                throw new Error(result.message || '載入主題失敗');
+            }
+            return { subjects: result.subjects || [], valueMode: 'name' };
+        },
+
+        /**
+         * onSubjectChange(Composer 獨有):subject 切換時 reset state + 清 chart。
+         * 走 app.onComposerSubjectChange()(M5 wiring 保留此 method):reset
+         * _composerEMGMotionOffset / _composerLoadedSubject + 清 chart container,
+         * 強制 user 重按「載入 EMG 欄位」(codex P2#3 guard,避免上個 subject 的
+         * offset silent 套到新 subject)。其他 4 panel 省略 onSubjectChange。
+         *
+         * @param {object} _mp - ManifestPanel 實例(本 hook 不用,走 app.onComposerSubjectChange)
+         */
+        onSubjectChange: (_mp) => app.onComposerSubjectChange(),
 
         /**
          * 呼 GenerateChartComposer RPC。在 envelope 包之內 — throw 後 envelope

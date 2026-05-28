@@ -77,6 +77,40 @@ test('normalizedPhaseSyncSpec 必須暴露 ADR-0007 §6 spec shape + silentSucce
     assert.equal(typeof spec.formBody, 'function', 'formBody 應為 builder function');
     assert.equal(typeof spec.rpc, 'function', 'rpc 應為 async function');
     assert.equal(typeof spec.onResult, 'function', 'onResult 應為 async function');
+
+    // M5:loadSubjects(index-mode)+ afterRender(4 個 phase 下拉 load + mirror)必填;
+    // onSubjectChange 省略。
+    assert.equal(typeof spec.loadSubjects, 'function', 'Normalized 有 loadSubjects(index-mode)');
+    assert.equal(typeof spec.afterRender, 'function', 'Normalized 有 afterRender(load 4 phase 下拉)');
+    assert.equal(spec.onSubjectChange, undefined, 'Normalized 省略 onSubjectChange');
+});
+
+// ---------- spec.loadSubjects + afterRender(M5)----------
+
+test('Normalized spec.loadSubjects 走 LoadPhaseManifest 且 valueMode=index', async () => {
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    try {
+        window.go = {
+            gui: { App: { LoadPhaseManifest: async () => ['N1', 'N2'] } },
+        };
+        const spec = makeNormalizedPhaseSyncSpec({});
+        const out = await spec.loadSubjects('/tmp/m.csv', '');
+        assert.deepEqual(out.subjects, ['N1', 'N2']);
+        assert.equal(out.valueMode, 'index', 'Normalized valueMode=index');
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+    }
+});
+
+test('Normalized spec.afterRender 呼叫 app.loadNormalizedPhaseSyncPhases()', () => {
+    // afterRender 對齊舊 showNormalizedPhaseSyncPanel:2189(內部會綁 mirror)。
+    let loadCalled = 0;
+    const app = { loadNormalizedPhaseSyncPhases: () => { loadCalled += 1; } };
+    const spec = makeNormalizedPhaseSyncSpec(app);
+    spec.afterRender(/* mp */ {});
+    assert.equal(loadCalled, 1, 'afterRender 應呼叫 app.loadNormalizedPhaseSyncPhases 一次');
 });
 
 // ---------- formBody i18n 防回歸 ----------
