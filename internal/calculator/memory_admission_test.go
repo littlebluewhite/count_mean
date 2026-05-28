@@ -15,9 +15,10 @@ import (
 // rather than by counting ticker fires (which would be flaky on slow CI).
 //
 // Test envs run with allocs well under 1GB * 0.9 = 921MB; the ratio check trips
-// `nil` immediately. Bound is generous (5ms) to survive cold cache and slow VMs
-// while still failing if a regression makes the gate enter the ticker loop
-// (which would cost at least one memoryCheckInterval = 100ms).
+// `nil` immediately. Bound is generous (50ms) to survive -race + -coverpkg
+// instrumentation overhead on shared CI runners while still failing if a
+// regression makes the gate enter the ticker loop (which would cost at least
+// one memoryCheckInterval = 100ms — so 50ms keeps a 2× safety margin).
 func TestWaitForMemoryCapacity_ReturnsImmediatelyBelowThreshold(t *testing.T) {
 	calc := NewMaxMeanCalculator(10)
 	ctx := context.Background()
@@ -27,7 +28,7 @@ func TestWaitForMemoryCapacity_ReturnsImmediatelyBelowThreshold(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NoError(t, err, "fast path should return nil when below threshold")
-	assert.Less(t, elapsed, 5*time.Millisecond,
+	assert.Less(t, elapsed, 50*time.Millisecond,
 		"fast path must skip ticker; actual elapsed = %v (one ticker tick is %v)",
 		elapsed, memoryCheckInterval)
 }
