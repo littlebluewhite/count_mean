@@ -1,6 +1,9 @@
 package chart
 
-import "math"
+import (
+	"math"
+	"sort"
+)
 
 // triangleAreaFactor LTTB 三角形面積係數。
 const triangleAreaFactor = 0.5
@@ -101,4 +104,82 @@ func findMaxAreaIndex(
 	}
 
 	return maxIdx
+}
+
+// UnionLTTBIndices 對 series 中每條曲線各自跑 LTTBDownsample，再將所有保留索引取
+// union、排序後回傳。為什麼用「索引 union」而不是「第一條曲線當 representative」：
+//   - representative 策略在某條曲線平緩時，會讓其他曲線在同 bucket 的高 variance
+//     窄峰被遺漏（峰值點不在 representative 曲線的 bucket 最大面積位置）。
+//   - 每條曲線各自跑 LTTB 再 union，保留所有曲線自身的高 variance 點，
+//     代價是索引總數可能稍超 threshold（最壞 len(series) × threshold 個點）。
+//
+// threshold*2 cap（由 capUnionIndices 實施）：
+//   - 若 series 很多（例如 CCI 12 對），union 最壞可達 12 × threshold 個索引，
+//     直接送 ECharts 會壓垮互動效能。
+//   - 2× threshold 在保留 LTTB 高 variance 點的同時，限制前端最大渲染點數。
+//
+// 退化條件（回傳 nil）：
+//   - len(time) <= threshold：點數不超過閾值，不需要降採樣。
+//   - threshold <= 0：無效閾值。
+//   - len(series) == 0：沒有曲線可處理。
+//
+// Caller invariant: 每個 series[i] 的長度必須等於 len(time)，否則 LTTBDownsample
+// 會 panic（caller bug，與 LTTBDownsample 的合約一致；長度校驗屬於 adapter 層）。
+func UnionLTTBIndices(time []float64, series [][]float64, threshold int) []int {
+	if len(time) <= threshold || threshold <= 0 || len(series) == 0 {
+		return nil
+	}
+
+	seen := make(map[int]struct{}, threshold)
+
+	for _, s := range series {
+		idx := LTTBDownsample(time, s, threshold)
+		for _, i := range idx {
+			seen[i] = struct{}{}
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+
+	indices := make([]int, 0, len(seen))
+	for i := range seen {
+		indices = append(indices, i)
+	}
+
+	sort.Ints(indices)
+
+	return capUnionIndices(indices, threshold*2)
+}
+
+// capUnionIndices 在 indices 超出 limit 時用 stride decimation 壓回 limit 上限，
+// 保留首尾索引以維持 zoom 範圍。indices 必須已遞增排序。
+// 參數命名為 limit 避免與內建 cap() 混淆。
+//
+// 注意：stride 必須用 ceiling division — `len / limit` 的 floor 結果在
+// `len % limit != 0` 時會給出太小的 stride。例：len=29999, limit=10000 用 floor
+// 算出 stride=2，輸出 ≈ 15k 點仍超過 limit。ceiling `(len + limit - 1) / limit`
+// 保證 `len / stride <= limit`，最後 append 末筆讓輸出至多 limit+1。
+func capUnionIndices(indices []int, limit int) []int {
+	if limit < 1 || len(indices) <= limit {
+		return indices
+	}
+
+	stride := (len(indices) + limit - 1) / limit
+	if stride < 2 {
+		stride = 2
+	}
+
+	capped := make([]int, 0, limit+1)
+	for i := 0; i < len(indices); i += stride {
+		capped = append(capped, indices[i])
+	}
+
+	// 確保最後一筆保留，否則 zoom 末端會被截掉
+	if last := indices[len(indices)-1]; len(capped) == 0 || capped[len(capped)-1] != last {
+		capped = append(capped, last)
+	}
+
+	return capped
 }
