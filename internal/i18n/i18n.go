@@ -371,6 +371,10 @@ const (
 	KeyButtonLoadEMGChannels             = "button.load_emg_channels"
 	KeyButtonGenerateChart               = "button.generate_chart"
 	KeyButtonDownloadPNG                 = "button.download_png"
+	// button.download_chart — CCI 結果區「下載圖表」按鈕(ADR-0007 M5:cci_spec
+	// onResult 渲染下載按鈕,改走 i18n key;舊 main.js showCCIResult 走 hardcoded
+	// '下載圖表',M3 標記留 M5 sweep)。語意「下載圖表」≠ button.download_png 的「下載 PNG」。
+	KeyButtonDownloadChart               = "button.download_chart"
 	KeyFormLabelComposerChannels         = "form.label.composer_channels"
 	KeyFormLabelComposerPhases           = "form.label.composer_phases"
 	KeyFormHelptextLoadChannelsFirst     = "form.helptext.load_channels_first"
@@ -457,6 +461,10 @@ const (
 	KeyStatusChartDownloadDone    = "status.chart_download_done"
 	KeyStatusChartDownloadFailed  = "status.chart_download_failed"
 	KeyStatusNormalizedRunning    = "status.normalized_running"
+	// status.composer_running — Chart Composer 生成中(ADR-0007 M5:Composer panel
+	// 走 ManifestPanel envelope,statusRunningKey 需此 key;舊 main.js 走 hardcoded
+	// 'Chart Composer 生成中...',Slice E i18n sweep 漏網)。
+	KeyStatusComposerRunning      = "status.composer_running"
 	KeyStatusMuscleRunning        = "status.muscle_running"
 	KeyStatusMusclePartialFailed  = "status.muscle_partial_failed"
 	KeyStatusAnalysisDone         = "status.analysis_done"

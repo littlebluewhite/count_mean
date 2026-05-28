@@ -523,6 +523,27 @@ export class ManifestPanel {
     }
 
     /**
+     * Manifest 拖放後的 subject load(對齊 selectMpManifest 的 post-pick 行為)。
+     * handleFileDrop 已把 filePath 寫進 #mpManifestPath input,此 method 只負責
+     * 「若 spec.loadSubjects 且非 hideSubject 則 load」。取代舊
+     * handleFileDrop 內 phaseSyncManifest / cciManifest / normalizedPhaseSyncManifest
+     * 三條 branch 各呼 loadXxxManifestSubjects 的 ad-hoc pattern。
+     *
+     * load 失敗 → ShowError(對齊 selectMpManifest catch)。
+     */
+    async onMpManifestDropped() {
+        const spec = this._currentSpec;
+        if (!spec?.loadSubjects || spec.hideSubject) return;
+        try {
+            await this._loadMpSubjects();
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error('載入主題失敗:', err);
+            await globalThis.ShowError(globalThis.t('dialog.error'), String(err));
+        }
+    }
+
+    /**
      * 內部 helper:呼 spec.loadSubjects(manifestPath, dataFolder) 取 subject 列表 +
      * valueMode,填 `#mpSubject` option 並 enable。**Subject 兩形態(ADR-0007 §4)**:
      *   - valueMode='index':option.value = 0-based 索引(CCI/PhaseSync/Normalized),

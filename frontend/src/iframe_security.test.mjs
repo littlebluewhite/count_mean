@@ -25,21 +25,36 @@ import { Window } from 'happy-dom';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MAIN_JS_PATH = path.join(__dirname, 'main.js');
+// ADR-0007 / M5:iframe 建立(srcdoc + sandbox + load listener)從 main.js 5 個
+// show*Panel 收乾到 manifestPanel.mjs 的 attachIframe()。iframe 安全 source-guard
+// 因此改掃 manifestPanel.mjs(唯一 iframe.srcdoc 賦值點)。
+const MANIFEST_PANEL_PATH = path.join(__dirname, 'manifestPanel.mjs');
+const COMPOSER_SPEC_PATH = path.join(__dirname, 'panels', 'chart_composer_spec.mjs');
 
 async function readMainJs() {
     return await readFile(MAIN_JS_PATH, 'utf8');
 }
+async function readManifestPanelJs() {
+    return await readFile(MANIFEST_PANEL_PATH, 'utf8');
+}
+async function readComposerSpecJs() {
+    return await readFile(COMPOSER_SPEC_PATH, 'utf8');
+}
 
 // -------------------- P2-7:iframe sandbox source guard --------------------
+//
+// ADR-0007:iframe.srcdoc/sandbox 賦值唯一點現在是 manifestPanel.mjs attachIframe()。
+// 所有 5 panel(CCI/Composer/...)走它,故 srcdoc 出現次數 == 1(收乾後不再每
+// panel 各自一份)。invariant 不變:srcdoc 賦值前必先設 sandbox=allow-scripts。
 
 test('P2-7: 所有 iframe.srcdoc 賦值前都有 iframe.sandbox = ...', async () => {
-    const src = await readMainJs();
+    const src = await readManifestPanelJs();
 
     // 找出所有 iframe.srcdoc = ... 的位置;前面 30 行應出現 iframe.sandbox 設定
     const srcdocRe = /iframe\.srcdoc\s*=/g;
     const matches = [...src.matchAll(srcdocRe)];
-    assert.ok(matches.length >= 2,
-        `預期至少 2 個 iframe.srcdoc 賦值(preview + CCI),got ${matches.length}`);
+    assert.ok(matches.length >= 1,
+        `預期至少 1 個 iframe.srcdoc 賦值(attachIframe 收乾後唯一點),got ${matches.length}`);
 
     for (const m of matches) {
         const idx = m.index;
@@ -55,7 +70,7 @@ test('P2-7: 所有 iframe.srcdoc 賦值前都有 iframe.sandbox = ...', async ()
 });
 
 test('P2-7: iframe.sandbox 不可包含 allow-top-navigation / allow-popups / allow-forms / allow-modals', async () => {
-    const src = await readMainJs();
+    const src = await readManifestPanelJs();
 
     const dangerous = [
         'allow-top-navigation',
@@ -68,8 +83,8 @@ test('P2-7: iframe.sandbox 不可包含 allow-top-navigation / allow-popups / al
 
     const sandboxRe = /iframe\.sandbox\s*=\s*['"]([^'"]+)['"]/g;
     const sandboxMatches = [...src.matchAll(sandboxRe)];
-    assert.ok(sandboxMatches.length >= 2,
-        `預期至少 2 個 iframe.sandbox 設定,got ${sandboxMatches.length}`);
+    assert.ok(sandboxMatches.length >= 1,
+        `預期至少 1 個 iframe.sandbox 設定(attachIframe 收乾後唯一點),got ${sandboxMatches.length}`);
 
     for (const m of sandboxMatches) {
         const value = m[1];
@@ -143,19 +158,19 @@ test('P2-10: 沒有任何 iframe.onload = ... 賦值留存', async () => {
 });
 
 test('P2-10: 所有 iframe load 等待都用 addEventListener("load", ..., {once: true})', async () => {
-    const src = await readMainJs();
+    // ADR-0007:iframe load listener 收乾到 manifestPanel.mjs attachIframe() 內的
+    // ready promise(`iframe.addEventListener('load', () => resolve(), {once:true})`)。
+    // main.js 不再持有任何 iframe load listener。掃 manifestPanel.mjs。
+    const src = await readManifestPanelJs();
 
     // 切分到每一行 — 用 line-by-line 取代 multiline regex,避免 () 巢狀
     // (e.g. arrow fn 內也有 ())把 regex pattern 拐到錯的位置。
     const lines = src.split('\n');
     const loadLines = lines.filter(l => /iframe\.addEventListener\(\s*['"]load['"]\s*,/.test(l));
 
-    // ADR-0003 後 download path 不再需要 iframe-ready wait(bridge.requestReply
-    // 內部處理 readiness + timeout),所以 downloadCCIChart / downloadComposerChart
-    // 那兩個 load listener 刪除。剩下 2 個是 showCCIResult + generateComposerChart
-    // 內的「iframe 建好觸發 updateXxxPhaseLines / _onComposerIframeLoaded」path。
-    assert.ok(loadLines.length >= 2,
-        `應至少 2 個 iframe.addEventListener("load", ...)(showCCIResult + Composer 生成 iframe load),got ${loadLines.length}\n` +
+    // attachIframe 收乾後唯一一個 load listener(ready promise),5 panel 共用。
+    assert.ok(loadLines.length >= 1,
+        `應至少 1 個 iframe.addEventListener("load", ...)(attachIframe ready promise),got ${loadLines.length}\n` +
         loadLines.join('\n'));
 
     // 每個都應該帶 { once: true } 避免重複 fire 累積
@@ -240,21 +255,25 @@ test('Slice D P2#3: onComposerSubjectChange 必須 reset _composerEMGMotionOffse
     );
 });
 
-// generateComposerChart 必須在 generate 前驗 _composerLoadedSubject === 當前 subject。
-test('Slice D P2#3: generateComposerChart 必須驗證 _composerLoadedSubject 與當前 subject 一致', async () => {
-    const src = await readMainJs();
+// generateComposerChart 的 _composerLoadedSubject guard:ADR-0007 / M5 後,RPC
+// 呼叫從 main.js generateComposerChart 移到 chart_composer_spec.mjs 的 spec.rpc。
+// 此 guard(loadedSubject ≠ ctx.subjectName 時 throw)現在掃 spec rpc。
+// 行為層另由 chart_composer_spec.test.mjs「rpc 在 _composerLoadedSubject 與
+// ctx.subjectName 不一致時 throw」釘死。
+test('Slice D P2#3: chart_composer_spec.rpc 必須驗證 _composerLoadedSubject 與當前 subject 一致', async () => {
+    const src = await readComposerSpecJs();
 
-    const fnStart = src.indexOf('async generateComposerChart()');
-    assert.ok(fnStart > 0, '找不到 generateComposerChart');
-    // 改用下一個 method signature 作邊界(比註解字串穩),不會被 comment 改動破。
-    const fnEnd = src.indexOf('\n    _onComposerIframeLoaded()', fnStart);
-    assert.ok(fnEnd > fnStart, '找不到 generateComposerChart 結束邊界(_onComposerIframeLoaded)');
+    const fnStart = src.indexOf('rpc: async (ctx)');
+    assert.ok(fnStart > 0, '找不到 chart_composer_spec rpc');
+    // 邊界:下一個 spec 欄位(onResult)
+    const fnEnd = src.indexOf('\n        onResult:', fnStart);
+    assert.ok(fnEnd > fnStart, '找不到 rpc 結束邊界(onResult)');
     const fnBody = src.slice(fnStart, fnEnd);
 
     assert.match(
         fnBody,
-        /this\._composerLoadedSubject/,
-        'generateComposerChart 必須讀 _composerLoadedSubject 來驗證 user 已對當前 subject 重新載入 EMG 欄位'
+        /_composerLoadedSubject/,
+        'spec.rpc 必須讀 app._composerLoadedSubject 驗證 user 已對當前 subject 重新載入 EMG 欄位'
     );
     // 必須在 GenerateChartComposer 呼叫前 short-circuit(出現順序檢查)
     const guardIdx = fnBody.indexOf('_composerLoadedSubject');
@@ -265,13 +284,14 @@ test('Slice D P2#3: generateComposerChart 必須驗證 _composerLoadedSubject �
 });
 
 // loadComposerEMGChannels 成功後必須記錄 _composerLoadedSubject = 當前 subject。
+// ADR-0007 / M5:此 method 仍掛 app this(KEPT),只是 DOM id 改走 #mp*。
 test('Slice D P2#3: loadComposerEMGChannels 成功後必須 set _composerLoadedSubject', async () => {
     const src = await readMainJs();
 
     const fnStart = src.indexOf('async loadComposerEMGChannels()');
     assert.ok(fnStart > 0, '找不到 loadComposerEMGChannels');
-    // 邊界:下一個 method(generateComposerChart)
-    const fnEnd = src.indexOf('\n    // 生成圖表 ', fnStart);
+    // 邊界:下一個 method signature(M5 後為 downloadComposerChart;比註解字串穩)。
+    const fnEnd = src.indexOf('\n    async downloadComposerChart(', fnStart);
     assert.ok(fnEnd > fnStart, '找不到 loadComposerEMGChannels 結束邊界');
     const fnBody = src.slice(fnStart, fnEnd);
 
@@ -291,7 +311,9 @@ test('Slice D P2#4: downloadComposerChart 不可呼叫 SelectFile 開「儲存�
 
     const fnStart = src.indexOf('async downloadComposerChart()');
     assert.ok(fnStart > 0, '找不到 downloadComposerChart');
-    const fnEnd = src.indexOf('\n    // ==================== 標準化分期同步分析', fnStart);
+    // M5:原邊界(// === 標準化分期同步分析 section header)隨 showNormalizedPhaseSyncPanel
+    // 刪除而消失;改用下一個 KEPT method signature(loadNormalizedPhaseSyncPhases)作邊界。
+    const fnEnd = src.indexOf('\n    async loadNormalizedPhaseSyncPhases(', fnStart);
     assert.ok(fnEnd > fnStart, '找不到 downloadComposerChart 結束邊界');
     const fnBody = src.slice(fnStart, fnEnd);
 
@@ -317,7 +339,9 @@ test('Slice D P2#4: downloadComposerChart 必須走 config.outputDir(鏡像 Down
 
     const fnStart = src.indexOf('async downloadComposerChart()');
     assert.ok(fnStart > 0, '找不到 downloadComposerChart');
-    const fnEnd = src.indexOf('\n    // ==================== 標準化分期同步分析', fnStart);
+    // M5:原邊界(// === 標準化分期同步分析 section header)隨 showNormalizedPhaseSyncPanel
+    // 刪除而消失;改用下一個 KEPT method signature(loadNormalizedPhaseSyncPhases)作邊界。
+    const fnEnd = src.indexOf('\n    async loadNormalizedPhaseSyncPhases(', fnStart);
     const fnBody = src.slice(fnStart, fnEnd);
 
     // 必須讀 config (GetConfig 或 this.config)並用 outputDir

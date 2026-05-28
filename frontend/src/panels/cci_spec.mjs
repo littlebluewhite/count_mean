@@ -193,10 +193,9 @@ export function makeCciSpec(app) {
             const tH = globalThis.tHtml;
             // i18n:phase_display / analysis_report / open_output_folder 三個 key
             // 後端字典已有(internal/i18n/i18n.go:354/363/300),直接走 tH 不擴
-            // schema(ADR-0007 §6 對齊)。唯「下載圖表」無對應 key('button.download_png'
-            // 文案是「下載 PNG」語意不符 CCI 的「下載圖表」)— 維持 hardcoded,
-            // 留 M5 i18n sweep 補 button.download_chart key。對齊 M2
-            // chart_composer_spec.mjs onResult 用 tH(key) 於 result 區的慣例。
+            // schema(ADR-0007 §6 對齊)。「下載圖表」M5 i18n sweep 已補
+            // button.download_chart key(語意「下載圖表」≠ button.download_png「下載 PNG」),
+            // 改走 tH。對齊 M2 chart_composer_spec.mjs onResult 用 tH(key) 於 result 區的慣例。
             wrapper.innerHTML = `
                 <div class="result-info" id="cciInfoList"></div>
                 ${result.chartHTML ? `
@@ -208,8 +207,7 @@ export function makeCciSpec(app) {
                     </div>
                     <div id="cciPhasePositions" style="margin-top:0.5rem;"></div>
                     <div class="button-group" style="margin-top:0.5rem;">
-                        <!-- M5 i18n sweep:補 button.download_chart key 後改走 tH。 -->
-                        <button class="btn btn-primary" onclick="app.downloadCCIChart()">下載圖表</button>
+                        <button class="btn btn-primary" onclick="app.downloadCCIChart()">${tH('button.download_chart')}</button>
                     </div>
                 </div>` : ''}
                 ${result.report ? `
