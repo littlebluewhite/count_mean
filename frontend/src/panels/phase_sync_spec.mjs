@@ -193,6 +193,17 @@ export function makePhaseSyncSpec(app) {
          */
         onResult: async (result, _ctx, mp) => {
             const tt = globalThis.t;
+
+            // success guard:result.success=false 是業務軟失敗(Execute/Write 失敗),
+            // 失敗 result 只帶 success+message(無 subject/startPhase/outputPath),若照常
+            // render 會顯示 undefined (—s) → undefined + 無用 open-folder 按鈕。對齊舊
+            // executePhaseSyncAnalysis 的 else branch(只彈 ShowError、不 render 結果區,
+            // main.js:1156-1161),fail 早退。
+            if (!result.success) {
+                await globalThis.ShowError(tt('dialog.error'), result.message);
+                return;
+            }
+
             const contentDiv = document.getElementById('mpResultContent');
             contentDiv.textContent = '';
 
@@ -243,16 +254,13 @@ export function makePhaseSyncSpec(app) {
 
             document.getElementById('mpResult').style.display = 'block';
 
-            // dialog(onResult own,對齊 main.js:1156-1161)。
-            if (result.success) {
-                // 成功訊息帶 outputPath(非 result.message)— PhaseSync 特有形狀。
-                await globalThis.ShowMessage(
-                    tt('dialog.success'),
-                    tt('success.msg.analysis_done', result.outputPath)
-                );
-            } else {
-                await globalThis.ShowError(tt('dialog.error'), result.message);
-            }
+            // dialog(onResult own,對齊 main.js:1156-1161 的 success 分支)。fail 已於
+            // 開頭 success guard 早退(ShowError),此處只剩 success 路徑。
+            // 成功訊息帶 outputPath(非 result.message)— PhaseSync 特有形狀。
+            await globalThis.ShowMessage(
+                tt('dialog.success'),
+                tt('success.msg.analysis_done', result.outputPath)
+            );
         },
     };
 }

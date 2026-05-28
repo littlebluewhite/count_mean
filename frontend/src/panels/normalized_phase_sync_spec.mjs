@@ -212,6 +212,17 @@ export function makeNormalizedPhaseSyncSpec(app) {
          */
         onResult: async (result, _ctx, mp) => {
             const tt = globalThis.t;
+
+            // success guard:result.success=false 是業務軟失敗(參數/load/phase/normalize/
+            // stats/寫檔 失敗),失敗 result 只帶 success+message(無 subject/phase/路徑),
+            // 若照常 render 會顯示 undefined rows + 無用 open-folder 按鈕。對齊舊
+            // executeNormalizedPhaseSyncAnalysis 的 else branch(只彈 ShowError、不 render
+            // 結果區,main.js:2319-2327),fail 早退。
+            if (!result.success) {
+                await globalThis.ShowError(tt('dialog.error'), result.message);
+                return;
+            }
+
             const contentDiv = document.getElementById('mpResultContent');
             contentDiv.textContent = '';
 
@@ -323,16 +334,13 @@ export function makeNormalizedPhaseSyncSpec(app) {
 
             document.getElementById('mpResult').style.display = 'block';
 
-            // dialog(onResult own,對齊 main.js:2319-2327)。
-            if (result.success) {
-                // 成功訊息帶雙輸出路徑(Output 1 標準化 EMG + Output 2 分期統計)。
-                await globalThis.ShowMessage(
-                    tt('dialog.success'),
-                    tt('success.msg.normalized_analysis_done', result.normalizedEMGPath, result.phaseSyncCSVPath)
-                );
-            } else {
-                await globalThis.ShowError(tt('dialog.error'), result.message);
-            }
+            // dialog(onResult own,對齊 main.js:2319-2327 的 success 分支)。fail 已於
+            // 開頭 success guard 早退(ShowError),此處只剩 success 路徑。
+            // 成功訊息帶雙輸出路徑(Output 1 標準化 EMG + Output 2 分期統計)。
+            await globalThis.ShowMessage(
+                tt('dialog.success'),
+                tt('success.msg.normalized_analysis_done', result.normalizedEMGPath, result.phaseSyncCSVPath)
+            );
         },
     };
 }

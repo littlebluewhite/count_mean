@@ -11,6 +11,8 @@
 //   4-7. spec.rpc 在 manifestPath / dataFolder / subjectIdx / 任一 phase 缺時 throw。
 //   8. spec.rpc happy path:全必填齊 → 呼到 AnalyzeNormalizedPhaseSync 且
 //      success=false 不升 throw + param 正確 map。
+//   9. spec.onResult 在 result.success=false(軟失敗)時不 render 結果區、只彈 ShowError
+//      (對齊舊 executeNormalizedPhaseSyncAnalysis else branch;codex round-2 P2 回歸守護)。
 //
 // Mock 策略(同 phase_sync_spec.test.mjs):rpc 從 DOM 讀 4 個 phase,故每個 test 先
 // 在 document 內備好 4 個 select 並塞 value(helper setPhases)。
@@ -245,5 +247,43 @@ test('spec.rpc 全必填齊 → 呼到 AnalyzeNormalizedPhaseSync 且 success=fa
         if (window?.happyDOM?.close) await window.happyDOM.close();
         delete globalThis.window;
         delete globalThis.document;
+    }
+});
+
+// ---------- spec.onResult 軟失敗:不 render 結果區、只彈 ShowError ----------
+
+test('spec.onResult 在 result.success=false 時不 render 結果區、只彈 ShowError(codex round-2 P2)', async () => {
+    // 軟失敗 result 只帶 success+message(無 subject/phase/路徑)。修正前 onResult 在
+    // check success 前就 render rows → 顯示 undefined rows + 無用 open-folder 按鈕
+    //(對齊舊 executeNormalizedPhaseSyncAnalysis else branch:只 ShowError、不 render)。
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    globalThis.document = window.document;
+    window.document.body.innerHTML =
+        '<div id="mpResult" style="display:none"><div id="mpResultContent"></div></div>';
+    const errCalls = [];
+    const msgCalls = [];
+    globalThis.t = (key) => key;
+    globalThis.ShowError = async (title, body) => { errCalls.push([title, body]); };
+    globalThis.ShowMessage = async (title, body) => { msgCalls.push([title, body]); };
+    try {
+        const spec = makeNormalizedPhaseSyncSpec({});
+        const mp = { openOutputFolder: () => { throw new Error('不該被呼叫'); } };
+        await spec.onResult({ success: false, message: '標準化視窗時間越界' }, validCtx(), mp);
+
+        const contentDiv = window.document.getElementById('mpResultContent');
+        assert.equal(contentDiv.children.length, 0, '軟失敗時結果區應維持空(不 render row)');
+        assert.equal(contentDiv.querySelector('.result-info'), null, '不應有 .result-info 區塊');
+
+        assert.equal(errCalls.length, 1, 'ShowError 應被呼叫一次');
+        assert.equal(errCalls[0][1], '標準化視窗時間越界', 'ShowError body 為 result.message');
+        assert.equal(msgCalls.length, 0, '軟失敗不應呼叫 ShowMessage');
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+        delete globalThis.document;
+        delete globalThis.t;
+        delete globalThis.ShowError;
+        delete globalThis.ShowMessage;
     }
 });

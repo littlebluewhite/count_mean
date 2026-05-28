@@ -284,6 +284,8 @@ jobs:
         export const GetVersion = stub;
         export const GetTranslations = stub;
         export const SetLanguage = stub;
+        export const GenerateChartComposer = stub;
+        export const LoadChartComposerSubjects = stub;
         EOF
         cat > wailsjs/runtime/runtime.js <<'EOF'
         // CI stub — see .github/workflows/build.yml frontend-test job.
