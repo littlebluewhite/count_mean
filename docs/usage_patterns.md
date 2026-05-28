@@ -18,7 +18,6 @@
 - [大文件處理模式](#大文件處理模式)
 - [批量處理模式](#批量處理模式)
 - [實時數據分析](#實時數據分析)
-- [圖表生成最佳實踐](#圖表生成最佳實踐)
 - [錯誤處理與恢復](#錯誤處理與恢復)
 - [性能優化技巧](#性能優化技巧)
 - [配置管理模式](#配置管理模式)
@@ -80,26 +79,10 @@ func StandardEMGAnalysis() {
         return
     }
 
-    // 5. 生成互動式 HTML 圖表（gonum-plot PNG 版已於 Wave 4 PR3 移除）
-    gen := chart.NewEChartsGenerator()
-    chartCfg := chart.InteractiveChartConfig{
-        Title:           "EMG 分析結果",
-        XAxisLabel:      "時間 (秒)",
-        YAxisLabel:      "EMG 值",
-        SelectedColumns: []int{1, 2, 3},
-        ColumnNames:     []string{"Channel1", "Channel2", "Channel3"},
-        Width:           "1200px",
-        Height:          "800px",
-    }
-    // 注意：InteractiveChart 接 *models.EMGDataset，需先解析 records → dataset
-    // （這裡略，請見 parsers.DataParser 用法）。
-
     logger.Info("分析完成", map[string]interface{}{
         "results_count": len(results),
         "rows":          len(records) - 1,
     })
-    _ = gen
-    _ = chartCfg
     _ = log.Default
 }
 ```
@@ -328,27 +311,6 @@ func processSingleFile(ctx context.Context, cfg *config.AppConfig, fileName stri
         return err
     }
     
-    // 生成圖表（可選）
-    if config.GenerateCharts {
-        chartGenerator := chart.NewEChartsGenerator()
-        chartConfig := chart.InteractiveChartConfig{
-            Title:           fmt.Sprintf("EMG 分析 - %s", fileName),
-            XAxisLabel:      "時間 (秒)",
-            YAxisLabel:      "EMG 值",
-            ShowAllColumns:  true,
-            Width:           "1200px",
-            Height:          "800px",
-        }
-        
-        chartName := fmt.Sprintf("%s%s.html", config.OutputPrefix, 
-            strings.TrimSuffix(fileName, ".csv"))
-        err = chartGenerator.GenerateInteractiveChart(dataset, chartConfig, 
-            filepath.Join("output", chartName))
-        if err != nil {
-            return err
-        }
-    }
-    
     return nil
 }
 ```
@@ -546,117 +508,6 @@ func simulateRealTimeData(processor *RealTimeProcessor) {
 2. 實現非阻塞的結果處理
 3. 設置適當的更新間隔
 4. 監控系統性能指標
-
----
-
-## 圖表生成最佳實踐
-
-### 模式：多樣化圖表生成
-
-展示如何根據不同需求生成各種類型的圖表。
-
-```go
-func ComprehensiveChartGeneration(cfg *config.AppConfig, dataset *models.EMGDataset) {
-    logger := logging.GetLogger("charts")
-
-    // 1. 互動式圖表（HTML）
-    generateInteractiveChart(dataset)
-
-    // 2. 比較圖表
-    generateComparisonChart(dataset)
-
-    logger.Info("圖表生成完成", nil)
-}
-
-// 已移除：generateBasicLineChart
-//
-// 它依賴 chart.ChartGenerator / GenerateLineChart / GenerateLineChartImage 與整個
-// internal/chart/chart.go（gonum/plot 路徑）— 已在 Wave 4 PR3 (commit `f0ce17f`)
-// 刪除。如需 PNG 匯出請在前端透過 canvas 截圖 (SavePNGFromBase64)。
-//
-// (generateBatchCharts / generateCustomThemedChart 移除說明見下方 generateComparisonChart 之後)
-
-func generateInteractiveChart(dataset *models.EMGDataset) {
-    generator := chart.NewEChartsGenerator()
-    
-    // 獲取可用通道信息
-    columns := generator.GetAvailableColumns(dataset)
-    
-    config := chart.InteractiveChartConfig{
-        Title:           "EMG 數據分析 - 互動式圖表",
-        XAxisLabel:      "時間 (秒)",
-        YAxisLabel:      "EMG 值",
-        SelectedColumns: []int{1, 2, 3},
-        ColumnNames:     extractColumnNames(columns),
-        ShowAllColumns:  false,
-        Width:           "1400px",
-        Height:          "900px",
-    }
-    
-    err := generator.GenerateInteractiveChart(dataset, config, "output/interactive_chart.html")
-    if err != nil {
-        log.Printf("互動式圖表生成失敗: %v", err)
-    }
-}
-
-func generateComparisonChart(dataset *models.EMGDataset) {
-    generator := chart.NewEChartsGenerator()
-    
-    // 創建比較數據集（正常 vs 標準化）
-    normalizer := calculator.NewNormalizer()
-    normalizedData, err := normalizer.Normalize(dataset, []float64{0.5, 0.6, 0.7})
-    if err != nil {
-        log.Printf("數據標準化失敗: %v", err)
-        return
-    }
-    
-    datasets := []*models.EMGDataset{dataset, normalizedData}
-    labels := []string{"原始數據", "標準化數據"}
-    
-    config := chart.InteractiveChartConfig{
-        Title:           "EMG 數據比較 - 原始 vs 標準化",
-        XAxisLabel:      "時間 (秒)",
-        YAxisLabel:      "EMG 值",
-        SelectedColumns: []int{1, 2},
-        Width:           "1400px",
-        Height:          "900px",
-    }
-    
-    err = generator.GenerateComparisonChart(datasets, labels, config, "output/comparison_chart.html")
-    if err != nil {
-        log.Printf("比較圖表生成失敗: %v", err)
-    }
-}
-
-// 已移除：generateBatchCharts / generateCustomThemedChart
-//
-// 對應的 EChartsGenerator.BatchExportCharts / GenerateCustomTheme（與其他 4 個
-// dead func：ValidateDataset / OptimizeForLargeDataset / GenerateRealtimeChart /
-// FormatValue）在 Wave 4 PR3 (commit `f0ce17f`) 從 echarts_generator.go 刪除 —
-// 無 production caller。
-//
-// 批量導出請在前端 loop 呼叫 GUI binding 的 GenerateChart；自定主題改用 ECharts
-// 內建 theme 載入機制。
-
-func extractColumnNames(columns []chart.ColumnInfo) []string {
-    names := make([]string, len(columns))
-    for i, col := range columns {
-        names[i] = col.Name
-    }
-    return names
-}
-```
-
-### 使用場景
-- 研究報告圖表生成
-- 數據可視化展示
-- 批量圖表生成需求
-
-### 最佳實踐
-1. 根據數據特點選擇合適的圖表類型
-2. 使用一致的顏色方案和樣式
-3. 提供互動功能提升用戶體驗
-4. 優化大數據集的圖表性能
 
 ---
 

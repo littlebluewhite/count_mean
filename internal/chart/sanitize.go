@@ -1,7 +1,6 @@
 package chart
 
 import (
-	"encoding/json"
 	"strings"
 	"unicode"
 )
@@ -27,8 +26,7 @@ import (
 // 在 escape table 加入 (2)(3) 兩條,並補上 FuzzSanitizeChartString 守門。
 //
 // Exported（H3）：cci package 也要把 user-controlled subject 嵌進
-// chart title/subtitle，需要跨 package 重用同一份 sanitizer 確保策略一致；
-// 既有 chart 套件內 caller 走 sanitizeChartString alias。
+// chart title/subtitle，需要跨 package 重用同一份 sanitizer 確保策略一致。
 func SanitizeChartString(s string) string {
 	if s == "" {
 		return s
@@ -80,43 +78,3 @@ var chartStringEscaper = strings.NewReplacer(
 	" ", "\\u2028",
 	" ", "\\u2029",
 )
-
-// sanitizeChartString 是 SanitizeChartString 的套件內 alias，保留既有 caller
-// 命名一致性（chart 套件內所有舊用法不必同步改名）。
-func sanitizeChartString(s string) string {
-	return SanitizeChartString(s)
-}
-
-// sanitizeForJSString 用於把 user-controlled 字串嵌入 JS 字面字串時：用
-// json.Marshal 取得 JSON-escaped 形式（含外層引號），讓嵌入 JS 後絕無
-// 逸出字串邊界的可能。caller 不應該再外包引號。
-//
-// 防 XSS 三道契約 (明示):
-//
-//  1. 先過 sanitizeChartString:把 `</` → `<\/`、`<!` → `<\!`、U+2028/2029
-//     →  / ,並剔除 control char + cap 長度。
-//  2. json.Marshal:預設行為對 `<` / `>` / `&` 會 escape 為 `<` / `>`
-//     / `&`(encoding/json 預設 HTMLEscape=true)。所以 sanitize 之後再過
-//     json.Marshal,所有 HTML 特殊字元都會變成 `\uXXXX` 序列,絕對不會留下
-//     可逸出 JS 字串邊界的 `"` 或 `</`。
-//  3. 第二道 strings.ReplaceAll(s, "</", "<\\/"):
-//     **與 (2) 重複,目前為 no-op (defensive)**。
-//     原因:(2) 已把 `<` escape 成 `<`,輸出不會含字面 `</`,所以
-//     ReplaceAll 不會 match 任何 substring。保留此行作為「即使未來 encoding/json
-//     預設 HTMLEscape 行為改變、或 caller 改走 Encoder.SetEscapeHTML(false)」時
-//     仍能擋下 `</script>` 跳出 — 屬於 defense-in-depth 守門。
-//
-// 如果未來 caller 改走 SetEscapeHTML(false) (例如為了輸出 emoji / 中文不被
-// escape 成 \uXXXX),(2) 的 HTML escape 就失效,此時 (3) 的 ReplaceAll 變成
-// 真正的 active defense。保留此 helper 不會降低安全強度,刪除則會 silently
-// 退化 — 寧可保留 redundancy。
-func sanitizeForJSString(s string) string {
-	b, err := json.Marshal(sanitizeChartString(s))
-	if err != nil {
-		return `""`
-	}
-	// 第二道 defense-in-depth:目前 no-op (json.Marshal 預設 HTMLEscape=true 已
-	// 把 `<` escape 成 <),保留以防 caller 未來改走 SetEscapeHTML(false)。
-	out := strings.ReplaceAll(string(b), "</", "<\\/")
-	return out
-}

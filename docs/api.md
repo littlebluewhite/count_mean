@@ -17,7 +17,6 @@
   - [CSV 處理](#csv-處理)
   - [大文件處理](#大文件處理)
 - [圖表生成](#圖表生成)
-  - [互動式圖表](#互動式圖表)
 - [配置管理](#配置管理)
 - [錯誤處理](#錯誤處理)
 - [日誌記錄](#日誌記錄)
@@ -329,11 +328,10 @@ func (a *Analyzer) Analyze(
 
 接受 phase-sync 後的 EMG 資料與肌肉對清單，使用 errgroup 並行計算每對 CCI 時間序列，並產出步態週期內的 mean curve。
 
-**Analyzer.ExportToCSV / Analyzer.GenerateInteractiveChart**
+**Analyzer.ExportToCSV**
 
 ```go
 func (a *Analyzer) ExportToCSV(result *CCIAnalysisResult, outputDir string) (string, error)
-func (a *Analyzer) GenerateInteractiveChart(result *CCIAnalysisResult, outputPath string) error
 ```
 
 匯出時會檢查 `GaitEndTime > GaitStartTime`，否則回傳「無效的步態週期區間」錯誤，避免 NaN/Inf 寫入 `Gait Cycle (%)` 欄位。
@@ -528,112 +526,6 @@ fmt.Printf("處理 %d 筆，耗時 %s，產出 %d 通道結果\n",
 > 整個 `internal/chart/chart.go`（含 `gonum.org/v1/plot` 依賴）在 Wave 4 PR3
 > (commit `f0ce17f`) 刪除 — 無 production caller，僅 test 自相依賴。
 >
-> 改用下一節的 `EChartsGenerator`：HTML 互動圖表 + 前端 canvas 截圖匯出 PNG
-> (`SavePNGFromBase64`)。
-
-### 互動式圖表
-
-#### EChartsGenerator
-
-`EChartsGenerator` 提供互動式圖表生成功能，生成 HTML 格式的圖表。
-
-```go
-type EChartsGenerator struct {
-    logger *logging.Logger
-}
-```
-
-**NewEChartsGenerator**
-
-```go
-func NewEChartsGenerator() *EChartsGenerator
-```
-
-**GenerateInteractiveChart**
-
-```go
-func (e *EChartsGenerator) GenerateInteractiveChart(dataset *models.EMGDataset, config InteractiveChartConfig, outputPath string) error
-```
-
-生成互動式圖表並保存為 HTML 文件。
-
-**InteractiveChartConfig 結構：**
-```go
-type InteractiveChartConfig struct {
-    Title           string   // 圖表標題
-    XAxisLabel      string   // X 軸標籤
-    YAxisLabel      string   // Y 軸標籤
-    SelectedColumns []int    // 要顯示的通道索引
-    ColumnNames     []string // 對應的通道名稱
-    ShowAllColumns  bool     // 是否顯示所有通道
-    Width           string   // 圖表寬度
-    Height          string   // 圖表高度
-}
-```
-
-**示例：**
-```go
-generator := chart.NewEChartsGenerator()
-
-// 配置互動式圖表
-config := chart.InteractiveChartConfig{
-    Title:           "EMG 互動式數據分析",
-    XAxisLabel:      "時間 (秒)",
-    YAxisLabel:      "EMG 值",
-    SelectedColumns: []int{1, 2, 3},
-    ColumnNames:     []string{"右腿", "左腿", "腹部"},
-    ShowAllColumns:  false,
-    Width:           "1200px",
-    Height:          "800px",
-}
-
-// 生成互動式圖表
-err := generator.GenerateInteractiveChart(dataset, config, "output/interactive_chart.html")
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-**GetAvailableColumns**
-
-```go
-func (e *EChartsGenerator) GetAvailableColumns(dataset *models.EMGDataset) []ColumnInfo
-```
-
-獲取數據集的可用通道信息。
-
-**ColumnInfo 結構：**
-```go
-type ColumnInfo struct {
-    Index      int     `json:"index"`      // 通道索引
-    Name       string  `json:"name"`       // 通道名稱
-    DataPoints int     `json:"dataPoints"` // 數據點數
-    Min        float64 `json:"min"`        // 最小值
-    Max        float64 `json:"max"`        // 最大值
-    Mean       float64 `json:"mean"`       // 平均值
-}
-```
-
-**示例：**
-```go
-// 獲取通道信息
-columns := generator.GetAvailableColumns(dataset)
-
-fmt.Println("可用通道：")
-for _, col := range columns {
-    fmt.Printf("  %s: %d 個數據點，範圍 %.6f - %.6f，平均值 %.6f\n",
-        col.Name, col.DataPoints, col.Min, col.Max, col.Mean)
-}
-```
-
-> **已移除：6 個 ECharts 死 func**
->
-> `BatchExportCharts`、`GenerateCustomTheme`、`ValidateDataset`、`OptimizeForLargeDataset`、
-> `GenerateRealtimeChart`、`FormatValue` 在 Wave 4 PR3 (commit `f0ce17f`) 從
-> `echarts_generator.go` 一併刪除（無 production caller）。
->
-> 批量導出需求請在前端側 loop 呼叫 GUI binding 的 `GenerateChart`，或開新 PR
-> 重建一個 server-side renderer。
 
 ---
 
@@ -1206,17 +1098,6 @@ handler := io.NewLargeFileHandler(cfg)
 result, err := handler.ProcessLargeFileInChunks(filePath, windowSize, progressCallback)
 ```
 
-### Q: 如何自定義圖表樣式？
-A: 使用 `InteractiveChartConfig` 進行配置（純 HTML/ECharts，無 vg.Length 概念，寬高採 CSS 字串）：
-```go
-config := chart.InteractiveChartConfig{
-    Title:      "自定義標題",
-    XAxisLabel: "時間",
-    YAxisLabel: "值",
-    Width:      "1200px",
-    Height:     "800px",
-}
-```
 
 ### Q: 如何處理多語言支持？
 A: 使用 `i18n` 模組：

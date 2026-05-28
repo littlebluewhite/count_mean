@@ -44,7 +44,7 @@ func TestSanitizeChartString_BlocksScriptClose(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := sanitizeChartString(tc.in)
+			got := SanitizeChartString(tc.in)
 			for _, banned := range tc.bannedSubstring {
 				if strings.Contains(got, banned) {
 					t.Errorf("output should not contain %q\ngot: %q", banned, got)
@@ -61,7 +61,7 @@ func TestSanitizeChartString_BlocksScriptClose(t *testing.T) {
 
 func TestSanitizeChartString_LengthCap(t *testing.T) {
 	in := strings.Repeat("a", 2000)
-	got := sanitizeChartString(in)
+	got := SanitizeChartString(in)
 	if len(got) > 1024 {
 		t.Errorf("expected length cap at 1024, got %d", len(got))
 	}
@@ -88,54 +88,6 @@ func TestSanitizeChartString_CJKTruncation_NoMojibake(t *testing.T) {
 
 	if len(got) > 1024 {
 		t.Errorf("expected length cap at 1024, got %d", len(got))
-	}
-}
-
-func TestSanitizeForJSString_QuoteSafe(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		// when embedded directly into JS source, the result must include leading/trailing
-		// quotes (so caller doesn't add own) and must not allow escape via input
-		mustStartsWith string
-		mustEndsWith   string
-		bannedRawClose []string
-	}{
-		{
-			name:           "single quote injection",
-			in:             "'; alert(1); //",
-			mustStartsWith: `"`,
-			mustEndsWith:   `"`,
-		},
-		{
-			name:           "script close inside filename",
-			in:             "evil</script>x.png",
-			mustStartsWith: `"`,
-			mustEndsWith:   `"`,
-			bannedRawClose: []string{"</script>"},
-		},
-		{
-			name:           "double quote injection",
-			in:             `"; alert(1); //`,
-			mustStartsWith: `"`,
-			mustEndsWith:   `"`,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := sanitizeForJSString(tc.in)
-			if !strings.HasPrefix(got, tc.mustStartsWith) {
-				t.Errorf("expected leading %q, got %q", tc.mustStartsWith, got)
-			}
-			if !strings.HasSuffix(got, tc.mustEndsWith) {
-				t.Errorf("expected trailing %q, got %q", tc.mustEndsWith, got)
-			}
-			for _, banned := range tc.bannedRawClose {
-				if strings.Contains(got, banned) {
-					t.Errorf("output should not contain %q\ngot: %q", banned, got)
-				}
-			}
-		})
 	}
 }
 
