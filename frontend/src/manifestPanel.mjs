@@ -23,6 +23,8 @@
 //     silentSuccess: false,  // optional, Composer 寫 true、其他 4 省略
 //   });
 //   // ctx shape:{ manifestPath, dataFolder, subjectIdx, subjectName, subjects }
+//   //   subjects: 預留欄位(目前 always []);M3/M4 spec author 如需 subjects array,
+//   //   自 `app._<adapter>Subjects` 取(M1 _gatherCtx 不主動 populate)。
 //
 // 核心不變式(由 manifestPanel.test.mjs 釘):
 //   - Envelope 自帶 reentrant guard(ADR-0007 §7,防 MuscleRatio doubleclick race)
@@ -157,10 +159,8 @@ export class ManifestPanel {
      * ctx。Subject 不對稱(idx vs name)由 ManifestPanel own — 兩種形狀同時
      * 給,caller 各取所需,不擴 backend RPC signature(ADR-0007 §4)。
      *
-     * 注意:`subjects` array 在此版本回空陣列 — 因為 subjects 由各 panel 自己
-     * 透過 `loadXxxSubjects` 寫入 select option。M2-M4 spec 可從 select
-     * `<option>` 反推,或自己掛在 `app._mpSubjects` 上;這欄位是「特殊 caller
-     * 不需重 load」的 escape hatch,非必填。
+     * `subjects` 為預留欄位(目前 always []);M3/M4 spec author 如需 subjects
+     * array,自 `app._<adapter>Subjects` 取(_gatherCtx 不主動 populate)。
      */
     _gatherCtx() {
         const manifestPath = document.getElementById('mpManifestPath')?.value || '';
@@ -179,7 +179,7 @@ export class ManifestPanel {
             dataFolder,
             subjectIdx,
             subjectName,
-            subjects: [], // M2-M4 視需要從 app this 取(_composerSubjects 等)
+            subjects: [], // reserved, currently always [];spec 端如需自 app._<adapter>Subjects 取
         };
     }
 

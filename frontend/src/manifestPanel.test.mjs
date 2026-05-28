@@ -11,7 +11,9 @@
 //   3. silentSuccess=true:略過 ShowMessage,onResult 仍呼叫
 //   4. Reentrant guard:_runEnvelope 重入 → rpc 只跑一次(防 MuscleRatio doubleclick race)
 //   5. registerCleanup:cleanup fn 在下次 run 開頭被 flush 並 call 一次
-//   6. attachIframe ready promise:iframe `load` event 觸發後 ready resolve
+//   6. registerCleanup:throwing cleanup 不阻擋後續 cleanup(swallow + log)
+//   7. attachIframe ready promise:iframe `load` event 觸發後 ready resolve
+//   8. spec.runBtnLabelKey:default + override 行為
 //
 // Mock 策略:不 import main.js(會 trigger Wails runtime IIFE),
 // 改 stub globalThis.app / ShowMessage / ShowError / t / tHtml +
@@ -260,7 +262,32 @@ test('5. registerCleanup:cleanup fn 在下次 run 開頭被 flush 並 call 一�
     }
 });
 
-test('6. attachIframe ready promise:iframe load event 觸發後 ready resolve', async () => {
+test('6. registerCleanup:throwing cleanup 不會阻擋後續 cleanup 執行', async () => {
+    // _flushCleanups 用 try/catch + console.error swallow,讓後續 cleanup 仍跑。
+    // 此 invariant 鎖定「一個 bridge.unsubscribe throw 不能讓其他 unsubscribe 漏跑」。
+    const { window, mp } = await setup();
+    try {
+        // 暫 swallow console.error,避免 test output noise(_flushCleanups 內 swallow + log)
+        const origError = console.error;
+        console.error = () => {};
+        try {
+            let counter = 0;
+            mp.registerCleanup(() => { throw new Error('boom'); });
+            mp.registerCleanup(() => { counter += 1; });
+            // 觸發 flush — 跑下一次 envelope 就會 flush
+            mp.run(minimalSpec());
+            fillCtxInputs(window);
+            await mp._runEnvelope(minimalSpec());
+            assert.equal(counter, 1, 'second cleanup should run despite first throwing');
+        } finally {
+            console.error = origError;
+        }
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('7. attachIframe ready promise:iframe load event 觸發後 ready resolve', async () => {
     const { window, mp } = await setup();
     try {
         // 預備一個 container — attachIframe 會把 iframe append 進去
@@ -293,7 +320,7 @@ test('6. attachIframe ready promise:iframe load event 觸發後 ready resolve', 
     }
 });
 
-test('7. spec.runBtnLabelKey:default 為 button.start_analyze、override 走 spec 覆蓋值', async () => {
+test('8. spec.runBtnLabelKey:default 為 button.start_analyze、override 走 spec 覆蓋值', async () => {
     // M2 prep API extension(ADR-0007 §6 spec shape):
     //   - Composer 的 run button label 是「生成圖表」而非「開始分析」,
     //     需要 spec 端可 override 而不擴 i18n schema。

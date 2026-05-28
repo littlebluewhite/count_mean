@@ -77,19 +77,14 @@ test('Chart Composer spec.formBody 內 user-visible text 均來自 translator(�
     );
 });
 
-test('Chart Composer spec.formBody 必呼叫 translator 至少 6 次(各 label/button 一次)', () => {
-    // Sanity bound:相對 chart_composer_panel.mjs ≥9 少 3 處(panel-header / first
-    // back / result.section.composer_preview / button.download_png 移到 shell 或
-    // onResult,剩 6 處在 formBody:load_emg_channels / form.label.composer_channels /
+test('Chart Composer spec.formBody 必呼叫 translator 至少 5 次(各 label/button 一次)', () => {
+    // 5 = 當前 formBody 內 translator call 數的下界;新增 label 時連同此數 bump。
+    //
+    // 對應 5 個 translator call site:load_emg_channels / form.label.composer_channels /
     // form.helptext.load_channels_first / form.label.composer_phases /
-    // form.helptext.composer_phases_pending — 共 5 個固定,加 sanity 緩衝為 ≥ 6)。
+    // form.helptext.composer_phases_pending。
     //
-    // 為何 6 不是 5:5 個 label/helptext 是當前最小覆蓋,若未來補翻譯點(例如
-    // info banner)會自然增加;此 lower bound 抓「人為把翻譯整段砍光」regression。
-    //
-    // 注 — composer_channels 加 composer_phases 加 load_channels_first 加
-    // composer_phases_pending 加 load_emg_channels 共 5,刻意保守設 ≥ 5(對齊
-    // 實際 call site)。
+    // 此 lower bound 抓「人為把翻譯整段砍光」regression。
     const calls = [];
     const trackingT = (key) => {
         calls.push(key);

@@ -36,10 +36,10 @@
 //
 // invariant(由 chart_composer_spec.test.mjs 釘):
 //   * spec.formBody 內所有 user-visible text 必經 translator(無繁中字元)
-//   * spec.formBody 呼 translator ≥ 6 次(比 chart_composer_panel.mjs 的 ≥9 少 3 處,
+//   * spec.formBody 呼 translator ≥ 5 次(比 chart_composer_panel.mjs 的 ≥9 少 4 處,
 //     對應 shell 已包的 panel header / manifest / dataFolder / subject / back-button
 //     + result.section.composer_preview / button.download_png + 第二個 back button —
-//     扣除這些後 formBody 仍 ≥ 6 個翻譯點)
+//     扣除這些後 formBody 仍 ≥ 5 個翻譯點)
 //   * silentSuccess === true、runBtnLabelKey === 'button.generate_chart'
 //   * rpc 在 _composerSelectedChannels 空 / _composerLoadedSubject 不一致時 throw
 
@@ -69,6 +69,8 @@ import { GenerateChartComposer } from '../../wailsjs/go/gui/App.js';
  */
 export function composerFormBody(t) {
     return `
+            <!-- 寫入點:app._showComposerWarning,於 loadComposerEMGChannels 失敗時填充。
+                 M3/M4 spec author 若搬動此 banner 必須對齊 caller。 -->
             <div id="composerWarningBanner" class="result-info"
                  style="display:none; background:#fff3cd; border-left:4px solid #ffc107; padding:0.5rem 0.75rem; margin-bottom:0.5rem;">
             </div>
