@@ -62,15 +62,16 @@ export function muscleRatioFormBody(t) {
 /**
  * 肌肉比值 spec object — 給 ManifestPanel.run(spec) 消費。
  *
- * Factory 接 `app` 注入(對齊 cci / composer spec)。MuscleRatio onResult 不寫任何
- * app this state(無 download / 無 iframe ready promise),`app` 目前未被 closure
- * 直接使用 — 仍保留 factory 簽名以對齊其他 4 panel 一致性 + 未來若需 app method
- *(例如 openOutputFolder 走 mp.openOutputFolder 已足)無需改簽名。
+ * Factory 接 `app` 注入(對齊 cci / composer spec)。onResult 在 partial-fail
+ *(result.success=false)分支需呼 `app.updateStatus(dialog.title.partial_failed)`
+ * 修正 status bar — envelope 在 onResult 前已設 status.analysis_done,partial-fail
+ * 時保留它會誤導(對齊舊 executeMuscleRatioAnalysis main.js:2540-2547 註解
+ *「status 必須與 success 一致;部分失敗時顯示『分析完成』會誤導」,codex round-1 P2)。
  *
- * @param {object} _app - EMGAnalysisApp 實例(MuscleRatio 目前未用,保留簽名一致性)
+ * @param {object} app - EMGAnalysisApp 實例(updateStatus 用於 partial-fail status 修正)
  * @returns {object} spec for ManifestPanel.run(spec)
  */
-export function makeMuscleRatioSpec(_app) {
+export function makeMuscleRatioSpec(app) {
     return {
         titleKey: 'panel.muscleratio.title',
         statusRunningKey: 'status.muscle_running',
@@ -128,9 +129,10 @@ export function makeMuscleRatioSpec(_app) {
          *   1. summary 行:「共 N 個主題:<message>」
          *   2. 若有 subjects:per-subject 表格(主題 / 狀態 / Output1 / Output2 / 耗時 / 訊息)
          *
-         * dialog(silentSuccess=true,onResult own):
-         *   * result.success=true → ShowMessage(完成, message)
-         *   * result.success=false → ShowError(部分失敗, message)
+         * dialog + status(silentSuccess=true,onResult own,見 muscleRatioDialog):
+         *   * result.success=true → ShowMessage(完成, message)（status 保留 envelope analysis_done）
+         *   * result.success=false → updateStatus(部分失敗) + ShowError(部分失敗, message)
+         *     （codex round-1 P2:覆寫 envelope analysis_done 修正 status bar）
          *
          * @param {object} result - MuscleRatioResult(欄位見 file header,已對 Go struct 驗證)
          * @param {object} _ctx - ManifestPanel _gatherCtx 結果(本 onResult 不用)
@@ -155,7 +157,7 @@ export function makeMuscleRatioSpec(_app) {
             // 對齊 main.js:2572-2575 early-return(顯示 result section 後結束)。
             if (!result.subjects || result.subjects.length === 0) {
                 document.getElementById('mpResult').style.display = 'block';
-                await muscleRatioDialog(result);
+                await muscleRatioDialog(result, app);
                 return;
             }
 
@@ -239,29 +241,43 @@ export function makeMuscleRatioSpec(_app) {
             document.getElementById('mpResult').style.display = 'block';
 
             // 3. dialog(onResult own,對齊 main.js:2542-2548)。
-            await muscleRatioDialog(result);
+            await muscleRatioDialog(result, app);
         },
     };
 }
 
 /**
- * MuscleRatio 的 success/partial-fail dialog(onResult own,silentSuccess=true)。
+ * MuscleRatio 的 success/partial-fail dialog + status 修正(onResult own,
+ * silentSuccess=true)。
  *
- * 對齊 main.js:2542-2548:
- *   * result.success=true → ShowMessage(dialog.title.complete, message)
- *   * result.success=false → ShowError(dialog.title.partial_failed, message)
+ * 對齊舊 executeMuscleRatioAnalysis(main.js:2540-2548):
+ *   * result.success=true → status 保留 envelope 已設的 status.analysis_done
+ *     + ShowMessage(dialog.title.complete, message)
+ *   * result.success=false(partial fail)→ updateStatus(dialog.title.partial_failed)
+ *     + ShowError(dialog.title.partial_failed, message)
+ *
+ * **partial-fail status 修正(codex round-1 P2)**:envelope 在 onResult 前已設
+ * status.analysis_done(manifestPanel.mjs:_runEnvelope)。MuscleRatio partial fail
+ * 時 backend 回 success=false 但不 throw(結果表格仍要 render),若不覆寫 status,
+ * status bar 會停在「分析完成」誤導使用者。故 partial-fail 分支補 updateStatus
+ *(對齊舊註解「status 必須與 success 一致;部分失敗時顯示『分析完成』會誤導」)。
+ * success 分支不動 status — envelope 的 analysis_done 正確,不需覆寫。
  *
  * 抽成 module-level helper 讓 early-return(無 subjects)與正常路徑共用同一段
- * dialog 邏輯,避免重複。走 globalThis.t / ShowMessage / ShowError(production
+ * 邏輯,避免重複。走 globalThis.t / ShowMessage / ShowError(production
  * 由 main.js 掛在 window,test 由 stub 提供)。
  *
  * @param {object} result - MuscleRatioResult(success / message)
+ * @param {object} app - EMGAnalysisApp 實例(partial-fail 時呼 updateStatus 修正 status bar)
  */
-async function muscleRatioDialog(result) {
+async function muscleRatioDialog(result, app) {
     const tt = globalThis.t;
     if (result.success) {
         await globalThis.ShowMessage(tt('dialog.title.complete'), result.message);
     } else {
+        // partial fail:覆寫 envelope 的 status.analysis_done,避免 status bar 誤導
+        //(對齊舊 main.js:2546 updateStatus(t('dialog.title.partial_failed')))。
+        app.updateStatus(tt('dialog.title.partial_failed'));
         await globalThis.ShowError(tt('dialog.title.partial_failed'), result.message);
     }
 }

@@ -120,6 +120,11 @@ export function makeChartComposerSpec(app) {
         // Composer 的成功訊號是「chart 出現」— ADR-0007 §6 + handoff 鎖定:
         // 不彈 ShowMessage dialog,避免 user 流程被打斷。
         silentSuccess: true,
+        // Composer subject 依賴 dataFolder(LoadChartComposerSubjects 帶 dataFolder),
+        // 故 selectMpDataFolder 寫完 dataFolder 後需 re-load subjects。僅 Composer 設此
+        // 旗標 — index-mode 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest,
+        // 設 true 會讓選 dataFolder 清空已選 subject(codex round-1 P2)。
+        subjectsDependOnDataFolder: true,
 
         formBody: composerFormBody,
 

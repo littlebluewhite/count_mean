@@ -21,6 +21,9 @@
 //     rpc: async (ctx) => AnalyzeCCI(ctx.manifestPath, ctx.dataFolder, ctx.subjectIdx),
 //     onResult: async (result, ctx, mp) => { mp.attachIframe(...); mp.bindPhaseCheckboxes(...); },
 //     silentSuccess: false,  // optional, Composer 寫 true、其他 4 省略
+//     subjectsDependOnDataFolder: false,  // optional, 僅 Composer 寫 true(subject
+//                                         // 依賴 dataFolder → 選 folder 後 re-load);
+//                                         // index-mode 3 panel 省略避免清空已選 subject
 //   });
 //   // ctx shape:{ manifestPath, dataFolder, subjectIdx, subjectName, subjects }
 //   //   subjects: 預留欄位(目前 always []);M3/M4 spec author 如需 subjects array,
@@ -98,6 +101,12 @@ export class ManifestPanel {
      *   option.value 寫 0-based 索引(CCI/PhaseSync/Normalized — subjectIdx);
      *   valueMode='name' 時 option.value 寫 subject string(Composer — subjectName,
      *   ADR-0002 canonical-key)。MuscleRatio 省略(hideSubject,無 subject load)。
+     * @param {boolean} [spec.subjectsDependOnDataFolder=false] - Optional。true 時
+     *   subject 列表依賴 dataFolder(目前僅 Composer:LoadChartComposerSubjects 帶
+     *   dataFolder),selectMpDataFolder 寫完 dataFolder 後會 re-load subjects。
+     *   index-mode 的 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest,
+     *   省略此旗標(default false)→ 選 dataFolder 不 reload,避免 _loadMpSubjects
+     *   的 `select.innerHTML=''` 清空已選 subject(codex round-1 P2)。
      * @param {(mp: ManifestPanel) => void} [spec.afterRender] - Optional。run() 把
      *   shell + formBody render 完、showPanel 之後呼叫。PhaseSync/Normalized 用來
      *   load phase 下拉(GetAvailablePhases,manifest-independent)+ (Normalized)
@@ -488,12 +497,19 @@ export class ManifestPanel {
     }
 
     /**
-     * 選資料夾 → 寫 `#mpDataFolder`。Composer 的 loadSubjects 需要 dataFolder
-     *(LoadChartComposerSubjects 帶 dataFolder),故寫完 dataFolder 後,若
-     * spec.loadSubjects 且 manifest 已選,re-load subjects(對齊既有
-     * selectComposerDataFolder:1710「dataFolder 改了且 manifest 在 → reload
-     * subjects」behaviour)。index-mode 的 3 panel loadSubjects 不讀 dataFolder,
-     * re-load 結果等價(冪等),統一走同一條路不分流。
+     * 選資料夾 → 寫 `#mpDataFolder`。**僅** subject 列表真的依賴 dataFolder 的
+     * panel(spec.subjectsDependOnDataFolder=true,目前只有 Composer:
+     * LoadChartComposerSubjects 帶 dataFolder)才在寫完 dataFolder 後 re-load
+     * subjects(對齊既有 selectComposerDataFolder:1710「dataFolder 改了且 manifest
+     * 在 → reload subjects」behaviour)。
+     *
+     * index-mode 的 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest、
+     * **不**讀 dataFolder。對它們 re-load 並非冪等:`_loadMpSubjects` 先
+     * `select.innerHTML=''` 再重填,會把已選的 subject value reset 回空 placeholder
+     *(codex round-1 P2:先選 subject 再選 dataFolder 會 silent 清空 subject →
+     * 後續 Run required-field validation fail)。故這些 panel 省略
+     * subjectsDependOnDataFolder(default false)→ 選 dataFolder 不 reload、保留
+     * 已選 subject。
      */
     async selectMpDataFolder() {
         const spec = this._currentSpec;
@@ -504,7 +520,9 @@ export class ManifestPanel {
             if (input) input.value = folder;
 
             const manifest = document.getElementById('mpManifestPath')?.value || '';
-            if (spec?.loadSubjects && !spec.hideSubject && manifest) {
+            // 只有 subjectsDependOnDataFolder=true(Composer)才 re-load — 否則對
+            // index-mode panel 的 reload 會清空已選 subject(見上方註解 codex P2)。
+            if (spec?.subjectsDependOnDataFolder && spec?.loadSubjects && !spec.hideSubject && manifest) {
                 await this._loadMpSubjects();
             }
         } catch (err) {

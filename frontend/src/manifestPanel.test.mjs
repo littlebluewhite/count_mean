@@ -671,7 +671,10 @@ test('16. selectMpDataFolder:寫 #mpDataFolder + 若 manifest 已選則 re-load 
         stubWails(window, { folder: '/tmp/data-dir' });
 
         let loadArgs = null;
+        // subjectsDependOnDataFolder=true:Composer 的 subject 依賴 dataFolder,選完
+        // dataFolder 才 re-load(codex round-1 P2 後唯一會在 selectMpDataFolder reload 的 panel)。
         const spec = minimalSpec({
+            subjectsDependOnDataFolder: true,
             loadSubjects: async (manifestPath, dataFolder) => {
                 loadArgs = { manifestPath, dataFolder };
                 return { subjects: ['X'], valueMode: 'name' };
@@ -734,6 +737,76 @@ test('17b. selectMpManifest:loadSubjects 回空 subjects → select 保留 disab
         // 不應發「已載入 N 個主題」status(N=0 無意義)
         const loadedStatus = calls.statusUpdates.find((s) => /subjects_loaded/.test(s));
         assert.equal(loadedStatus, undefined, '空 subjects 不應報 subjects_loaded status');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('17c. selectMpDataFolder:index-mode panel(無 subjectsDependOnDataFolder)選 folder 不 reload,保留已選 subject', async () => {
+    // codex round-1 P2 regression:CCI/PhaseSync/Normalized 的 subject 只依賴 manifest。
+    // 先選 subject 再選 dataFolder 時,若 selectMpDataFolder 仍 reload subjects,
+    // _loadMpSubjects 的 `select.innerHTML=''` 會把已選 subject value reset 回空
+    // placeholder → 後續 Run required-field validation fail。此 test 釘:省略
+    // subjectsDependOnDataFolder(default false)時 selectMpDataFolder **不** reload、
+    // 已選 subject value 必須被保留。
+    const { window, mp } = await setup();
+    try {
+        stubWails(window, { folder: '/tmp/data-dir' });
+
+        let loadCalled = false;
+        const spec = minimalSpec({
+            // 故意不傳 subjectsDependOnDataFolder(index-mode 行為)
+            loadSubjects: async () => {
+                loadCalled = true;
+                return { subjects: ['SubjA', 'SubjB'], valueMode: 'index' };
+            },
+        });
+        mp.run(spec);
+        // 模擬 user 已選 manifest + 已選一個 subject(index-mode option.value=索引)
+        window.document.getElementById('mpManifestPath').value = '/tmp/manifest.csv';
+        fillCtxInputs(window, { subjectIdx: 1, subjectName: 'SubjB' });
+        const select = window.document.getElementById('mpSubject');
+        assert.equal(select.value, '1', 'precondition:subject 已選為 index 1');
+
+        await mp.selectMpDataFolder();
+
+        assert.equal(window.document.getElementById('mpDataFolder').value, '/tmp/data-dir', 'dataFolder 仍寫入');
+        assert.equal(loadCalled, false, 'index-mode panel 選 dataFolder 不應 reload subjects');
+        // 已選 subject value 必須被保留(reload 會 reset 回空 placeholder)
+        assert.equal(select.value, '1', '已選 subject value 必須被保留,不被清空');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('17d. selectMpDataFolder:subjectsDependOnDataFolder=true(Composer)選 folder 後 reload subjects', async () => {
+    // codex round-1 P2 對照組:Composer 的 subject 真的依賴 dataFolder
+    //(LoadChartComposerSubjects 帶 dataFolder),設 subjectsDependOnDataFolder=true。
+    // 此 test 釘:選 dataFolder 後 loadSubjects **必被呼叫** 且 select 被重新填充
+    //(這是 Composer 正確行為 — 不同 dataFolder 可能有不同 subject 集合)。
+    const { window, mp } = await setup();
+    try {
+        stubWails(window, { folder: '/tmp/data-dir' });
+
+        let loadArgs = null;
+        const spec = minimalSpec({
+            subjectsDependOnDataFolder: true,
+            loadSubjects: async (manifestPath, dataFolder) => {
+                loadArgs = { manifestPath, dataFolder };
+                return { subjects: ['Alice', 'Bob', 'Carol'], valueMode: 'name' };
+            },
+        });
+        mp.run(spec);
+        window.document.getElementById('mpManifestPath').value = '/tmp/manifest.csv';
+
+        await mp.selectMpDataFolder();
+
+        assert.ok(loadArgs, 'subjectsDependOnDataFolder=true → selectMpDataFolder 應 reload subjects');
+        assert.equal(loadArgs.dataFolder, '/tmp/data-dir', 'loadSubjects 收到 dataFolder');
+        // select 被重新填充:placeholder + 3 subject
+        const select = window.document.getElementById('mpSubject');
+        assert.equal(select.options.length, 4, 'select 重新填充為 placeholder + 3 subject');
+        assert.equal(select.options[1].value, 'Alice', 'name-mode option.value=subject 字串');
     } finally {
         await teardown(window);
     }

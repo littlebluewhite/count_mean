@@ -204,3 +204,117 @@ test('spec.rpc 在 backend result.success=false 時不升 throw(partial-fail 交
         delete globalThis.window;
     }
 });
+
+// ---------- onResult status bar 修正(codex round-1 P2)----------
+//
+// envelope(manifestPanel.mjs _runEnvelope)在 onResult 前已設 status.analysis_done。
+// MuscleRatio partial fail(success=false)backend 不 throw、結果表格仍 render,
+// 若 onResult 不覆寫 status,status bar 會停在「分析完成」誤導使用者。下面兩 test
+// 釘:partial fail → updateStatus(dialog.title.partial_failed);success → onResult
+// 不以 partial key 覆寫(保留 envelope 的 analysis_done)。
+// 對齊舊 executeMuscleRatioAnalysis(main.js:2540-2548)。
+
+// onResult 需要 DOM(#mpResultContent / #mpResult)+ globalThis.t / ShowMessage /
+// ShowError。fake t 回 ASCII key 讓我們能 assert 具體 i18n key 觸發。
+function setupOnResultEnv() {
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    globalThis.document = window.document;
+
+    const root = window.document.createElement('div');
+    root.id = 'functionPanel';
+    // onResult 寫 #mpResultContent + toggle #mpResult display
+    const result = window.document.createElement('div');
+    result.id = 'mpResult';
+    result.style.display = 'none';
+    const content = window.document.createElement('div');
+    content.id = 'mpResultContent';
+    result.appendChild(content);
+    root.appendChild(result);
+    window.document.body.appendChild(root);
+
+    globalThis.t = (key, ...args) => `__T:${key}__${args.length ? ':' + args.join(',') : ''}`;
+
+    const calls = { showMessage: [], showError: [] };
+    globalThis.ShowMessage = async (title, msg) => { calls.showMessage.push({ title, msg }); };
+    globalThis.ShowError = async (title, msg) => { calls.showError.push({ title, msg }); };
+
+    return { window, calls };
+}
+
+async function teardownOnResultEnv(window) {
+    if (window?.happyDOM?.close) {
+        await window.happyDOM.close();
+    }
+    delete globalThis.window;
+    delete globalThis.document;
+    delete globalThis.t;
+    delete globalThis.ShowMessage;
+    delete globalThis.ShowError;
+}
+
+test('onResult partial-fail(success=false)→ app.updateStatus(dialog.title.partial_failed) 修正 status bar', async () => {
+    const { window, calls } = setupOnResultEnv();
+    try {
+        // app stub:記錄 updateStatus 呼叫(envelope 已設 analysis_done,onResult 須覆寫)
+        const statusUpdates = [];
+        const app = { updateStatus: (msg) => statusUpdates.push(msg) };
+        const spec = makeMuscleRatioSpec(app);
+
+        const partialResult = {
+            success: false,
+            message: '部分主題未完成',
+            subjects: [
+                { subject: 'A', success: true, outputAllPath: '/o/a1', outputPhasePath: '/o/a2', durationMs: 12 },
+                { subject: 'B', success: false, error: '處理失敗', durationMs: 0 },
+            ],
+        };
+
+        await spec.onResult(partialResult, {}, {});
+
+        // status bar 必須被覆寫為 partial_failed(對齊舊 main.js:2546)
+        const partialStatus = statusUpdates.find((s) => /dialog\.title\.partial_failed/.test(s));
+        assert.ok(
+            partialStatus,
+            `partial fail 必呼 updateStatus(dialog.title.partial_failed),實際 status 呼叫:${JSON.stringify(statusUpdates)}`
+        );
+        // dialog 走 ShowError(部分失敗),非 ShowMessage(完成)
+        assert.equal(calls.showError.length, 1, 'partial fail 應 ShowError 一次');
+        assert.match(calls.showError[0].title, /dialog\.title\.partial_failed/, 'ShowError 標題為 partial_failed');
+        assert.equal(calls.showMessage.length, 0, 'partial fail 不應 ShowMessage(完成)');
+    } finally {
+        await teardownOnResultEnv(window);
+    }
+});
+
+test('onResult success=true → 不以 partial key 覆寫 status(保留 envelope analysis_done)', async () => {
+    // success 路徑 onResult 不該動 status — envelope 已設的 status.analysis_done 正確。
+    // 釘:updateStatus 不應被以 partial_failed key 呼叫(避免回歸成「成功也報部分失敗」)。
+    const { window, calls } = setupOnResultEnv();
+    try {
+        const statusUpdates = [];
+        const app = { updateStatus: (msg) => statusUpdates.push(msg) };
+        const spec = makeMuscleRatioSpec(app);
+
+        const successResult = {
+            success: true,
+            message: '已處理 2 個主題',
+            subjects: [
+                { subject: 'A', success: true, outputAllPath: '/o/a1', outputPhasePath: '/o/a2', durationMs: 12 },
+                { subject: 'B', success: true, outputAllPath: '/o/b1', outputPhasePath: '/o/b2', durationMs: 34 },
+            ],
+        };
+
+        await spec.onResult(successResult, {}, {});
+
+        // success 不應以 partial_failed 覆寫 status
+        const partialStatus = statusUpdates.find((s) => /dialog\.title\.partial_failed/.test(s));
+        assert.equal(partialStatus, undefined, 'success 路徑不應以 partial_failed 覆寫 status');
+        // dialog 走 ShowMessage(完成),非 ShowError
+        assert.equal(calls.showMessage.length, 1, 'success 應 ShowMessage(完成)一次');
+        assert.match(calls.showMessage[0].title, /dialog\.title\.complete/, 'ShowMessage 標題為 complete');
+        assert.equal(calls.showError.length, 0, 'success 不應 ShowError');
+    } finally {
+        await teardownOnResultEnv(window);
+    }
+});
