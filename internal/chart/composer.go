@@ -313,9 +313,13 @@ func buildEMGSeries(
 }
 
 // downsampleSeriesMap 對共享同一條 time series 的多個 channel 一起做 LTTB:
-//   - 每 channel 各自跑 LTTB → union 索引 → 重組 time + 各 channel slice
+//   - union/sort/cap 數學委派給 UnionLTTBIndices kernel
 //   - 對齊「all series share one X-axis」的 invariant
 //   - threshold <= 0 or 長度 <= threshold 直接 passthrough
+//
+// Composer 的 mismatch 策略是 graceful skip（與 CCI fail-fast 相反）：
+// 長度不符的 channel 在 pre-filter 階段靜默過濾，不進入 kernel，也不出現在結果 map。
+// 若所有 channel 都不符（matrix 為空），kernel 回傳 nil，函式原封不動回傳原始 time + series。
 func downsampleSeriesMap(
 	time []float64,
 	series map[string][]float64,
@@ -327,30 +331,19 @@ func downsampleSeriesMap(
 		return time, series
 	}
 
-	// per-channel LTTB → union 索引
-	seen := make(map[int]struct{}, threshold)
+	// 預先過濾長度符合的 channel，graceful skip 不符的（Composer 策略）
+	matrix := make([][]float64, 0, len(series))
 	for _, vals := range series {
-		if len(vals) != len(time) {
-			// 長度不符 → skip(不該污染 union;但也不 hard reject,保守 graceful 處理)
-			continue
-		}
-		idx := LTTBDownsample(time, vals, threshold)
-		for _, i := range idx {
-			seen[i] = struct{}{}
+		if len(vals) == len(time) {
+			matrix = append(matrix, vals)
 		}
 	}
-	if len(seen) == 0 {
+
+	indices := UnionLTTBIndices(time, matrix, threshold)
+	if len(indices) == 0 {
+		// matrix 為空（全部 channel 不符）→ kernel 回 nil → passthrough 原始輸入
 		return time, series
 	}
-
-	indices := make([]int, 0, len(seen))
-	for i := range seen {
-		indices = append(indices, i)
-	}
-	sort.Ints(indices)
-
-	// stride cap — 對齊 CCI cciChartMaxRenderPoints(2x threshold)
-	indices = capComposerUnionIndices(indices, threshold*2)
 
 	newTime := make([]float64, len(indices))
 	for i, idx := range indices {
@@ -359,7 +352,7 @@ func downsampleSeriesMap(
 	newSeries := make(map[string][]float64, len(series))
 	for name, vals := range series {
 		if len(vals) != len(time) {
-			// 長度不符的 channel 不被 downsample,但 X 軸對齊不上 — 跳過此 series
+			// 長度不符的 channel 不被 downsample,X 軸對齊不上 — 跳過此 series
 			continue
 		}
 		out := make([]float64, len(indices))
@@ -369,26 +362,6 @@ func downsampleSeriesMap(
 		newSeries[name] = out
 	}
 	return newTime, newSeries
-}
-
-// capComposerUnionIndices stride decimation 對齊 CCI capUnionIndices ceiling-division 邏輯。
-// 保留首末索引維持 zoom 範圍。
-func capComposerUnionIndices(indices []int, limit int) []int {
-	if limit < 1 || len(indices) <= limit {
-		return indices
-	}
-	stride := (len(indices) + limit - 1) / limit
-	if stride < 2 {
-		stride = 2
-	}
-	capped := make([]int, 0, limit+1)
-	for i := 0; i < len(indices); i += stride {
-		capped = append(capped, indices[i])
-	}
-	if last := indices[len(indices)-1]; len(capped) == 0 || capped[len(capped)-1] != last {
-		capped = append(capped, last)
-	}
-	return capped
 }
 
 // setComposerGlobalOptions 設置 chart-level 全域選項:
@@ -1037,4 +1010,3 @@ func sortedKeys(m map[string][]float64) []string {
 	sort.Strings(keys)
 	return keys
 }
-

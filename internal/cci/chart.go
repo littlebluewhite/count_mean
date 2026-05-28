@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"sort"
 
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
@@ -137,20 +136,17 @@ func buildCCILine(ctx context.Context, result *CCIAnalysisResult) (*charts.Line,
 
 // downsampleCCIResult 對每個 pair 獨立跑 LTTB，再 union 各組保留索引、排序後
 // apply 到 TimeValues 與所有 PairResults[i].Values，保證所有曲線共享同一個 X 軸。
+// union index 運算（per-pair LTTB + union + threshold*2 cap）委由 chart.UnionLTTBIndices 實施。
 //
-// 為什麼不用「第一個 pair 當 representative」的單組 LTTB：
-//   - 若 representative 在某 bucket 平緩、其他 pair 在同 bucket 有窄峰，那個峰會被遺失。
-//   - per-pair LTTB + union 保留每個 series 自身的高 variance 點，
-//     代價是 union 後總點數可能稍超 threshold（受 pair 數 × threshold 上限約束，
-//     實務 12 對相關曲線 union ≈ 1.2-2x threshold）。
+// 為什麼 CCI 在這裡 fail-fast 校驗長度（而非靠 kernel）：
+//   - CCI 的 PairResults[i].Values 與 TimeValues 必須 1:1 對齊，違反是 caller bug。
+//   - chart.UnionLTTBIndices 的 caller invariant 是「長度一致由 adapter 保證」，
+//     mismatch 會在 LTTBDownsample 端 panic。CCI adapter 選擇在 panic 發生前就
+//     fail-fast 回 ErrPairLengthMismatch，避免 half-state HTML 寫出。
+//   - silent passthrough 會讓部分 pair 不被壓縮、X 軸 drift；fail-fast 是 spec 的一部分。
 //
 // MeanCurves / PhasePercents / PhaseTimes / GaitStartTime / GaitEndTime 不動：
 // 那些是 phase-domain 元資料（已 normalize 到 0-100% 或單純時間值），不是時序樣本。
-//
-// 嚴格契約：所有 PairResults[i].Values 長度必須等於 TimeValues 長度，
-// 否則回傳 ErrPairLengthMismatch。舊版「silent passthrough」會讓部分 pair 不
-// 被壓縮、X 軸 drift；CCI invariant 是 spec 的一部分，違反應 fail-fast 而非
-// 在 renderer 端 paper over。
 func downsampleCCIResult(result *CCIAnalysisResult, threshold int) (*CCIAnalysisResult, error) {
 	if result == nil {
 		return result, nil
@@ -164,11 +160,12 @@ func downsampleCCIResult(result *CCIAnalysisResult, threshold int) (*CCIAnalysis
 		}
 	}
 
-	if timeLen <= threshold || len(result.PairResults) == 0 {
-		return result, nil
+	matrix := make([][]float64, len(result.PairResults))
+	for i, pr := range result.PairResults {
+		matrix[i] = pr.Values
 	}
 
-	indices := unionLTTBIndices(result, threshold)
+	indices := chart.UnionLTTBIndices(result.TimeValues, matrix, threshold)
 	if len(indices) == 0 {
 		return result, nil
 	}
@@ -199,83 +196,6 @@ func downsampleCCIResult(result *CCIAnalysisResult, threshold int) (*CCIAnalysis
 		GaitStartTime: result.GaitStartTime,
 		GaitEndTime:   result.GaitEndTime,
 	}, nil
-}
-
-// cciChartMaxRenderPoints 是 union 後的 hard cap，避免 12 對 union 最壞情況灌出
-// pairCount × threshold ≈ 60k 點壓垮 ECharts 互動效能。2× threshold 保留 LTTB
-// 變異敏感點同時讓首尾 zoom-in 視覺仍夠細。
-const cciChartMaxRenderPoints = cciChartDownsampleThreshold * 2
-
-// unionLTTBIndices 對每個 PairResult 獨立跑 LTTB，回傳所有保留索引的 union（排序後）。
-// 各 pair 用相同 threshold；map 去重後排序，保證輸出單調遞增。
-//
-// cross-compare review:
-//   - codex P2 抓到「LTTB 非均勻索引在 category x-axis 上會視覺擠壓/拉伸」。category
-//     軸每個點等寬，但時間真實間隔不等。
-//   - Claude P2 抓到 union 可超 threshold 達 pairCount 倍，理論 worst 60k 點。
-//
-// 修法：union 排序後若超過 cciChartMaxRenderPoints，用 stride 平均抽樣再壓回，並保留
-// 首尾索引維持 zoom 範圍正確。stride decimation 雖然無法完全消除 category 軸 jitter，
-// 但限制最大點數 + 平均化間距能緩解視覺失真；徹底解需切到 value axis 的 [time, value]
-// 資料形式，列入 backlog（變更面比較大、含次要 percent 軸對齊）。
-//
-// Caller invariant: downsampleCCIResult 已校驗所有 pair.Values 與 TimeValues
-// 等長 (嚴格契約)，因此這裡不再 defensively skip — 違反會在 caller
-// 端就 reject。保持 unionLTTBIndices 為 unexported 也防止外部繞過。
-func unionLTTBIndices(result *CCIAnalysisResult, threshold int) []int {
-	seen := make(map[int]struct{}, threshold)
-
-	for _, pr := range result.PairResults {
-		idx := chart.LTTBDownsample(result.TimeValues, pr.Values, threshold)
-		for _, i := range idx {
-			seen[i] = struct{}{}
-		}
-	}
-
-	if len(seen) == 0 {
-		return nil
-	}
-
-	indices := make([]int, 0, len(seen))
-	for i := range seen {
-		indices = append(indices, i)
-	}
-
-	sort.Ints(indices)
-
-	return capUnionIndices(indices, cciChartMaxRenderPoints)
-}
-
-// capUnionIndices 在 indices 超出 limit 時用 stride decimation 壓回 limit 上限，
-// 保留首尾索引以維持 zoom 範圍。indices 必須已遞增排序。
-// 參數命名為 limit 避免與內建 cap() 混淆（cross-compare review 補強）。
-//
-// 注意：stride 必須用 ceiling division — `len / limit` 的 floor 結果在
-// `len % limit != 0` 時會給出太小的 stride。例：len=29999, limit=10000 用 floor
-// 算出 stride=2，輸出 ≈ 15k 點仍超過 limit（codex re-review P2）。ceiling
-// `(len + limit - 1) / limit` 保證 `len / stride <= limit`，最後 append 末筆讓
-// 輸出至多 limit+1。
-func capUnionIndices(indices []int, limit int) []int {
-	if limit < 1 || len(indices) <= limit {
-		return indices
-	}
-
-	stride := (len(indices) + limit - 1) / limit
-	if stride < 2 {
-		stride = 2
-	}
-
-	capped := make([]int, 0, limit+1)
-	for i := 0; i < len(indices); i += stride {
-		capped = append(capped, indices[i])
-	}
-
-	// 確保最後一筆保留，否則 zoom 末端會被截掉
-	if last := indices[len(indices)-1]; len(capped) == 0 || capped[len(capped)-1] != last {
-		capped = append(capped, last)
-	}
-
-	return capped
 }
 
 // setCCIGlobalOptions configures all global chart options.
