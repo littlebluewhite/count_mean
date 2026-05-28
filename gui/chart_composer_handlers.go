@@ -412,13 +412,13 @@ func (a *App) GenerateChartComposer(
 			muscleRatioData = mr
 		}
 
-		// PhasePoints (P0/P1/P2/S/C/T0/T/L) 在 manifest 內為**力板時間** domain
-		// 秒值（見 internal/models/phase_sync_models.go PhasePoints 註解）。Chart
-		// Composer 的所有 grid X 軸是 **EMG 時間** domain；若不換算直接 attach,
-		// markLine 會早 / 晚整個 sync offset(`(EMGMotionOffset - 1) / 250` 秒)—
-		// silent visual bug。對齊 synchronizer.TimeSynchronizer.ForceTimeToEMGTime
-		// 公式逐欄換算;Set=false 的 OptFloat 保持 NoOpt 不污染 markLine。
-		emgPhase := convertPhasePointsToEMGTime(row.PhasePoints, params.EMGMotionOffset)
+		// manifest PhasePoints 換算成「phase 名 → EMG 秒數」單一份 map:力板時間欄位
+		// (P0/P1/P2/S/C/T0/T/L)走 ForceTimeToEMGTime,motion-index 欄位(D/O)走
+		// MotionIndexToEMGTime。Chart Composer 的所有 grid X 軸是 **EMG 時間** domain;
+		// 若不換算直接 attach,markLine 會早 / 晚整個 sync offset — silent visual bug。
+		// 這份 map 同時供後端預設 markLine(composerInput.PhaseTimesEMG)與前端 checkbox
+		// /動態 markLine(回傳的 PhaseTimes)使用,兩端共用來源不會分歧。
+		phaseTimes := composerPhaseTimesEMG(row.PhasePoints, params.EMGMotionOffset)
 
 		composerInput := chart.ComposerInput{
 			Subject:          row.Subject,
@@ -426,7 +426,7 @@ func (a *App) GenerateChartComposer(
 			SelectedChannels: params.SelectedChannels,
 			MuscleRatioData:  muscleRatioData,
 			MotionData:       composerMotion,
-			PhasePoints:      emgPhase,
+			PhaseTimesEMG:    phaseTimes,
 			EMGMotionOffset:  params.EMGMotionOffset,
 		}
 
@@ -440,36 +440,6 @@ func (a *App) GenerateChartComposer(
 			return failedChartComposerResult(
 				fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(renderErr)),
 			), nil
-		}
-
-		// 攤平 emgPhase 為 map[string]float64 給前端 — 只送出 Set=true 的 phase。
-		// emgPhase 已是 EMG 時間 domain(convertPhasePointsToEMGTime 換算過),前端
-		// 直接配對 markLine.xAxis 用。motion-index sentinel D/O 在 composer 不轉
-		// 換為 markLine,此處同樣略過(對齊 composerPhaseMarkLineOpts whitelist)。
-		phaseTimes := make(map[string]float64, 8)
-		if v, ok := emgPhase.P0.Get(); ok {
-			phaseTimes["P0"] = v
-		}
-		if v, ok := emgPhase.P1.Get(); ok {
-			phaseTimes["P1"] = v
-		}
-		if v, ok := emgPhase.P2.Get(); ok {
-			phaseTimes["P2"] = v
-		}
-		if v, ok := emgPhase.S.Get(); ok {
-			phaseTimes["S"] = v
-		}
-		if v, ok := emgPhase.C.Get(); ok {
-			phaseTimes["C"] = v
-		}
-		if v, ok := emgPhase.T0.Get(); ok {
-			phaseTimes["T0"] = v
-		}
-		if v, ok := emgPhase.T.Get(); ok {
-			phaseTimes["T"] = v
-		}
-		if v, ok := emgPhase.L.Get(); ok {
-			phaseTimes["L"] = v
 		}
 
 		return &ChartComposerResult{
@@ -752,47 +722,47 @@ func loadComposerMuscleRatio(dataFolder, muscleRatioFile string) (*chart.MuscleR
 	}, nil
 }
 
-// convertPhasePointsToEMGTime 把 PhasePoints 內 8 個 OptFloat 力板時間欄位
-// (P0/P1/P2/S/C/T0/T/L)換算成 EMG-time domain 秒值。
+// composerPhaseTimesEMG 把 manifest PhasePoints 換算成「phase 名 → EMG 秒數」map,
+// 供 Chart Composer 後端預設 markLine 與前端 phaseTimes RPC return 共用同一份來源。
 //
-// 換算公式來自 synchronizer.TimeSynchronizer.ForceTimeToEMGTime:
+// 兩種 domain 各走對應 synchronizer 公式(換算規則是 cross-cutting domain knowledge,
+// 單一來源,故 reuse synchronizer.TimeSynchronizer 而非寫死):
 //
-//	emgTime = forceTime - (emgMotionOffset - 1) / FrequencyMotion
+//   - 力板時間欄位(P0/P1/P2/S/C/T0/T/L,OptFloat 秒值):ForceTimeToEMGTime
+//     emgTime = forceTime - (emgMotionOffset - 1) / FrequencyMotion
+//   - motion-index 欄位(D 下蹲結束 / O 展體,int sentinel):MotionIndexToEMGTime
+//     emgTime = (motionIndex - emgMotionOffset) / FrequencyMotion
 //
-// EMGMotionOffset 在 manifest 內單位是「EMG 起點對應的 motion frame index」
-// (1-based),非秒;FrequencyMotion = 250 Hz(parsers.FrequencyMotion)。
-//
-// Set=false 的 OptFloat 保持 NoOpt,不會出現在 markLine 上 — 換算
-// 「未提供」會把它變成有限值並 inject 一條偽 marker,違反 OptFloat 契約。
-//
-// D / O(motion-index sentinel int 欄位)維持原樣回傳;composer 本來就
-// 不對它們作 markLine,handler 也不負責 motion-index → 秒值的轉換(那是
-// 上游 parser / synchronizer 的職責)。
-//
-// 為何 reuse synchronizer.TimeSynchronizer 而非寫死公式:換算規則是 cross-
-// cutting domain knowledge,單一來源。
-func convertPhasePointsToEMGTime(
-	src models.PhasePoints, emgMotionOffset int,
-) models.PhasePoints {
+// EMGMotionOffset 單位是「EMG 起點對應的 motion frame index」(1-based),非秒;
+// FrequencyMotion = 250 Hz。Set=false 的 OptFloat 與 <=0 的 motion-index sentinel
+// (0 = 未提供)都 skip — 不在 map 內就不會 inject 偽 markLine,前端也不渲染 checkbox。
+func composerPhaseTimesEMG(src models.PhasePoints, emgMotionOffset int) map[string]float64 {
 	ts := synchronizer.NewTimeSynchronizer()
-	conv := func(o models.OptFloat) models.OptFloat {
+	out := make(map[string]float64, 10)
+
+	addOpt := func(name string, o models.OptFloat) {
 		if v, ok := o.Get(); ok {
-			return models.MakeOpt(ts.ForceTimeToEMGTime(v, emgMotionOffset))
+			out[name] = ts.ForceTimeToEMGTime(v, emgMotionOffset)
 		}
-		return models.NoOpt()
 	}
-	return models.PhasePoints{
-		P0: conv(src.P0),
-		P1: conv(src.P1),
-		P2: conv(src.P2),
-		S:  conv(src.S),
-		C:  conv(src.C),
-		D:  src.D, // motion-index 不換算
-		T0: conv(src.T0),
-		T:  conv(src.T),
-		O:  src.O, // motion-index 不換算
-		L:  conv(src.L),
+	addOpt("P0", src.P0)
+	addOpt("P1", src.P1)
+	addOpt("P2", src.P2)
+	addOpt("S", src.S)
+	addOpt("C", src.C)
+	addOpt("T0", src.T0)
+	addOpt("T", src.T)
+	addOpt("L", src.L)
+
+	addIdx := func(name string, idx int) {
+		if idx > 0 {
+			out[name] = ts.MotionIndexToEMGTime(idx, emgMotionOffset)
+		}
 	}
+	addIdx("D", src.D)
+	addIdx("O", src.O)
+
+	return out
 }
 
 // parseFloatCell parses a CSV cell as float64. Empty / unparseable cells become

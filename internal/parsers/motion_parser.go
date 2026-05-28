@@ -127,13 +127,23 @@ func (p *MotionParser) extractHeaderRows(records [][]string) (categoryRow, subca
 //
 //nolint:revive // unused-receiver: keep consistent API
 func (p *MotionParser) initializeMotionData(headers []string, capacity int) *models.MotionData {
+	// headers[0] 是 Index 欄一律排除;其餘可能含位置佔位用的 "" 空欄
+	//(見 buildUniqueHeaders)— 過濾掉,只有具名欄成為 series。
+	dataHeaders := make([]string, 0, len(headers))
+	for _, h := range headers[1:] {
+		if h == "" {
+			continue
+		}
+		dataHeaders = append(dataHeaders, h)
+	}
+
 	motionData := &models.MotionData{
 		Indices: make([]int, 0, capacity),
 		Data:    make(map[string][]float64),
-		Headers: headers[1:],
+		Headers: dataHeaders,
 	}
 
-	for _, header := range motionData.Headers {
+	for _, header := range dataHeaders {
 		motionData.Data[header] = make([]float64, 0, capacity)
 	}
 
@@ -185,6 +195,10 @@ func (p *MotionParser) parseDataRecord(
 	motionData.Indices = append(motionData.Indices, indexValue)
 
 	for j := 1; j < len(headers) && j < len(record); j++ {
+		if headers[j] == "" {
+			// 佔位空欄(spacer):位置仍前進以維持 record[j] 對齊,但不收進任何 series。
+			continue
+		}
 		value, _ := ParseFloatCell(record[j])
 		motionData.Data[headers[j]] = append(motionData.Data[headers[j]], value)
 	}
@@ -305,25 +319,47 @@ func ensureUniqueName(name string, usedNames map[string]int) string {
 // buildUniqueHeaders 構建唯一的標題列表.
 // 優先使用 categoryRow，如果為空則使用 subcatRow，最後加上索引確保唯一性.
 //
+// 欄位數的真相來源不是單一列:真實 Motion CSV 的 header(Series)列可能稀疏 ——
+// 例如 NSF11_BTS_5_ok_OK_20Hz.csv 的 `Index,Series,,,Series` 只在有 marker 的欄
+// 填字,真正每一欄的名字落在 category / subcat 列。因此取三列最寬者逐「欄位位置」
+// 解析,確保 category/subcat 有名的欄不被漏掉。
+//
+// **位置對齊不可破壞**:parseDataRecord 按 record[j] 位置餵值,headers[j] 必須對應
+// CSV 第 j 欄。若某欄三列皆空(中間的 spacer 欄),不可 compact 抽掉 —— 否則後面的
+// 具名欄會位移、配到 spacer 欄的值 → 靜默資料錯位。改以 "" 佔位保留位置,由
+// initializeMotionData / parseDataRecord 跳過不產生 series。回傳的 headers 因此與
+// CSV 欄位位置 1:1 對齊(尾端純佔位欄除外,見下方 trim)。
+//
 //nolint:revive // unused-receiver: keep consistent API
 func (p *MotionParser) buildUniqueHeaders(headerRow, categoryRow, subcatRow []string) []string {
-	headers := make([]string, 0, len(headerRow))
+	width := max(len(headerRow), len(categoryRow), len(subcatRow))
+
+	headers := make([]string, 0, width)
 	usedNames := make(map[string]int)
 
-	for i, h := range headerRow {
-		trimmed := strings.TrimSpace(h)
-		if trimmed == "" {
-			continue
-		}
-
+	for i := range width {
 		if i == 0 {
-			headers = append(headers, trimmed)
+			// 第 0 欄為 Index 欄,名稱取自 header 列(category/subcat 此欄通常為空);
+			// 此 slot 之後會被 initializeMotionData 的 headers[1:] 剝掉,僅作位置佔位。
+			headers = append(headers, getNameFromRow(headerRow, 0))
 			continue
 		}
 
-		uniqueName := resolveColumnName(i, trimmed, categoryRow, subcatRow)
-		uniqueName = ensureUniqueName(uniqueName, usedNames)
-		headers = append(headers, uniqueName)
+		uniqueName := resolveColumnName(i, getNameFromRow(headerRow, i), categoryRow, subcatRow)
+		if uniqueName == "" {
+			// 三列在此欄皆空 → 真正的空欄。append "" 佔位保留位置對齊(見上方 doc)。
+			headers = append(headers, "")
+			continue
+		}
+
+		headers = append(headers, ensureUniqueName(uniqueName, usedNames))
+	}
+
+	// 移除 trailing 佔位欄:它們後面沒有具名欄,不需保留位置。留著會撐大 len(headers),
+	// 害 parseDataRecord 的 `len(record) < len(headers)` 保護把正常 ragged data row
+	// (Excel 末欄省略 comma)誤判為「欄位數不足」而整列跳過。中間的佔位欄必須留。
+	for len(headers) > 0 && headers[len(headers)-1] == "" {
+		headers = headers[:len(headers)-1]
 	}
 
 	return headers

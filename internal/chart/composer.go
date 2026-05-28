@@ -57,13 +57,18 @@ type MuscleRatioData struct {
 // EMGMotionOffset 為 motion-time 對 EMG-time 的位移(以 motion frame 計);
 // 目前 composer 不對 motion-time 做位移轉換(motion data 已是時間序列),保留欄位
 // 為 caller 上層(Wails handler)在準備 MotionData 時換算之用。
+//
+// PhaseTimesEMG 是 phase 名 → EMG 秒數 map,已由 caller 統一換算成 EMG 時間 domain
+// (力板時間欄位走 ForceTimeToEMGTime;motion-index 欄位 D/O 走 MotionIndexToEMGTime)。
+// chart 套件不持有 conversion 知識,只把秒值 anchor 成 markLine —— 與 handler 回給
+// 前端的 phaseTimes 為同一份 map,確保前端 checkbox 與後端 markLine 不分歧。
 type ComposerInput struct {
 	Subject          string
 	EMGDataset       *models.EMGDataset
 	SelectedChannels []string
 	MuscleRatioData  *MuscleRatioData // nil → 2-grid (EMG + motion)
 	MotionData       *MotionData
-	PhasePoints      models.PhasePoints
+	PhaseTimesEMG    map[string]float64
 	EMGMotionOffset  int
 }
 
@@ -74,7 +79,7 @@ type ComposerInput struct {
 //   - MuscleRatioData == nil → 2 grid;非 nil → 3 grid
 //   - EMG / muscle_ratio dataset > 5000 點時跑 LTTB(threshold 5000)
 //   - motion 不 downsample(對齊 ADR-0002)
-//   - PhasePoints 翻成秒值後 attach 為 dashed grey markLine(沿用 CCI 樣式)
+//   - PhaseTimesEMG(已是 EMG 秒值)attach 為 dashed grey markLine(沿用 CCI 樣式)
 //   - dataZoom slider + inside 聯動全部 grid
 //   - tooltip 走 ECharts native axisPointer 跨 grid
 //
@@ -223,7 +228,7 @@ func buildComposerLine(ctx context.Context, in ComposerInput) (*charts.Line, err
 	}
 
 	// Series:依序加 EMG(grid 0)、muscle_ratio(grid 1, if any)、motion(最後一個 grid)
-	if err := addComposerSeries(ctx, line, n, emgTime, emgSeries, muscleTime, muscleSeries, in.MotionData, in.PhasePoints, hasMuscle); err != nil {
+	if err := addComposerSeries(ctx, line, n, emgTime, emgSeries, muscleTime, muscleSeries, in.MotionData, in.PhaseTimesEMG, hasMuscle); err != nil {
 		return nil, err
 	}
 
@@ -614,7 +619,7 @@ func addComposerSeries(
 	muscleTime []float64,
 	muscleSeries map[string][]float64,
 	motion *MotionData,
-	phase models.PhasePoints,
+	phaseTimes map[string]float64,
 	hasMuscle bool,
 ) error {
 	if err := ctx.Err(); err != nil {
@@ -632,7 +637,7 @@ func addComposerSeries(
 	// 不可改用 line.AddSeries(...).SetSeriesOptions(opts...) — 後者會把 opts 套用到
 	// **MultiSeries 內所有 series**(go-echarts 官方 charts/series.go:722-735 註解明示)
 	// 違反此 contract → 全部 series 的 XAxisIndex/YAxisIndex 會被最後一個 series 覆寫。
-	markLineOpts := composerPhaseMarkLineOpts(phase)
+	markLineOpts := composerPhaseMarkLineOpts(phaseTimes)
 
 	// EMG series → grid 0
 	emgNames := sortedKeys(emgSeries)
@@ -749,33 +754,33 @@ func buildComposerLineData(ctx context.Context, time []float64, vals []float64) 
 	return out, nil
 }
 
-// composerPhaseMarkLineOpts 把 PhasePoints 已 Set 的 OptFloat 轉成 markLine XAxis items。
-// motion-index 欄位(D/O)目前不轉換(屬於 motion-domain;chart composer 不負責 conversion);
-// 由 caller 上層在準備 input 時透過 EMGMotionOffset 換算成秒。
+// composerPhaseOrder 是 markLine 的 canonical phase 順序,對齊 frontend
+// manifestPanel.mjs 的 phaseOrder whitelist。含 motion-index 衍生的 D(下蹲結束)、
+// O(展體):caller 已用 MotionIndexToEMGTime 換算成 EMG 秒數放進 map。
+var composerPhaseOrder = []string{"P0", "P1", "P2", "S", "C", "D", "T0", "T", "O", "L"}
+
+// composerPhaseMarkLineOpts 把 phase 名 → EMG 秒數 map 轉成 markLine XAxis items。
+//
+// 輸入 phaseTimes 已是 EMG 時間 domain 秒值,由 caller(Wails handler)統一換算:
+// 力板時間欄位(P0/P1/P2/S/C/T0/T/L)走 ForceTimeToEMGTime,motion-index 欄位
+// (D/O)走 MotionIndexToEMGTime。chart 套件不持有 conversion 知識(對齊 ComposerInput
+// doc),只負責把秒值 anchor 成 markLine —— 前端 checkbox(phaseTimes RPC return)與
+// 後端預設 markLine 因此共用同一份 seconds 來源,不會分歧。
+//
+// 依 composerPhaseOrder 挑出 map 內存在的 phase,不存在的 key skip。
 //
 // 對齊 CCI markLine 風格:dashed grey、symbol none。
-func composerPhaseMarkLineOpts(phase models.PhasePoints) []charts.SeriesOpts {
-	// 收集 (name, sec) pairs;Set=false 的 OptFloat skip
+func composerPhaseMarkLineOpts(phaseTimes map[string]float64) []charts.SeriesOpts {
 	type pt struct {
 		name string
 		sec  float64
 	}
-	pairs := make([]pt, 0, 10)
-	add := func(name string, opt models.OptFloat) {
-		if v, ok := opt.Get(); ok {
-			pairs = append(pairs, pt{name: name, sec: v})
+	pairs := make([]pt, 0, len(composerPhaseOrder))
+	for _, name := range composerPhaseOrder {
+		if sec, ok := phaseTimes[name]; ok {
+			pairs = append(pairs, pt{name: name, sec: sec})
 		}
 	}
-	add("P0", phase.P0)
-	add("P1", phase.P1)
-	add("P2", phase.P2)
-	add("S", phase.S)
-	add("C", phase.C)
-	add("T0", phase.T0)
-	add("T", phase.T)
-	add("L", phase.L)
-	// D / O 是 motion-index sentinel,不在 chart composer 處理;caller 換算後可
-	// 透過 PhasePoints 別的 OptFloat 欄位(若未來引入)或自行 inject。
 
 	if len(pairs) == 0 {
 		return nil
