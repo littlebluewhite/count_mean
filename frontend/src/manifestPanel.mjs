@@ -48,6 +48,8 @@
 // 既有 onLocaleChange `panelDispatch[currentPanel]()` re-render pattern 天然
 // work — 只重設 functionPanel.innerHTML、不動 app instance state。
 
+import { SelectFile, SelectDirectory } from '../wailsjs/go/gui/App.js';
+
 /**
  * ManifestPanel — 5 個 manifest+dataFolder panel 共用的 envelope。
  *
@@ -90,6 +92,20 @@ export class ManifestPanel {
      * @param {boolean} [spec.hideSubject=false] - true 時 shell 省略 subject `<select>`
      *   區塊。MuscleRatio 只吃 manifest + dataFolder(無 subject,ADR-0007 §2 入口
      *   定義),設此旗標;其他 4 panel 省略走 default(顯示 subject select)。
+     * @param {(manifestPath: string, dataFolder: string) => Promise<{subjects: string[], valueMode: ('index'|'name')}>} [spec.loadSubjects]
+     *   - Optional。manifest 選好後 selectMpManifest 呼此 fn 取 subject 列表並填
+     *   `#mpSubject`。**Subject 兩形態(ADR-0007 §4)**:valueMode='index' 時
+     *   option.value 寫 0-based 索引(CCI/PhaseSync/Normalized — subjectIdx);
+     *   valueMode='name' 時 option.value 寫 subject string(Composer — subjectName,
+     *   ADR-0002 canonical-key)。MuscleRatio 省略(hideSubject,無 subject load)。
+     * @param {(mp: ManifestPanel) => void} [spec.afterRender] - Optional。run() 把
+     *   shell + formBody render 完、showPanel 之後呼叫。PhaseSync/Normalized 用來
+     *   load phase 下拉(GetAvailablePhases,manifest-independent)+ (Normalized)
+     *   綁 mirror。CCI/Composer/MuscleRatio 省略。
+     * @param {(mp: ManifestPanel) => void} [spec.onSubjectChange] - Optional。
+     *   `#mpSubject` change 時呼叫(經 onMpSubjectChange delegator)。Composer 用來
+     *   reset state(_composerEMGMotionOffset / _composerLoadedSubject)+ 清 chart。
+     *   其他 panel 省略(subject change 無特殊行為)。
      */
     run(spec) {
         this._currentSpec = spec;
@@ -106,6 +122,15 @@ export class ManifestPanel {
         }
 
         this._app.showPanel();
+
+        // afterRender hook(ADR §reversibility:reversible spec 欄位增補)。
+        // shell + formBody 已 render 進 DOM、panel 已顯示後才呼叫,讓 hook 能安全
+        // 找到 formBody 內的 element(PhaseSync/Normalized 的 phase 下拉)。
+        // onLocaleChange re-run panelDispatch[currentPanel]() 會重新走 run() →
+        // afterRender 自然 re-fire,phase 下拉跟著 re-populate(對齊既有
+        // showPhaseSyncPanel:1045 / showNormalizedPhaseSyncPanel:2189 在 panel
+        // render 尾端呼 loadAvailablePhases / loadNormalizedPhaseSyncPhases 的時機)。
+        spec.afterRender?.(this);
     }
 
     /**
@@ -421,6 +446,116 @@ export class ManifestPanel {
      */
     openOutputFolder() {
         return this._app.openOutputFolder();
+    }
+
+    // ==================== shared input pickers(M5 wiring)====================
+    //
+    // shell 的 onclick="app.selectMpManifest()" / "app.selectMpDataFolder()" /
+    // onchange="app.onMpSubjectChange()" 由 EMGAnalysisApp 上的 thin delegator
+    // forward 到此(維持 `app.xxx()` convention)。3 method 收乾既有 5 panel 各自
+    // 重寫的 selectXxxManifest / selectXxxDataFolder + Composer onComposerSubjectChange。
+
+    /**
+     * 選 manifest 檔 → 寫 `#mpManifestPath` → 若 spec.loadSubjects 且非 hideSubject,
+     * load subject 列表填 `#mpSubject`(subject 兩形態 idx/name 由 valueMode 決定,
+     * ADR-0007 §4)。對齊既有 selectCCIManifest(main.js:1279)+ selectComposerManifest
+     *(:1694)pattern,但 subject load 改走 spec 注入的 loadSubjects。
+     *
+     * SelectFile 失敗 / load 失敗 → ShowError(對齊既有 catch 行為)。user cancel
+     *(file 為 falsy)→ no-op 不動 input。
+     */
+    async selectMpManifest() {
+        const spec = this._currentSpec;
+        try {
+            const filters = [{ displayName: 'CSV Files (*.csv)', pattern: '*.csv' }];
+            // SelectFile title 沿用既有 hardcoded 字串(OS-native dialog title,非
+            // panel HTML — 不進 CJK-leak 測試面;對齊 selectCCIManifest:1285)。
+            const file = await SelectFile('選擇分期總檔案', filters, 'open');
+            if (!file) return; // user cancel
+            const input = document.getElementById('mpManifestPath');
+            if (input) input.value = file;
+
+            // hideSubject(MuscleRatio)無 subject select,不 load。其他 panel 若
+            // spec 帶 loadSubjects 則 load。
+            if (spec?.loadSubjects && !spec.hideSubject) {
+                await this._loadMpSubjects();
+            }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error('選擇分期總檔案失敗:', err);
+            await globalThis.ShowError(globalThis.t('dialog.error'), String(err));
+        }
+    }
+
+    /**
+     * 選資料夾 → 寫 `#mpDataFolder`。Composer 的 loadSubjects 需要 dataFolder
+     *(LoadChartComposerSubjects 帶 dataFolder),故寫完 dataFolder 後,若
+     * spec.loadSubjects 且 manifest 已選,re-load subjects(對齊既有
+     * selectComposerDataFolder:1710「dataFolder 改了且 manifest 在 → reload
+     * subjects」behaviour)。index-mode 的 3 panel loadSubjects 不讀 dataFolder,
+     * re-load 結果等價(冪等),統一走同一條路不分流。
+     */
+    async selectMpDataFolder() {
+        const spec = this._currentSpec;
+        try {
+            const folder = await SelectDirectory('選擇數據資料夾');
+            if (!folder) return; // user cancel
+            const input = document.getElementById('mpDataFolder');
+            if (input) input.value = folder;
+
+            const manifest = document.getElementById('mpManifestPath')?.value || '';
+            if (spec?.loadSubjects && !spec.hideSubject && manifest) {
+                await this._loadMpSubjects();
+            }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error('選擇資料夾失敗:', err);
+            await globalThis.ShowError(globalThis.t('dialog.error'), String(err));
+        }
+    }
+
+    /**
+     * `#mpSubject` change delegator → spec.onSubjectChange?.(this)。Composer 用來
+     * reset state + 清 chart(app.onComposerSubjectChange);其他 panel 省略 → no-op。
+     */
+    onMpSubjectChange() {
+        this._currentSpec?.onSubjectChange?.(this);
+    }
+
+    /**
+     * 內部 helper:呼 spec.loadSubjects(manifestPath, dataFolder) 取 subject 列表 +
+     * valueMode,填 `#mpSubject` option 並 enable。**Subject 兩形態(ADR-0007 §4)**:
+     *   - valueMode='index':option.value = 0-based 索引(CCI/PhaseSync/Normalized),
+     *     _gatherCtx 的 parseInt(value) → subjectIdx valid。
+     *   - valueMode='name':option.value = subject string(Composer,ADR-0002
+     *     canonical-key),_gatherCtx 的 subjectName 走 select.value / option text。
+     *
+     * loadSubjects throw(例如 Composer LoadChartComposerSubjects success=false)→
+     * 往外冒給 caller(selectMpManifest / selectMpDataFolder)的 catch 統一 ShowError。
+     */
+    async _loadMpSubjects() {
+        const manifestPath = document.getElementById('mpManifestPath')?.value || '';
+        const dataFolder = document.getElementById('mpDataFolder')?.value || '';
+        const { subjects, valueMode } = await this._currentSpec.loadSubjects(manifestPath, dataFolder);
+
+        const select = document.getElementById('mpSubject');
+        if (!select) return;
+        select.innerHTML = '';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = globalThis.tHtml('form.option.select_subject');
+        select.appendChild(placeholder);
+
+        (subjects || []).forEach((subject, index) => {
+            const opt = document.createElement('option');
+            // index-mode 寫 0-based 索引;name-mode 寫 subject 字串。subject text 一律
+            // 顯示 subject 名(textContent 防 XSS — subject 來自 manifest CSV)。
+            opt.value = valueMode === 'name' ? subject : String(index);
+            opt.textContent = subject;
+            select.appendChild(opt);
+        });
+        select.disabled = false;
+        this._app.updateStatus(globalThis.t('status.subjects_loaded', (subjects || []).length));
     }
 
     /**

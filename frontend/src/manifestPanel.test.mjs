@@ -519,6 +519,266 @@ test('10. bindPhaseCheckboxes 未傳 onUpdate:change 觸發不應 throw(向後�
     }
 });
 
+// ---------- M5 wiring:selectMpManifest / selectMpDataFolder / onMpSubjectChange ----------
+//
+// Subject load 兩形態(ADR-0007 §4):index-mode(CCI/PhaseSync/Normalized,
+// option.value=0-based 索引)vs name-mode(Composer,option.value=subject 字串)。
+// 這幾個 test 釘 ManifestPanel 的 subject-load helper 行為,不真正觸發 wails RPC
+// (stub window.go.gui.App.{SelectFile,SelectDirectory})。
+
+// stub wails bindings(SelectFile / SelectDirectory)— manifestPanel.mjs 直接 import,
+// 呼叫時走 window['go']['gui']['App'][name]。回傳值由各 test 控制。
+function stubWails(window, { file = '/tmp/picked.csv', folder = '/tmp/picked-dir' } = {}) {
+    window.go = window.go || {};
+    window.go.gui = window.go.gui || {};
+    window.go.gui.App = window.go.gui.App || {};
+    window.go.gui.App.SelectFile = async () => file;
+    window.go.gui.App.SelectDirectory = async () => folder;
+}
+
+test('11. selectMpManifest:index-mode loadSubjects 填 #mpSubject(option.value=索引)', async () => {
+    const { window, mp } = await setup();
+    try {
+        stubWails(window, { file: '/tmp/manifest.csv' });
+
+        let loadArgs = null;
+        const spec = minimalSpec({
+            loadSubjects: async (manifestPath, dataFolder) => {
+                loadArgs = { manifestPath, dataFolder };
+                return { subjects: ['SubjA', 'SubjB', 'SubjC'], valueMode: 'index' };
+            },
+        });
+        mp.run(spec);
+
+        await mp.selectMpManifest();
+
+        // manifest 寫入 input
+        assert.equal(window.document.getElementById('mpManifestPath').value, '/tmp/manifest.csv');
+        // loadSubjects 被呼叫,manifestPath forward 正確
+        assert.equal(loadArgs.manifestPath, '/tmp/manifest.csv', 'loadSubjects 收到 manifestPath');
+
+        // #mpSubject 填了 placeholder + 3 個 subject,index-mode option.value 為索引
+        const select = window.document.getElementById('mpSubject');
+        assert.equal(select.disabled, false, 'subject select 應 enable');
+        const opts = Array.from(select.options);
+        assert.equal(opts.length, 4, 'placeholder + 3 subject = 4 option');
+        assert.equal(opts[1].value, '0', 'index-mode:第一個 subject option.value=0');
+        assert.equal(opts[1].textContent, 'SubjA', 'option text 顯示 subject 名');
+        assert.equal(opts[3].value, '2', 'index-mode:第三個 subject option.value=2');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('12. selectMpManifest:name-mode loadSubjects 填 #mpSubject(option.value=subject 字串)', async () => {
+    const { window, mp } = await setup();
+    try {
+        stubWails(window, { file: '/tmp/composer-manifest.csv' });
+
+        const spec = minimalSpec({
+            loadSubjects: async () => ({ subjects: ['Alice', 'Bob'], valueMode: 'name' }),
+        });
+        mp.run(spec);
+
+        await mp.selectMpManifest();
+
+        const select = window.document.getElementById('mpSubject');
+        const opts = Array.from(select.options);
+        assert.equal(opts.length, 3, 'placeholder + 2 subject');
+        // name-mode:option.value 為 subject 字串(ADR-0002 canonical-key),非索引
+        assert.equal(opts[1].value, 'Alice', 'name-mode:option.value=subject 字串');
+        assert.equal(opts[2].value, 'Bob', 'name-mode:option.value=subject 字串');
+        assert.equal(opts[1].textContent, 'Alice');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('13. selectMpManifest:hideSubject=true 時不呼 loadSubjects(MuscleRatio)', async () => {
+    const { window, mp } = await setup();
+    try {
+        stubWails(window, { file: '/tmp/m.csv' });
+
+        let loadCalled = false;
+        const spec = minimalSpec({
+            hideSubject: true,
+            loadSubjects: async () => { loadCalled = true; return { subjects: [], valueMode: 'index' }; },
+        });
+        mp.run(spec);
+
+        await mp.selectMpManifest();
+
+        // manifest 仍寫入,但 loadSubjects 不該被呼(hideSubject → 無 subject select)
+        assert.equal(window.document.getElementById('mpManifestPath').value, '/tmp/m.csv');
+        assert.equal(loadCalled, false, 'hideSubject=true 時不應 load subjects');
+        // hideSubject → shell 無 #mpSubject
+        assert.equal(window.document.getElementById('mpSubject'), null, 'hideSubject 時無 subject select');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('14. selectMpManifest:user cancel(SelectFile 回 falsy)→ 不動 input、不 load', async () => {
+    const { window, mp } = await setup();
+    try {
+        stubWails(window, { file: '' }); // cancel
+
+        let loadCalled = false;
+        const spec = minimalSpec({
+            loadSubjects: async () => { loadCalled = true; return { subjects: [], valueMode: 'index' }; },
+        });
+        mp.run(spec);
+        // 預填一個既有值,cancel 後不應被覆蓋
+        window.document.getElementById('mpManifestPath').value = '/existing.csv';
+
+        await mp.selectMpManifest();
+
+        assert.equal(window.document.getElementById('mpManifestPath').value, '/existing.csv', 'cancel 不動既有值');
+        assert.equal(loadCalled, false, 'cancel 後不 load subjects');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('15. selectMpManifest:loadSubjects throw → ShowError(冒泡到 catch)', async () => {
+    const { window, mp, calls } = await setup();
+    try {
+        stubWails(window, { file: '/tmp/m.csv' });
+
+        const spec = minimalSpec({
+            loadSubjects: async () => { throw new Error('後端載入失敗'); },
+        });
+        mp.run(spec);
+
+        // 暫 swallow console.error noise
+        const origError = console.error;
+        console.error = () => {};
+        try {
+            await mp.selectMpManifest();
+        } finally {
+            console.error = origError;
+        }
+
+        assert.equal(calls.showError.length, 1, 'loadSubjects throw 應觸發 ShowError 一次');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('16. selectMpDataFolder:寫 #mpDataFolder + 若 manifest 已選則 re-load subjects(Composer)', async () => {
+    const { window, mp } = await setup();
+    try {
+        stubWails(window, { folder: '/tmp/data-dir' });
+
+        let loadArgs = null;
+        const spec = minimalSpec({
+            loadSubjects: async (manifestPath, dataFolder) => {
+                loadArgs = { manifestPath, dataFolder };
+                return { subjects: ['X'], valueMode: 'name' };
+            },
+        });
+        mp.run(spec);
+        // 先有 manifest(模擬 user 已選 manifest 再選 dataFolder)
+        window.document.getElementById('mpManifestPath').value = '/tmp/manifest.csv';
+
+        await mp.selectMpDataFolder();
+
+        assert.equal(window.document.getElementById('mpDataFolder').value, '/tmp/data-dir');
+        // manifest 已在 → 應 re-load subjects 且 dataFolder forward 正確(Composer 需要)
+        assert.ok(loadArgs, 'manifest 已選 → selectMpDataFolder 應 re-load subjects');
+        assert.equal(loadArgs.dataFolder, '/tmp/data-dir', 'loadSubjects 收到 dataFolder');
+        assert.equal(loadArgs.manifestPath, '/tmp/manifest.csv', 'loadSubjects 收到 manifestPath');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('17. selectMpDataFolder:manifest 未選時不 re-load subjects', async () => {
+    const { window, mp } = await setup();
+    try {
+        stubWails(window, { folder: '/tmp/data-dir' });
+
+        let loadCalled = false;
+        const spec = minimalSpec({
+            loadSubjects: async () => { loadCalled = true; return { subjects: [], valueMode: 'index' }; },
+        });
+        mp.run(spec);
+        // manifest 留空
+
+        await mp.selectMpDataFolder();
+
+        assert.equal(window.document.getElementById('mpDataFolder').value, '/tmp/data-dir');
+        assert.equal(loadCalled, false, 'manifest 未選 → 不 load subjects');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('18. afterRender:run() render + showPanel 後呼叫一次,收到 mp', async () => {
+    const { window, mp } = await setup();
+    try {
+        let afterRenderArg = 'NOT_CALLED';
+        let formBodyExistedAtAfterRender = false;
+        const spec = minimalSpec({
+            formBody: (t) => `<div id="afterRenderProbe">${t('x')}</div>`,
+            afterRender: (mpInst) => {
+                afterRenderArg = mpInst;
+                // afterRender 必須在 formBody 已 render 進 DOM 後才跑(PhaseSync 需要
+                // 找到 phase 下拉)。
+                formBodyExistedAtAfterRender = !!window.document.getElementById('afterRenderProbe');
+            },
+        });
+
+        mp.run(spec);
+
+        assert.equal(afterRenderArg, mp, 'afterRender 收到 ManifestPanel 實例');
+        assert.equal(formBodyExistedAtAfterRender, true, 'afterRender 時 formBody 已在 DOM');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('19. afterRender 省略:run() 不 throw(向後相容)', async () => {
+    const { window, mp } = await setup();
+    try {
+        // 不傳 afterRender
+        assert.doesNotThrow(() => {
+            mp.run(minimalSpec());
+        }, 'afterRender=undefined 時 run() 不應 throw');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('20. onMpSubjectChange:forward 到 spec.onSubjectChange(收到 mp)', async () => {
+    const { window, mp } = await setup();
+    try {
+        let changeArg = 'NOT_CALLED';
+        const spec = minimalSpec({
+            onSubjectChange: (mpInst) => { changeArg = mpInst; },
+        });
+        mp.run(spec);
+
+        mp.onMpSubjectChange();
+
+        assert.equal(changeArg, mp, 'onSubjectChange 收到 ManifestPanel 實例');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('21. onMpSubjectChange:spec.onSubjectChange 省略 → no-op 不 throw', async () => {
+    const { window, mp } = await setup();
+    try {
+        mp.run(minimalSpec()); // 無 onSubjectChange
+        assert.doesNotThrow(() => {
+            mp.onMpSubjectChange();
+        }, 'onSubjectChange=undefined 時 onMpSubjectChange() 不應 throw');
+    } finally {
+        await teardown(window);
+    }
+});
+
 // ---------- panel shell hardcoded 中文回歸測試 ----------
 
 test('panel shell 內 user-visible text 均來自 translator(無 hardcoded 繁中)', async () => {
