@@ -13,7 +13,7 @@ import (
 )
 
 // normalizedPhaseSyncPrecision 為 Output 1 (標準化 EMG CSV) 的小數位數，
-// 與分期同步分析統計輸出 (defaultEMGStatsPrecision = 6) 保持一致。
+// 與分期同步分析統計輸出的小數位數 (固定 6) 保持一致。
 const normalizedPhaseSyncPrecision = 6
 
 // NormalizedPhaseSyncParams 標準化分期同步分析參數。
@@ -183,7 +183,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("擷取統計區間失敗: %s", redact.RedactForMessage(rangeErr))), nil
 		}
 
-		statsCalc := calculator.NewEMGStatisticsCalculator(normalizedPhaseSyncPrecision)
+		statsCalc := calculator.NewEMGStatisticsCalculator()
 
 		stats, statsErr := statsCalc.CalculateStatistics(
 			rangeResult.Data,

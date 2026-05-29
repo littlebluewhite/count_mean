@@ -542,8 +542,8 @@ func TestWritePhaseSyncResult_SubDir(t *testing.T) {
 // PhaseSync 的 8-row layout 跟自動 filename 由 CSVHandler 持有,
 // caller 只給 stats 跟 WriteRequest (SubDir 可選); 回傳 outputPath。
 //
-// Row layout (與 calculator.EMGStatisticsCalculator.ExportToCSV 對齊,
-// 確保 migrate 後輸出檔對等):
+// Row layout (8-row PhaseSync layout:
+// header + 開始分期點/時間 + 結束分期點/時間 + 時間差值 + 平均值 + 最大值):
 //
 //	row 0: header (空格 + channel names)
 //	row 1: 開始分期點

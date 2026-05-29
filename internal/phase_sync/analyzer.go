@@ -20,9 +20,6 @@ import (
 	"count_mean/internal/synchronizer"
 )
 
-// Default precision for EMG statistics.
-const defaultEMGStatsPrecision = 6
-
 // Validation errors.
 var (
 	// ErrInvalidSubjectIndex indicates an invalid subject index.
@@ -58,7 +55,7 @@ func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 		motionParser:    parsers.NewMotionParser(),
 		ancParser:       parsers.NewANCParser(),
 		phaseCalculator: synchronizer.NewPhaseCalculator(),
-		statsCalculator: calculator.NewEMGStatisticsCalculator(defaultEMGStatsPrecision),
+		statsCalculator: calculator.NewEMGStatisticsCalculator(),
 	}
 }
 
