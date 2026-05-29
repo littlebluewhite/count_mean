@@ -45,8 +45,12 @@ import (
 //
 //nolint:gochecknoglobals // immutable regex shared across redact callers
 var pathRedactPattern = regexp.MustCompile(
-	// POSIX 絕對路徑 — 已知 system / mount root prefix + 後續 path 元素到下一 separator
-	`(?:/(?:Users|home|var|tmp|opt|private|System|Library|Volumes|mnt|media|srv|data|root)/[^\s:"']*?/)+` +
+	// POSIX 絕對路徑 — 已知 system / mount root prefix,後接 0+ 路徑元素(每個元素可含
+	// 單一空白分隔的字 → 涵蓋 macOS `/Volumes/pCloud Drive/`);trailing `/` 為元素邊界,
+	// 最後一段 basename(及其後散文)保留。`(?:seg/)*` 的 `*` 允許 0 段 → 涵蓋 root-level
+	// 檔(`/tmp/x.csv` 的 `/tmp/`)。元素內仍排除 `\s/:"'`,避免吃掉相鄰路徑、quoted
+	// 字串或跨越 `recover.go:42` 的行號。
+	`/(?:Users|home|var|tmp|opt|private|System|Library|Volumes|mnt|media|srv|data|root)/(?:[^\s/:"']+(?: [^\s/:"']+)*/)*` +
 		// Windows drive-letter 路徑(`C:\...` 或 `C:/...`)— case-insensitive
 		`|(?i:[A-Z]:[\\/](?:[^\s:"'\\/]+[\\/])+)` +
 		// UNC 路徑(`\\server\share\...`)— 至少要 host + share + trailing separator

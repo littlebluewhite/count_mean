@@ -162,6 +162,69 @@ func TestPaths_HandlesSystemPathVariants(t *testing.T) {
 	}
 }
 
+// TestPaths_RedactsSpaceAndRootLevelPaths 釘住 PHI redact 兩個漏洞(whole-project
+// review P1):
+//
+//  1. 含空白元件的路徑(macOS /Volumes/pCloud Drive/...)先前因 char class 排除
+//     whitespace,整段路徑(含 patient 資料夾名)漏進 webview。
+//  2. root-level 檔(/tmp/patient_123.csv,無子目錄)先前因 regex 要求至少一層
+//     trailing `/` 而完全不匹配,目錄前綴漏出。
+//
+// 兩者夾在訊息中段(非行首)時 line-fallback 也救不到。修法須在不破壞「多路徑
+// 不互相 over-match、basename 與散文保留」前提下補匹配。
+func TestPaths_RedactsSpaceAndRootLevelPaths(t *testing.T) {
+	cases := []struct {
+		name         string
+		input        string
+		mustNotLeak  []string
+		mustPreserve []string
+	}{
+		{
+			name:  "volumes_path_with_space_component",
+			input: "open /Volumes/pCloud Drive/patient_jane/ch1.csv: permission denied",
+			mustNotLeak: []string{
+				"/Volumes/pCloud Drive",
+				"patient_jane",
+			},
+			mustPreserve: []string{"<redacted-path>", "ch1.csv", "permission denied"},
+		},
+		{
+			name:  "root_level_file_mid_string",
+			input: "failed to open /tmp/patient_123.csv here",
+			mustNotLeak: []string{
+				"/tmp/patient_123.csv",
+				"/tmp/",
+			},
+			mustPreserve: []string{"<redacted-path>", "patient_123.csv", "failed to open", "here"},
+		},
+		{
+			name:  "two_paths_no_overmatch",
+			input: "copied /Users/a/My Docs/x.csv and /tmp/y.csv done",
+			mustNotLeak: []string{
+				"/Users/a/My Docs",
+				"/tmp/y",
+			},
+			mustPreserve: []string{"x.csv", "y.csv", " and ", "done"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Paths(tc.input)
+			for _, leak := range tc.mustNotLeak {
+				if strings.Contains(got, leak) {
+					t.Errorf("redact 失敗,leaky fragment %q 仍在 output:\n%s", leak, got)
+				}
+			}
+			for _, want := range tc.mustPreserve {
+				if !strings.Contains(got, want) {
+					t.Errorf("redact 過度,必要 fragment %q 不在 output:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 // TestRedactForMessage_NilReturnsEmpty 守 contract:nil error → "" 空字串,
 // caller 可安心把回傳值塞進 result.Message 而不必先做 nil-check。
 func TestRedactForMessage_NilReturnsEmpty(t *testing.T) {
