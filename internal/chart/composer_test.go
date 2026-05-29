@@ -1073,6 +1073,95 @@ func TestRenderComposer_FixedPalettePerSeries(t *testing.T) {
 	}
 }
 
+// TestRenderComposer_MuscleGracefulSkip_ColorIndexNoShift — D2+D3 新引入的
+// `if !ok { continue }` branch(composer.go:658-661)的 render-path 覆蓋。
+//
+// 背景:addComposerSeries 的 muscle grid 改用 `for colIdx, name := range muscleNames`
+// (= MuscleRatioData.Order,欄位序)+ guard `vals, ok := muscleSeries[name]; if !ok continue`。
+// 當某 channel 在 Order 內、但因 value 長度 ≠ time 長度被 downsampleSeriesMap
+// graceful-skip 掉而不在 muscleSeries map 內時,該 channel 被跳過。
+//
+// 關鍵 invariant:跳過某 channel 時,後續 channel 的「顏色 index 不位移」——
+// colIdx 跟著 Order position 走(不是 running counter),skip 只留下一個色盤空位,
+// 存活的 channel 仍拿到它在 Order 中位置對應的顏色。
+//
+// fixture:Order=["m0","gap","m1"](欄位序);time 6000 點(> threshold 5000,
+// 確保 downsampleSeriesMap 真的執行 mismatch skip,而非 below-threshold passthrough);
+// "gap" value 長度故意 5999 ≠ 6000 → 被 skip;"m0"/"m1" 等長 6000 → 存活。
+//
+// 防線(若把 colIdx 改成 running counter,或移除 if !ok continue,此 test 會 fail):
+//  1. "gap" 不出現在渲染 series(被 skip)。
+//  2. "m1" 出現,line color = composerMuscleMotionPalette[2](Order index 2),
+//     不是 [1]——證明 skip 沒讓後續 channel 色 index 往前位移。
+//  3. "m0" line color = composerMuscleMotionPalette[0]。
+func TestRenderComposer_MuscleGracefulSkip_ColorIndexNoShift(t *testing.T) {
+	// time > composerDownsampleThreshold(5000),否則 downsampleSeriesMap 走
+	// below-threshold passthrough,gap 不會被 skip(會留在 map 內,ok=true)。
+	const n = 6000
+	muscleTime := make([]float64, n)
+	for i := range muscleTime {
+		muscleTime[i] = float64(i) * 0.001
+	}
+	// m0 / m1 等長(= n)→ downsample 後存活;gap 長度 n-1 ≠ n → graceful-skip。
+	m0 := make([]float64, n)
+	m1 := make([]float64, n)
+	gap := make([]float64, n-1)
+	for i := 0; i < n; i++ {
+		m0[i] = float64(i)*0.01 + float64(i%3) // 非平坦,讓 LTTB 有點選
+		m1[i] = float64(i)*0.02 + float64(i%5)
+	}
+	for i := range gap {
+		gap[i] = float64(i)
+	}
+
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(100, "RA"),
+		SelectedChannels: []string{"RA"},
+		MuscleRatioData: &MuscleRatioData{
+			Time: muscleTime,
+			Series: map[string][]float64{
+				"m0":  m0,
+				"gap": gap,
+				"m1":  m1,
+			},
+			Order: []string{"m0", "gap", "m1"}, // 欄位序;gap 在 index 1
+		},
+		// 單一 motion channel → 只用 palette index 0(#E8000B),不會引入 [1]/[2]
+		// 色,確保下方對 muscle 色的斷言無歧義。
+		MotionData: makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	// (1) gap 被 graceful-skip → 不出現在 series。
+	assert.NotContains(t, html, `"name":"gap"`,
+		`"gap" channel(value 長度 5999 ≠ time 6000)應被 downsampleSeriesMap graceful-skip,不渲染成 series`)
+
+	// 存活的 m0 / m1 仍應渲染。
+	assert.Contains(t, html, `"name":"m0"`, `"m0" 等長應存活並渲染`)
+	assert.Contains(t, html, `"name":"m1"`, `"m1" 等長應存活並渲染`)
+
+	// (2) m1 在 Order index 2 → 色 = composerMuscleMotionPalette[2](#1F77B4)。
+	// 若 colIdx 改成 running counter(跳過 gap 後 m1 變 index 1),色會錯成 [1]。
+	hexM1 := composerMuscleMotionPalette[2]
+	assert.Contains(t, html, `"lineStyle":{"color":"`+hexM1+`","width":1.5}`,
+		`"m1" 應拿 Order index 2 的色 %s(skip 不位移 color index)`, hexM1)
+	assert.Contains(t, html, `"itemStyle":{"color":"`+hexM1+`"}`,
+		`"m1" legend marker 色也應為 %s`, hexM1)
+
+	// 核心 regression 斷言:palette[1](#2CA02C)不該出現在 muscle lineStyle —— 那是
+	// 「colIdx 用 running counter 跳過 gap 後 m1 錯拿 index 1」的 fingerprint。
+	// (motion 單 channel 用 index 0,EMG 用另一組 palette,皆不會貢獻 #2CA02C。)
+	hexShifted := composerMuscleMotionPalette[1]
+	assert.NotContains(t, html, `"lineStyle":{"color":"`+hexShifted+`","width":1.5}`,
+		`palette[1] %s 不該出現 —— 出現代表 skip 後 color index 往前位移(m1 錯拿 index 1)`, hexShifted)
+
+	// (3) m0 在 Order index 0 → 色 = composerMuscleMotionPalette[0](#E8000B)。
+	hexM0 := composerMuscleMotionPalette[0]
+	assert.Contains(t, html, `"lineStyle":{"color":"`+hexM0+`","width":1.5}`,
+		`"m0" 應拿 Order index 0 的色 %s`, hexM0)
+}
+
 // TestRenderComposer_PaletteWrapsAround — Decision 3 防呆:series 數超過 palette
 // 長度時用 `% len(palette)` 循環,不 panic、不漏色。
 //
