@@ -149,6 +149,32 @@ func TestValidateCSVData_EMGHeaderPassesWithFalsePositiveTerms(t *testing.T) {
 	}
 }
 
+// TestValidateCell_BodyRejectsDangerousFunctionPrefix 釘住 CSV injection P0:
+// body cell 以危險函式名「開頭」(system(...)、importxml(...) 等)先前因
+// checkDangerousFunctions 的 `!strings.HasPrefix(cell, fn)` guard 被 silently
+// 放行(return nil)。移除 guard 後,DetectFormula 命中危險函式即拒絕。
+func TestValidateCell_BodyRejectsDangerousFunctionPrefix(t *testing.T) {
+	v := NewCellValidator()
+
+	// 全部小寫且「以」危險函式名開頭 — 觸發 HasPrefix-guard 繞過。刻意避開會被
+	// formula starter / script / sql / command / extension 攔截的字串,確保這些 cell
+	// 的唯一守門點就是 checkDangerousFunctions。
+	cases := []string{
+		"system(x)",
+		"importxml(x)",
+		"indirect(x)",
+	}
+
+	for _, cell := range cases {
+		t.Run(cell, func(t *testing.T) {
+			ctx := NewCellContext(1, 1, "evil.csv") // body cell(IsHeader=false)
+			if err := v.ValidateCell(cell, ctx); err == nil {
+				t.Errorf("body cell %q 以危險函式開頭,必須被拒絕(CSV injection),實際通過", cell)
+			}
+		})
+	}
+}
+
 // TestValidateCSVData_HeaderStillBlocksFormulaInjection 釘住 不能 weaken header
 // 的 formula starter 守門 — `=cmd|/c calc!A1` 在 header 仍要被擋下（Excel 開啟 header
 // 仍會 trigger formula 計算）。
