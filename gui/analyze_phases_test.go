@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -73,6 +74,31 @@ func TestValidatePhaseParams_RejectsBadInput(t *testing.T) {
 		_, _, err := validatePhaseParams(PhaseParams{
 			InputFile: "x.csv",
 			Phases:    []PhaseSpec{{Name: "a", StartTime: 1, EndTime: 1}},
+		})
+		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
+	})
+	// 非有限邊界(±Inf):ErrInvalidPhaseRange 訊息承諾「為有限值」,且舊 phaseStrings
+	// 路徑經 Str2Number 會拒 Inf。新 front-end-ranges 路徑必須同樣拒絕,否則 Inf 被
+	// scale 後當無邊界區間分析 → 產出「成功但誤導」的結果(codex round-2 finding)。
+	t.Run("inf_end", func(t *testing.T) {
+		_, _, err := validatePhaseParams(PhaseParams{
+			InputFile: "x.csv",
+			Phases:    []PhaseSpec{{Name: "a", StartTime: 0, EndTime: math.Inf(1)}},
+		})
+		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
+	})
+	t.Run("neg_inf_start", func(t *testing.T) {
+		_, _, err := validatePhaseParams(PhaseParams{
+			InputFile: "x.csv",
+			Phases:    []PhaseSpec{{Name: "a", StartTime: math.Inf(-1), EndTime: 1}},
+		})
+		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
+	})
+	t.Run("both_inf", func(t *testing.T) {
+		// -Inf < +Inf 為 true → 繞過 start<end 檢查;必須由顯式有限值守門擋下。
+		_, _, err := validatePhaseParams(PhaseParams{
+			InputFile: "x.csv",
+			Phases:    []PhaseSpec{{Name: "a", StartTime: math.Inf(-1), EndTime: math.Inf(1)}},
 		})
 		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
 	})

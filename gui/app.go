@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -775,8 +776,11 @@ func validatePhaseParams(params PhaseParams) (labels []string, ranges []models.T
 			return nil, nil, ErrNoValidPhaseLabels
 		}
 
-		// start < end 同時擋 NaN(NaN 的任何比較皆為 false)與反序 / 零長度區間。
-		if !(ph.StartTime < ph.EndTime) {
+		// 邊界須有限且 start < end:`!(start < end)` 同時擋 NaN(NaN 的任何比較皆為
+		// false)與反序 / 零長度;另顯式擋 ±Inf —— `-Inf < +Inf` 為 true 會繞過上式,
+		// 而舊 phaseStrings 路徑經 Str2Number 本就拒非有限值,新路徑於此補回對齊
+		// (否則 Inf 被 scale 後當無邊界區間,產出「成功但誤導」的結果)。
+		if math.IsInf(ph.StartTime, 0) || math.IsInf(ph.EndTime, 0) || !(ph.StartTime < ph.EndTime) {
 			return nil, nil, ErrInvalidPhaseRange
 		}
 
