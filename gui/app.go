@@ -780,15 +780,18 @@ func convertPhaseResultToAnalysis(phaseResult *models.PhaseAnalysisResult, chann
 	maxValues := make([]float64, channelCount)
 	meanValues := make([]float64, channelCount)
 
+	// MaxValues/MeanValues 的 key 是 0-based channel index(key 0 = Ch1,見
+	// calculator.computePhaseStatistics)。直接以 colIdx 對應輸出槽;先前的
+	// colIdx-1 會丟掉 Ch1 並整體位移一格。
 	for colIdx, val := range phaseResult.MaxValues {
-		if colIdx-1 >= 0 && colIdx-1 < len(maxValues) {
-			maxValues[colIdx-1] = val
+		if colIdx >= 0 && colIdx < len(maxValues) {
+			maxValues[colIdx] = val
 		}
 	}
 
 	for colIdx, val := range phaseResult.MeanValues {
-		if colIdx-1 >= 0 && colIdx-1 < len(meanValues) {
-			meanValues[colIdx-1] = val
+		if colIdx >= 0 && colIdx < len(meanValues) {
+			meanValues[colIdx] = val
 		}
 	}
 
@@ -1239,4 +1242,3 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 
 	return result, nil
 }
-
