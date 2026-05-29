@@ -663,7 +663,7 @@ func addComposerSeries(
 			if err != nil {
 				return err
 			}
-			hex := composerMuscleMotionPalette[colIdx%len(composerMuscleMotionPalette)]
+			hex := composerMuscleRatioPalette[colIdx%len(composerMuscleRatioPalette)]
 			seriesOpts := []charts.SeriesOpts{
 				charts.WithLineChartOpts(opts.LineChart{
 					Smooth:     opts.Bool(false),
@@ -683,7 +683,8 @@ func addComposerSeries(
 	if motion != nil {
 		motionGridIdx := n - 1
 		// 依 Order 渲染,確保順序穩定(已是欄位序,Decision 2 不動此處排序)。
-		// colIdx = 欄位序位置 → composerMuscleMotionPalette[colIdx % len](與 muscle 共用色票)。
+		// colIdx = 欄位序位置 → composerMotionPalette[colIdx % len](motion 專用色票,
+		// 與 muscle 僅第 4 色不同)。
 		for colIdx, name := range motion.Order {
 			vals, ok := motion.Series[name]
 			if !ok {
@@ -693,7 +694,7 @@ func addComposerSeries(
 			if err != nil {
 				return err
 			}
-			hex := composerMuscleMotionPalette[colIdx%len(composerMuscleMotionPalette)]
+			hex := composerMotionPalette[colIdx%len(composerMotionPalette)]
 			seriesOpts := []charts.SeriesOpts{
 				charts.WithLineChartOpts(opts.LineChart{
 					Smooth:     opts.Bool(false),
@@ -769,13 +770,29 @@ var composerEMGPalette = []string{
 	"#F2C500", // 7 黃
 }
 
-// composerMuscleMotionPalette 是 muscle ratio grid(grid 1)與 motion grid(grid n-1)
-// 共用的固定色票,index 對應 series 在**欄位序**中的位置(0-based)。
+// composerMuscleRatioPalette 是 muscle ratio grid(grid 1)的固定色票,index 對應
+// series 在**欄位序**中的位置(0-based)。
 //
-// 色序語意(對齊 Decision 3 spec,muscle/motion 各最多 4 channel):
+// 色序語意(muscle 最多 4 channel):
+//
+//	0 #E8000B 紅 1 #2CA02C 綠 2 #1F77B4 藍 3 #F2C500 黃
+//
+// 與 composerMotionPalette 僅第 4 色不同(muscle 黃 / motion 紫)— 兩 grid 不再
+// 共用色票,讓 muscle 第 4 條與 motion 第 4 條可視覺區分(user 指定)。
+var composerMuscleRatioPalette = []string{
+	"#E8000B", // 0 紅
+	"#2CA02C", // 1 綠
+	"#1F77B4", // 2 藍
+	"#F2C500", // 3 黃
+}
+
+// composerMotionPalette 是 motion grid(grid n-1)的固定色票,index 對應 series 在
+// **欄位序**中的位置(0-based)。
+//
+// 色序語意(motion 最多 4 channel):
 //
 //	0 #E8000B 紅 1 #2CA02C 綠 2 #1F77B4 藍 3 #9467BD 紫
-var composerMuscleMotionPalette = []string{
+var composerMotionPalette = []string{
 	"#E8000B", // 0 紅
 	"#2CA02C", // 1 綠
 	"#1F77B4", // 2 藍

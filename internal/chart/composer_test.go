@@ -1029,27 +1029,32 @@ func TestRenderComposer_SeriesRenderedInFieldOrder(t *testing.T) {
 // TestRenderComposer_FixedPalettePerSeries — Decision 3 regression:
 //
 // 每條 series 依「欄位序 index」明確指定固定色票,line + item 同一 hex
-// (item 是為 legend marker 上色)。EMG 用 composerEMGPalette、muscle/motion 共用
-// composerMuscleMotionPalette。
+// (item 是為 legend marker 上色)。EMG 用 composerEMGPalette、muscle 用
+// composerMuscleRatioPalette、motion 用 composerMotionPalette(2026-05-29 起 muscle
+// 與 motion 不再共用色票:兩者僅第 4 色不同,muscle 黃 #F2C500 / motion 紫 #9467BD)。
 //
 // 防線:render 後 HTML 必須含每條 series 對應 index 的 lineStyle+itemStyle color hex。
 // go-echarts v2.7.1 序列化為 `"itemStyle":{"color":"#XXX"}` 與
 // `"lineStyle":{"color":"#XXX","width":1.5}`(item 在 line 前)。
+//
+// 注:hex 比對是「出現於 HTML」粒度。第 4 色具鑑別性(黃 #F2C500 只由 muscle[3] 產生
+// — EMG 僅 3 channel 不會用到 EMG palette index 7 的黃;紫 #9467BD 只由 motion[3] 產生),
+// 故 4-channel 設計能釘住 muscle/motion 第 4 色的分歧。
 func TestRenderComposer_FixedPalettePerSeries(t *testing.T) {
-	// EMG 3 channel(欄位序 ch0,ch1,ch2)+ muscle 2 + motion 2,各對 palette index。
+	// EMG 3 channel + muscle 4 + motion 4,各對 palette index(muscle/motion 取到 index 3)。
 	in := ComposerInput{
 		Subject:          "S",
 		EMGDataset:       makeEMGDataset(100, "ch0", "ch1", "ch2"),
 		SelectedChannels: []string{"ch0", "ch1", "ch2"},
 		MuscleRatioData: &MuscleRatioData{
-			Time:   makeMuscleRatioData(100, "m0", "m1").Time,
-			Series: makeMuscleRatioData(100, "m0", "m1").Series,
-			Order:  []string{"m0", "m1"},
+			Time:   makeMuscleRatioData(100, "m0", "m1", "m2", "m3").Time,
+			Series: makeMuscleRatioData(100, "m0", "m1", "m2", "m3").Series,
+			Order:  []string{"m0", "m1", "m2", "m3"},
 		},
 		MotionData: &MotionData{
-			Time:   makeMotionData(50, "mo0", "mo1").Time,
-			Series: makeMotionData(50, "mo0", "mo1").Series,
-			Order:  []string{"mo0", "mo1"},
+			Time:   makeMotionData(50, "mo0", "mo1", "mo2", "mo3").Time,
+			Series: makeMotionData(50, "mo0", "mo1", "mo2", "mo3").Series,
+			Order:  []string{"mo0", "mo1", "mo2", "mo3"},
 		},
 	}
 	html := renderToString(t, context.Background(), in)
@@ -1063,14 +1068,29 @@ func TestRenderComposer_FixedPalettePerSeries(t *testing.T) {
 			"EMG series index %d 的 itemStyle.color(legend marker)應為 %s", i, hex)
 	}
 
-	// muscle index 0/1 + motion index 0/1 共用 composerMuscleMotionPalette[0..1]
-	for i := 0; i < 2; i++ {
-		hex := composerMuscleMotionPalette[i]
+	// muscle index 0..3 → composerMuscleRatioPalette(第 4 色 = 黃 #F2C500)
+	for i := 0; i < 4; i++ {
+		hex := composerMuscleRatioPalette[i]
 		assert.Contains(t, html, `"lineStyle":{"color":"`+hex+`","width":1.5}`,
-			"muscle/motion series index %d 的 lineStyle.color 應為 %s", i, hex)
+			"muscle series index %d 的 lineStyle.color 應為 %s", i, hex)
 		assert.Contains(t, html, `"itemStyle":{"color":"`+hex+`"}`,
-			"muscle/motion series index %d 的 itemStyle.color 應為 %s", i, hex)
+			"muscle series index %d 的 itemStyle.color 應為 %s", i, hex)
 	}
+
+	// motion index 0..3 → composerMotionPalette(第 4 色 = 紫 #9467BD)
+	for i := 0; i < 4; i++ {
+		hex := composerMotionPalette[i]
+		assert.Contains(t, html, `"lineStyle":{"color":"`+hex+`","width":1.5}`,
+			"motion series index %d 的 lineStyle.color 應為 %s", i, hex)
+		assert.Contains(t, html, `"itemStyle":{"color":"`+hex+`"}`,
+			"motion series index %d 的 itemStyle.color 應為 %s", i, hex)
+	}
+
+	// 釘住分歧:muscle 第 4 色 = 黃,motion 第 4 色 = 紫,兩者不同。
+	assert.Equal(t, "#F2C500", composerMuscleRatioPalette[3], "muscle 第 4 色應為黃")
+	assert.Equal(t, "#9467BD", composerMotionPalette[3], "motion 第 4 色應為紫")
+	assert.NotEqual(t, composerMuscleRatioPalette[3], composerMotionPalette[3],
+		"muscle 與 motion 第 4 色應已拆分(不再共用)")
 }
 
 // TestRenderComposer_MuscleGracefulSkip_ColorIndexNoShift — D2+D3 新引入的
@@ -1091,9 +1111,9 @@ func TestRenderComposer_FixedPalettePerSeries(t *testing.T) {
 //
 // 防線(若把 colIdx 改成 running counter,或移除 if !ok continue,此 test 會 fail):
 //  1. "gap" 不出現在渲染 series(被 skip)。
-//  2. "m1" 出現,line color = composerMuscleMotionPalette[2](Order index 2),
+//  2. "m1" 出現,line color = composerMuscleRatioPalette[2](Order index 2),
 //     不是 [1]——證明 skip 沒讓後續 channel 色 index 往前位移。
-//  3. "m0" line color = composerMuscleMotionPalette[0]。
+//  3. "m0" line color = composerMuscleRatioPalette[0]。
 func TestRenderComposer_MuscleGracefulSkip_ColorIndexNoShift(t *testing.T) {
 	// time > composerDownsampleThreshold(5000),否則 downsampleSeriesMap 走
 	// below-threshold passthrough,gap 不會被 skip(會留在 map 內,ok=true)。
@@ -1141,9 +1161,9 @@ func TestRenderComposer_MuscleGracefulSkip_ColorIndexNoShift(t *testing.T) {
 	assert.Contains(t, html, `"name":"m0"`, `"m0" 等長應存活並渲染`)
 	assert.Contains(t, html, `"name":"m1"`, `"m1" 等長應存活並渲染`)
 
-	// (2) m1 在 Order index 2 → 色 = composerMuscleMotionPalette[2](#1F77B4)。
+	// (2) m1 在 Order index 2 → 色 = composerMuscleRatioPalette[2](#1F77B4)。
 	// 若 colIdx 改成 running counter(跳過 gap 後 m1 變 index 1),色會錯成 [1]。
-	hexM1 := composerMuscleMotionPalette[2]
+	hexM1 := composerMuscleRatioPalette[2]
 	assert.Contains(t, html, `"lineStyle":{"color":"`+hexM1+`","width":1.5}`,
 		`"m1" 應拿 Order index 2 的色 %s(skip 不位移 color index)`, hexM1)
 	assert.Contains(t, html, `"itemStyle":{"color":"`+hexM1+`"}`,
@@ -1152,12 +1172,12 @@ func TestRenderComposer_MuscleGracefulSkip_ColorIndexNoShift(t *testing.T) {
 	// 核心 regression 斷言:palette[1](#2CA02C)不該出現在 muscle lineStyle —— 那是
 	// 「colIdx 用 running counter 跳過 gap 後 m1 錯拿 index 1」的 fingerprint。
 	// (motion 單 channel 用 index 0,EMG 用另一組 palette,皆不會貢獻 #2CA02C。)
-	hexShifted := composerMuscleMotionPalette[1]
+	hexShifted := composerMuscleRatioPalette[1]
 	assert.NotContains(t, html, `"lineStyle":{"color":"`+hexShifted+`","width":1.5}`,
 		`palette[1] %s 不該出現 —— 出現代表 skip 後 color index 往前位移(m1 錯拿 index 1)`, hexShifted)
 
-	// (3) m0 在 Order index 0 → 色 = composerMuscleMotionPalette[0](#E8000B)。
-	hexM0 := composerMuscleMotionPalette[0]
+	// (3) m0 在 Order index 0 → 色 = composerMuscleRatioPalette[0](#E8000B)。
+	hexM0 := composerMuscleRatioPalette[0]
 	assert.Contains(t, html, `"lineStyle":{"color":"`+hexM0+`","width":1.5}`,
 		`"m0" 應拿 Order index 0 的色 %s`, hexM0)
 }
@@ -1167,7 +1187,7 @@ func TestRenderComposer_MuscleGracefulSkip_ColorIndexNoShift(t *testing.T) {
 //
 // 防線:給 EMG 10 個 channel(> 8 色 palette)、muscle 6 個(> 4 色 palette)。
 // 第 8 條 EMG(index 8)應 wrap 回 composerEMGPalette[0];第 4 條 muscle(index 4)
-// 應 wrap 回 composerMuscleMotionPalette[0]。render 不可 panic。
+// 應 wrap 回 composerMuscleRatioPalette[0]。render 不可 panic。
 func TestRenderComposer_PaletteWrapsAround(t *testing.T) {
 	emgNames := []string{"e0", "e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"}
 	muscleNames := []string{"m0", "m1", "m2", "m3", "m4", "m5"}
@@ -1194,9 +1214,9 @@ func TestRenderComposer_PaletteWrapsAround(t *testing.T) {
 	assert.Equal(t, composerEMGPalette[0], wrapHexEMG, "index 8 應 wrap 回 EMG palette[0]")
 
 	// muscle 第 5 條(index 4)wrap → palette[4%4=0];len=4
-	require.Len(t, composerMuscleMotionPalette, 4, "muscle/motion palette 預期 4 色")
-	wrapHexMuscle := composerMuscleMotionPalette[4%len(composerMuscleMotionPalette)]
-	assert.Equal(t, composerMuscleMotionPalette[0], wrapHexMuscle, "index 4 應 wrap 回 muscle palette[0]")
+	require.Len(t, composerMuscleRatioPalette, 4, "muscle palette 預期 4 色")
+	wrapHexMuscle := composerMuscleRatioPalette[4%len(composerMuscleRatioPalette)]
+	assert.Equal(t, composerMuscleRatioPalette[0], wrapHexMuscle, "index 4 應 wrap 回 muscle palette[0]")
 
 	// 確認 render 真的產出 series(沒被 wrap 邏輯弄壞)
 	assert.Contains(t, html, `"name":"e9"`, "第 10 條 EMG series 仍應渲染")
