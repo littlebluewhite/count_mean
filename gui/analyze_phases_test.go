@@ -1,7 +1,6 @@
 package gui
 
 import (
-	"math"
 	"path/filepath"
 	"testing"
 
@@ -30,8 +29,8 @@ func TestAnalyzePhases_HonorsFrontendPhasesAndNames(t *testing.T) {
 	result, err := app.AnalyzePhases(PhaseParams{
 		InputFile: csvPath,
 		Phases: []PhaseSpec{
-			{Name: "站立期", StartTime: f64(0.0), EndTime: f64(0.05)},
-			{Name: "擺動期", StartTime: f64(0.05), EndTime: f64(0.099)},
+			{Name: "站立期", StartTime: "0.0", EndTime: "0.05"},
+			{Name: "擺動期", StartTime: "0.05", EndTime: "0.099"},
 		},
 	})
 	require.NoError(t, err)
@@ -51,11 +50,13 @@ func TestAnalyzePhases_HonorsFrontendPhasesAndNames(t *testing.T) {
 		"phase 區間內 mean 應非零")
 }
 
-// TestValidatePhaseParams_RejectsBadInput 釘住新 contract 的驗證邊界。
+// TestValidatePhaseParams_RejectsBadInput 釘住新 contract 的驗證邊界。邊界以原始字串
+// 收入,後端用 strconv.ParseFloat 嚴格解析整串(拒空字串 / 部分解析 / 非數值),另擋
+// ParseFloat 仍接受的 ±Inf / NaN。
 func TestValidatePhaseParams_RejectsBadInput(t *testing.T) {
 	t.Run("no_input_file", func(t *testing.T) {
 		_, _, err := validatePhaseParams(PhaseParams{
-			Phases: []PhaseSpec{{Name: "a", StartTime: f64(0), EndTime: f64(1)}},
+			Phases: []PhaseSpec{{Name: "a", StartTime: "0", EndTime: "1"}},
 		})
 		assert.ErrorIs(t, err, ErrNoInputFile)
 	})
@@ -66,62 +67,95 @@ func TestValidatePhaseParams_RejectsBadInput(t *testing.T) {
 	t.Run("empty_name", func(t *testing.T) {
 		_, _, err := validatePhaseParams(PhaseParams{
 			InputFile: "x.csv",
-			Phases:    []PhaseSpec{{Name: "  ", StartTime: f64(0), EndTime: f64(1)}},
+			Phases:    []PhaseSpec{{Name: "  ", StartTime: "0", EndTime: "1"}},
 		})
 		assert.ErrorIs(t, err, ErrNoValidPhaseLabels)
 	})
 	t.Run("start_not_before_end", func(t *testing.T) {
 		_, _, err := validatePhaseParams(PhaseParams{
 			InputFile: "x.csv",
-			Phases:    []PhaseSpec{{Name: "a", StartTime: f64(1), EndTime: f64(1)}},
+			Phases:    []PhaseSpec{{Name: "a", StartTime: "1", EndTime: "1"}},
 		})
 		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
 	})
-	// 非有限邊界(±Inf):ErrInvalidPhaseRange 訊息承諾「為有限值」,且舊 phaseStrings
-	// 路徑經 Str2Number 會拒 Inf。新 front-end-ranges 路徑必須同樣拒絕,否則 Inf 被
-	// scale 後當無邊界區間分析 → 產出「成功但誤導」的結果(codex round-2 finding)。
+	// 非有限邊界(±Inf / NaN):strconv.ParseFloat 接受 "Inf"/"NaN"(回 ±Inf/NaN、無 error),
+	// 故須在解析後另以 IsInf / `!(start<end)` 擋下,否則無邊界區間會產出「成功但誤導」結果。
 	t.Run("inf_end", func(t *testing.T) {
 		_, _, err := validatePhaseParams(PhaseParams{
 			InputFile: "x.csv",
-			Phases:    []PhaseSpec{{Name: "a", StartTime: f64(0), EndTime: f64(math.Inf(1))}},
+			Phases:    []PhaseSpec{{Name: "a", StartTime: "0", EndTime: "Inf"}},
 		})
 		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
 	})
 	t.Run("neg_inf_start", func(t *testing.T) {
 		_, _, err := validatePhaseParams(PhaseParams{
 			InputFile: "x.csv",
-			Phases:    []PhaseSpec{{Name: "a", StartTime: f64(math.Inf(-1)), EndTime: f64(1)}},
+			Phases:    []PhaseSpec{{Name: "a", StartTime: "-Inf", EndTime: "1"}},
 		})
 		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
 	})
 	t.Run("both_inf", func(t *testing.T) {
-		// -Inf < +Inf 為 true → 繞過 start<end 檢查;必須由顯式有限值守門擋下。
+		// -Inf < +Inf 為 true → 繞過 start<end 檢查;必須由顯式 IsInf 守門擋下。
 		_, _, err := validatePhaseParams(PhaseParams{
 			InputFile: "x.csv",
-			Phases:    []PhaseSpec{{Name: "a", StartTime: f64(math.Inf(-1)), EndTime: f64(math.Inf(1))}},
+			Phases:    []PhaseSpec{{Name: "a", StartTime: "-Inf", EndTime: "Inf"}},
 		})
 		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
 	})
-	// nil 邊界:前端非數值輸入經 parseFloat→NaN→Wails JSON null,對 *float64
-	// unmarshal 成 nil;先前 float64 會靜默 coerce 成 0(像 {nil,1}→{0,1} 通過驗證,
-	// 產出「成功但錯誤」的分析)。必須顯式拒絕 nil(codex round-4 finding)。
-	t.Run("nil_start", func(t *testing.T) {
+	t.Run("nan_start", func(t *testing.T) {
 		_, _, err := validatePhaseParams(PhaseParams{
 			InputFile: "x.csv",
-			Phases:    []PhaseSpec{{Name: "a", StartTime: nil, EndTime: f64(1)}},
+			Phases:    []PhaseSpec{{Name: "a", StartTime: "NaN", EndTime: "1"}},
 		})
 		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
 	})
-	t.Run("nil_end", func(t *testing.T) {
-		// start 取負值:若 nil 被誤 coerce 成 0,{-1,0} 仍通過 start<end ordering,
-		// 故此 case 只能靠「拒絕 nil」擋下 — 隔離出 nil-end 偵測(非 ordering 副作用)。
+	// 空字串(前端未填 / 清空):ParseFloat 回 error → 拒絕,不可當成 0。
+	t.Run("empty_start", func(t *testing.T) {
 		_, _, err := validatePhaseParams(PhaseParams{
 			InputFile: "x.csv",
-			Phases:    []PhaseSpec{{Name: "a", StartTime: f64(-1), EndTime: nil}},
+			Phases:    []PhaseSpec{{Name: "a", StartTime: "", EndTime: "1"}},
+		})
+		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
+	})
+	t.Run("empty_end", func(t *testing.T) {
+		_, _, err := validatePhaseParams(PhaseParams{
+			InputFile: "x.csv",
+			Phases:    []PhaseSpec{{Name: "a", StartTime: "1", EndTime: ""}},
+		})
+		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
+	})
+	// 部分解析:前端 parseFloat 會把 "1.2foo" 截成 1.2、"2.5bar" 截成 2.5(有限數、
+	// 通過驗證 → 截斷的誤輸入被當合法值)。後端嚴格解析整串必須拒絕(codex round-5)。
+	t.Run("partial_start", func(t *testing.T) {
+		_, _, err := validatePhaseParams(PhaseParams{
+			InputFile: "x.csv",
+			Phases:    []PhaseSpec{{Name: "a", StartTime: "1.2foo", EndTime: "2"}},
+		})
+		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
+	})
+	t.Run("partial_end", func(t *testing.T) {
+		_, _, err := validatePhaseParams(PhaseParams{
+			InputFile: "x.csv",
+			Phases:    []PhaseSpec{{Name: "a", StartTime: "0", EndTime: "2.5bar"}},
 		})
 		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
 	})
 }
 
-// f64 回傳 v 的指標,供建構 PhaseSpec 的 *float64 邊界(對應前端 JSON 數值)。
-func f64(v float64) *float64 { return &v }
+// TestValidatePhaseParams_AcceptsValidNumericStrings 釘住合法數值字串(含負數 /
+// 科學記號 / 前後空白)正常解析、產出對應 ranges。
+func TestValidatePhaseParams_AcceptsValidNumericStrings(t *testing.T) {
+	labels, ranges, err := validatePhaseParams(PhaseParams{
+		InputFile: "x.csv",
+		Phases: []PhaseSpec{
+			{Name: "a", StartTime: " 0 ", EndTime: "0.5"},
+			{Name: "b", StartTime: "0.5", EndTime: "1e0"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, labels)
+	require.Len(t, ranges, 2)
+	assert.InDelta(t, 0.0, ranges[0].Start, 1e-9)
+	assert.InDelta(t, 0.5, ranges[0].End, 1e-9)
+	assert.InDelta(t, 1.0, ranges[1].End, 1e-9)
+}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -776,19 +777,18 @@ func validatePhaseParams(params PhaseParams) (labels []string, ranges []models.T
 			return nil, nil, ErrNoValidPhaseLabels
 		}
 
-		// 邊界以 *float64 表示:前端非數值輸入經 parseFloat→NaN→Wails JSON null,對
-		// *float64 unmarshal 成 nil(而非靜默 coerce 成 float64 0)。顯式拒絕 nil 以區分
-		// 「未填 / 無效」與「合法的 0」,否則 {nil,1} 會被當成真實 {0,1} phase 分析。
-		if ph.StartTime == nil || ph.EndTime == nil {
+		// 邊界以原始字串收,用 strconv.ParseFloat 嚴格解析整串:拒空字串 / 部分解析
+		// (前端 parseFloat 會把 "1.2foo" 截成 1.2、"0x10" 截成 0,這類截斷誤輸入若以
+		// 數字傳入會被當合法值)/ 非數值。
+		start, errStart := strconv.ParseFloat(strings.TrimSpace(ph.StartTime), 64)
+		end, errEnd := strconv.ParseFloat(strings.TrimSpace(ph.EndTime), 64)
+		if errStart != nil || errEnd != nil {
 			return nil, nil, ErrInvalidPhaseRange
 		}
 
-		start, end := *ph.StartTime, *ph.EndTime
-
 		// 邊界須有限且 start < end:`!(start < end)` 同時擋 NaN(NaN 的任何比較皆為
-		// false)與反序 / 零長度;另顯式擋 ±Inf —— `-Inf < +Inf` 為 true 會繞過上式,
-		// 而舊 phaseStrings 路徑經 Str2Number 本就拒非有限值,新路徑於此補回對齊
-		// (否則 Inf 被 scale 後當無邊界區間,產出「成功但誤導」的結果)。
+		// false)與反序 / 零長度;另顯式擋 ±Inf —— ParseFloat 接受 "Inf",且
+		// `-Inf < +Inf` 為 true 會繞過上式。
 		if math.IsInf(start, 0) || math.IsInf(end, 0) || !(start < end) {
 			return nil, nil, ErrInvalidPhaseRange
 		}
@@ -1060,13 +1060,14 @@ type ChartResult struct {
 
 // PhaseSpec 是單一分期的名稱與時間邊界,對應前端送出的 {name, startTime, endTime}。
 //
-// StartTime/EndTime 用 *float64:前端非數值輸入經 parseFloat→NaN、再經 Wails JSON
-// 編碼成 null,對 *float64 會 unmarshal 成 nil(而非靜默 coerce 成 float64 0)。
-// validatePhaseParams 以此區分「未填 / 無效(nil)」與「合法的 0」並拒絕前者。
+// StartTime/EndTime 收「原始字串」:前端送使用者輸入的原字串,後端以 strconv.ParseFloat
+// 嚴格解析整串。前端 parseFloat 會把 "1.2foo" 截成 1.2、"0x10" 截成 0、非數值成 NaN,
+// 這些部分解析 / 截斷的誤輸入若以數字傳入會被當合法值;改收字串 + 嚴格解析可一律拒絕
+// (含空字串 / "1.2foo" / "0x10")。validatePhaseParams 另擋 ParseFloat 仍接受的 ±Inf / NaN。
 type PhaseSpec struct {
-	Name      string   `json:"name"`
-	StartTime *float64 `json:"startTime"`
-	EndTime   *float64 `json:"endTime"`
+	Name      string `json:"name"`
+	StartTime string `json:"startTime"`
+	EndTime   string `json:"endTime"`
 }
 
 // PhaseParams holds parameters for phase analysis. Phases 由前端提供(名稱 + 邊界),

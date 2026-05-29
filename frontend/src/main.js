@@ -776,8 +776,10 @@ class EMGAnalysisApp {
             return;
         }
 
-        // 解析時間點和標籤
-        const points = phasePoints.split(',').map(p => parseFloat(p.trim()));
+        // 解析時間點和標籤:時間點保留「原始字串」送後端,由 strconv.ParseFloat 嚴格
+        // 解析整串。先前用 parseFloat 會把 "1.2foo" 截成 1.2、"0x10" 截成 0 等部分解析
+        // 誤值當合法數字送出;改傳原字串讓後端一律拒絕(空字串 / 部分解析 / 非數值)。
+        const points = phasePoints.split(',').map(p => p.trim());
         const labels = phaseLabels.split('\n').filter(l => l.trim());
 
         if (points.length !== labels.length + 1) {
@@ -785,7 +787,7 @@ class EMGAnalysisApp {
             return;
         }
 
-        // 構建階段數據
+        // 構建階段數據(startTime/endTime 為原始字串)
         const phases = [];
         for (let i = 0; i < labels.length; i++) {
             phases.push({
