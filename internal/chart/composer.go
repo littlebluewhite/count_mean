@@ -983,6 +983,35 @@ func addComposerCustomJS(line *charts.Line) {
 					}
 					return;
 				}
+				if (e.data.type === 'composer-standardize-zoom') {
+					/* ADR-0013 D4/D5 標準化視圖:parent 寄 {payload: {startSec, endSec}}
+					   (勾選分期 min/max 秒 ± 5% buffer)。把秒值換算成 dataZoom 百分比。
+					   ⚠️ 必用百分比 start/end(0-100)而非 startValue/endValue:dataZoom 的
+					   XAxisIndex 涵蓋全部 2n 軸(bottom 秒軸 + top 百分比軸),絕對秒值會被
+					   套到 0-100 百分比軸 → 錯位。百分比則每軸各自依自身範圍解讀,跨軸一致。
+					   axisMin/axisMax 取 bottom xAxis[0](configureComposerAxes 已設 union 秒範圍)。 */
+					try {
+						const payload = e.data.payload || {};
+						const startSec = payload.startSec;
+						const endSec = payload.endSec;
+						const xAxes = myChart.getOption().xAxis || [];
+						if (xAxes.length > 0 && typeof xAxes[0].min === 'number' && typeof xAxes[0].max === 'number') {
+							const axisMin = xAxes[0].min;
+							const axisMax = xAxes[0].max;
+							const span = axisMax - axisMin;
+							if (span > 0) {
+								let startPct = (startSec - axisMin) / span * 100;
+								let endPct = (endSec - axisMin) / span * 100;
+								startPct = Math.max(0, Math.min(100, startPct));
+								endPct = Math.max(0, Math.min(100, endPct));
+								myChart.dispatchAction({type: 'dataZoom', start: startPct, end: endPct});
+							}
+						}
+					} catch (err) {
+						try { console.error('composer-standardize-zoom 失敗:', err); } catch (e2) {}
+					}
+					return;
+				}
 				if (e.data.type === 'composer-update-phase-markers') {
 					/* ADR-0003 §5 symmetric payload:parent 寄
 					   {payload: {checkedPhases: [{name, time, pct}]}}。

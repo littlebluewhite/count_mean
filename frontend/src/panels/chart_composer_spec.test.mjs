@@ -269,6 +269,96 @@ test('spec.onResult render 後 #composerPhaseSelector 容器存在於結果區',
     }
 });
 
+// ---------- extraRunButtons + onUpdate enable 邏輯(D4 標準化視圖按鈕)----------
+
+test('spec.extraRunButtons 產出 #composerStandardizeBtn 且初始 disabled', () => {
+    // D4:標準化視圖按鈕由 spec.extraRunButtons 注入(shell button-group 內、
+    // #mpRunBtn 之後)。生成前永遠灰 → HTML 必須帶 disabled。label 走 translator
+    // (button.standardize_view),onclick 委派 app.standardizeComposerView()。
+    const spec = makeChartComposerSpec({});
+    assert.equal(typeof spec.extraRunButtons, 'function', 'extraRunButtons 應為 builder function');
+
+    const fakeT = (key) => `__T:${key}__`;
+    const html = spec.extraRunButtons(fakeT);
+
+    // 解析成 DOM 驗 disabled attribute(read-only parse,避開 XSS hook)。
+    const window = new Window();
+    const parser = new window.DOMParser();
+    const doc = parser.parseFromString(`<!doctype html><body>${html}</body>`, 'text/html');
+    const btn = doc.getElementById('composerStandardizeBtn');
+
+    assert.ok(btn, '應產出 #composerStandardizeBtn');
+    assert.ok(btn.hasAttribute('disabled'), '標準化視圖按鈕初始必須 disabled(生成前灰)');
+    assert.match(btn.getAttribute('onclick') || '', /standardizeComposerView/, 'onclick 委派 app.standardizeComposerView()');
+    assert.match(btn.textContent, /button\.standardize_view/, 'label 走 translator(button.standardize_view)');
+});
+
+test('onResult 傳的 onUpdate 依勾選分期數 enable/disable 標準化視圖按鈕(>=2 亮、<2 灰)', async () => {
+    // D4:onResult 呼 bindPhaseCheckboxes 時多傳 onUpdate;首次 render(全勾)就
+    // enable,每次 checkbox change 即時更新。透過跑完整 onResult(render 3 phase
+    // 全勾 → 按鈕應 enable),再 uncheck 到剩 1 個(< 2 → disable)驗證。
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    globalThis.document = window.document;
+    globalThis.tHtml = (key) => `__T:${key}__`;
+    try {
+        // shell:#mpResult / #mpResultContent + extraRunButtons 注入的按鈕(初始 disabled)。
+        const result = window.document.createElement('div');
+        result.id = 'mpResult';
+        result.style.display = 'none';
+        const content = window.document.createElement('div');
+        content.id = 'mpResultContent';
+        result.appendChild(content);
+        window.document.body.appendChild(result);
+
+        const btn = window.document.createElement('button');
+        btn.id = 'composerStandardizeBtn';
+        btn.disabled = true; // 對齊 extraRunButtons 初始 disabled
+        window.document.body.appendChild(btn);
+
+        const { ManifestPanel } = await import('../manifestPanel.mjs');
+        const app = {};
+        const spec = makeChartComposerSpec(app);
+        const mp = new ManifestPanel(app);
+
+        const onResultPromise = spec.onResult(
+            { success: true, html: '<html><body>c</body></html>', phaseTimes: { P0: 0, P1: 100, P2: 200 } },
+            {},
+            mp
+        );
+        await Promise.resolve();
+        const iframe = window.document.querySelector('#composerChartContent iframe');
+        if (iframe) iframe.dispatchEvent(new window.Event('load'));
+        await onResultPromise;
+
+        // 首次 render 全勾(3 個 ≥ 2)→ onUpdate 應 enable 按鈕。
+        assert.equal(btn.disabled, false, '首次 render 全勾(3 phase)後標準化視圖按鈕應 enable');
+
+        // uncheck 到剩 1 個 → < 2 → onUpdate 應 disable。
+        const checkboxes = Array.from(
+            window.document.querySelectorAll('#composerPhaseSelector input[type="checkbox"]')
+        );
+        assert.equal(checkboxes.length, 3, '應有 3 個 phase checkbox');
+        // 取消其中兩個,觸發 change(emitUpdate → onUpdate)。
+        checkboxes[0].checked = false;
+        checkboxes[0].dispatchEvent(new window.Event('change'));
+        checkboxes[1].checked = false;
+        checkboxes[1].dispatchEvent(new window.Event('change'));
+
+        assert.equal(btn.disabled, true, '勾選剩 1 個(< 2)時標準化視圖按鈕應 disable');
+
+        // 重新勾回 1 個 → 共 2 個 ≥ 2 → 應 enable。
+        checkboxes[0].checked = true;
+        checkboxes[0].dispatchEvent(new window.Event('change'));
+        assert.equal(btn.disabled, false, '勾選回到 2 個(>= 2)時標準化視圖按鈕應 enable');
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+        delete globalThis.document;
+        delete globalThis.tHtml;
+    }
+});
+
 // ---------- spec.rpc(ADR-0013 一鍵生成:只 forward 三參數 + success=false throw)----------
 
 test('spec.rpc 只 forward manifest/dataFolder/subject 三參數給 GenerateChartComposer', async () => {

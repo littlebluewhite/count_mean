@@ -370,6 +370,9 @@ const (
 	KeyPanelComposerTitle  = "panel.composer.title"
 	KeyButtonGenerateChart = "button.generate_chart"
 	KeyButtonDownloadPNG   = "button.download_png"
+	// button.standardize_view — Chart Composer 結果區「標準化視圖」按鈕(ADR-0013
+	// D4/D5):把 chart zoom 到當下勾選分期點 min/max 秒兩側各留 5% buffer 的區間。
+	KeyButtonStandardizeView = "button.standardize_view"
 	// button.download_chart — CCI 結果區「下載圖表」按鈕(ADR-0007 M5:cci_spec
 	// onResult 渲染下載按鈕,改走 i18n key;舊 main.js showCCIResult 走 hardcoded
 	// '下載圖表',M3 標記留 M5 sweep)。語意「下載圖表」≠ button.download_png 的「下載 PNG」。

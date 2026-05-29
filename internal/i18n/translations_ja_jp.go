@@ -337,6 +337,7 @@ var translationsJaJP = map[string]string{
 	KeyPanelComposerTitle:           "データ作図",
 	KeyButtonGenerateChart:          "チャート生成",
 	KeyButtonDownloadPNG:            "PNG ダウンロード",
+	KeyButtonStandardizeView:        "標準化ビュー",
 	KeyButtonDownloadChart:          "チャートダウンロード",
 	KeyFormLabelComposerPhases:      "フェーズマーカー表示",
 	KeyResultSectionComposerPreview: "チャートプレビュー",

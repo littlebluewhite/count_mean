@@ -1089,6 +1089,10 @@ class EMGAnalysisApp {
         }
         // 清掉舊 subject 的勾選分期,避免殘留到新 subject(下次 generate 後重新 render)。
         if (this._composerCheckedPhases) this._composerCheckedPhases.clear();
+        // D4:切 subject 後到下次生成前,標準化視圖按鈕回灰(視覺一致;下次 onResult
+        // 的 bindPhaseCheckboxes onUpdate 會依勾選數重新 enable)。
+        const stdBtn = document.getElementById('composerStandardizeBtn');
+        if (stdBtn) stdBtn.disabled = true;
     }
 
     // 下載 PNG — 從 iframe 抓 ECharts dataURL(反映當下 zoom / phase / legend 狀態)
@@ -1161,6 +1165,38 @@ class EMGAnalysisApp {
             console.error('下載 PNG 失敗:', err);
             await ShowError(t('dialog.error'), err.message || String(err));
         }
+    }
+
+    // 標準化視圖(ADR-0013 D4/D5):把 chart zoom 到「當下勾選分期點的 min/max 秒」
+    // 兩側各留 5% buffer 的區間。由結果區「標準化視圖」按鈕(chart_composer_spec
+    // extraRunButtons 注入)的 onclick 觸發。
+    //
+    // 讀勾選分期 Set(_composerCheckedPhases:phase 名)+ phase 秒數 map
+    // (_composerPhaseTimes:phase 名→秒),取勾選 phase 對應秒數;< 2 個無法定義
+    // 區間 → no-op return(按鈕本就灰,雙重保險)。算出 [t_first - buf, t_last + buf]
+    // 後走 bridge 送 composer-standardize-zoom 給 iframe(iframe 端 customJS 把
+    // 秒值換算成 dataZoom 百分比 start/end)。
+    standardizeComposerView() {
+        const checked = this._composerCheckedPhases;
+        const times = this._composerPhaseTimes;
+        if (!checked || !times) return;
+
+        // 勾選 phase 對應的秒數(過濾掉 times 內不存在的,防殘留)。
+        const secs = Array.from(checked)
+            .map((name) => times[name])
+            .filter((s) => typeof s === 'number');
+        if (secs.length < 2) return; // < 2 → no-op(按鈕本就 disabled)
+
+        const tFirst = Math.min(...secs);
+        const tLast = Math.max(...secs);
+        const buf = (tLast - tFirst) * 0.05;
+
+        const iframe = this._composerIframe;
+        if (!iframe) return;
+        bridge.send(iframe, 'composer-standardize-zoom', {
+            startSec: tFirst - buf,
+            endSec: tLast + buf,
+        });
     }
 
     async loadNormalizedPhaseSyncPhases() {

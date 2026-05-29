@@ -341,6 +341,7 @@ var translationsZhTW = map[string]string{
 	KeyPanelComposerTitle:           "資料做圖",
 	KeyButtonGenerateChart:          "生成圖表",
 	KeyButtonDownloadPNG:            "下載 PNG",
+	KeyButtonStandardizeView:        "標準化視圖",
 	KeyButtonDownloadChart:          "下載圖表",
 	KeyFormLabelComposerPhases:      "分期點顯示",
 	KeyResultSectionComposerPreview: "圖表預覽",

@@ -97,6 +97,22 @@ export function makeChartComposerSpec(app) {
         formBody: composerFormBody,
 
         /**
+         * extraRunButtons(ADR-0013 D4):在 shell button-group 內、`#mpRunBtn` 之後
+         * 注入「標準化視圖」按鈕。**初始 disabled** —— 生成前永遠灰;onResult 跑完後
+         * bindPhaseCheckboxes 的 onUpdate(見下方)會依勾選分期數(≥2)enable/disable。
+         *
+         * 走 i18n key(button.standardize_view),locale change 時隨 shell re-render。
+         * onclick 委派 app.standardizeComposerView()(實作在 main.js,讀勾選分期 Set +
+         * phase 秒數 map,算 zoom 區間後走 bridge 送 composer-standardize-zoom 給 iframe)。
+         *
+         * @param {(k: string) => string} t - tHtml translator(shell 傳 globalThis.tHtml)
+         * @returns {string} button HTML
+         */
+        extraRunButtons: (t) =>
+            `<button id="composerStandardizeBtn" class="btn btn-secondary" disabled `
+            + `onclick="app.standardizeComposerView()">${t('button.standardize_view')}</button>`,
+
+        /**
          * Subject load(ADR-0007 §4 **name-mode**):Composer 走
          * LoadChartComposerSubjects({manifestPath, dataFolder}) → result.subjects,
          * valueMode='name' → option.value 寫 subject **字串**(ADR-0002 §1
@@ -219,6 +235,11 @@ export function makeChartComposerSpec(app) {
             //    就 timeout。M5 wiring 不動 downloadComposerChart,本欄位需保留。
             app._composerIframeReady = ready;
 
+            // 4b. 存 iframe ref 給 standardizeComposerView(D4):它走 bridge.send
+            //     送 composer-standardize-zoom 給此 iframe。對齊 _composerIframeReady
+            //     的存取慣例(app this 持有 panel state,ADR-0007 §9)。
+            app._composerIframe = iframe;
+
             // 5. await ready,然後 bindPhaseCheckboxes — M1 review I1 precondition:
             //    iframe-side message listener 在 load 後才掛,首次 emitUpdate 的
             //    bridge.send 必須等到 listener 在線才不會 silent drop。
@@ -233,6 +254,13 @@ export function makeChartComposerSpec(app) {
                 iframe,
                 recalcPercents,
                 checkedSet: app._composerCheckedPhases,
+                // onUpdate(D4):依當前勾選分期數即時 enable/disable 標準化視圖按鈕。
+                // 首次 render(全勾)就會 enable;每次 checkbox change 即時更新。
+                // < 2 個分期點無法定義 zoom 區間 → disable。
+                onUpdate: (_pcts, checkedPhases) => {
+                    const btn = document.getElementById('composerStandardizeBtn');
+                    if (btn) btn.disabled = checkedPhases.length < 2;
+                },
             });
         },
     };

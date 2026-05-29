@@ -337,6 +337,7 @@ var translationsZhCN = map[string]string{
 	KeyPanelComposerTitle:           "数据作图",
 	KeyButtonGenerateChart:          "生成图表",
 	KeyButtonDownloadPNG:            "下载 PNG",
+	KeyButtonStandardizeView:        "标准化视图",
 	KeyButtonDownloadChart:          "下载图表",
 	KeyFormLabelComposerPhases:      "分期点显示",
 	KeyResultSectionComposerPreview: "图表预览",

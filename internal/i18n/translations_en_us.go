@@ -337,6 +337,7 @@ var translationsEnUS = map[string]string{
 	KeyPanelComposerTitle:           "Chart Composer",
 	KeyButtonGenerateChart:          "Generate Chart",
 	KeyButtonDownloadPNG:            "Download PNG",
+	KeyButtonStandardizeView:        "Standardize View",
 	KeyButtonDownloadChart:          "Download Chart",
 	KeyFormLabelComposerPhases:      "Phase Markers",
 	KeyResultSectionComposerPreview: "Chart Preview",
