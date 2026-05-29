@@ -776,16 +776,25 @@ func validatePhaseParams(params PhaseParams) (labels []string, ranges []models.T
 			return nil, nil, ErrNoValidPhaseLabels
 		}
 
+		// 邊界以 *float64 表示:前端非數值輸入經 parseFloat→NaN→Wails JSON null,對
+		// *float64 unmarshal 成 nil(而非靜默 coerce 成 float64 0)。顯式拒絕 nil 以區分
+		// 「未填 / 無效」與「合法的 0」,否則 {nil,1} 會被當成真實 {0,1} phase 分析。
+		if ph.StartTime == nil || ph.EndTime == nil {
+			return nil, nil, ErrInvalidPhaseRange
+		}
+
+		start, end := *ph.StartTime, *ph.EndTime
+
 		// 邊界須有限且 start < end:`!(start < end)` 同時擋 NaN(NaN 的任何比較皆為
 		// false)與反序 / 零長度;另顯式擋 ±Inf —— `-Inf < +Inf` 為 true 會繞過上式,
 		// 而舊 phaseStrings 路徑經 Str2Number 本就拒非有限值,新路徑於此補回對齊
 		// (否則 Inf 被 scale 後當無邊界區間,產出「成功但誤導」的結果)。
-		if math.IsInf(ph.StartTime, 0) || math.IsInf(ph.EndTime, 0) || !(ph.StartTime < ph.EndTime) {
+		if math.IsInf(start, 0) || math.IsInf(end, 0) || !(start < end) {
 			return nil, nil, ErrInvalidPhaseRange
 		}
 
 		labels = append(labels, name)
-		ranges = append(ranges, models.TimeRange{Start: ph.StartTime, End: ph.EndTime})
+		ranges = append(ranges, models.TimeRange{Start: start, End: end})
 	}
 
 	return labels, ranges, nil
@@ -1050,10 +1059,14 @@ type ChartResult struct {
 }
 
 // PhaseSpec 是單一分期的名稱與時間邊界,對應前端送出的 {name, startTime, endTime}。
+//
+// StartTime/EndTime 用 *float64:前端非數值輸入經 parseFloat→NaN、再經 Wails JSON
+// 編碼成 null,對 *float64 會 unmarshal 成 nil(而非靜默 coerce 成 float64 0)。
+// validatePhaseParams 以此區分「未填 / 無效(nil)」與「合法的 0」並拒絕前者。
 type PhaseSpec struct {
-	Name      string  `json:"name"`
-	StartTime float64 `json:"startTime"`
-	EndTime   float64 `json:"endTime"`
+	Name      string   `json:"name"`
+	StartTime *float64 `json:"startTime"`
+	EndTime   *float64 `json:"endTime"`
 }
 
 // PhaseParams holds parameters for phase analysis. Phases 由前端提供(名稱 + 邊界),
