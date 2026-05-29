@@ -26,6 +26,10 @@ var ErrInvalidGaitCycle = errors.New("無效的步態週期區間")
 // 都仰賴此 invariant。違反時應 fail-fast，避免 silent X-axis drift。
 var ErrPairLengthMismatch = errors.New("CCI pair 樣本長度與時間軸不一致")
 
+// ErrNilResult 表示傳入的 CCIAnalysisResult 為 nil。chart pipeline 入口 fail-fast，
+// 避免下游 setCCIGlobalOptions / buildCCILine 解參 nil result 造成 panic。
+var ErrNilResult = errors.New("CCI 分析結果為 nil")
+
 // CCIParams holds parameters for CCI analysis.
 type CCIParams struct {
 	ManifestFile string

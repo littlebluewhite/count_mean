@@ -76,7 +76,16 @@ func GenerateCCIInteractiveChart(ctx context.Context, result *CCIAnalysisResult,
 // 在 analyzer.go doc）。
 func validateCCIResultForChart(result *CCIAnalysisResult) error {
 	if result == nil {
-		return nil
+		return ErrNilResult
+	}
+
+	// GaitStartTime/GaitEndTime 為 NaN/±Inf 時,下面的 `d <= 0` 對 NaN 與 +Inf 恆為
+	// false 而 silently 通過,產出含 "NaN%"/"+Inf%" 軸標的圖。先擋非有限值,共用
+	// ErrInvalidGaitCycle sentinel(與 zero/negative duration 同語意:gait 區間不合法)。
+	if math.IsNaN(result.GaitStartTime) || math.IsInf(result.GaitStartTime, 0) ||
+		math.IsNaN(result.GaitEndTime) || math.IsInf(result.GaitEndTime, 0) {
+		return fmt.Errorf("%w: start=%v end=%v(含非有限值)",
+			ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
 	}
 
 	if d := result.GaitEndTime - result.GaitStartTime; d <= 0 {
@@ -399,7 +408,9 @@ func addCCIMeanSeries(
 			}
 		}
 
-		line.AddSeries(pr.PairName, lineData).
+		// PairName 為 user-controlled(來自 manifest CSV)— 嵌進 echarts series 名前
+		// 必須過 SanitizeChartString,否則 `</script>` 序列逸出 <script> context(H3 契約)。
+		line.AddSeries(chart.SanitizeChartString(pr.PairName), lineData).
 			SetSeriesOptions(
 				charts.WithLineChartOpts(opts.LineChart{
 					Smooth:     opts.Bool(false),
