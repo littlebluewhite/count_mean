@@ -210,7 +210,10 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 			io.WriteRequest{}, stats, params.NormStartPhase, params.NormEndPhase,
 		)
 		if statsWriteErr != nil {
-			a.logger.Error("寫入標準化統計 CSV 失敗", statsWriteErr, map[string]any{"path": phaseSyncCSVPath})
+			// 對齊 CCI/muscle_ratio sibling:atomic 寫入失敗時不另記 path 欄位
+			// (writePhaseSyncAtomic 失敗回空 path);statsWriteErr 已 wrap「PhaseSync
+			// 輸出...」帶 context,redact 後進 result.Message。
+			a.logger.Error("寫入標準化統計 CSV 失敗", statsWriteErr, map[string]any{})
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("寫入統計失敗: %s", redact.RedactForMessage(statsWriteErr))), nil
 		}
 

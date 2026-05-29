@@ -235,7 +235,9 @@ func TestAnalyzeNormalizedPhaseSync_RejectsInvalidExternalPath(t *testing.T) {
 	// 把 OutputDir 改成 /etc 子目錄(系統敏感前綴,security.ValidateExternalPath
 	// 必擋),強迫 boundary 觸發。/etc 的子目錄即使 ENOENT 也應該被 path
 	// validator 提早 reject,不該交給 OS 寫到一半才 fail。
-	app.state.Store(&appState{config: &config.AppConfig{OutputDir: "/etc/normalized_phase_sync_invalid"}})
+	// 用 buildAppState(非裸 &appState{})確保 csvHandler 非 nil — 即使日後 Output 1
+	// 的 boundary guard 放寬,Output 2 的 s.csvHandler 路徑也不會 nil-deref。
+	app.state.Store(buildAppState(&config.AppConfig{OutputDir: "/etc/normalized_phase_sync_invalid"}))
 
 	manifestPath, dataFolder := setupNormalizedPhaseSyncFixture(t)
 
