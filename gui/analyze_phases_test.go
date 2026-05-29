@@ -41,6 +41,13 @@ func TestAnalyzePhases_HonorsFrontendPhasesAndNames(t *testing.T) {
 		"phase 名稱必須來自前端傳入,不耦合 config.PhaseLabels")
 	assert.Equal(t, "擺動期", result.Results[1].PhaseLabel)
 	assert.NotEmpty(t, result.OutputPath)
+
+	// 前端 ranges 是「秒」,但 parsed-data 的時間欄被 Str2Number scale 過(×10^ScalingFactor)。
+	// ranges 必須 scale 到同域,否則沒有任何樣本落入 phase → 統計全為 0(panel 看似成功卻空)。
+	assert.NotZero(t, result.Results[0].MaxValues[0],
+		"phase 區間內應有樣本 → 統計非零;ranges 未 scale 到縮放時間域會導致全 0")
+	assert.NotZero(t, result.Results[0].Average[0],
+		"phase 區間內 mean 應非零")
 }
 
 // TestValidatePhaseParams_RejectsBadInput 釘住新 contract 的驗證邊界。
