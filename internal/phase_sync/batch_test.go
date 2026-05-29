@@ -16,7 +16,7 @@ import (
 // 把 PhaseSync 寫檔職責搬到 csvHandler 同步移除。對應的 RTL / NUL / ZWSP /
 // bidi-iso / CRLF subject sanitization 契約由
 // io.TestWritePhaseSyncResult_SubjectSanitization 釘住 — 內部仍走
-// calculator.GenerateOutputFileName -> SanitizeFileName 同一份過濾規則,
+// calculator.GenerateOutputFileName -> filename.Sanitize 同一份過濾規則,
 // migrate 前後行為對等。
 
 // TestValidateEMGFilePath_NonExistentBaseFolder 釘住 當 baseFolder 不

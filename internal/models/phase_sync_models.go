@@ -5,7 +5,7 @@ import "time"
 // PhaseManifest 分期總檔案記錄。一筆 PhaseManifest 代表一個受試者試次（subject trial）。
 //
 // 欄位語意：
-//   - Subject：受試者 ID，作為 output 檔名前綴；經 calculator.SanitizeFileName 處理路徑分隔符與特殊字元
+//   - Subject：受試者 ID，作為 output 檔名前綴；經 filename.Sanitize 處理路徑分隔符與特殊字元
 //   - MotionFile / ForceFile / EMGFile：相對於 DataFolder 的檔名，路徑解析走 manifest.ResolveEMGFile（lenient）
 //   - EMGMotionOffset：EMG 第一筆樣本對應的 Motion index；用於 motion-time ↔ EMG-time 轉換
 //     （見 synchronizer.TimeSynchronizer.MotionIndexToEMGTime）

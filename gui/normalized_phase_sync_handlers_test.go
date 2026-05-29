@@ -219,7 +219,7 @@ func TestAnalyzeNormalizedPhaseSync_StatsZeroDurationRejected(t *testing.T) {
 
 // TestAnalyzeNormalizedPhaseSync_RejectsInvalidExternalPath 釘住 (b):
 // 兩條 CSV 輸出路徑(normalizedEMGPath / phaseSyncCSVPath)由 outputDir +
-// subject 拼出來,subject 雖經 SanitizeFileName 仍可能拼出意外路徑。對齊
+// subject 拼出來,subject 雖經 filename.Sanitize 仍可能拼出意外路徑。對齊
 // CCI / muscle_ratio 的 boundary validation 模式 — 用 validateExternalPathInputs
 // 在寫檔前 reject 落入系統敏感目錄的路徑。
 //

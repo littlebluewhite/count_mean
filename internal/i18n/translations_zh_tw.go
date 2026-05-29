@@ -103,7 +103,7 @@ var translationsZhTW = map[string]string{
 	KeyErrorMuscleRatioSubjectEmptyEMG:           "EMG 資料為空",
 	KeyErrorMuscleRatioSubjectInsufficientPhases: "有效分期點不足 2 個，跳過 Output 2",
 	KeyErrorMuscleRatioSubjectPhaseOutOfEMGRange: "phase %s 時間 %.4f 落在 EMG 範圍 [%.4f, %.4f] 外，跳過 Output 2",
-	KeyErrorMuscleRatioSubjectCollision:          "輸出檔名衝突: subject %q 與 %q 經 SanitizeFileName 後同為 %q (case-insensitive)",
+	KeyErrorMuscleRatioSubjectCollision:          "輸出檔名衝突: subject %q 與 %q 經檔名安全化後同為 %q (case-insensitive)",
 	// 批次取消。
 	KeyErrorMuscleRatioCancelled: "肌肉比值批次已中止",
 	// CCI Analysis Messages (backend i18n).
