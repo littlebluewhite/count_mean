@@ -186,7 +186,7 @@ var translationsEnUS = map[string]string{
 	KeyPanelNormPhaseTitle:   "Normalised Phase Sync Analysis",
 	KeyPanelNormPhaseDesc:    "First normalises each muscle by its maximum within the \"normalisation range\", then computes phase-sync statistics over the normalised data within the \"statistics range\". Two files are produced in one run. The two ranges can be selected independently (defaulting to the same range, adjustable separately).",
 	KeyPanelMuscleRatioTitle: "Muscle Ratio Analysis",
-	KeyPanelMuscleRatioDesc:  "Batch-compute four right-side muscle-pair ratios for every subject in the manifest: R.RA/R.ES, R.IL/R.GMax, R.RF/R.BF, R.TA&IO/R.MF. Each subject produces two CSVs: the full time series and a phase-point slice (10 phases + 9 adjacent midpoints + up to 2 biomechanical-interval midpoints = up to 21 rows).",
+	KeyPanelMuscleRatioDesc:  "Batch-compute four right-side muscle-pair ratios for every subject in the manifest: R.RA/R.ES, R.IL/R.GMax, R.RF/R.BF, R.TA&IO/R.MF. Each subject produces two CSVs: the full time series and a phase-point slice where each ratio is the mean of an 11-sample window centred on the point (10 phases + 9 adjacent midpoints + up to 2 biomechanical-interval midpoints = up to 21 rows).",
 	// Phase 2 common buttons. (KeyButtonBrowse 用 legacy entry — 字串一致)
 	KeyButtonBack:              "Back",
 	KeyButtonStartCalculate:    "Start Calculation",
