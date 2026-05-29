@@ -2,6 +2,7 @@ package calculator
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	calcerrors "count_mean/internal/errors"
@@ -232,6 +233,38 @@ func (p *PhaseAnalyzer) AnalyzeFromRawData(records [][]string, phaseStrings []st
 	}
 
 	return p.Analyze(dataset, phases)
+}
+
+// AnalyzeFromRawDataWithRanges 從原始字串資料 + 顯式 phase 時間區間進行分析。
+// 與 AnalyzeFromRawData 不同:phase 邊界由 caller 直接提供(不從 phaseStrings 解析
+// 時間點);phase 名稱來自建構 analyzer 時注入的 phaseLabels。供 GUI 用前端傳入的
+// {name, startTime, endTime} 直接驅動,與 config.PhaseLabels 解耦。
+//
+// phases 以「秒」為單位傳入;本函式會在比對前把 ranges scale 到 parsed-data 時間域。
+func (p *PhaseAnalyzer) AnalyzeFromRawDataWithRanges(
+	records [][]string, phases []models.TimeRange,
+) (*AnalyzeResult, error) {
+	if p == nil {
+		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "階段分析器為空")
+	}
+
+	dataset, err := p.dataParser.ParseRawData(records)
+	if err != nil {
+		p.logger.Error("階段分析數據解析失敗", err)
+		return nil, fmt.Errorf("解析數據失敗: %w", err)
+	}
+
+	// 前端 ranges 以「秒」為單位,但 ParseRawData 已用 Str2Number 把時間欄
+	// × math.Pow10(scalingFactor)。比照舊路徑 parsePhases 把 ranges scale 到同域,
+	// 否則已 scale 的 data.Time 永遠落不進原始秒區間 → 每個 phase 統計全 0。
+	// 建新 slice,不就地改 caller 傳入的 phases。
+	factor := math.Pow10(p.scalingFactor)
+	scaled := make([]models.TimeRange, len(phases))
+	for i, r := range phases {
+		scaled[i] = models.TimeRange{Start: r.Start * factor, End: r.End * factor}
+	}
+
+	return p.Analyze(dataset, scaled)
 }
 
 // parsePhases 解析階段字符串為時間範圍.

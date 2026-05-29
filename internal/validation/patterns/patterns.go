@@ -34,6 +34,20 @@ var commandInjectionWordTokens = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bmount\b`),
 	regexp.MustCompile(`(?i)\bchmod\b`),
 	regexp.MustCompile(`(?i)\bbatch\b`),
+	// shell / code-exec token,原在 DangerousFunctions 用 call-syntax(後接 `(`)比對,
+	// 但 `; powershell script`、`run cmd here`、`use system now` 等 bare 命令不接 `(`
+	// → 被漏判(call-syntax gate 引入的 P1 回歸)。這些 token bare 出現即為攻擊,改用
+	// \bword\b 與其他命令 token 一致(case-insensitive)。`sh` 已在上方(\bsh\b);此處
+	// 補 cmd/powershell/bash/exec/eval/spawn/shell/system。word-boundary 不誤命中
+	// systemic/evaluation/execution/shoulder 等合法子串(無 \b)。
+	regexp.MustCompile(`(?i)\bcmd\b`),
+	regexp.MustCompile(`(?i)\bpowershell\b`),
+	regexp.MustCompile(`(?i)\bbash\b`),
+	regexp.MustCompile(`(?i)\bexec\b`),
+	regexp.MustCompile(`(?i)\beval\b`),
+	regexp.MustCompile(`(?i)\bspawn\b`),
+	regexp.MustCompile(`(?i)\bshell\b`),
+	regexp.MustCompile(`(?i)\bsystem\b`),
 }
 
 // isReservedNameIn reports whether name is a Windows reserved device name
@@ -158,9 +172,12 @@ func (r *PatternRegistry) initializePatterns() {
 		"=", "@", "\t=", "\r=", "\n=",
 	}
 
+	// 只留「試算表函式」—— 危險僅在被呼叫(後接 `(`)時,DetectFormula 以 call-syntax
+	// 比對(避免 document/query/offset 等常見英文字 bare 誤命中)。shell / code-exec
+	// token(cmd/powershell/bash/sh/system/exec/eval/spawn/shell)bare 即危險,已移到
+	// commandInjectionWordTokens 用 \bword\b 比對(見上方),否則 call-syntax gate 會
+	// 漏掉不接 `(` 的 bare 命令。
 	r.patterns[DangerousFunctions] = []string{
-		"cmd", "powershell", "bash", "sh", "system",
-		"exec", "eval", "spawn", "shell",
 		"hyperlink", "importxml", "importhtml",
 		"importrange", "importdata", "importfeed",
 		"webservice", "filterxml", "document",

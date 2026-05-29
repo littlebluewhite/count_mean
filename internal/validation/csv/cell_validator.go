@@ -185,18 +185,19 @@ func checkFormulaInjection(cell string, ctx *CellContext) error {
 }
 
 func (v *CellValidator) checkDangerousFunctions(cell string, ctx *CellContext) error {
+	// formula starter（=、@ 等）早在 checkFormulaInjection（ValidateCell 內先跑）
+	// 就被攔下，不會走到這裡；因此 DetectFormula 在這裡只會命中「危險函式名」。
+	// 先前的 `!strings.HasPrefix(cell, fn)` guard 會讓「以危險函式名開頭」的 cell
+	// （system(...)、importxml(...)）被 silently 放行，形成 CSV injection 繞過 —— 移除。
 	if detected, fn := v.detector.DetectFormula(cell); detected {
-		// Only report if it's a dangerous function (not a formula starter)
-		if !strings.HasPrefix(cell, fn) {
-			return errors.NewValidationError("csv_cell",
-				map[string]any{
-					"row":      ctx.Row,
-					"col":      ctx.Col,
-					"filename": ctx.Filename,
-					"function": fn,
-				},
-				fmt.Sprintf("第 %d 行第 %d 欄包含危險函數: %s", ctx.Row, ctx.Col, fn))
-		}
+		return errors.NewValidationError("csv_cell",
+			map[string]any{
+				"row":      ctx.Row,
+				"col":      ctx.Col,
+				"filename": ctx.Filename,
+				"function": fn,
+			},
+			fmt.Sprintf("第 %d 行第 %d 欄包含危險函數: %s", ctx.Row, ctx.Col, fn))
 	}
 
 	return nil

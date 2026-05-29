@@ -2,6 +2,7 @@ package patterns
 
 import (
 	"strings"
+	"unicode"
 )
 
 // InjectionDetectorImpl implements InjectionDetector interface.
@@ -33,17 +34,45 @@ func (d *InjectionDetectorImpl) DetectFormula(content string) (bool, string) {
 		}
 	}
 
-	// Check dangerous functions (case-insensitive)
+	// Check dangerous functions — 只在「被呼叫」(後接 `(`)時才算命中。
+	// 危險函式僅在被呼叫時危險;naive substring 比對會把 `shoulder`(⊃`sh`)、
+	// `systemic`(⊃`system`)、`evaluation`(⊃`eval`)等合法 EMG 內容誤殺。gate 在
+	// 呼叫語法上,並掃描所有出現位置 → 早期良性子串不會 shadow 後面真正的呼叫。
 	contentLower := strings.ToLower(content)
 
 	functions := d.registry.Get(DangerousFunctions)
 	for _, fn := range functions {
-		if strings.Contains(contentLower, strings.ToLower(fn)) {
+		if isFunctionCall(contentLower, strings.ToLower(fn)) {
 			return true, fn
 		}
 	}
 
 	return false, ""
+}
+
+// isFunctionCall 回報 fn 是否在 content 中以「呼叫」形式出現 — 即某個 fn 出現位置
+// 之後(略過所有空白:空白 / tab / 換行 / CR / Unicode 空白)緊接 `(`。content 與
+// fn 須皆已 lower-case。掃描每個出現位置,因此早期良性子串(如 `wash` 裡的 `sh`)
+// 不會 shadow 後面真正的呼叫(`system(`)。
+//
+// 略過「全部」空白而非僅空白 / tab:試算表在函式名與 `(` 之間容忍各種空白(含換行),
+// 且 quoted CSV multiline cell 可合法夾帶 `\n`/`\r`(cell_validator 的 checkControlChars
+// 放行 `\t`/`\n`/`\r`)— 只略過空白 / tab 會讓 `system\n(1)` 繞過危險函式偵測。
+func isFunctionCall(content, fn string) bool {
+	from := 0
+	for {
+		idx := strings.Index(content[from:], fn)
+		if idx < 0 {
+			return false
+		}
+
+		rest := strings.TrimLeftFunc(content[from+idx+len(fn):], unicode.IsSpace)
+		if strings.HasPrefix(rest, "(") {
+			return true
+		}
+
+		from += idx + 1
+	}
 }
 
 // DetectSQL checks for SQL injection patterns.

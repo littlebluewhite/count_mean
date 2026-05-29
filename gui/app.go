@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -40,6 +42,7 @@ var (
 	ErrLocaleEmpty        = errors.New("locale 不可為空字串")
 	ErrLocaleUnsupported  = errors.New("不支援的 locale")
 	ErrInvalidPhasePoint  = errors.New("無效的分期點代碼")
+	ErrInvalidPhaseRange  = errors.New("分期時間區間不合法（起始須小於結束且為有限值）")
 	ErrNoCSVFilesInFolder = errors.New("資料夾中沒有找到CSV文件")
 )
 
@@ -430,11 +433,15 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 		return nil, fmt.Errorf("寫入輸出檔案失敗: %w", writeErr)
 	}
 
-	// 準備回傳結果
+	// 準備回傳結果。Success/Message 必須顯式設定 — 前端依 result.success 判定成敗,
+	// 漏設會讓 bool 零值 false 使成功計算被誤判為失敗(對齊批次 executeBatchLoop 與
+	// NormalizeData 的 envelope)。
 	return &MaxMeanResult{
 		OutputPath: outputPath,
 		Headers:    records[0],
 		Results:    convertMaxMeanResultsToArray(results),
+		Success:    true,
+		Message:    fmt.Sprintf("最大平均值計算成功完成，結果已保存到: %s", outputPath),
 	}, nil
 }
 
@@ -510,8 +517,14 @@ func (a *App) executeBatchLoop(
 	s *appState,
 	entries []batchFileEntry,
 	ctx *batchProcessContext,
-	outputPath string,
 ) (*MaxMeanResult, error) {
+	// 回報的 OutputPath 必須與檔案實際寫入位置一致:processSingleBatchFile 以
+	// SubDir: ctx.outputDirName 寫到 OutputDir/<outputDirName>/。先前由 caller 各自
+	// 傳入 outputPath(non-direct 傳 Join(OutputDir, dirName)、direct 傳裸 outputDirName),
+	// 與實際 SubDir(Base(dirName))漂移 — direct 路徑更只回裸名缺 OutputDir 前綴。
+	// 改為在此統一從同一個 ctx.outputDirName 推導,杜絕漂移。
+	outputPath := filepath.Join(s.config.OutputDir, ctx.outputDirName)
+
 	var allHeaders []string
 	// Pre-allocate with estimated capacity (assume ~10 results per file on average)
 	estimatedCapacity := 10
@@ -644,7 +657,7 @@ func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error
 		}
 	}
 
-	return a.executeBatchLoop(s, entries, ctx, filepath.Join(s.config.OutputDir, discovery.dirName))
+	return a.executeBatchLoop(s, entries, ctx)
 }
 
 // executeBatchCalculationDirect 直接處理外部目錄的批次計算.
@@ -674,7 +687,7 @@ func (a *App) executeBatchCalculationDirect(
 		}
 	}
 
-	return a.executeBatchLoop(s, entries, ctx, outputDirName)
+	return a.executeBatchLoop(s, entries, ctx)
 }
 
 // NormalizeData performs data normalization.
@@ -743,30 +756,48 @@ func (a *App) NormalizeData(params NormalizeParams) (result *NormalizeResult, er
 	}, nil
 }
 
-// validatePhaseParams validates phase analysis parameters and returns cleaned labels.
-func validatePhaseParams(params PhaseParams) ([]string, error) {
+// validatePhaseParams validates phase analysis parameters and returns the phase
+// labels and time ranges parsed from params.Phases. 名稱與邊界皆來自前端傳入,
+// 不再耦合 config.PhaseLabels。
+func validatePhaseParams(params PhaseParams) (labels []string, ranges []models.TimeRange, err error) {
 	if params.InputFile == "" {
-		return nil, ErrNoInputFile
+		return nil, nil, ErrNoInputFile
 	}
 
-	if len(params.PhaseLabels) == 0 {
-		return nil, ErrNoPhaseLabels
+	if len(params.Phases) == 0 {
+		return nil, nil, ErrNoPhaseLabels
 	}
 
-	// 清理階段標籤（移除空白）
-	cleanLabels := make([]string, 0, len(params.PhaseLabels))
+	labels = make([]string, 0, len(params.Phases))
+	ranges = make([]models.TimeRange, 0, len(params.Phases))
 
-	for _, label := range params.PhaseLabels {
-		if trimmed := strings.TrimSpace(label); trimmed != "" {
-			cleanLabels = append(cleanLabels, trimmed)
+	for _, ph := range params.Phases {
+		name := strings.TrimSpace(ph.Name)
+		if name == "" {
+			return nil, nil, ErrNoValidPhaseLabels
 		}
+
+		// 邊界以原始字串收,用 strconv.ParseFloat 嚴格解析整串:拒空字串 / 部分解析
+		// (前端 parseFloat 會把 "1.2foo" 截成 1.2、"0x10" 截成 0,這類截斷誤輸入若以
+		// 數字傳入會被當合法值)/ 非數值。
+		start, errStart := strconv.ParseFloat(strings.TrimSpace(ph.StartTime), 64)
+		end, errEnd := strconv.ParseFloat(strings.TrimSpace(ph.EndTime), 64)
+		if errStart != nil || errEnd != nil {
+			return nil, nil, ErrInvalidPhaseRange
+		}
+
+		// 邊界須有限且 start < end:`!(start < end)` 同時擋 NaN(NaN 的任何比較皆為
+		// false)與反序 / 零長度;另顯式擋 ±Inf —— ParseFloat 接受 "Inf",且
+		// `-Inf < +Inf` 為 true 會繞過上式。
+		if math.IsInf(start, 0) || math.IsInf(end, 0) || !(start < end) {
+			return nil, nil, ErrInvalidPhaseRange
+		}
+
+		labels = append(labels, name)
+		ranges = append(ranges, models.TimeRange{Start: start, End: end})
 	}
 
-	if len(cleanLabels) == 0 {
-		return nil, ErrNoValidPhaseLabels
-	}
-
-	return cleanLabels, nil
+	return labels, ranges, nil
 }
 
 // generatePhaseOutputName generates the output filename for phase analysis.
@@ -780,15 +811,18 @@ func convertPhaseResultToAnalysis(phaseResult *models.PhaseAnalysisResult, chann
 	maxValues := make([]float64, channelCount)
 	meanValues := make([]float64, channelCount)
 
+	// MaxValues/MeanValues 的 key 是 0-based channel index(key 0 = Ch1,見
+	// calculator.computePhaseStatistics)。直接以 colIdx 對應輸出槽;先前的
+	// colIdx-1 會丟掉 Ch1 並整體位移一格。
 	for colIdx, val := range phaseResult.MaxValues {
-		if colIdx-1 >= 0 && colIdx-1 < len(maxValues) {
-			maxValues[colIdx-1] = val
+		if colIdx >= 0 && colIdx < len(maxValues) {
+			maxValues[colIdx] = val
 		}
 	}
 
 	for colIdx, val := range phaseResult.MeanValues {
-		if colIdx-1 >= 0 && colIdx-1 < len(meanValues) {
-			meanValues[colIdx-1] = val
+		if colIdx >= 0 && colIdx < len(meanValues) {
+			meanValues[colIdx] = val
 		}
 	}
 
@@ -815,7 +849,7 @@ type phaseRunData struct {
 // AnalyzePhases performs phase analysis.
 //
 // 走 [[AnalysisHandler[P, R]]] 樣板:Validate / Execute / WriteCSV 三 closure 分別綁
-// `validatePhaseParams`、`readCSVWithPathValidation + phaseAnalyzer.AnalyzeFromRawData`、
+// `validatePhaseParams`、`readCSVWithPathValidation + per-call analyzer.AnalyzeFromRawDataWithRanges`、
 // `csvHandler.WritePhaseAnalysis`。panic safety + entry/exit log 由樣板透過
 // [[HandlerRun]] 收乾;handler body 只剩 metadata log + result envelope 組裝。
 //
@@ -825,28 +859,32 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 	s := a.state.Load()
 
 	a.logger.Info("階段分析參數", map[string]any{
-		"input_file":   params.InputFile,
-		"phase_labels": params.PhaseLabels,
-		"output_path":  params.OutputPath,
+		"input_file":  params.InputFile,
+		"phase_count": len(params.Phases),
+		"output_path": params.OutputPath,
 	})
 
-	// cleanLabels 跨 closure 共用:Validate 內由 validatePhaseParams 產出,
-	// Execute 內餵給 phaseAnalyzer.AnalyzeFromRawData,result envelope 組裝時
-	// 用 len(cleanLabels) 作為 phase loop guard。closure capture 是必要 trick —
-	// 樣板的 Validate 簽章 `func(P) error` 不允許多回傳值,但 cleanLabels 又是
-	// validate 副產物,放 P 裡會把 caller 還沒做的驗證提前到組 P 階段。
-	var cleanLabels []string
+	// labels / ranges 跨 closure 共用:Validate 內由 validatePhaseParams 產出(名稱與
+	// 時間區間皆來自前端 params.Phases),Execute 內以 labels 建 per-call analyzer、
+	// ranges 作為顯式 phase 邊界,result envelope 組裝時用 len(labels) 作為 phase loop
+	// guard。closure capture 是必要 trick — 樣板的 Validate 簽章 `func(P) error` 不允許
+	// 多回傳值。
+	var (
+		labels []string
+		ranges []models.TimeRange
+	)
 
 	handler := &AnalysisHandler[PhaseParams, phaseRunData]{
 		Name:   "階段分析",
 		Logger: a.logger,
 		CSV:    s.csvHandler,
 		Validate: func(p PhaseParams) error {
-			labels, validateErr := validatePhaseParams(p)
+			ls, rs, validateErr := validatePhaseParams(p)
 			if validateErr != nil {
 				return validateErr
 			}
-			cleanLabels = labels
+			labels = ls
+			ranges = rs
 			return nil
 		},
 		Execute: func(ctx context.Context, p PhaseParams) (phaseRunData, error) {
@@ -855,7 +893,11 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 				return phaseRunData{}, fmt.Errorf("讀取資料檔案失敗: %w", readErr)
 			}
 
-			analysisResult, analyzeErr := s.phaseAnalyzer.AnalyzeFromRawData(records, cleanLabels)
+			// per-call analyzer:phase 名稱用前端 labels、邊界用前端 ranges
+			// (AnalyzeFromRawDataWithRanges 不從字串解析時間點),與 config.PhaseLabels 解耦。
+			analyzer := calculator.NewPhaseAnalyzer(s.config.ScalingFactor, labels)
+
+			analysisResult, analyzeErr := analyzer.AnalyzeFromRawDataWithRanges(records, ranges)
 			if analyzeErr != nil {
 				return phaseRunData{}, fmt.Errorf("階段分析失敗: %w", analyzeErr)
 			}
@@ -889,7 +931,7 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 	results := make([]PhaseAnalysis, 0, len(data.analysisResult.PhaseResults))
 
 	for i, phaseResult := range data.analysisResult.PhaseResults {
-		if i >= len(cleanLabels) {
+		if i >= len(labels) {
 			break
 		}
 
@@ -1016,11 +1058,24 @@ type ChartResult struct {
 	Message     string `json:"message"`
 }
 
-// PhaseParams holds parameters for phase analysis.
+// PhaseSpec 是單一分期的名稱與時間邊界,對應前端送出的 {name, startTime, endTime}。
+//
+// StartTime/EndTime 收「原始字串」:前端送使用者輸入的原字串,後端以 strconv.ParseFloat
+// 嚴格解析整串。前端 parseFloat 會把 "1.2foo" 截成 1.2、"0x10" 截成 0、非數值成 NaN,
+// 這些部分解析 / 截斷的誤輸入若以數字傳入會被當合法值;改收字串 + 嚴格解析可一律拒絕
+// (含空字串 / "1.2foo" / "0x10")。validatePhaseParams 另擋 ParseFloat 仍接受的 ±Inf / NaN。
+type PhaseSpec struct {
+	Name      string `json:"name"`
+	StartTime string `json:"startTime"`
+	EndTime   string `json:"endTime"`
+}
+
+// PhaseParams holds parameters for phase analysis. Phases 由前端提供(名稱 + 邊界),
+// 後端據此分析並以該名稱標記結果,不再耦合 config.PhaseLabels。
 type PhaseParams struct {
-	InputFile   string   `json:"inputFile"`
-	PhaseLabels []string `json:"phaseLabels"`
-	OutputPath  string   `json:"outputPath"`
+	InputFile  string      `json:"inputFile"`
+	Phases     []PhaseSpec `json:"phases"`
+	OutputPath string      `json:"outputPath"`
 }
 
 // PhaseResult holds the result of phase analysis.
@@ -1239,4 +1294,3 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 
 	return result, nil
 }
-

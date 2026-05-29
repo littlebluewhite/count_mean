@@ -149,6 +149,32 @@ func TestValidateCSVData_EMGHeaderPassesWithFalsePositiveTerms(t *testing.T) {
 	}
 }
 
+// TestValidateCell_BodyRejectsDangerousFunctionPrefix 釘住 CSV injection P0:
+// body cell 以危險函式名「開頭」(system(...)、importxml(...) 等)先前因
+// checkDangerousFunctions 的 `!strings.HasPrefix(cell, fn)` guard 被 silently
+// 放行(return nil)。移除 guard 後,DetectFormula 命中危險函式即拒絕。
+func TestValidateCell_BodyRejectsDangerousFunctionPrefix(t *testing.T) {
+	v := NewCellValidator()
+
+	// 全部小寫且「以」危險函式名開頭 — 觸發 HasPrefix-guard 繞過。刻意避開會被
+	// formula starter / script / sql / command / extension 攔截的字串,確保這些 cell
+	// 的唯一守門點就是 checkDangerousFunctions。
+	cases := []string{
+		"system(x)",
+		"importxml(x)",
+		"indirect(x)",
+	}
+
+	for _, cell := range cases {
+		t.Run(cell, func(t *testing.T) {
+			ctx := NewCellContext(1, 1, "evil.csv") // body cell(IsHeader=false)
+			if err := v.ValidateCell(cell, ctx); err == nil {
+				t.Errorf("body cell %q 以危險函式開頭,必須被拒絕(CSV injection),實際通過", cell)
+			}
+		})
+	}
+}
+
 // TestValidateCSVData_HeaderStillBlocksFormulaInjection 釘住 不能 weaken header
 // 的 formula starter 守門 — `=cmd|/c calc!A1` 在 header 仍要被擋下（Excel 開啟 header
 // 仍會 trigger formula 計算）。
@@ -255,5 +281,87 @@ func TestValidateHeaderRow_SmokeForStreamingCaller(t *testing.T) {
 	if err := v.ValidateHeaderRow([]string{"Time", "=cmd|/c calc", "LA"}, 1, -1,
 		"evil.csv"); err == nil {
 		t.Error("ValidateHeaderRow(formula injection) 必須擋下，實際通過")
+	}
+}
+
+// TestValidateCell_BodyAllowsBenignFunctionSubstrings 釘住 P2 回歸:body cell 含
+// 危險函式「名」的子串但非呼叫(`shoulder`⊃`sh`、`systemic`⊃`system`、
+// `evaluation`⊃`eval`、`Cash`/`Wash`⊃`sh`)必須放行。先前 checkDangerousFunctions 的
+// DetectFormula 用 naive substring 比對(移除 !HasPrefix guard 後暴露),把這些合法
+// EMG 內容全誤殺。修法把危險函式偵測 gate 在呼叫語法(後接 `(`)上。
+func TestValidateCell_BodyAllowsBenignFunctionSubstrings(t *testing.T) {
+	v := NewCellValidator()
+
+	cases := []string{
+		"shoulder",   // 含 `sh`
+		"systemic",   // 含 `system`
+		"Cash",       // 含 `sh`
+		"evaluation", // 含 `eval`
+		"Wash",       // 含 `sh`
+	}
+	for _, cell := range cases {
+		t.Run(cell, func(t *testing.T) {
+			ctx := NewCellContext(1, 1, "data.csv") // body cell(IsHeader=false)
+			if err := v.ValidateCell(cell, ctx); err != nil {
+				t.Errorf("body cell %q 為合法 EMG 內容(危險函式名子串但非呼叫),必須放行,實際 err=%v", cell, err)
+			}
+		})
+	}
+}
+
+// TestValidateCell_BodyBlocksShadowedFunctionCall 釘住 no-shadowing 端到端契約:
+// body cell 內早期良性子串(`wash` 的 `sh`)不可掩蓋後面真正的危險函式呼叫
+// (`system(`)。確保 call-syntax gate 掃描所有出現位置,而非第一個子串就放行。
+func TestValidateCell_BodyBlocksShadowedFunctionCall(t *testing.T) {
+	v := NewCellValidator()
+	ctx := NewCellContext(1, 1, "evil.csv") // body cell(IsHeader=false）
+	if err := v.ValidateCell("wash system(1)", ctx); err == nil {
+		t.Error(`body cell "wash system(1)" 含真實函式呼叫 system(,必須被拒(no-shadowing),實際通過`)
+	}
+}
+
+// TestValidateCell_BodyBlocksMultilineFunctionCall 釘住 no-bypass 端到端:body cell
+// 內危險函式名與 `(` 之間夾換行(quoted CSV multiline cell — checkControlChars 放行
+// `\n`/`\r`,且 checkDangerousFunctions 先於 checkControlChars 跑)仍須被拒。
+func TestValidateCell_BodyBlocksMultilineFunctionCall(t *testing.T) {
+	v := NewCellValidator()
+
+	cases := map[string]string{
+		"lf":   "system\n(1)",
+		"crlf": "system\r\n(1)",
+	}
+	for name, cell := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := NewCellContext(1, 1, "evil.csv")
+			if err := v.ValidateCell(cell, ctx); err == nil {
+				t.Errorf("body cell %q 跨行函式呼叫須被拒,實際通過(換行繞過)", cell)
+			}
+		})
+	}
+}
+
+// TestValidateCell_BodyBlocksBareShellCommands 釘住 P1 安全回歸:shell / exec 命令
+// token(cmd/powershell/bash/exec/spawn/shell/system/eval)在 body cell 即使未接 `(`
+// 也必須被擋。先前這些 token 只在 DangerousFunctions、被 call-syntax gate 要求 `(`,
+// 使 `; powershell -enc`、`run cmd here` 等 bare 命令漏判。修法:把命令 token 移到
+// DetectCommand 的 word-boundary 組(bare 即命中)。
+func TestValidateCell_BodyBlocksBareShellCommands(t *testing.T) {
+	v := NewCellValidator()
+
+	cases := map[string]string{
+		"powershell": "; powershell script",
+		"cmd":        "run cmd here",
+		"bash":       "do bash thing",
+		"exec":       "please exec payload",
+		"system":     "use system now",
+		"eval":       "then eval expr",
+	}
+	for name, cell := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := NewCellContext(1, 1, "evil.csv")
+			if err := v.ValidateCell(cell, ctx); err == nil {
+				t.Errorf("body cell %q 為 bare shell / exec 命令,必須被拒,實際通過(偵測回歸)", cell)
+			}
+		})
 	}
 }
