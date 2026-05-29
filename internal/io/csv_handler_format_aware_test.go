@@ -268,7 +268,7 @@ func TestWritePhaseSyncResult_NilStats(t *testing.T) {
 }
 
 // TestWritePhaseSyncResult_SubjectSanitization 釘住:WritePhaseSyncResult 把
-// stats.Subject 交給 calculator.GenerateOutputFileName -> SanitizeFileName,
+// stats.Subject 交給 calculator.GenerateOutputFileName -> filename.Sanitize,
 // Unicode 控制 / 雙向書寫覆寫 (U+202E) / NUL / ZWSP / 各 bidi isolation marker /
 // CRLF 等不會落到實際 filename。原 TestExportResults_SubjectWithRTLAndControl_FilenameSanitized
 // 在 phase_sync 套件以 ExportResults 路徑釘同一份契約; ADR-0001 把寫檔職責搬到 csvHandler 後

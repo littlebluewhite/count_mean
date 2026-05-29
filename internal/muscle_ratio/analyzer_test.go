@@ -721,7 +721,7 @@ func TestAnalyze_EMGFileTraversalRejected(t *testing.T) {
 }
 
 // TestAnalyze_CaseOnlySubjectCollision_FailFast 釘住 codex review P2 (post-impl)：
-// macOS / Windows 預設 case-insensitive filesystem，"SF8" 與 "sf8" 經 SanitizeFileName
+// macOS / Windows 預設 case-insensitive filesystem，"SF8" 與 "sf8" 經 filename.Sanitize
 // 後在 case-sensitive map 不衝突，但寫入磁碟時實為同檔，後者 O_TRUNC 覆寫前者輸出。
 // 修法：collision key 用 strings.ToLower 做 case-insensitive normalization。
 func TestAnalyze_CaseOnlySubjectCollision_FailFast(t *testing.T) {
@@ -788,7 +788,7 @@ func TestAnalyze_NFCvsNFDSubjectCollision_FailFast(t *testing.T) {
 }
 
 // TestAnalyze_FormulaInjectionSubject_Sanitized 釘住測試補洞：
-// Subject 含 "=SUM(A1:B2)" 之類試算表公式 — SanitizeFileName 應移除路徑分隔字元（`:`、`/` 等），
+// Subject 含 "=SUM(A1:B2)" 之類試算表公式 — filename.Sanitize 應移除路徑分隔字元（`:`、`/` 等），
 // 使最終 output 檔名不含這類字元；pipeline 不應 panic 或 fail。
 // 註：CSV injection 字元（=、( 等）由 csvutil.SanitizeHeaderRow 在寫檔層保護，非本 helper 職責。
 func TestAnalyze_FormulaInjectionSubject_Sanitized(t *testing.T) {
@@ -864,7 +864,7 @@ func TestAnalyze_NegativeTime_Handled(t *testing.T) {
 }
 
 func TestAnalyze_DuplicateSanitizedSubjects_FailFast(t *testing.T) {
-	// "A/B" 和 "A:B" 經 SanitizeFileName 都成 "A_B"，整批應 fail
+	// "A/B" 和 "A:B" 經 filename.Sanitize 都成 "A_B"，整批應 fail
 	tempDir := t.TempDir()
 	dataDir := filepath.Join(tempDir, "data")
 	outDir := filepath.Join(tempDir, "output")
@@ -1065,7 +1065,7 @@ func TestAnalyze_EmptyManifest_FailFast(t *testing.T) {
 }
 
 // TestAnalyze_EmptySubject_Rejected 釘住 analyzeSubject 的 Subject 空字串守門：
-// 沒擋下時 SanitizeFileName("") 產生 "_muscle_ratio.csv"，多個空 Subject 會 silently 共寫同檔。
+// 沒擋下時 filename.Sanitize("") 產生 "_muscle_ratio.csv"，多個空 Subject 會 silently 共寫同檔。
 func TestAnalyze_EmptySubject_Rejected(t *testing.T) {
 	tempDir := t.TempDir()
 	dataDir := filepath.Join(tempDir, "data")

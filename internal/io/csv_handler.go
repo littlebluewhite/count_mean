@@ -24,6 +24,7 @@ import (
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
 	"count_mean/internal/validation"
+	"count_mean/internal/validation/filename"
 )
 
 // Static errors for err113 compliance.
@@ -778,7 +779,7 @@ func (h *CSVHandler) WritePhaseSyncResult(
 
 // WriteCCIResult 把 CCI 分析結果寫成 CSV。
 //
-// Filename 由 result.Subject 經 SanitizeFileName 後 + "_CCI_Rudolph.csv" suffix
+// Filename 由 result.Subject 經 filename.Sanitize 後 + "_CCI_Rudolph.csv" suffix
 // 推導 — req.Filename 被忽略,僅 req.SubDir 生效(空字串 → OutputDir 根)。
 // 回傳實際 outputPath 與錯誤。
 //
@@ -811,9 +812,9 @@ func (h *CSVHandler) WriteCCIResult(
 			cci.ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
 	}
 
-	safeSubject := calculator.SanitizeFileName(result.Subject)
-	filename := fmt.Sprintf("%s_CCI_Rudolph.csv", safeSubject)
-	outputPath, joinErr := h.safeJoinOutput(req.SubDir, filename)
+	safeSubject := filename.Sanitize(result.Subject)
+	fname := fmt.Sprintf("%s_CCI_Rudolph.csv", safeSubject)
+	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
 	if joinErr != nil {
 		return "", fmt.Errorf("CCI 輸出路徑無效: %w", joinErr)
 	}
@@ -938,7 +939,7 @@ type MuscleRatioOutputPhasesPayload struct {
 
 // WriteMuscleRatioOutputAll 寫 per-subject Output 1 — full time-series ratio CSV。
 //
-// Filename 由 Subject 經 SanitizeFileName 後 + "_muscle_ratio.csv" 推導;
+// Filename 由 Subject 經 filename.Sanitize 後 + "_muscle_ratio.csv" 推導;
 // req.Filename 被忽略,僅 req.SubDir 生效。
 //
 // row layout: 1 header ["Time (s)", PairLabels...] + N data rows。
@@ -950,9 +951,9 @@ func (h *CSVHandler) WriteMuscleRatioOutputAll(
 		return "", errEmptyMuscleRatioPayload
 	}
 
-	safeSubject := calculator.SanitizeFileName(p.Subject)
-	filename := fmt.Sprintf("%s_muscle_ratio.csv", safeSubject)
-	outputPath, joinErr := h.safeJoinOutput(req.SubDir, filename)
+	safeSubject := filename.Sanitize(p.Subject)
+	fname := fmt.Sprintf("%s_muscle_ratio.csv", safeSubject)
+	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
 	if joinErr != nil {
 		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
 	}
@@ -999,9 +1000,9 @@ func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 		return "", errEmptyMuscleRatioPayload
 	}
 
-	safeSubject := calculator.SanitizeFileName(p.Subject)
-	filename := fmt.Sprintf("%s_muscle_ratio_phases_avg11.csv", safeSubject)
-	outputPath, joinErr := h.safeJoinOutput(req.SubDir, filename)
+	safeSubject := filename.Sanitize(p.Subject)
+	fname := fmt.Sprintf("%s_muscle_ratio_phases_avg11.csv", safeSubject)
+	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
 	if joinErr != nil {
 		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
 	}

@@ -34,7 +34,7 @@ const defaultEMGCSVPrecision = 6
 // 或 lenient_path 確認 outputPath 在允許的 OutputDir 範圍內、不含 traversal
 // segment。Audit (2026-05-17)：所有 production caller 都已符合：
 //   - gui/normalized_phase_sync_handlers.go:131 — outputDir 來自 app config，
-//     檔名走 calculator.SanitizeFileName(subject) 再 filepath.Join 後傳入。
+//     檔名走 filename.Sanitize(subject) 再 filepath.Join 後傳入。
 //
 // # Atomic write
 //

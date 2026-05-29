@@ -3,6 +3,7 @@ package patterns
 
 import (
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -33,6 +34,25 @@ var commandInjectionWordTokens = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bmount\b`),
 	regexp.MustCompile(`(?i)\bchmod\b`),
 	regexp.MustCompile(`(?i)\bbatch\b`),
+}
+
+// isReservedNameIn reports whether name is a Windows reserved device name
+// (case-insensitive) within the given registry's ReservedNames set.
+func isReservedNameIn(reg *PatternRegistry, name string) bool {
+	nameUpper := strings.ToUpper(name)
+	for _, r := range reg.Get(ReservedNames) {
+		if nameUpper == r {
+			return true
+		}
+	}
+	return false
+}
+
+// IsReservedName reports whether name is a Windows reserved device name
+// (case-insensitive), consulting the default registry. Use this from callers
+// without a detector instance (e.g. filename.Sanitize).
+func IsReservedName(name string) bool {
+	return isReservedNameIn(DefaultRegistry(), name)
 }
 
 // CommandInjectionWordTokens 回傳 word-boundary command-injection regex 切片副本。

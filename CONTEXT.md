@@ -25,7 +25,7 @@ _Avoid_: phase line(舊內部變數名,實際上是 markLine + label 組合)、m
 _Avoid_: config, batch file, descriptor, sheet.
 
 **Subject**
-[[Manifest]] 一列代表的「一個分析對象」，是所有 [[Analysis pipeline family]] 與 [[Chart Composer]] 的 unit of work。在程式碼裡是 `PhaseManifest.Subject` 字串欄位（首欄）；在 UI 上 CCI / PhaseSync / Chart Composer panel 統一以「分析主題」呈現 — 兩個詞**同義**。Subject 名稱經 `SanitizeFileName` 後成為 muscle_ratio output1 (`{safeSubject}_muscle_ratio.csv`) 等下游檔名的 prefix。
+[[Manifest]] 一列代表的「一個分析對象」，是所有 [[Analysis pipeline family]] 與 [[Chart Composer]] 的 unit of work。在程式碼裡是 `PhaseManifest.Subject` 字串欄位（首欄）；在 UI 上 CCI / PhaseSync / Chart Composer panel 統一以「分析主題」呈現 — 兩個詞**同義**。Subject 名稱經檔名安全化後成為 muscle_ratio output1 (`{safeSubject}_muscle_ratio.csv`) 等下游檔名的 prefix。
 _Avoid_: trial, sample, case, 分析主題（UI label only — 內部以 Subject 為準）.
 
 **Reference EMG**
