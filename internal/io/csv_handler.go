@@ -784,7 +784,7 @@ func (h *CSVHandler) WritePhaseSyncResult(
 //
 // row layout: 1 header row ["Time (s)", "Gait Cycle (%)", PairName...]
 //
-//	+ N data rows,每 row 含 [time, gait_pct, pair_value...]
+//   - N data rows,每 row 含 [time, gait_pct, pair_value...]
 //
 // NaN/Inf cell → 空字串;整 row 所有 pair 都 NaN/Inf → skip 整 row(計入 droppedRowCount)。
 //
@@ -919,23 +919,21 @@ type MuscleRatioOutputAllPayload struct {
 	Ratios     [][]float64 // 每個 pair 一個 inner slice,長度與 Times 對齊
 }
 
-// MuscleRatioOutputPhasesPayload 是 WriteMuscleRatioOutputPhases 的輸入承載。
-//
-// Points 與 Ratios 由 muscle_ratio.Analyzer 預先 collectPhasePoints 計算得;
-// CSVHandler 只負責照 Point.Time 找 Ratios 切片的對應 cell 並 emit row。
-type MuscleRatioOutputPhasesPayload struct {
-	Subject    string
-	PairLabels []string
-	Times      []float64
-	Ratios     [][]float64
-	Points     []MuscleRatioPhasePoint
+// MuscleRatioPhasePoint 是 Analyzer 在 collectPhasePoints + WindowMean 階段算好的
+// Output 2 條目:Name 顯示名稱,Time 為對齊到最近 EMG sample 的中心時間,
+// Values 為各 pair 已算好的 11 點 window mean(與 PairLabels 同序)。(ADR-0014)
+type MuscleRatioPhasePoint struct {
+	Name   string
+	Time   float64
+	Values []float64
 }
 
-// MuscleRatioPhasePoint 是 muscle_ratio.Analyzer 在 collectPhasePoints 階段
-// 算出的 phase / midpoint 條目,Name 為顯示名稱,Time 為 EMG-time-aligned 時間值。
-type MuscleRatioPhasePoint struct {
-	Name string
-	Time float64
+// MuscleRatioOutputPhasesPayload — handler 純 layout:只 emit Points 內算好的值。
+// 不再帶 Times/Ratios(ADR-0014:math 上移 Analyzer,handler 不 reach-in)。
+type MuscleRatioOutputPhasesPayload struct {
+	Subject    string
+	PairLabels []string // 已由 Analyzer 加上 "(11pt avg)" 後綴,handler verbatim emit
+	Points     []MuscleRatioPhasePoint
 }
 
 // WriteMuscleRatioOutputAll 寫 per-subject Output 1 — full time-series ratio CSV。
@@ -991,22 +989,18 @@ func (h *CSVHandler) WriteMuscleRatioOutputAll(
 
 // WriteMuscleRatioOutputPhases 寫 per-subject Output 2 — phase+midpoint slice CSV。
 //
-// Filename 由 Subject 推導 + "_muscle_ratio_phases.csv";req.Filename 被忽略。
+// Filename 由 Subject 推導 + "_muscle_ratio_phases_avg11.csv";req.Filename 被忽略。
 // Row 數量由 caller (muscle_ratio.Analyzer) 預先決定的 Points 切片長度決定。
+// Analyzer 已算好 window mean 值,handler 純 layout emit。(ADR-0014)
 func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 	req WriteRequest, p MuscleRatioOutputPhasesPayload,
 ) (string, error) {
 	if len(p.Points) == 0 {
 		return "", errEmptyMuscleRatioPayload
 	}
-	// Points 非空但 Times 空時,nearestTimeIndex 仍會回 0,後面 p.Times[idx]
-	// 會 index 越界 panic — 提早 fail 為 errEmptyMuscleRatioPayload。
-	if len(p.Times) == 0 {
-		return "", errEmptyMuscleRatioPayload
-	}
 
 	safeSubject := calculator.SanitizeFileName(p.Subject)
-	filename := fmt.Sprintf("%s_muscle_ratio_phases.csv", safeSubject)
+	filename := fmt.Sprintf("%s_muscle_ratio_phases_avg11.csv", safeSubject)
 	outputPath, joinErr := h.safeJoinOutput(req.SubDir, filename)
 	if joinErr != nil {
 		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
@@ -1024,11 +1018,10 @@ func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 		Header: header,
 		Emit: func(emit func([]string) error) error {
 			for _, point := range p.Points {
-				idx := nearestTimeIndex(p.Times, point.Time)
-				row := make([]string, 0, 2+len(p.Ratios))
-				row = append(row, point.Name, fmt.Sprintf("%.4f", p.Times[idx]))
-				for k := range p.Ratios {
-					row = append(row, formatMuscleRatioCell(p.Ratios[k], idx))
+				row := make([]string, 0, 2+len(point.Values))
+				row = append(row, point.Name, fmt.Sprintf("%.4f", point.Time))
+				for _, v := range point.Values {
+					row = append(row, formatRatioValue(v))
 				}
 				if err := emit(row); err != nil {
 					return err
@@ -1043,36 +1036,22 @@ func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 	return outputPath, nil
 }
 
-// formatMuscleRatioCell formats one ratio value (與 cci.ExportToCSV row-format
-// 同款規則,NaN/Inf → 空字串、否則 %.6f)。
-func formatMuscleRatioCell(values []float64, idx int) string {
-	if idx < 0 || idx >= len(values) {
-		return ""
-	}
-	v := values[idx]
+// formatRatioValue formats a single ratio float (NaN/Inf → 空字串,否則 %.6f)。
+// Output-2 handler 直接呼叫;Output-1 透過 formatMuscleRatioCell 委派。
+func formatRatioValue(v float64) string {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return ""
 	}
 	return fmt.Sprintf("%.6f", v)
 }
 
-// nearestTimeIndex 是 muscle_ratio.Analyzer 內 synchronizer.FindNearestTimeIndex
-// 的純函式 mirror — 取出最接近 target 的 times slice index。time series 假設
-// 已 ascending sorted (muscle_ratio.Analyzer 上游已保證)。
-func nearestTimeIndex(times []float64, target float64) int {
-	if len(times) == 0 {
-		return 0
+// formatMuscleRatioCell formats one ratio value (與 cci.ExportToCSV row-format
+// 同款規則,NaN/Inf → 空字串、否則 %.6f)。Output-1 專用(含 bounds-check)。
+func formatMuscleRatioCell(values []float64, idx int) string {
+	if idx < 0 || idx >= len(values) {
+		return ""
 	}
-	best := 0
-	bestDelta := math.Abs(times[0] - target)
-	for i, t := range times[1:] {
-		delta := math.Abs(t - target)
-		if delta < bestDelta {
-			best = i + 1
-			bestDelta = delta
-		}
-	}
-	return best
+	return formatRatioValue(values[idx])
 }
 
 // validateMuscleRatioOutputDir 是 muscle_ratio write path 共用的 defense-in-depth

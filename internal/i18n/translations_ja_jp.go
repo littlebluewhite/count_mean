@@ -186,7 +186,7 @@ var translationsJaJP = map[string]string{
 	KeyPanelNormPhaseTitle:   "正規化フェーズ同期解析",
 	KeyPanelNormPhaseDesc:    "まず各筋肉について「正規化範囲」内の最大値で正規化(除数)し、その後正規化済みデータに対して「統計範囲」内でフェーズ同期統計を算出します。1回の実行で2つのファイルを生成します。正規化範囲と統計範囲は個別に選択可能(既定では同一、別々に調整可)。",
 	KeyPanelMuscleRatioTitle: "筋肉比解析",
-	KeyPanelMuscleRatioDesc:  "manifest 内の全 subject に対し、右側4対の筋肉比 (R.RA/R.ES、R.IL/R.GMax、R.RF/R.BF、R.TA&IO/R.MF) をバッチ計算します。各 subject につき2つの CSV を生成:完全な時系列 + フェーズ点スライス (10 フェーズ + 9 隣接中間点 + 最大 2 ステージ間中間点 = 最大 21 行)。",
+	KeyPanelMuscleRatioDesc:  "manifest 内の全 subject に対し、右側4対の筋肉比 (R.RA/R.ES、R.IL/R.GMax、R.RF/R.BF、R.TA&IO/R.MF) をバッチ計算します。各 subject につき2つの CSV を生成:完全な時系列 + フェーズ点スライス (各比はその点を中心とする 11 サンプル窓の平均、10 フェーズ + 9 隣接中間点 + 最大 2 ステージ間中間点 = 最大 21 行)。",
 	// Phase 2 common buttons. (KeyButtonBrowse 用 legacy entry — 字串一致)
 	KeyButtonBack:              "戻る",
 	KeyButtonStartCalculate:    "計算開始",

@@ -540,6 +540,8 @@ func TestWriteMuscleRatioOutputAll_RoundTrip(t *testing.T) {
 }
 
 // TestWriteMuscleRatioOutputPhases_RoundTrip 驗證 Output 2 round-trip.
+// handler 純 layout emit — PairLabels 無後綴(後綴由 Analyzer 負責),
+// Values 直接 emit(不 reach-in Times/Ratios)。(ADR-0014)
 func TestWriteMuscleRatioOutputPhases_RoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -548,16 +550,14 @@ func TestWriteMuscleRatioOutputPhases_RoundTrip(t *testing.T) {
 	payload := MuscleRatioOutputPhasesPayload{
 		Subject:    "s1",
 		PairLabels: []string{"R1"},
-		Times:      []float64{0.0, 0.5, 1.0},
-		Ratios:     [][]float64{{0.1, 0.2, 0.3}},
 		Points: []MuscleRatioPhasePoint{
-			{Name: "P1", Time: 0.5},
+			{Name: "P1", Time: 0.5, Values: []float64{0.2}},
 		},
 	}
 
 	outputPath, err := handler.WriteMuscleRatioOutputPhases(WriteRequest{}, payload)
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(tempDir, "s1_muscle_ratio_phases.csv"), outputPath)
+	assert.Equal(t, filepath.Join(tempDir, "s1_muscle_ratio_phases_avg11.csv"), outputPath)
 
 	rows := readCSVRows(t, outputPath)
 	require.Len(t, rows, 2)
@@ -587,20 +587,15 @@ func TestWriteMuscleRatioOutputAll_NaNInfCell(t *testing.T) {
 	assert.Equal(t, []string{"1.0000", ""}, rows[2])
 }
 
-// TestWriteMuscleRatioOutputPhases_EmptyTimesRejected 驗證 codex review 抓的 P2 —
-// payload 帶 Points 但 Times 空時,nearestTimeIndex 回 0 後 p.Times[0] 會 index
-// 越界 panic。要求 WriteMuscleRatioOutputPhases 提早回 errEmptyMuscleRatioPayload。
-func TestWriteMuscleRatioOutputPhases_EmptyTimesRejected(t *testing.T) {
+// TestWriteMuscleRatioOutputPhases_EmptyPointsRejected 驗證 Points 為空時提早回
+// errEmptyMuscleRatioPayload(ADR-0014:Times/Ratios 已移除,guard 改為 Points 空檢)。
+func TestWriteMuscleRatioOutputPhases_EmptyPointsRejected(t *testing.T) {
 	handler, _ := newFormatAwareTestHandler(t)
 
 	_, err := handler.WriteMuscleRatioOutputPhases(WriteRequest{}, MuscleRatioOutputPhasesPayload{
-		Subject:    "empty_times",
+		Subject:    "empty_points",
 		PairLabels: []string{"R1"},
-		Times:      []float64{}, // 故意空
-		Ratios:     [][]float64{{0.1}},
-		Points: []MuscleRatioPhasePoint{
-			{Name: "P1", Time: 0.5},
-		},
+		Points:     []MuscleRatioPhasePoint{}, // 故意空
 	})
 	require.ErrorIs(t, err, errEmptyMuscleRatioPayload)
 }
@@ -656,9 +651,7 @@ func TestSafeJoinOutput_RejectsTraversal(t *testing.T) {
 				MuscleRatioOutputPhasesPayload{
 					Subject:    "s",
 					PairLabels: []string{"R1"},
-					Times:      []float64{0.0, 1.0},
-					Ratios:     [][]float64{{0.1, 0.2}},
-					Points:     []MuscleRatioPhasePoint{{Name: "P1", Time: 0.5}},
+					Points:     []MuscleRatioPhasePoint{{Name: "P1", Time: 0.5, Values: []float64{0.1}}},
 				})
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "輸出路徑")

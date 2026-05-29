@@ -190,7 +190,7 @@ var translationsZhTW = map[string]string{
 	KeyPanelNormPhaseTitle:   "標準化分期同步分析",
 	KeyPanelNormPhaseDesc:    "先以每條肌肉在「標準化區間」內的最大值做標準化(除數),再對標準化後的資料於「統計區間」內計算分期同步統計。一次產生兩個檔案。標準化區間與統計區間可獨立選擇(預設兩者相同,可分別調整)。",
 	KeyPanelMuscleRatioTitle: "肌肉比值分析",
-	KeyPanelMuscleRatioDesc:  "批次計算 manifest 中所有 subject 的 4 對右側肌肉比值:R.RA/R.ES、R.IL/R.GMax、R.RF/R.BF、R.TA&IO/R.MF。每個 subject 產出兩個 CSV:完整時間序列 + 分期點切片(10 個分期 + 9 個相鄰中間點 + 最多 2 個跨段中間點 = 最多 21 列)。",
+	KeyPanelMuscleRatioDesc:  "批次計算 manifest 中所有 subject 的 4 對右側肌肉比值:R.RA/R.ES、R.IL/R.GMax、R.RF/R.BF、R.TA&IO/R.MF。每個 subject 產出兩個 CSV:完整時間序列 + 分期點切片,各比值取以該點為中心的 11 點視窗平均(10 個分期 + 9 個相鄰中間點 + 最多 2 個跨段中間點 = 最多 21 列)。",
 	// Phase 2 common buttons. (KeyButtonBrowse 用 legacy entry — 字串一致)
 	KeyButtonBack:              "返回",
 	KeyButtonStartCalculate:    "開始計算",
