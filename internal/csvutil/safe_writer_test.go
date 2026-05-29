@@ -42,6 +42,52 @@ func TestWriteCSVAtomic_HappyPath_WritesBomHeaderRows(t *testing.T) {
 	}
 }
 
+// TestWriteCSVAtomic_LongBasenameTmpStaysUnderNameMax 釘住:當 final basename 本身
+// 合法 (<=255 bytes) 但加上 atomic tmp 後綴 (".tmp." + 16 hex = 21 bytes) 會跨越
+// NAME_MAX 時,WriteCSVAtomic 仍成功 —— tmp basename 截斷讓中介檔 fit,final
+// rename 用完整 path 寫出未截斷的檔名。
+//
+// 回歸來源 (codex Round 2 [P2]):normalized PhaseSync 把 ~200-byte subject 拼成
+// ~238-byte filename,舊 direct-write (ExportToCSV) 寫得出,遷 atomic 後 tmp
+// ~259 bytes 在 255 上限的 fs 上 ENAMETOOLONG。
+//
+// 平台前提:ext4 / APFS 等 NAME_MAX=255。basename 取 245 → final 合法,
+// tmp (245+21=266) 無 fix 時溢位 fail。
+func TestWriteCSVAtomic_LongBasenameTmpStaysUnderNameMax(t *testing.T) {
+	dir := t.TempDir()
+
+	const baseLen = 245
+	name := strings.Repeat("a", baseLen-len(".csv")) + ".csv"
+	if len(name) != baseLen {
+		t.Fatalf("setup: basename len = %d, want %d", len(name), baseLen)
+	}
+	path := filepath.Join(dir, name)
+
+	err := WriteCSVAtomic(path, SafeWriteOptions{
+		Header: []string{"col"},
+		Emit:   func(emit func([]string) error) error { return emit([]string{"v"}) },
+	})
+	if err != nil {
+		t.Fatalf("expected nil err for long-but-valid basename, got %v", err)
+	}
+
+	// final 檔案以完整 (未截斷) basename 寫出。
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("final file should exist at full path: %v", statErr)
+	}
+
+	// 無 tmp orphan 殘留 (tmp 已 rename 成 final)。
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("readdir: %v", readErr)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp.") {
+			t.Errorf("stray tmp file remained: %s", e.Name())
+		}
+	}
+}
+
 func TestWriteCSVAtomic_EmitFailMidRow_FinalPathUntouched(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.csv")
