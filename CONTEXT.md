@@ -75,7 +75,8 @@ _Avoid_: AnalysisPanel(與 backend Analysis pipeline family 字面衝突,且 Cha
 
 **Chart Composer**
 Visualization-only feature：讀 [[Manifest]] + 數據資料夾後，把單一 subject 的 EMG / motion / muscle_ratio output1 三類資料同框渲染成三張帶 [[Phase]] 虛線與時期百分比軸的圖。**不計算、不寫 CSV、不產生新的 result struct** —— 與 [[Analysis pipeline family]] 的形狀差異就在這裡：它是 multi-source viewer，不是 analyzer。Phase line / 百分比軸的 UX 機制沿用既有 CCI chart（go-echarts + Wails postMessage），但資料來源不同。
-_Avoid_: data plotting, chart panel, multi-chart viewer, 資料做圖（後者是舊單檔流程的口語名，新版避免共用）.
+在 UI(panel 標題)以「資料做圖」呈現 — 與 Chart Composer **同義**;canonical code/domain 術語仍為 Chart Composer(比照 [[Subject]] ↔ 分析主題)。「資料做圖」原為舊單檔流程口語名,Composer panel 沿用為標題,故由 _Avoid_ 升為 UI 同義詞。
+_Avoid_: data plotting, chart panel, multi-chart viewer.
 
 ## Example dialogue
 

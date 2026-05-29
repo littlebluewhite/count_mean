@@ -367,19 +367,18 @@ const (
 	// Chart Composer panel — Slice E i18n sweep 漏網之魚(form labels / buttons /
 	// helptext / result section);對齊 panel.cci / panel.muscleratio 命名慣例,
 	// key 集中宣告以利 review。
-	KeyPanelComposerTitle                = "panel.composer.title"
-	KeyButtonLoadEMGChannels             = "button.load_emg_channels"
-	KeyButtonGenerateChart               = "button.generate_chart"
-	KeyButtonDownloadPNG                 = "button.download_png"
+	KeyPanelComposerTitle  = "panel.composer.title"
+	KeyButtonGenerateChart = "button.generate_chart"
+	KeyButtonDownloadPNG   = "button.download_png"
+	// button.standardize_view — Chart Composer 結果區「標準化視圖」按鈕(ADR-0013
+	// D4/D5):把 chart zoom 到當下勾選分期點 min/max 秒兩側各留 5% buffer 的區間。
+	KeyButtonStandardizeView = "button.standardize_view"
 	// button.download_chart — CCI 結果區「下載圖表」按鈕(ADR-0007 M5:cci_spec
 	// onResult 渲染下載按鈕,改走 i18n key;舊 main.js showCCIResult 走 hardcoded
 	// '下載圖表',M3 標記留 M5 sweep)。語意「下載圖表」≠ button.download_png 的「下載 PNG」。
-	KeyButtonDownloadChart               = "button.download_chart"
-	KeyFormLabelComposerChannels         = "form.label.composer_channels"
-	KeyFormLabelComposerPhases           = "form.label.composer_phases"
-	KeyFormHelptextLoadChannelsFirst     = "form.helptext.load_channels_first"
-	KeyFormHelptextComposerPhasesPending = "form.helptext.composer_phases_pending"
-	KeyResultSectionComposerPreview      = "result.section.composer_preview"
+	KeyButtonDownloadChart          = "button.download_chart"
+	KeyFormLabelComposerPhases      = "form.label.composer_phases"
+	KeyResultSectionComposerPreview = "result.section.composer_preview"
 
 	// Phase 2 table headers (Normalized & MuscleRatio result tables).
 	KeyTableHeaderMuscle      = "table.header.muscle"
@@ -398,22 +397,22 @@ const (
 	KeyDialogTitleHint          = "dialog.title.hint"
 
 	// Phase 2 static error messages.
-	KeyErrorMsgOnlyCSV              = "error.msg.only_csv"
-	KeyErrorMsgSelectInputFile      = "error.msg.select_input_file"
-	KeyErrorMsgSelectInputFolder    = "error.msg.select_input_folder"
-	KeyErrorMsgSelectBothFiles      = "error.msg.select_both_files"
-	KeyErrorMsgCCIChartNotFound     = "error.msg.cci_chart_not_found"
+	KeyErrorMsgOnlyCSV           = "error.msg.only_csv"
+	KeyErrorMsgSelectInputFile   = "error.msg.select_input_file"
+	KeyErrorMsgSelectInputFolder = "error.msg.select_input_folder"
+	KeyErrorMsgSelectBothFiles   = "error.msg.select_both_files"
+	KeyErrorMsgCCIChartNotFound  = "error.msg.cci_chart_not_found"
 	// Chart download / ECharts runtime error messages (CCI download + Composer download 共用)。
 	// Slice E (#20) deletion sweep 把舊「資料做圖」一族 key 全刪時誤帶這 4 個;CCI 與
 	// Composer download 路徑都還在用,restore 維持 user-facing message 不破。
 	KeyErrorMsgChartElementNotFound  = "error.msg.chart_element_not_found"
 	KeyErrorMsgChartInstanceNotFound = "error.msg.chart_instance_not_found"
 	KeyErrorMsgEChartsNotFound       = "error.msg.echarts_not_found"
-	KeyErrorMsgPhaseInputs          = "error.msg.phase_inputs"
-	KeyErrorMsgPhasePointsCount     = "error.msg.phase_points_count"
-	KeyErrorMsgFillRequiredFields   = "error.msg.fill_required_fields"
-	KeyErrorMsgMuscleFillFields     = "error.msg.muscle_fill_fields"
-	KeyErrorMsgOpenOutputFolderFail = "error.msg.open_output_folder"
+	KeyErrorMsgPhaseInputs           = "error.msg.phase_inputs"
+	KeyErrorMsgPhasePointsCount      = "error.msg.phase_points_count"
+	KeyErrorMsgFillRequiredFields    = "error.msg.fill_required_fields"
+	KeyErrorMsgMuscleFillFields      = "error.msg.muscle_fill_fields"
+	KeyErrorMsgOpenOutputFolderFail  = "error.msg.open_output_folder"
 
 	// Phase 2 dynamic error messages (with %v for error / path).
 	KeyErrorMsgCalculationFailedDyn   = "error.msg.calculation_failed"
@@ -464,12 +463,12 @@ const (
 	// status.composer_running — Chart Composer 生成中(ADR-0007 M5:Composer panel
 	// 走 ManifestPanel envelope,statusRunningKey 需此 key;舊 main.js 走 hardcoded
 	// 'Chart Composer 生成中...',Slice E i18n sweep 漏網)。
-	KeyStatusComposerRunning      = "status.composer_running"
-	KeyStatusMuscleRunning        = "status.muscle_running"
-	KeyStatusMusclePartialFailed  = "status.muscle_partial_failed"
-	KeyStatusAnalysisDone         = "status.analysis_done"
-	KeyStatusAnalysisFailed       = "status.analysis_failed"
-	KeyStatusSubjectsLoaded       = "status.subjects_loaded"
+	KeyStatusComposerRunning     = "status.composer_running"
+	KeyStatusMuscleRunning       = "status.muscle_running"
+	KeyStatusMusclePartialFailed = "status.muscle_partial_failed"
+	KeyStatusAnalysisDone        = "status.analysis_done"
+	KeyStatusAnalysisFailed      = "status.analysis_failed"
+	KeyStatusSubjectsLoaded      = "status.subjects_loaded"
 
 	// Phase 2 console warnings.
 	KeyWarnGetVersionFailed = "warning.get_version_failed"

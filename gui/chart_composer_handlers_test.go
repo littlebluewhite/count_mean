@@ -106,7 +106,8 @@ func setupChartComposerTestApp(t *testing.T) *App {
 }
 
 // writeChartComposerMinimalEMG 建立最小 EMG CSV(2 sec, 2 channels)。
-// EMG header 內含 R.RA / R.ES 等;LoadChartComposerEMGChannels 會把這些回給前端。
+// EMG header 內含 R.RA / R.ES 等;GenerateChartComposer 對空 SelectedChannels
+// 走 composer fallback 全選,會把這些 channel 都渲染進圖表。
 func writeChartComposerMinimalEMG(t *testing.T, path string) {
 	t.Helper()
 
@@ -264,9 +265,8 @@ func TestLoadChartComposerSubjects_SurfacesMissingEMGFiles(t *testing.T) {
 	writeChartComposerMinimalEMG(t, filepath.Join(dataFolder, "exists.csv"))
 
 	// 注意:LoadChartComposerSubjects 只 LoadManifests + dedup,**不會** 嘗試
-	// parse motion/force(那是 LoadChartComposerEMGChannels / GenerateComposerChart
-	// 的事),所以 fixture 不必建 motion.csv / force.anc。Subject dropdown 邏輯
-	// 只看 EMGFile 欄是否 disk 上存在。
+	// parse motion/force(那是 GenerateChartComposer 的事),所以 fixture 不必建
+	// motion.csv / force.anc。Subject dropdown 邏輯只看 EMGFile 欄是否 disk 上存在。
 	manifestContent := "Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n" +
 		"OkSubject,motion.csv,force.anc,exists.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,0.8\n" +
 		"BrokenSubject,motion.csv,force.anc,missing.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,0.8"
@@ -294,105 +294,20 @@ func TestLoadChartComposerSubjects_SurfacesMissingEMGFiles(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// LoadChartComposerEMGChannels
-// ---------------------------------------------------------------------------
-
-func TestLoadChartComposerEMGChannels_V10_NoMuscleRatio(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-	manifestPath, dataFolder := setupChartComposerV10Fixture(t)
-
-	result, err := app.LoadChartComposerEMGChannels(&LoadChartComposerEMGChannelsParams{
-		ManifestPath: manifestPath,
-		DataFolder:   dataFolder,
-		Subject:      "TestSubjectV10",
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.True(t, result.Success, "Message: %s", result.Message)
-	assert.Equal(t, []string{"R.RA", "R.ES"}, result.Channels)
-	assert.False(t, result.HasMuscleRatio,
-		"V.10 manifest 無 MuscleRatioFile 欄位,HasMuscleRatio 必為 false")
-	assert.Equal(t, 1, result.EMGMotionOffset,
-		"EMGMotionOffset 必須從 manifest row 透傳給 frontend(否則 Slice D 硬編 0 → V.14 典型 offset=600+ 視覺錯位 ~2.4s)")
-}
-
-func TestLoadChartComposerEMGChannels_V14_HasMuscleRatio(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-	manifestPath, dataFolder := setupChartComposerV14Fixture(t)
-
-	result, err := app.LoadChartComposerEMGChannels(&LoadChartComposerEMGChannelsParams{
-		ManifestPath: manifestPath,
-		DataFolder:   dataFolder,
-		Subject:      "TestSubjectV14",
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.True(t, result.Success, "Message: %s", result.Message)
-	assert.Equal(t, []string{"R.RA", "R.ES"}, result.Channels)
-	assert.True(t, result.HasMuscleRatio,
-		"V.14 manifest 帶 MuscleRatioFile,HasMuscleRatio 必為 true")
-	assert.Equal(t, 1, result.EMGMotionOffset,
-		"EMGMotionOffset 同 V.10 路徑透傳")
-}
-
-func TestLoadChartComposerEMGChannels_NilParams(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-
-	result, err := app.LoadChartComposerEMGChannels(nil)
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Success)
-	assert.Contains(t, result.Message, "參數為空")
-}
-
-func TestLoadChartComposerEMGChannels_UnknownSubject(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-	manifestPath, dataFolder := setupChartComposerV10Fixture(t)
-
-	result, err := app.LoadChartComposerEMGChannels(&LoadChartComposerEMGChannelsParams{
-		ManifestPath: manifestPath,
-		DataFolder:   dataFolder,
-		Subject:      "NonExistentSubject",
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Success)
-	assert.Contains(t, result.Message, "NonExistentSubject")
-}
-
-func TestLoadChartComposerEMGChannels_RejectsTraversalPath(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-
-	result, err := app.LoadChartComposerEMGChannels(&LoadChartComposerEMGChannelsParams{
-		ManifestPath: "/etc/passwd",
-		DataFolder:   t.TempDir(),
-		Subject:      "Whatever",
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Success)
-	assert.Contains(t, result.Message, "路徑驗證失敗")
-}
-
-// ---------------------------------------------------------------------------
 // GenerateChartComposer
 // ---------------------------------------------------------------------------
 
+// TestGenerateChartComposer_V10_TwoGrid 驗 V.10(無 muscle_ratio)一鍵生成:
+// 不再傳 SelectedChannels(空 → composer fallback 全選);EMGMotionOffset 由
+// handler 內部從 row 讀取(ADR-0013)。兩個 EMG channel 應都渲染進 HTML。
 func TestGenerateChartComposer_V10_TwoGrid(t *testing.T) {
 	app := setupChartComposerTestApp(t)
 	manifestPath, dataFolder := setupChartComposerV10Fixture(t)
 
 	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath:     manifestPath,
-		DataFolder:       dataFolder,
-		Subject:          "TestSubjectV10",
-		SelectedChannels: []string{"R.RA", "R.ES"},
-		EMGMotionOffset:  1,
+		ManifestPath: manifestPath,
+		DataFolder:   dataFolder,
+		Subject:      "TestSubjectV10",
 	})
 
 	require.NoError(t, err)
@@ -401,6 +316,11 @@ func TestGenerateChartComposer_V10_TwoGrid(t *testing.T) {
 	assert.NotEmpty(t, result.HTML, "HTML 應包含 echarts 渲染後內容")
 	// 對齊 chart.RenderComposer 渲染後典型內容 — title "Chart Composer" subtitle 帶 subject。
 	assert.Contains(t, result.HTML, "Chart Composer")
+	// 空 SelectedChannels → composer fallback 全選,兩個 EMG channel 都應出現。
+	assert.Contains(t, result.HTML, "R.RA",
+		"空 SelectedChannels 應 fallback 全選 — R.RA 必須渲染")
+	assert.Contains(t, result.HTML, "R.ES",
+		"空 SelectedChannels 應 fallback 全選 — R.ES 必須渲染")
 }
 
 func TestGenerateChartComposer_V14_ThreeGrid(t *testing.T) {
@@ -408,11 +328,9 @@ func TestGenerateChartComposer_V14_ThreeGrid(t *testing.T) {
 	manifestPath, dataFolder := setupChartComposerV14Fixture(t)
 
 	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath:     manifestPath,
-		DataFolder:       dataFolder,
-		Subject:          "TestSubjectV14",
-		SelectedChannels: []string{"R.RA"},
-		EMGMotionOffset:  1,
+		ManifestPath: manifestPath,
+		DataFolder:   dataFolder,
+		Subject:      "TestSubjectV14",
 	})
 
 	require.NoError(t, err)
@@ -436,11 +354,9 @@ func TestGenerateChartComposer_RejectsTraversalPath(t *testing.T) {
 	app := setupChartComposerTestApp(t)
 
 	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath:     "/etc/passwd",
-		DataFolder:       t.TempDir(),
-		Subject:          "Whatever",
-		SelectedChannels: nil,
-		EMGMotionOffset:  1,
+		ManifestPath: "/etc/passwd",
+		DataFolder:   t.TempDir(),
+		Subject:      "Whatever",
 	})
 
 	require.NoError(t, err)
@@ -456,11 +372,9 @@ func TestGenerateChartComposer_UnknownSubject(t *testing.T) {
 	manifestPath, dataFolder := setupChartComposerV10Fixture(t)
 
 	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath:     manifestPath,
-		DataFolder:       dataFolder,
-		Subject:          "Nope",
-		SelectedChannels: nil,
-		EMGMotionOffset:  1,
+		ManifestPath: manifestPath,
+		DataFolder:   dataFolder,
+		Subject:      "Nope",
 	})
 
 	require.NoError(t, err)
@@ -561,29 +475,14 @@ func TestChartComposerHandlers_PanicRecovery(t *testing.T) {
 		assert.Nil(t, result)
 	})
 
-	t.Run("LoadChartComposerEMGChannels", func(t *testing.T) {
-		app := &App{logger: nil}
-		app.state.Store(&appState{config: &config.AppConfig{OutputDir: t.TempDir()}})
-
-		result, err := app.LoadChartComposerEMGChannels(&LoadChartComposerEMGChannelsParams{
-			ManifestPath: filepath.Join(t.TempDir(), "x.csv"),
-			DataFolder:   t.TempDir(),
-			Subject:      "S1",
-		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInternalPanic)
-		assert.Nil(t, result)
-	})
-
 	t.Run("GenerateChartComposer", func(t *testing.T) {
 		app := &App{logger: nil}
 		app.state.Store(&appState{config: &config.AppConfig{OutputDir: t.TempDir()}})
 
 		result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-			ManifestPath:    filepath.Join(t.TempDir(), "x.csv"),
-			DataFolder:      t.TempDir(),
-			Subject:         "S1",
-			EMGMotionOffset: 1,
+			ManifestPath: filepath.Join(t.TempDir(), "x.csv"),
+			DataFolder:   t.TempDir(),
+			Subject:      "S1",
 		})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInternalPanic)
@@ -697,11 +596,9 @@ func TestGenerateChartComposer_PhaseMarkersConvertedToEMGTime(t *testing.T) {
 	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o644))
 
 	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath:     manifestPath,
-		DataFolder:       dataFolder,
-		Subject:          "PhaseConvertSubject",
-		SelectedChannels: []string{"R.RA"},
-		EMGMotionOffset:  251,
+		ManifestPath: manifestPath,
+		DataFolder:   dataFolder,
+		Subject:      "PhaseConvertSubject",
 	})
 
 	require.NoError(t, err)
@@ -739,34 +636,15 @@ func TestLoadChartComposerSubjects_RejectsEmptyDataFolder(t *testing.T) {
 		"DataFolder 空字串必須對齊 ErrNoDataFolder 訊息(請選擇數據資料夾)")
 }
 
-// TestLoadChartComposerEMGChannels_RejectsEmptyDataFolder P2 #2 sibling
-func TestLoadChartComposerEMGChannels_RejectsEmptyDataFolder(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-	manifestPath, _ := setupChartComposerV10Fixture(t)
-
-	result, err := app.LoadChartComposerEMGChannels(&LoadChartComposerEMGChannelsParams{
-		ManifestPath: manifestPath,
-		DataFolder:   "",
-		Subject:      "TestSubjectV10",
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Success)
-	assert.Equal(t, ErrNoDataFolder.Error(), result.Message)
-}
-
 // TestGenerateChartComposer_RejectsEmptyDataFolder P2 #2 sibling
 func TestGenerateChartComposer_RejectsEmptyDataFolder(t *testing.T) {
 	app := setupChartComposerTestApp(t)
 	manifestPath, _ := setupChartComposerV10Fixture(t)
 
 	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath:     manifestPath,
-		DataFolder:       "",
-		Subject:          "TestSubjectV10",
-		SelectedChannels: []string{"R.RA"},
-		EMGMotionOffset:  1,
+		ManifestPath: manifestPath,
+		DataFolder:   "",
+		Subject:      "TestSubjectV10",
 	})
 
 	require.NoError(t, err)
@@ -796,11 +674,9 @@ func TestGenerateChartComposer_MotionFirstChannelRendered(t *testing.T) {
 	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o644))
 
 	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath:     manifestPath,
-		DataFolder:       dataFolder,
-		Subject:          "MotionSingleChannelSubject",
-		SelectedChannels: []string{"R.RA"},
-		EMGMotionOffset:  1,
+		ManifestPath: manifestPath,
+		DataFolder:   dataFolder,
+		Subject:      "MotionSingleChannelSubject",
 	})
 
 	require.NoError(t, err)
@@ -833,11 +709,9 @@ func TestGenerateChartComposer_EmptyMuscleRatioCellIsNaN(t *testing.T) {
 	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o644))
 
 	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath:     manifestPath,
-		DataFolder:       dataFolder,
-		Subject:          "MuscleRatioNaNSubject",
-		SelectedChannels: []string{"R.RA"},
-		EMGMotionOffset:  1,
+		ManifestPath: manifestPath,
+		DataFolder:   dataFolder,
+		Subject:      "MuscleRatioNaNSubject",
 	})
 
 	require.NoError(t, err)
@@ -850,29 +724,4 @@ func TestGenerateChartComposer_EmptyMuscleRatioCellIsNaN(t *testing.T) {
 	// 用 4 位小數時間值 0.0123 避免與 echarts 預設 option 字串撞點。
 	assert.NotContains(t, result.HTML, "[0.0123,0]",
 		"muscle_ratio 空 cell 必須轉 NaN(序列化省略 value)而非靜默 0 真值")
-}
-
-// TestGenerateChartComposer_EmptySelectedChannelsFailsFast 釘住 P2 finding #5:
-// handler 在 GenerateChartComposer 入口檢查 SelectedChannels — 空 slice 必須
-// fail-fast(回 failed result 含「至少選擇一個 EMG 通道」訊息),不可走到
-// composer 走「empty = fallback all channels」內部 default(那是 composer
-// 合理 default,但 frontend UI 預設不勾、明確需要使用者勾選後才該渲染;handler
-// 是這個前後語意鴻溝的守門點)。
-func TestGenerateChartComposer_EmptySelectedChannelsFailsFast(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-	manifestPath, dataFolder := setupChartComposerV10Fixture(t)
-
-	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath:     manifestPath,
-		DataFolder:       dataFolder,
-		Subject:          "TestSubjectV10",
-		SelectedChannels: []string{}, // 空 slice — 觸發 P2 #5 finding
-		EMGMotionOffset:  1,
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Success,
-		"空 SelectedChannels 必須 fail-fast,而非靜默 fallback 到全 channel 渲染")
-	assert.Contains(t, result.Message, "至少選擇一個 EMG 通道")
 }

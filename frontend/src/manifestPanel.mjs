@@ -113,8 +113,12 @@ export class ManifestPanel {
      *   綁 mirror。CCI/Composer/MuscleRatio 省略。
      * @param {(mp: ManifestPanel) => void} [spec.onSubjectChange] - Optional。
      *   `#mpSubject` change 時呼叫(經 onMpSubjectChange delegator)。Composer 用來
-     *   reset state(_composerEMGMotionOffset / _composerLoadedSubject)+ 清 chart。
-     *   其他 panel 省略(subject change 無特殊行為)。
+     *   清 chart container + 清勾選分期 Set(ADR-0013)。其他 panel 省略(subject
+     *   change 無特殊行為)。
+     * @param {(tH: (k:string)=>string) => string} [spec.extraRunButtons] - Optional。
+     *   button-group 內、`#mpRunBtn` 之後注入額外按鈕 HTML 的 seam(Composer 標準化
+     *   視圖按鈕用,ADR-0013)。收 tHtml translator(走 i18n key,locale change 時
+     *   隨 shell re-render)。其他 4 panel 省略 → 渲染空字串、button-group 不受影響。
      */
     run(spec) {
         this._currentSpec = spec;
@@ -279,7 +283,7 @@ export class ManifestPanel {
 
             <div class="button-group">
                 <button id="mpRunBtn" class="btn btn-primary">${tH(spec.runBtnLabelKey || 'button.start_analyze')}</button>
-                <button class="btn btn-secondary" onclick="app.showMainMenu()">${tH('button.back')}</button>
+                ${spec.extraRunButtons ? spec.extraRunButtons(tH) : ''}
             </div>
 
             <div id="mpResult" class="result-section" style="display:none;">

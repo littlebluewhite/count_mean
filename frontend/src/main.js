@@ -16,7 +16,6 @@ import {
     GetAvailablePhases,
     DownloadCCIChart,
     GetVersion,
-    LoadChartComposerEMGChannels,
     DownloadChartComposerImage
 } from '../wailsjs/go/gui/App.js';
 import { OnFileDrop, OnFileDropOff, EventsOn, EventsOff } from '../wailsjs/runtime/runtime.js';
@@ -63,11 +62,9 @@ class EMGAnalysisApp {
             muscleRatio: () => this._manifestPanel.run(makeMuscleRatioSpec(this)),
             config: () => this.showConfigPanel(),
         };
-        // Composer 跨 re-render / re-generate 持久的 channel/phase 勾選 Set(ADR-0007 §9:
-        // panel state 留 app this 自管)。原本由 showChartComposerPanel lazy-init,M5 刪該
-        // method 後 loadComposerEMGChannels 裸 iterate _composerSelectedChannels 會在首次
-        // 點「載入 EMG 欄位」TypeError — 移到 constructor 確保所有 entry path 安全。
-        this._composerSelectedChannels = new Set();
+        // Composer 跨 re-render / re-generate 持久的 phase 勾選 Set(ADR-0007 §9:
+        // panel state 留 app this 自管)。在 constructor 初始化確保所有 entry path
+        // (onSubjectChange clear / onResult bindPhaseCheckboxes)都不會裸 deref。
         this._composerCheckedPhases = new Set();
         this.config = null;
         this.init();
@@ -1075,41 +1072,14 @@ class EMGAnalysisApp {
         }
     }
 
-    // 顯示頂部 warning banner(channel 缺漏 reconcile 時觸發);
-    // 傳空 array 隱藏。banner 內容走 textContent — 任何來自後端的 channel name
-    // 都當外部輸入處理(對齊 P0-A H2 XSS hardening 慣例)。
-    _showComposerWarning(droppedChannelNames) {
-        const banner = document.getElementById('composerWarningBanner');
-        if (!banner) return;
-        if (!droppedChannelNames || droppedChannelNames.length === 0) {
-            banner.style.display = 'none';
-            banner.textContent = '';
-            return;
-        }
-        banner.textContent = `已自動取消勾選不存在於新主題的通道:${droppedChannelNames.join(', ')}`;
-        banner.style.display = 'block';
-    }
-
-    // 切 subject 時:zoom reset(清除 iframe)+ 保留 channel / phase 勾選 Set;
-    // 不自動重新呼叫 loadComposerEMGChannels — 對齊 spec「manual 觸發」設計,使用者
-    // 仍需按「載入 EMG 欄位」才更新 checkbox 列表(channel reconcile 在那時統一發生)。
+    // 切 subject 時清掉前一個 subject 的殘留(ADR-0013):清 chart container +
+    // 清勾選分期 Set。一鍵生成流程無 channel checkbox / EMGMotionOffset state,
+    // 故不再需要 reset offset / loadedSubject guard — Generate 自己從 manifest row
+    // 讀 offset、channel 預設全選。
     //
-    // codex P2 #3 修補:必須 reset `_composerEMGMotionOffset` 與 `_composerLoadedSubject`。
-    //
-    //   情境:user 載入 subject A → backend 回 emgMotionOffset=0.5,寫入 `_composerEMGMotionOffset`。
-    //   切到 subject B 但**沒按**「載入 EMG 欄位」(channel name 在兩 subject 重疊
-    //   時看起來不需重載)。直接按「生成圖表」 → emgMotionOffset 仍是 A 的 0.5,
-    //   套到 B 的 motion data 上 → motion / phase markers 全錯位。
-    //
-    //   修法:subject change 時 clear offset 為 0 + clear `_composerLoadedSubject`
-    //   to null。chart_composer_spec.mjs 的 spec.rpc 會在 RPC 前驗
-    //   `_composerLoadedSubject` 等於當前 subject,否則 throw → envelope ShowError
-    //   強制 user 重新按「載入 EMG 欄位」(M5 後 guard 從 main.js 移到 spec rpc)。
-    //
-    // M5:由 chart_composer_spec.mjs 的 onSubjectChange hook 經 ManifestPanel
-    // onMpSubjectChange 委派呼叫。結果區/圖表容器改走 ManifestPanel shell 的
-    // #mpResult(舊 #composerResult 已隨 showChartComposerPanel 刪除);
-    // #composerChartContent 由 spec.onResult render 進 #mpResultContent,id 不變。
+    // 由 chart_composer_spec.mjs 的 onSubjectChange hook 經 ManifestPanel
+    // onMpSubjectChange 委派呼叫。結果區/圖表容器走 ManifestPanel shell 的
+    // #mpResult;#composerChartContent 由 spec.onResult render 進 #mpResultContent。
     onComposerSubjectChange() {
         const resultDiv = document.getElementById('mpResult');
         if (resultDiv) {
@@ -1117,91 +1087,12 @@ class EMGAnalysisApp {
             const wrap = document.getElementById('composerChartContent');
             if (wrap) wrap.textContent = '';
         }
-        // codex P2#3:reset offset + loaded-subject flag,避免上個 subject 的 offset
-        // silent 套用到新 subject。
-        this._composerEMGMotionOffset = 0;
-        this._composerLoadedSubject = null;
-        // phase checkbox 暫時保留勾選 Set(下次 generate 後重新 render checkbox)
-    }
-
-    // 載入 EMG 通道 — manual 觸發。
-    //
-    // Channel reconcile:本次新主題 channel 列表 ∩ this._composerSelectedChannels
-    // 為「保留勾選」;落差的舊勾選 channel 走 silent drop + 頂部 warning banner。
-    async loadComposerEMGChannels() {
-        // M5:DOM ids 改走 ManifestPanel shell 共用 id(mpManifestPath/mpDataFolder/
-        // mpSubject)。Composer subject 為 name-mode(option.value=subject 字串,
-        // ADR-0007 §4),故 #mpSubject.value 直接是 subject 名。
-        const manifestPath = document.getElementById('mpManifestPath').value;
-        const dataFolder = document.getElementById('mpDataFolder').value;
-        const subject = document.getElementById('mpSubject').value;
-        if (!manifestPath || !dataFolder || !subject) {
-            await ShowError(t('dialog.error'), '請先選擇分期總檔案、資料夾與主題');
-            return;
-        }
-
-        try {
-            const result = await LoadChartComposerEMGChannels({
-                manifestPath,
-                dataFolder,
-                subject,
-            });
-            if (!result.success) {
-                await ShowError(t('dialog.error'), result.message);
-                return;
-            }
-            const channels = result.channels || [];
-
-            const channelSet = new Set(channels);
-            const dropped = [];
-            for (const ch of this._composerSelectedChannels) {
-                if (!channelSet.has(ch)) {
-                    dropped.push(ch);
-                    this._composerSelectedChannels.delete(ch);
-                }
-            }
-            this._showComposerWarning(dropped);
-
-            const container = document.getElementById('composerChannelSelector');
-            container.textContent = '';
-            channels.forEach((ch) => {
-                const item = document.createElement('div');
-                item.className = 'checkbox-item';
-                const cb = document.createElement('input');
-                cb.type = 'checkbox';
-                cb.id = 'composer_ch_' + ch;
-                cb.value = ch;
-                cb.checked = this._composerSelectedChannels.has(ch);
-                cb.addEventListener('change', () => {
-                    if (cb.checked) this._composerSelectedChannels.add(ch);
-                    else this._composerSelectedChannels.delete(ch);
-                });
-                const label = document.createElement('label');
-                label.setAttribute('for', cb.id);
-                label.textContent = ch;
-                item.appendChild(cb);
-                item.appendChild(label);
-                container.appendChild(item);
-            });
-
-            const info = document.getElementById('composerGridInfo');
-            if (info) {
-                if (result.hasMuscleRatio) {
-                    info.textContent = '本主題提供肌肉比值資料 → 3 個 grid(EMG / 肌肉比值 / motion)';
-                } else {
-                    info.textContent = '本主題未提供肌肉比值資料 → 2 個 grid(EMG / motion)';
-                }
-            }
-
-            this._composerEMGMotionOffset = Number(result.emgMotionOffset) || 0;
-            // codex P2#3:記錄成功 load 的 subject,讓 chart_composer_spec.mjs 的
-            // spec.rpc 能驗 user 沒有「subject 切了但沒重新 load」就直接 generate
-            //(M5 後 generate 走 spec rpc,guard 一併移過去)。
-            this._composerLoadedSubject = subject;
-        } catch (err) {
-            console.error('載入 EMG 通道失敗:', err);
-            await ShowError(t('dialog.error'), err.toString());
-        }
+        // 清掉舊 subject 的勾選分期,避免殘留到新 subject(下次 generate 後重新 render)。
+        if (this._composerCheckedPhases) this._composerCheckedPhases.clear();
+        // D4:切 subject 後到下次生成前,標準化視圖按鈕回灰(視覺一致;下次 onResult
+        // 的 bindPhaseCheckboxes onUpdate 會依勾選數重新 enable)。
+        const stdBtn = document.getElementById('composerStandardizeBtn');
+        if (stdBtn) stdBtn.disabled = true;
     }
 
     // 下載 PNG — 從 iframe 抓 ECharts dataURL(反映當下 zoom / phase / legend 狀態)
@@ -1274,6 +1165,38 @@ class EMGAnalysisApp {
             console.error('下載 PNG 失敗:', err);
             await ShowError(t('dialog.error'), err.message || String(err));
         }
+    }
+
+    // 標準化視圖(ADR-0013 D4/D5):把 chart zoom 到「當下勾選分期點的 min/max 秒」
+    // 兩側各留 5% buffer 的區間。由結果區「標準化視圖」按鈕(chart_composer_spec
+    // extraRunButtons 注入)的 onclick 觸發。
+    //
+    // 讀勾選分期 Set(_composerCheckedPhases:phase 名)+ phase 秒數 map
+    // (_composerPhaseTimes:phase 名→秒),取勾選 phase 對應秒數;< 2 個無法定義
+    // 區間 → no-op return(按鈕本就灰,雙重保險)。算出 [t_first - buf, t_last + buf]
+    // 後走 bridge 送 composer-standardize-zoom 給 iframe(iframe 端 customJS 把
+    // 秒值換算成 dataZoom 百分比 start/end)。
+    standardizeComposerView() {
+        const checked = this._composerCheckedPhases;
+        const times = this._composerPhaseTimes;
+        if (!checked || !times) return;
+
+        // 勾選 phase 對應的秒數(過濾掉 times 內不存在的,防殘留)。
+        const secs = Array.from(checked)
+            .map((name) => times[name])
+            .filter((s) => typeof s === 'number');
+        if (secs.length < 2) return; // < 2 → no-op(按鈕本就 disabled)
+
+        const tFirst = Math.min(...secs);
+        const tLast = Math.max(...secs);
+        const buf = (tLast - tFirst) * 0.05;
+
+        const iframe = this._composerIframe;
+        if (!iframe) return;
+        bridge.send(iframe, 'composer-standardize-zoom', {
+            startSec: tFirst - buf,
+            endSec: tLast + buf,
+        });
     }
 
     async loadNormalizedPhaseSyncPhases() {

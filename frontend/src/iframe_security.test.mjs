@@ -29,16 +29,12 @@ const MAIN_JS_PATH = path.join(__dirname, 'main.js');
 // show*Panel 收乾到 manifestPanel.mjs 的 attachIframe()。iframe 安全 source-guard
 // 因此改掃 manifestPanel.mjs(唯一 iframe.srcdoc 賦值點)。
 const MANIFEST_PANEL_PATH = path.join(__dirname, 'manifestPanel.mjs');
-const COMPOSER_SPEC_PATH = path.join(__dirname, 'panels', 'chart_composer_spec.mjs');
 
 async function readMainJs() {
     return await readFile(MAIN_JS_PATH, 'utf8');
 }
 async function readManifestPanelJs() {
     return await readFile(MANIFEST_PANEL_PATH, 'utf8');
-}
-async function readComposerSpecJs() {
-    return await readFile(COMPOSER_SPEC_PATH, 'utf8');
 }
 
 // -------------------- P2-7:iframe sandbox source guard --------------------
@@ -228,79 +224,13 @@ test('codex#1 P2: downloadComposerChart 在 requestReply 前 await _composerIfra
         'downloadComposerChart 必須在 bridge.requestReply 之前 await this._composerIframeReady');
 });
 
-// -------------------- Slice D codex P2 #3 + #4 source guards --------------------
-
-// onComposerSubjectChange 必須 clear 上一個 subject 的 _composerEMGMotionOffset
-// + reset _composerLoadedSubject — 避免 user 切 subject 但沒按「載入 EMG 欄位」
-// 直接 generateComposerChart 時用到舊 subject 的 offset。
-test('Slice D P2#3: onComposerSubjectChange 必須 reset _composerEMGMotionOffset + _composerLoadedSubject', async () => {
-    const src = await readMainJs();
-
-    const fnStart = src.indexOf('onComposerSubjectChange()');
-    assert.ok(fnStart > 0, '找不到 onComposerSubjectChange()');
-    // 抓 fn body 邊界:下一個 method 開頭(loadComposerEMGChannels)
-    const fnEnd = src.indexOf('\n    async loadComposerEMGChannels(', fnStart);
-    assert.ok(fnEnd > fnStart, '找不到 onComposerSubjectChange 結束邊界');
-    const fnBody = src.slice(fnStart, fnEnd);
-
-    assert.match(
-        fnBody,
-        /this\._composerEMGMotionOffset\s*=\s*0/,
-        'onComposerSubjectChange 必須 reset _composerEMGMotionOffset = 0,避免舊 subject offset 漏到新 subject'
-    );
-    assert.match(
-        fnBody,
-        /this\._composerLoadedSubject\s*=\s*(null|undefined|''|"")/,
-        'onComposerSubjectChange 必須 reset _composerLoadedSubject 來強制 user 重新按「載入 EMG 欄位」'
-    );
-});
-
-// generateComposerChart 的 _composerLoadedSubject guard:ADR-0007 / M5 後,RPC
-// 呼叫從 main.js generateComposerChart 移到 chart_composer_spec.mjs 的 spec.rpc。
-// 此 guard(loadedSubject ≠ ctx.subjectName 時 throw)現在掃 spec rpc。
-// 行為層另由 chart_composer_spec.test.mjs「rpc 在 _composerLoadedSubject 與
-// ctx.subjectName 不一致時 throw」釘死。
-test('Slice D P2#3: chart_composer_spec.rpc 必須驗證 _composerLoadedSubject 與當前 subject 一致', async () => {
-    const src = await readComposerSpecJs();
-
-    const fnStart = src.indexOf('rpc: async (ctx)');
-    assert.ok(fnStart > 0, '找不到 chart_composer_spec rpc');
-    // 邊界:下一個 spec 欄位(onResult)
-    const fnEnd = src.indexOf('\n        onResult:', fnStart);
-    assert.ok(fnEnd > fnStart, '找不到 rpc 結束邊界(onResult)');
-    const fnBody = src.slice(fnStart, fnEnd);
-
-    assert.match(
-        fnBody,
-        /_composerLoadedSubject/,
-        'spec.rpc 必須讀 app._composerLoadedSubject 驗證 user 已對當前 subject 重新載入 EMG 欄位'
-    );
-    // 必須在 GenerateChartComposer 呼叫前 short-circuit(出現順序檢查)
-    const guardIdx = fnBody.indexOf('_composerLoadedSubject');
-    const rpcIdx = fnBody.indexOf('GenerateChartComposer(');
-    assert.ok(guardIdx > 0, 'guard 條件必須存在');
-    assert.ok(rpcIdx > guardIdx,
-        '_composerLoadedSubject guard 必須在 GenerateChartComposer RPC 呼叫之前(否則 silent 用舊 offset)');
-});
-
-// loadComposerEMGChannels 成功後必須記錄 _composerLoadedSubject = 當前 subject。
-// ADR-0007 / M5:此 method 仍掛 app this(KEPT),只是 DOM id 改走 #mp*。
-test('Slice D P2#3: loadComposerEMGChannels 成功後必須 set _composerLoadedSubject', async () => {
-    const src = await readMainJs();
-
-    const fnStart = src.indexOf('async loadComposerEMGChannels()');
-    assert.ok(fnStart > 0, '找不到 loadComposerEMGChannels');
-    // 邊界:下一個 method signature(M5 後為 downloadComposerChart;比註解字串穩)。
-    const fnEnd = src.indexOf('\n    async downloadComposerChart(', fnStart);
-    assert.ok(fnEnd > fnStart, '找不到 loadComposerEMGChannels 結束邊界');
-    const fnBody = src.slice(fnStart, fnEnd);
-
-    assert.match(
-        fnBody,
-        /this\._composerLoadedSubject\s*=\s*subject/,
-        'loadComposerEMGChannels 成功後必須記錄 _composerLoadedSubject = subject(讓 generate 能驗證一致性)'
-    );
-});
+// -------------------- Slice D codex P2 #4 source guards --------------------
+//
+// 註:原 P2#3 三個 source-text guard(onComposerSubjectChange reset
+// _composerEMGMotionOffset / _composerLoadedSubject、spec.rpc loadedSubject 一致性
+// guard、loadComposerEMGChannels set _composerLoadedSubject)已隨 ADR-0013 一鍵生成
+// 刪除 —— offset 改由 backend 從 manifest row 讀,stale-offset 風險與其 guard 一併
+// 消失,故對應 source-text test 移除。
 
 // downloadComposerChart 不可走 SelectFile('save', ...) — Wails SelectFile 是
 // OpenFileDialog 包裝,'save' buttonType 不被認識,實際打開的是「請選現有檔案」
