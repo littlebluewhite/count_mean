@@ -24,7 +24,7 @@
 
 - **A. WriteRequest 加 filename-override(+ optional precision)** — 拒。reopen [[ADR-0004]] Boundary 2 拒過的「全 caller」方向、稀釋 Subject-based depth;且 precision 同為 6,override 無必要。
 - **B. 留 ExportToCSV residual + 記「evaluated-not-adopted」** — 拒。PhaseSync 永久 straddle(math 模組持有 CSV 寫入)、dead code 留存、Subject-based 家族 atomic 不齊。friction 已足以 justify 完成。
-- **C. 新 Subject-based method 但走非 atomic `WriteCSV`(對齊直系 sibling)** — 部分採。原推此案(strict guard 升級),user 改選 atomic;遂連 regular 一起 atomic 化,改以「Subject-based ⟹ atomic」立論。trade-off:atomic 放棄 `WriteCSV` 的 strict allowlist `ValidateFilePath` + `OpenWriteValidated` parent-symlink kernel guard,降為 lenient `ValidateExternalPath` + leaf `O_NOFOLLOW`(`TmpCreateFlags`,unix)。接受,因輸出恆在 OutputDir 內 + Subject 經 `filename.Sanitize` + 這正是 CCI/MR 既有姿態。
+- **C. 新 Subject-based method 但走非 atomic `WriteCSV`(對齊直系 sibling)** — 部分採。原推此案(strict guard 升級),user 改選 atomic;遂連 regular 一起 atomic 化,改以「Subject-based ⟹ atomic」立論。trade-off:atomic 放棄 `WriteCSV` 的 strict allowlist `ValidateFilePath` + `OpenWriteValidated` parent-symlink kernel guard,降為 lenient `ValidateExternalPath` + leaf `O_NOFOLLOW`(`TmpCreateFlags`,unix)。接受,因輸出恆在 OutputDir 內 + Subject 經 `filename.Sanitize` + 這正是 CCI/MR 既有姿態。**Caveat(codex Round 1 補)**:「輸出恆在 OutputDir 內」前提**漏了 symlinked SubDir** —— lenient posture 對指向 OutputDir 外的 symlink SubDir 失去邊界守門(`safeJoinOutput` lexical、`ValidateExternalPath` 字面比對、`O_NOFOLLOW` 只守 leaf;舊 `WriteCSV→OpenWriteValidated` 解析 parent symlink 會擋下)。現所有生產 caller 傳 `SubDir=""`(不可達 —— `TestPhaseSyncWriters_EmptySubDirStaysInOutputDir` 釘住此前提),故本 PR 不改行為;整族(CCI/MR/PhaseSync)讓 `WriteCSVAtomic` 走 validated-open 的硬化見 follow-up #34。
 
 ## Reversibility
 

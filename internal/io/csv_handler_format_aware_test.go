@@ -596,6 +596,69 @@ func TestWritePhaseSyncResult_RoundTrip(t *testing.T) {
 	require.Contains(t, lines[7], "最大值")
 }
 
+// TestPhaseSyncWriters_EmptySubDirStaysInOutputDir 釘住 ADR-0016 Option C 的安全前提:
+// 兩個 Subject-based atomic 寫入 (WritePhaseSyncResult / WriteNormalizedPhaseSyncResult)
+// 在生產 caller 路徑 (gui/normalized_phase_sync_handlers.go、gui/app.go 皆傳 WriteRequest{},
+// SubDir="") 下,輸出必直接落在 OutputDir 根 —— outputPath 不含任何中間 SubDir 段。
+//
+// 這是「接受 codex symlinked-SubDir finding (見 ADR-0016 Option C caveat) 不另修行為」的
+// 不可達性前提:lenient atomic 路徑 (WriteCSVAtomic + ValidateExternalPath + leaf O_NOFOLLOW)
+// 放棄了舊 WriteCSV 的 parent-symlink 守門,但只要 SubDir 恆為空,就無中間目錄供植入 symlink,
+// 攻擊向量不適用。若日後某 caller 改傳非空 SubDir,本 test 會 fail,提醒重新評估該 finding。
+//
+// 斷言用 filepath.Dir == OutputDir (精確),比現有 round-trip 的 HasPrefix 檢查更嚴 ——
+// HasPrefix 會放過 OutputDir 底下的子目錄,無法守住「無 SubDir 段」這條契約。
+func TestPhaseSyncWriters_EmptySubDirStaysInOutputDir(t *testing.T) {
+	t.Parallel()
+
+	stats := &models.EMGStatistics{
+		Subject:      "subject_safe",
+		StartPhase:   models.PhaseP0,
+		EndPhase:     models.PhaseL,
+		StartTime:    0.0,
+		EndTime:      1.0,
+		ChannelNames: []string{"Ch1"},
+		ChannelMeans: map[string]float64{"Ch1": 1.0},
+		ChannelMaxes: map[string]float64{"Ch1": 2.0},
+	}
+
+	cases := []struct {
+		name  string
+		write func(h *CSVHandler) (string, error)
+	}{
+		{
+			name: "regular",
+			write: func(h *CSVHandler) (string, error) {
+				return h.WritePhaseSyncResult(WriteRequest{}, stats)
+			},
+		},
+		{
+			name: "normalized",
+			write: func(h *CSVHandler) (string, error) {
+				return h.WriteNormalizedPhaseSyncResult(WriteRequest{}, stats,
+					models.PhaseP0, models.PhaseL)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, tempDir := newFormatAwareTestHandler(t)
+
+			outputPath, err := tc.write(handler)
+			require.NoError(t, err)
+
+			require.Equal(t, tempDir, filepath.Dir(outputPath),
+				"SubDir=\"\" 時輸出必直接落在 OutputDir 根,不得有中間目錄段 (ADR-0016 Option C 安全前提)")
+
+			_, statErr := os.Stat(outputPath)
+			require.NoError(t, statErr, "輸出檔應存在於 OutputDir 根")
+		})
+	}
+}
+
 // readCSVRows 讀檔、剝 BOM，並用 encoding/csv 解析為 [][]string,供 CCI round-trip 精確比對。
 func readCSVRows(t *testing.T, path string) [][]string {
 	t.Helper()
