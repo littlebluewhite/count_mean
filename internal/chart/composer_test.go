@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"testing"
 
@@ -219,9 +220,9 @@ func TestRenderComposer_PhaseMarkLinesIncludesMotionIndexDO(t *testing.T) {
 // TestRenderComposer_MarkLineOnEveryGrid — Bug 2 + Bug B regression(2026-05-27):
 //
 // 雙層需求:
-//   1. (Bug 2 / image #2):每個 grid 都要 phase 虛線(過去只 grid 0 有)。
-//   2. (Bug B / image #5):使用者透過 legend 隱藏某條 muscle/motion series 時
-//      (e.g. IL/GMax),markLine 不可隨之消失。
+//  1. (Bug 2 / image #2):每個 grid 都要 phase 虛線(過去只 grid 0 有)。
+//  2. (Bug B / image #5):使用者透過 legend 隱藏某條 muscle/motion series 時
+//     (e.g. IL/GMax),markLine 不可隨之消失。
 //
 // 修法:對 **每條** EMG/muscle/motion series 都 attach markLine。即便其中一條被
 // legend 隱藏,其他 series 仍 visible 且帶 markLine → 視覺持續顯示。
@@ -268,10 +269,10 @@ func TestRenderComposer_MarkLineOnEveryGrid(t *testing.T) {
 func TestRenderComposer_BottomXAxisUnionRange(t *testing.T) {
 	in := ComposerInput{
 		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA"),       // t=[0..0.099]
+		EMGDataset:       makeEMGDataset(100, "RA"), // t=[0..0.099]
 		SelectedChannels: []string{"RA"},
 		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"), // t=[0..0.099]
-		MotionData:       makeMotionData(50, "knee"),       // t=[0..0.49] — 最大
+		MotionData:       makeMotionData(50, "knee"),        // t=[0..0.49] — 最大
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -501,9 +502,9 @@ func TestRenderComposer_BodyMarginReset(t *testing.T) {
 // (regex 不認識 string literal,會把 `"wails://wails"` 內的 `//` 也吃掉)。
 //
 // 此 test 釘 3 條 invariant:
-//   1. wailsParentOrigins 陣列完整(URLs 內 `//` 未被誤吃)
-//   2. postMessage handler 結構完整(關鍵 token 都在,代表 function/if 都閉合到位)
-//   3. customJS 區段內 `{` 與 `}` 數量相等(若 `//` 吃掉 closing braces 就會不平衡)
+//  1. wailsParentOrigins 陣列完整(URLs 內 `//` 未被誤吃)
+//  2. postMessage handler 結構完整(關鍵 token 都在,代表 function/if 都閉合到位)
+//  3. customJS 區段內 `{` 與 `}` 數量相等(若 `//` 吃掉 closing braces 就會不平衡)
 func TestRenderComposer_CustomJSSyntaxValid(t *testing.T) {
 	in := ComposerInput{
 		Subject:          "S",
@@ -724,12 +725,12 @@ func TestRenderComposer_GridLayoutNoCSSCalc(t *testing.T) {
 // series data 改 [time, value] pair。
 //
 // 防線:
-//   1. HTML 含 `"type":"value"` (至少 bottom + top xAxes + yAxes)
-//   2. xAxis block 不含 `"type":"category"` — 整個 chart 沒任何 category 軸
-//   3. xAxis block 不含 `"data":` (value 軸不應該有 Data field 序列化)
-//      註:這條 assert 整個 HTML 不含 `"data":` — series 雖然有 data,但 go-echarts
-//      template 把 series.data 渲染成 "data:[..]" 而非 JSON `"data":` (含引號),
-//      所以這個 assert 純針對 xAxis JSON block 內的 data field。
+//  1. HTML 含 `"type":"value"` (至少 bottom + top xAxes + yAxes)
+//  2. xAxis block 不含 `"type":"category"` — 整個 chart 沒任何 category 軸
+//  3. xAxis block 不含 `"data":` (value 軸不應該有 Data field 序列化)
+//     註:這條 assert 整個 HTML 不含 `"data":` — series 雖然有 data,但 go-echarts
+//     template 把 series.data 渲染成 "data:[..]" 而非 JSON `"data":` (含引號),
+//     所以這個 assert 純針對 xAxis JSON block 內的 data field。
 func TestRenderComposer_AbsoluteTimeAxis(t *testing.T) {
 	in := ComposerInput{
 		Subject:          "S",
@@ -954,4 +955,161 @@ func TestDownsampleSeriesMap_BelowThreshold_Passthrough(t *testing.T) {
 	// channel 應原樣在 map 中且長度不變
 	require.Contains(t, newSeries, "ch")
 	assert.Len(t, newSeries["ch"], 10, "channel 長度應維持 10（passthrough 不截斷）")
+}
+
+// seriesNameOrder 從 render 出的 HTML 抽出 series name 的「出現順序」。
+// go-echarts 把每條 series 的 name 序列化為 `"name":"<sanitized>"`;依字串中首次
+// 出現位置排序即得 AddSeries 呼叫順序(= 渲染順序)。只回傳出現在 wantNames 內的
+// name,避免 markLine / title 等其他 `"name":` 干擾。
+func seriesNameOrder(html string, wantNames []string) []string {
+	type hit struct {
+		name string
+		pos  int
+	}
+	hits := make([]hit, 0, len(wantNames))
+	for _, n := range wantNames {
+		pos := strings.Index(html, `"name":"`+n+`"`)
+		if pos >= 0 {
+			hits = append(hits, hit{name: n, pos: pos})
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool { return hits[i].pos < hits[j].pos })
+	out := make([]string, len(hits))
+	for i, h := range hits {
+		out[i] = h.name
+	}
+	return out
+}
+
+// TestRenderComposer_SeriesRenderedInFieldOrder — Decision 2 regression:
+//
+// 渲染順序必須是「檔案欄位序」而非字母序。三 grid 各自的欄位序來源:
+//   - EMG:buildEMGSeries 回傳的 nameList(= SelectedChannels 順序 / headers 順序)
+//   - muscle:MuscleRatioData.Order
+//   - motion:MotionData.Order
+//
+// 防線:刻意讓每組 fixture 的欄位序 ≠ 字母序(EMG ["C","A","B"]、muscle
+// ["z_first","a_second"]、motion ["m_two","a_one"]),render 後抽 series name
+// 出現順序,必須等於欄位序;若退回 sortedKeys 會變字母序而失敗。
+func TestRenderComposer_SeriesRenderedInFieldOrder(t *testing.T) {
+	// EMG headers = [time, C, A, B];SelectedChannels 指定 C,A,B → 欄位序 = C,A,B(非字母序)
+	emg := makeEMGDataset(100, "C", "A", "B")
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       emg,
+		SelectedChannels: []string{"C", "A", "B"},
+		// muscle Order 刻意逆字母:z_first 先、a_second 後
+		MuscleRatioData: &MuscleRatioData{
+			Time:   makeMuscleRatioData(100, "z_first", "a_second").Time,
+			Series: makeMuscleRatioData(100, "z_first", "a_second").Series,
+			Order:  []string{"z_first", "a_second"},
+		},
+		// motion Order 刻意逆字母:m_two 先、a_one 後
+		MotionData: &MotionData{
+			Time:   makeMotionData(50, "m_two", "a_one").Time,
+			Series: makeMotionData(50, "m_two", "a_one").Series,
+			Order:  []string{"m_two", "a_one"},
+		},
+	}
+	html := renderToString(t, context.Background(), in)
+
+	emgOrder := seriesNameOrder(html, []string{"A", "B", "C"})
+	assert.Equal(t, []string{"C", "A", "B"}, emgOrder,
+		"EMG series 應依 buildEMGSeries 欄位序(C,A,B)渲染,而非字母序(A,B,C)")
+
+	muscleOrder := seriesNameOrder(html, []string{"a_second", "z_first"})
+	assert.Equal(t, []string{"z_first", "a_second"}, muscleOrder,
+		"muscle series 應依 MuscleRatioData.Order(z_first,a_second)渲染,而非字母序")
+
+	motionOrder := seriesNameOrder(html, []string{"a_one", "m_two"})
+	assert.Equal(t, []string{"m_two", "a_one"}, motionOrder,
+		"motion series 應依 MotionData.Order(m_two,a_one)渲染,而非字母序")
+}
+
+// TestRenderComposer_FixedPalettePerSeries — Decision 3 regression:
+//
+// 每條 series 依「欄位序 index」明確指定固定色票,line + item 同一 hex
+// (item 是為 legend marker 上色)。EMG 用 composerEMGPalette、muscle/motion 共用
+// composerMuscleMotionPalette。
+//
+// 防線:render 後 HTML 必須含每條 series 對應 index 的 lineStyle+itemStyle color hex。
+// go-echarts v2.7.1 序列化為 `"itemStyle":{"color":"#XXX"}` 與
+// `"lineStyle":{"color":"#XXX","width":1.5}`(item 在 line 前)。
+func TestRenderComposer_FixedPalettePerSeries(t *testing.T) {
+	// EMG 3 channel(欄位序 ch0,ch1,ch2)+ muscle 2 + motion 2,各對 palette index。
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(100, "ch0", "ch1", "ch2"),
+		SelectedChannels: []string{"ch0", "ch1", "ch2"},
+		MuscleRatioData: &MuscleRatioData{
+			Time:   makeMuscleRatioData(100, "m0", "m1").Time,
+			Series: makeMuscleRatioData(100, "m0", "m1").Series,
+			Order:  []string{"m0", "m1"},
+		},
+		MotionData: &MotionData{
+			Time:   makeMotionData(50, "mo0", "mo1").Time,
+			Series: makeMotionData(50, "mo0", "mo1").Series,
+			Order:  []string{"mo0", "mo1"},
+		},
+	}
+	html := renderToString(t, context.Background(), in)
+
+	// EMG index 0/1/2 → composerEMGPalette[0..2]
+	for i := 0; i < 3; i++ {
+		hex := composerEMGPalette[i]
+		assert.Contains(t, html, `"lineStyle":{"color":"`+hex+`","width":1.5}`,
+			"EMG series index %d 的 lineStyle.color 應為 %s", i, hex)
+		assert.Contains(t, html, `"itemStyle":{"color":"`+hex+`"}`,
+			"EMG series index %d 的 itemStyle.color(legend marker)應為 %s", i, hex)
+	}
+
+	// muscle index 0/1 + motion index 0/1 共用 composerMuscleMotionPalette[0..1]
+	for i := 0; i < 2; i++ {
+		hex := composerMuscleMotionPalette[i]
+		assert.Contains(t, html, `"lineStyle":{"color":"`+hex+`","width":1.5}`,
+			"muscle/motion series index %d 的 lineStyle.color 應為 %s", i, hex)
+		assert.Contains(t, html, `"itemStyle":{"color":"`+hex+`"}`,
+			"muscle/motion series index %d 的 itemStyle.color 應為 %s", i, hex)
+	}
+}
+
+// TestRenderComposer_PaletteWrapsAround — Decision 3 防呆:series 數超過 palette
+// 長度時用 `% len(palette)` 循環,不 panic、不漏色。
+//
+// 防線:給 EMG 10 個 channel(> 8 色 palette)、muscle 6 個(> 4 色 palette)。
+// 第 8 條 EMG(index 8)應 wrap 回 composerEMGPalette[0];第 4 條 muscle(index 4)
+// 應 wrap 回 composerMuscleMotionPalette[0]。render 不可 panic。
+func TestRenderComposer_PaletteWrapsAround(t *testing.T) {
+	emgNames := []string{"e0", "e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"}
+	muscleNames := []string{"m0", "m1", "m2", "m3", "m4", "m5"}
+
+	muscleSrc := makeMuscleRatioData(100, muscleNames...)
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(100, emgNames...),
+		SelectedChannels: emgNames,
+		MuscleRatioData: &MuscleRatioData{
+			Time:   muscleSrc.Time,
+			Series: muscleSrc.Series,
+			Order:  muscleNames,
+		},
+		MotionData: makeMotionData(50, "knee"),
+	}
+
+	// 不可 panic
+	html := renderToString(t, context.Background(), in)
+
+	// EMG 第 9 條(index 8)wrap → palette[8%8=0];len(palette)=8
+	require.Len(t, composerEMGPalette, 8, "EMG palette 預期 8 色")
+	wrapHexEMG := composerEMGPalette[8%len(composerEMGPalette)]
+	assert.Equal(t, composerEMGPalette[0], wrapHexEMG, "index 8 應 wrap 回 EMG palette[0]")
+
+	// muscle 第 5 條(index 4)wrap → palette[4%4=0];len=4
+	require.Len(t, composerMuscleMotionPalette, 4, "muscle/motion palette 預期 4 色")
+	wrapHexMuscle := composerMuscleMotionPalette[4%len(composerMuscleMotionPalette)]
+	assert.Equal(t, composerMuscleMotionPalette[0], wrapHexMuscle, "index 4 應 wrap 回 muscle palette[0]")
+
+	// 確認 render 真的產出 series(沒被 wrap 邏輯弄壞)
+	assert.Contains(t, html, `"name":"e9"`, "第 10 條 EMG series 仍應渲染")
+	assert.Contains(t, html, `"name":"m5"`, "第 6 條 muscle series 仍應渲染")
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"sort"
 
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
@@ -195,15 +194,19 @@ func buildComposerLine(ctx context.Context, in ComposerInput) (*charts.Line, err
 	grids := computeGridLayout(n)
 
 	// EMG / muscle_ratio downsample
-	emgTime, emgSeries, err := buildEMGSeries(ctx, in.EMGDataset, in.SelectedChannels)
+	// emgNames 是 EMG 欄位序(對齊 Decision 2),thread 進 addComposerSeries 取代字母序。
+	emgTime, emgSeries, emgNames, err := buildEMGSeries(ctx, in.EMGDataset, in.SelectedChannels)
 	if err != nil {
 		return nil, err
 	}
 
 	var muscleTime []float64
 	var muscleSeries map[string][]float64
+	var muscleNames []string
 	if hasMuscle {
 		muscleTime, muscleSeries = downsampleSeriesMap(in.MuscleRatioData.Time, in.MuscleRatioData.Series, composerDownsampleThreshold)
+		// muscle 欄位序 = MuscleRatioData.Order(對齊 Decision 2),thread 進 addComposerSeries。
+		muscleNames = in.MuscleRatioData.Order
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -228,7 +231,8 @@ func buildComposerLine(ctx context.Context, in ComposerInput) (*charts.Line, err
 	}
 
 	// Series:依序加 EMG(grid 0)、muscle_ratio(grid 1, if any)、motion(最後一個 grid)
-	if err := addComposerSeries(ctx, line, n, emgTime, emgSeries, muscleTime, muscleSeries, in.MotionData, in.PhaseTimesEMG, hasMuscle); err != nil {
+	// emgNames / muscleNames 提供欄位序(對齊 Decision 2),取代過去的 sortedKeys 字母序。
+	if err := addComposerSeries(ctx, line, n, emgTime, emgSeries, emgNames, muscleTime, muscleSeries, muscleNames, in.MotionData, in.PhaseTimesEMG, hasMuscle); err != nil {
 		return nil, err
 	}
 
@@ -244,14 +248,16 @@ func buildComposerLine(ctx context.Context, in ComposerInput) (*charts.Line, err
 // SelectedChannels 為空時 fallback 顯示全部 channel(對齊 echarts_generator
 // ShowAllColumns 行為)。
 //
-// 回傳:downsampled time slice + map(channel name → downsampled values)。
+// 回傳:downsampled time slice + map(channel name → downsampled values)+ 欄位序
+// channel 名 slice(nameList)。nameList 是渲染順序的權威來源(對齊 Decision 2 —
+// 字母序 → 欄位序),caller 把它 thread 進 addComposerSeries 取代 sortedKeys。
 func buildEMGSeries(
 	ctx context.Context,
 	dataset *models.EMGDataset,
 	selectedChannels []string,
-) ([]float64, map[string][]float64, error) {
+) ([]float64, map[string][]float64, []string, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	headers := dataset.Headers
@@ -293,7 +299,7 @@ func buildEMGSeries(
 		if i > 0 && i%composerCtxCheckInterval == 0 {
 			select {
 			case <-ctx.Done():
-				return nil, nil, ctx.Err()
+				return nil, nil, nil, ctx.Err()
 			default:
 			}
 		}
@@ -309,7 +315,7 @@ func buildEMGSeries(
 	}
 
 	downTime, downMap := downsampleSeriesMap(timeRaw, rawMap, composerDownsampleThreshold)
-	return downTime, downMap, nil
+	return downTime, downMap, nameList, nil
 }
 
 // downsampleSeriesMap 對共享同一條 time series 的多個 channel 一起做 LTTB:
@@ -589,8 +595,10 @@ func addComposerSeries(
 	n int,
 	emgTime []float64,
 	emgSeries map[string][]float64,
+	emgNames []string,
 	muscleTime []float64,
 	muscleSeries map[string][]float64,
+	muscleNames []string,
 	motion *MotionData,
 	phaseTimes map[string]float64,
 	hasMuscle bool,
@@ -613,8 +621,9 @@ func addComposerSeries(
 	markLineOpts := composerPhaseMarkLineOpts(phaseTimes)
 
 	// EMG series → grid 0
-	emgNames := sortedKeys(emgSeries)
-	for _, name := range emgNames {
+	// 依 emgNames(欄位序,對齊 Decision 2)渲染,取代過去的 sortedKeys 字母序。
+	// colIdx = series 在欄位序中的位置(0-based) → composerEMGPalette[colIdx % len]。
+	for colIdx, name := range emgNames {
 		vals := emgSeries[name]
 		if err := ctx.Err(); err != nil {
 			return err
@@ -623,6 +632,7 @@ func addComposerSeries(
 		if err != nil {
 			return err
 		}
+		hex := composerEMGPalette[colIdx%len(composerEMGPalette)]
 		seriesOpts := []charts.SeriesOpts{
 			charts.WithLineChartOpts(opts.LineChart{
 				Smooth:     opts.Bool(false),
@@ -630,21 +640,30 @@ func addComposerSeries(
 				XAxisIndex: 0,
 				YAxisIndex: 0,
 			}),
-			charts.WithLineStyleOpts(opts.LineStyle{Width: 1.5}),
+			charts.WithLineStyleOpts(opts.LineStyle{Color: hex, Width: 1.5}),
+			// item style 是為 legend marker 上色:go-echarts v2 的 legend 小方塊不會自動
+			// 跟 line color 走,需另設 itemStyle.color,line + item 同 hex 才一致。
+			charts.WithItemStyleOpts(opts.ItemStyle{Color: hex}),
 		}
 		seriesOpts = append(seriesOpts, markLineOpts...)
 		line.AddSeries(SanitizeChartString(name), lineData, seriesOpts...)
 	}
 
 	// muscle_ratio series → grid 1(僅 3-grid)
+	// 依 muscleNames(= MuscleRatioData.Order,欄位序,對齊 Decision 2)渲染,取代字母序。
+	// 與 motion 一致:Order 內但已被 downsample graceful-skip 的 channel(不在 series map)
+	// 用 ok 跳過,但 colIdx 仍取欄位序位置,確保配色不因跳過而位移。
 	if hasMuscle {
-		muscleNames := sortedKeys(muscleSeries)
-		for _, name := range muscleNames {
-			vals := muscleSeries[name]
+		for colIdx, name := range muscleNames {
+			vals, ok := muscleSeries[name]
+			if !ok {
+				continue
+			}
 			lineData, err := buildComposerLineData(ctx, muscleTime, vals)
 			if err != nil {
 				return err
 			}
+			hex := composerMuscleMotionPalette[colIdx%len(composerMuscleMotionPalette)]
 			seriesOpts := []charts.SeriesOpts{
 				charts.WithLineChartOpts(opts.LineChart{
 					Smooth:     opts.Bool(false),
@@ -652,7 +671,8 @@ func addComposerSeries(
 					XAxisIndex: 1,
 					YAxisIndex: 1,
 				}),
-				charts.WithLineStyleOpts(opts.LineStyle{Width: 1.5}),
+				charts.WithLineStyleOpts(opts.LineStyle{Color: hex, Width: 1.5}),
+				charts.WithItemStyleOpts(opts.ItemStyle{Color: hex}),
 			}
 			seriesOpts = append(seriesOpts, markLineOpts...)
 			line.AddSeries(SanitizeChartString(name), lineData, seriesOpts...)
@@ -662,8 +682,9 @@ func addComposerSeries(
 	// motion series → grid n-1
 	if motion != nil {
 		motionGridIdx := n - 1
-		// 依 Order 渲染,確保順序穩定
-		for _, name := range motion.Order {
+		// 依 Order 渲染,確保順序穩定(已是欄位序,Decision 2 不動此處排序)。
+		// colIdx = 欄位序位置 → composerMuscleMotionPalette[colIdx % len](與 muscle 共用色票)。
+		for colIdx, name := range motion.Order {
 			vals, ok := motion.Series[name]
 			if !ok {
 				continue
@@ -672,6 +693,7 @@ func addComposerSeries(
 			if err != nil {
 				return err
 			}
+			hex := composerMuscleMotionPalette[colIdx%len(composerMuscleMotionPalette)]
 			seriesOpts := []charts.SeriesOpts{
 				charts.WithLineChartOpts(opts.LineChart{
 					Smooth:     opts.Bool(false),
@@ -679,7 +701,8 @@ func addComposerSeries(
 					XAxisIndex: motionGridIdx,
 					YAxisIndex: motionGridIdx,
 				}),
-				charts.WithLineStyleOpts(opts.LineStyle{Width: 1.5}),
+				charts.WithLineStyleOpts(opts.LineStyle{Color: hex, Width: 1.5}),
+				charts.WithItemStyleOpts(opts.ItemStyle{Color: hex}),
 			}
 			seriesOpts = append(seriesOpts, markLineOpts...)
 			line.AddSeries(SanitizeChartString(name), lineData, seriesOpts...)
@@ -725,6 +748,38 @@ func buildComposerLineData(ctx context.Context, time []float64, vals []float64) 
 		}
 	}
 	return out, nil
+}
+
+// composerEMGPalette 是 EMG grid(grid 0)的固定色票,index 對應 series 在**欄位序**
+// 中的位置(0-based)。明確指定每條 series 顏色(而非依賴 go-echarts 全域 palette)—
+// 三 grid 色數不同、series 跨 grid 連續加入,全域 palette 會位移、顏色不穩定。
+//
+// 色序語意(對齊 Decision 3 spec,EMG 最多 8 channel):
+//
+//	0 #E8000B 紅   1 #FF6FB5 粉   2 #1B7837 深綠 3 #66BD63 淺綠
+//	4 #1F4EAA 深藍 5 #6BAED6 淺藍 6 #FF7F0E 橘   7 #F2C500 黃
+var composerEMGPalette = []string{
+	"#E8000B", // 0 紅
+	"#FF6FB5", // 1 粉
+	"#1B7837", // 2 深綠
+	"#66BD63", // 3 淺綠
+	"#1F4EAA", // 4 深藍
+	"#6BAED6", // 5 淺藍
+	"#FF7F0E", // 6 橘
+	"#F2C500", // 7 黃
+}
+
+// composerMuscleMotionPalette 是 muscle ratio grid(grid 1)與 motion grid(grid n-1)
+// 共用的固定色票,index 對應 series 在**欄位序**中的位置(0-based)。
+//
+// 色序語意(對齊 Decision 3 spec,muscle/motion 各最多 4 channel):
+//
+//	0 #E8000B 紅 1 #2CA02C 綠 2 #1F77B4 藍 3 #9467BD 紫
+var composerMuscleMotionPalette = []string{
+	"#E8000B", // 0 紅
+	"#2CA02C", // 1 綠
+	"#1F77B4", // 2 藍
+	"#9467BD", // 3 紫
 }
 
 // composerPhaseOrder 是 markLine 的 canonical phase 順序,對齊 frontend
@@ -999,14 +1054,4 @@ func computeUnionTimeRange(emgTime, muscleTime []float64, motion *MotionData) (f
 		return 0, 0
 	}
 	return minTime, maxTime
-}
-
-// sortedKeys 對 map[string][]float64 取 keys 並排序;讓 series 順序可預測。
-func sortedKeys(m map[string][]float64) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
