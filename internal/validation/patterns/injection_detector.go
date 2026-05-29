@@ -33,17 +33,44 @@ func (d *InjectionDetectorImpl) DetectFormula(content string) (bool, string) {
 		}
 	}
 
-	// Check dangerous functions (case-insensitive)
+	// Check dangerous functions — 只在「被呼叫」(後接 `(`)時才算命中。
+	// 危險函式僅在被呼叫時危險;naive substring 比對會把 `shoulder`(⊃`sh`)、
+	// `systemic`(⊃`system`)、`evaluation`(⊃`eval`)等合法 EMG 內容誤殺。gate 在
+	// 呼叫語法上,並掃描所有出現位置 → 早期良性子串不會 shadow 後面真正的呼叫。
 	contentLower := strings.ToLower(content)
 
 	functions := d.registry.Get(DangerousFunctions)
 	for _, fn := range functions {
-		if strings.Contains(contentLower, strings.ToLower(fn)) {
+		if isFunctionCall(contentLower, strings.ToLower(fn)) {
 			return true, fn
 		}
 	}
 
 	return false, ""
+}
+
+// isFunctionCall 回報 fn 是否在 content 中以「呼叫」形式出現 — 即某個 fn 出現位置
+// 之後(略過空白 / tab)緊接 `(`。content 與 fn 須皆已 lower-case。掃描每個出現
+// 位置,因此早期良性子串(如 `wash` 裡的 `sh`)不會 shadow 後面真正的呼叫(`system(`)。
+func isFunctionCall(content, fn string) bool {
+	from := 0
+	for {
+		idx := strings.Index(content[from:], fn)
+		if idx < 0 {
+			return false
+		}
+
+		pos := from + idx + len(fn)
+		for pos < len(content) && (content[pos] == ' ' || content[pos] == '\t') {
+			pos++
+		}
+
+		if pos < len(content) && content[pos] == '(' {
+			return true
+		}
+
+		from += idx + 1
+	}
 }
 
 // DetectSQL checks for SQL injection patterns.

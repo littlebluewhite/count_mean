@@ -197,3 +197,52 @@ func TestDetectCommand_LongPatternsStillWork(t *testing.T) {
 		})
 	}
 }
+
+// TestDetectFormula_RequiresCallSyntax 釘住 DetectFormula 的危險函式偵測必須 gate
+// 在「呼叫語法」(後接 `(`)上。先前用 naive strings.Contains 比對短 token(`sh`、
+// `eval`、`system`),把 `shoulder`、`Cash`、`systemic`、`evaluation` 與裸 `document`/
+// `query` 等合法 EMG 內容全部誤殺(P0 移除 !HasPrefix guard 後此 false-positive 暴露)。
+// 修法:危險函式名後必須緊跟 `(`(允許中間空白)才算命中,且掃描所有出現位置 —
+// 早期良性子串(`wash` 裡的 `sh`)不可 shadow 後面真正的呼叫(`system(`)。
+// formula starter(`=`、`@`)分支不變。
+func TestDetectFormula_RequiresCallSyntax(t *testing.T) {
+	det := NewInjectionDetector()
+
+	// 合法內容:含危險函式「名」的子串但無呼叫語法 → 必須放行(今天全部誤命中)。
+	benign := []string{
+		"shoulder",   // 含 `sh`
+		"Cash",       // 含 `sh`
+		"Wash",       // 含 `sh`
+		"Fish",       // 含 `sh`
+		"systemic",   // 含 `system`
+		"evaluation", // 含 `eval`
+		"document",   // 本身是危險函式名,但無 `(`
+		"query",      // 本身是危險函式名,但無 `(`
+	}
+	for _, content := range benign {
+		t.Run("benign/"+content, func(t *testing.T) {
+			if hit, fn := det.DetectFormula(content); hit {
+				t.Errorf("DetectFormula(%q) 假陽性 — 命中 fn=%q,無呼叫語法應放行", content, fn)
+			}
+		})
+	}
+
+	// 真實攻擊:危險函式被「呼叫」(後接 `(`)或 formula starter → 必須命中。
+	// `wash system(1)` 為 no-shadowing guard:前面 `wash` 的 `sh` 不可掩蓋後面 system(。
+	malicious := []string{
+		"system(x)",
+		"importxml(x)",
+		"indirect(x)",
+		"hyperlink(1)",
+		"wash system(1)",
+		"=cmd",
+		"@sum(1)",
+	}
+	for _, content := range malicious {
+		t.Run("malicious/"+content, func(t *testing.T) {
+			if hit, _ := det.DetectFormula(content); !hit {
+				t.Errorf("DetectFormula(%q) 應命中(危險函式呼叫 / formula starter),實際為 false", content)
+			}
+		})
+	}
+}

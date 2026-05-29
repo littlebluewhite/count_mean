@@ -283,3 +283,39 @@ func TestValidateHeaderRow_SmokeForStreamingCaller(t *testing.T) {
 		t.Error("ValidateHeaderRow(formula injection) 必須擋下，實際通過")
 	}
 }
+
+// TestValidateCell_BodyAllowsBenignFunctionSubstrings 釘住 P2 回歸:body cell 含
+// 危險函式「名」的子串但非呼叫(`shoulder`⊃`sh`、`systemic`⊃`system`、
+// `evaluation`⊃`eval`、`Cash`/`Wash`⊃`sh`)必須放行。先前 checkDangerousFunctions 的
+// DetectFormula 用 naive substring 比對(移除 !HasPrefix guard 後暴露),把這些合法
+// EMG 內容全誤殺。修法把危險函式偵測 gate 在呼叫語法(後接 `(`)上。
+func TestValidateCell_BodyAllowsBenignFunctionSubstrings(t *testing.T) {
+	v := NewCellValidator()
+
+	cases := []string{
+		"shoulder",   // 含 `sh`
+		"systemic",   // 含 `system`
+		"Cash",       // 含 `sh`
+		"evaluation", // 含 `eval`
+		"Wash",       // 含 `sh`
+	}
+	for _, cell := range cases {
+		t.Run(cell, func(t *testing.T) {
+			ctx := NewCellContext(1, 1, "data.csv") // body cell(IsHeader=false)
+			if err := v.ValidateCell(cell, ctx); err != nil {
+				t.Errorf("body cell %q 為合法 EMG 內容(危險函式名子串但非呼叫),必須放行,實際 err=%v", cell, err)
+			}
+		})
+	}
+}
+
+// TestValidateCell_BodyBlocksShadowedFunctionCall 釘住 no-shadowing 端到端契約:
+// body cell 內早期良性子串(`wash` 的 `sh`)不可掩蓋後面真正的危險函式呼叫
+// (`system(`)。確保 call-syntax gate 掃描所有出現位置,而非第一個子串就放行。
+func TestValidateCell_BodyBlocksShadowedFunctionCall(t *testing.T) {
+	v := NewCellValidator()
+	ctx := NewCellContext(1, 1, "evil.csv") // body cell(IsHeader=false）
+	if err := v.ValidateCell("wash system(1)", ctx); err == nil {
+		t.Error(`body cell "wash system(1)" 含真實函式呼叫 system(,必須被拒(no-shadowing),實際通過`)
+	}
+}
