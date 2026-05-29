@@ -514,8 +514,14 @@ func (a *App) executeBatchLoop(
 	s *appState,
 	entries []batchFileEntry,
 	ctx *batchProcessContext,
-	outputPath string,
 ) (*MaxMeanResult, error) {
+	// 回報的 OutputPath 必須與檔案實際寫入位置一致:processSingleBatchFile 以
+	// SubDir: ctx.outputDirName 寫到 OutputDir/<outputDirName>/。先前由 caller 各自
+	// 傳入 outputPath(non-direct 傳 Join(OutputDir, dirName)、direct 傳裸 outputDirName),
+	// 與實際 SubDir(Base(dirName))漂移 — direct 路徑更只回裸名缺 OutputDir 前綴。
+	// 改為在此統一從同一個 ctx.outputDirName 推導,杜絕漂移。
+	outputPath := filepath.Join(s.config.OutputDir, ctx.outputDirName)
+
 	var allHeaders []string
 	// Pre-allocate with estimated capacity (assume ~10 results per file on average)
 	estimatedCapacity := 10
@@ -648,7 +654,7 @@ func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error
 		}
 	}
 
-	return a.executeBatchLoop(s, entries, ctx, filepath.Join(s.config.OutputDir, discovery.dirName))
+	return a.executeBatchLoop(s, entries, ctx)
 }
 
 // executeBatchCalculationDirect 直接處理外部目錄的批次計算.
@@ -678,7 +684,7 @@ func (a *App) executeBatchCalculationDirect(
 		}
 	}
 
-	return a.executeBatchLoop(s, entries, ctx, outputDirName)
+	return a.executeBatchLoop(s, entries, ctx)
 }
 
 // NormalizeData performs data normalization.

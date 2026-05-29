@@ -53,3 +53,33 @@ func TestCalculateMaxMean_SingleFile_ReportsSuccessAndMessage(t *testing.T) {
 	assert.NotEmpty(t, result.OutputPath)
 	assert.FileExists(t, result.OutputPath)
 }
+
+// TestCalculateMaxMean_ExternalBatch_OutputPathUnderOutputDir 釘住 whole-project
+// review P1:批次 OutputPath 漂移。external(直接)批次先前回傳的 OutputPath 是
+// outputDirName 裸名(Base(inputPath),無 OutputDir 前綴),與檔案實際寫入位置
+// OutputDir/<batchName>/ 不一致 → 前端顯示「已保存到」的路徑錯誤、無法定位輸出。
+func TestCalculateMaxMean_ExternalBatch_OutputPathUnderOutputDir(t *testing.T) {
+	outDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.InputDir = t.TempDir() // 批次目錄刻意放在 InputDir 之外 → 走 external/direct 路徑
+	cfg.OutputDir = outDir
+	app := NewApp(cfg, "test")
+
+	batchDir := t.TempDir()
+	writeEMGCSVForMaxMean(t, filepath.Join(batchDir, "a.csv"), 50)
+	writeEMGCSVForMaxMean(t, filepath.Join(batchDir, "b.csv"), 50)
+
+	result, err := app.CalculateMaxMean(MaxMeanParams{
+		InputPath:  batchDir,
+		WindowSize: 5,
+		IsBatch:    true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Success, "Message: %s", result.Message)
+
+	wantDir := filepath.Join(outDir, filepath.Base(batchDir))
+	assert.Equal(t, wantDir, result.OutputPath,
+		"batch OutputPath 應為實際寫入目錄 OutputDir/<batchName>,而非裸名或漂移路徑")
+	assert.DirExists(t, result.OutputPath)
+}
