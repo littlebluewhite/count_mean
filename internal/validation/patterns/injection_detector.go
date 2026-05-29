@@ -172,7 +172,8 @@ func (d *InjectionDetectorImpl) DetectDangerousChars(content string) (bool, stri
 	return false, ""
 }
 
-// IsReservedName checks if the name is a Windows reserved name.
+// IsReservedName checks if the name is a Windows reserved name, honoring this
+// detector's (possibly custom) registry — consistent with the other Detect* methods.
 func (d *InjectionDetectorImpl) IsReservedName(name string) bool {
-	return IsReservedName(name)
+	return isReservedNameIn(d.registry, name)
 }
