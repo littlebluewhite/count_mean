@@ -339,3 +339,29 @@ func TestValidateCell_BodyBlocksMultilineFunctionCall(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateCell_BodyBlocksBareShellCommands 釘住 P1 安全回歸:shell / exec 命令
+// token(cmd/powershell/bash/exec/spawn/shell/system/eval)在 body cell 即使未接 `(`
+// 也必須被擋。先前這些 token 只在 DangerousFunctions、被 call-syntax gate 要求 `(`,
+// 使 `; powershell -enc`、`run cmd here` 等 bare 命令漏判。修法:把命令 token 移到
+// DetectCommand 的 word-boundary 組(bare 即命中)。
+func TestValidateCell_BodyBlocksBareShellCommands(t *testing.T) {
+	v := NewCellValidator()
+
+	cases := map[string]string{
+		"powershell": "; powershell script",
+		"cmd":        "run cmd here",
+		"bash":       "do bash thing",
+		"exec":       "please exec payload",
+		"system":     "use system now",
+		"eval":       "then eval expr",
+	}
+	for name, cell := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := NewCellContext(1, 1, "evil.csv")
+			if err := v.ValidateCell(cell, ctx); err == nil {
+				t.Errorf("body cell %q 為 bare shell / exec 命令,必須被拒,實際通過(偵測回歸)", cell)
+			}
+		})
+	}
+}

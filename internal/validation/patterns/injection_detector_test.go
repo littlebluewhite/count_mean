@@ -227,14 +227,16 @@ func TestDetectFormula_RequiresCallSyntax(t *testing.T) {
 		})
 	}
 
-	// 真實攻擊:危險函式被「呼叫」(後接 `(`)或 formula starter → 必須命中。
-	// `wash system(1)` 為 no-shadowing guard:前面 `wash` 的 `sh` 不可掩蓋後面 system(。
+	// 真實攻擊:試算表函式被「呼叫」(後接 `(`)或 formula starter → 必須命中。
+	// `query indirect(1)` 為 no-shadowing guard:前面 bare query(非呼叫)不可掩蓋後面
+	// 真正的 indirect( 呼叫。(shell/exec token 如 cmd 已移到 DetectCommand,此處 `=cmd`
+	// 走 formula starter `=` 分支。)
 	malicious := []string{
-		"system(x)",
 		"importxml(x)",
 		"indirect(x)",
 		"hyperlink(1)",
-		"wash system(1)",
+		"choose(1)",
+		"query indirect(1)",
 		"=cmd",
 		"@sum(1)",
 	}
@@ -250,23 +252,60 @@ func TestDetectFormula_RequiresCallSyntax(t *testing.T) {
 // TestDetectFormula_RejectsMultilineCallSyntax 釘住 no-bypass:危險函式名與 `(`
 // 之間夾換行 / CR / 其他空白不可繞過偵測。quoted CSV multiline cell 內可含 `\n`/`\r`
 // (cell_validator 的 checkControlChars 放行 `\t`/`\n`/`\r`),而試算表在函式名與
-// `(` 之間容忍各種空白(含換行),故 `system\n(1)` 仍是呼叫。call-syntax gate 只跳
-// 空白 / tab 會被換行繞過(weaken 原 substring 守門)— 須跳過全部 ASCII 空白。
+// `(` 之間容忍各種空白(含換行),故 `importxml\n(1)` 仍是呼叫。call-syntax gate 只跳
+// 空白 / tab 會被換行繞過(weaken 原 substring 守門)— 須跳過全部 Unicode 空白。
 func TestDetectFormula_RejectsMultilineCallSyntax(t *testing.T) {
 	det := NewInjectionDetector()
 
 	// map key 為可讀名稱,避免 subtest 名含換行。
 	cases := map[string]string{
-		"lf_before_paren":     "system\n(1)",
-		"crlf_before_paren":   "system\r\n(1)",
+		"lf_before_paren":     "importxml\n(1)",
+		"crlf_before_paren":   "importxml\r\n(1)",
 		"tab_lf_before_paren": "importxml\t\n (x)",
-		"shadowed_lf":         "wash system\n(1)", // wash 的 sh 不可 shadow 後面 system\n(
-		"nbsp_before_paren":   "system\u00a0(1)",  // Unicode 空白(NBSP)同屬繞過類別
+		"shadowed_lf":         "query importxml\n(1)", // bare query 不可 shadow 後面 importxml\n(
+		"nbsp_before_paren":   "importxml\u00a0(1)",   // Unicode 空白(NBSP)同屬繞過類別
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
 			if hit, _ := det.DetectFormula(content); !hit {
 				t.Errorf("DetectFormula(%q) 應命中(跨行函式呼叫),實際為 false — 換行繞過", content)
+			}
+		})
+	}
+}
+
+// TestDetectCommand_DetectsShellExecTokens 釘住 shell / exec token(cmd/powershell/
+// bash/exec/spawn/shell/system/eval)從 DangerousFunctions 移到 DetectCommand 的
+// word-boundary 組後,bare 出現(無 `(`)即命中;且不誤命中合法子串(無 word boundary)。
+func TestDetectCommand_DetectsShellExecTokens(t *testing.T) {
+	det := NewInjectionDetector()
+
+	// bare shell / exec token(無 `(`)須命中。
+	malicious := []string{
+		"; powershell script",
+		"run cmd here",
+		"do bash thing",
+		"please exec payload",
+		"use system now",
+		"then eval expr",
+		"spawn process",
+		"open shell here",
+		"system(x)", // 含 `(` 也命中（\bsystem\b）
+	}
+	for _, content := range malicious {
+		t.Run("hit/"+content, func(t *testing.T) {
+			if hit, _ := det.DetectCommand(content); !hit {
+				t.Errorf("DetectCommand(%q) 應命中 shell/exec token,實際 false", content)
+			}
+		})
+	}
+
+	// 合法子串（無 word boundary）不可誤命中。
+	benign := []string{"systemic", "evaluation", "execution", "bashful", "shoulder", "Cash"}
+	for _, content := range benign {
+		t.Run("miss/"+content, func(t *testing.T) {
+			if hit, p := det.DetectCommand(content); hit {
+				t.Errorf("DetectCommand(%q) 假陽性 — 命中 %q,word-boundary 應放行", content, p)
 			}
 		})
 	}
