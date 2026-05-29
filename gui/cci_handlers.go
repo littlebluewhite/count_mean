@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"count_mean/internal/calculator"
 	"count_mean/internal/cci"
 	"count_mean/internal/io"
 	"count_mean/internal/security/redact"
+	"count_mean/internal/validation/filename"
 )
 
 // CCIParams 共同收縮分析參數.
@@ -159,7 +159,7 @@ func (a *App) DownloadCCIChart(params CCIDownloadParams) (result *ChartResult, e
 	a.logger.Info("開始下載 CCI 圖表", nil)
 
 	// params.Subject 來自前端，需先 sanitize 避免路徑穿越（"../x" 之類）。
-	safeSubject := calculator.SanitizeFileName(params.Subject)
+	safeSubject := filename.Sanitize(params.Subject)
 	s := a.state.Load()
 	outputPath := filepath.Join(
 		s.config.OutputDir,

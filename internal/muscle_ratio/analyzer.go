@@ -12,7 +12,6 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
-	"count_mean/internal/calculator"
 	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
@@ -22,6 +21,7 @@ import (
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
 	"count_mean/internal/synchronizer"
+	"count_mean/internal/validation/filename"
 )
 
 // Params holds inputs for a batch muscle-ratio analysis run.
@@ -164,7 +164,7 @@ func (a *Analyzer) analyzeSubject(
 
 	result.Subject = m.Subject
 
-	// Subject 為空時擋下，否則 SanitizeFileName("") 會產生 "_muscle_ratio.csv"，
+	// Subject 為空時擋下，否則 filename.Sanitize("") 會產生 "_muscle_ratio.csv"，
 	// 多筆空 Subject 在 assertUniqueSanitizedSubjects 之後仍可能單筆通過寫到同一檔。
 	if strings.TrimSpace(m.Subject) == "" {
 		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectEmptyName)
@@ -454,7 +454,7 @@ func appendIntervalMidpoints(
 }
 
 // assertUniqueSanitizedSubjects rejects batches whose subjects collapse to the same output filename
-// after SanitizeFileName. Without this check, "A/B" + "A:B" both write to "A_B_muscle_ratio.csv" and
+// after filename.Sanitize. Without this check, "A/B" + "A:B" both write to "A_B_muscle_ratio.csv" and
 // the latter silently overwrites the former.
 //
 // 衝突 key 用 NFC + strings.ToLower：
@@ -469,7 +469,7 @@ func assertUniqueSanitizedSubjects(manifests []models.PhaseManifest) error {
 	seen := make(map[string]string, len(manifests))
 
 	for _, m := range manifests {
-		safe := calculator.SanitizeFileName(m.Subject)
+		safe := filename.Sanitize(m.Subject)
 		key := norm.NFC.String(strings.ToLower(safe))
 
 		if prev, exists := seen[key]; exists {

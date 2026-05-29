@@ -161,15 +161,17 @@ func (v *Validator) ValidateFilename(filename string) error {
 // 不同 context, 統一收緊。
 func (*Validator) checkControlChars(filename string) error {
 	for _, r := range filename {
-		if r == 0 || unicode.IsControl(r) {
-			return errors.NewValidationError("filename", filename, "檔案名稱包含非法控制字符")
+		if !isUnsafeFilenameRune(r) {
+			continue
 		}
+		// classification lives in isUnsafeFilenameRune; re-test Cf/Cs only to pick the message。
 		// \p{Cf} 包含 BOM(U+FEFF)、RTL override(U+202E)、bidi controls (U+2066-U+2069)、
 		// ZWSP/ZWJ/WJ 等；\p{Cs} 為 UTF-16 surrogate。在 base filename context 都應 reject。
 		if unicode.In(r, unicode.Cf, unicode.Cs) {
 			return errors.NewValidationError("filename", filename,
 				fmt.Sprintf("檔案名稱包含禁用的 Unicode 格式字元: U+%04X", r))
 		}
+		return errors.NewValidationError("filename", filename, "檔案名稱包含非法控制字符")
 	}
 
 	return nil

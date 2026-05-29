@@ -1,4 +1,4 @@
-package calculator
+package filename
 
 import (
 	"path/filepath"
@@ -7,11 +7,11 @@ import (
 	"unicode/utf8"
 )
 
-// TestSanitizeFileName_PathTraversal 是 cross-compare review 的 regression test
+// TestSanitize_PathTraversal 是 cross-compare review 的 regression test
 // （d45ee1f Wave 2 修了 cci_handlers.go params.Subject 但漏修 chart_helpers.go params.Title，
-// 同樣症狀的對稱漏洞）。本 test 釘住：SanitizeFileName 的輸出無論如何不可被 filepath.Join
+// 同樣症狀的對稱漏洞）。本 test 釘住：Sanitize 的輸出無論如何不可被 filepath.Join
 // 解讀為「跳出目錄」— 把 / 與 \ 都替換為 _，剩餘的 .. 只會成為合法 filename 的一部分。
-func TestSanitizeFileName_PathTraversal(t *testing.T) {
+func TestSanitize_PathTraversal(t *testing.T) {
 	cases := []struct {
 		name     string
 		input    string
@@ -32,13 +32,13 @@ func TestSanitizeFileName_PathTraversal(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := SanitizeFileName(tc.input)
+			got := Sanitize(tc.input)
 			if !strings.Contains(got, tc.expectIn) {
-				t.Errorf("SanitizeFileName(%q) = %q; expected to contain %q",
+				t.Errorf("Sanitize(%q) = %q; expected to contain %q",
 					tc.input, got, tc.expectIn)
 			}
 			if tc.mustNot != "" && strings.Contains(got, tc.mustNot) {
-				t.Errorf("SanitizeFileName(%q) = %q; must NOT contain %q (path-traversal risk)",
+				t.Errorf("Sanitize(%q) = %q; must NOT contain %q (path-traversal risk)",
 					tc.input, got, tc.mustNot)
 			}
 			// 額外驗證：sanitized 結果與 OutputDir 組合後，filepath.Clean 不會逃出。
@@ -47,41 +47,41 @@ func TestSanitizeFileName_PathTraversal(t *testing.T) {
 			joined := filepath.Join(outputDir, got)
 			cleaned := filepath.Clean(joined)
 			if !strings.HasPrefix(cleaned, outputDir) {
-				t.Errorf("filepath.Join(%q, SanitizeFileName(%q)=%q) → %q escapes OutputDir",
+				t.Errorf("filepath.Join(%q, Sanitize(%q)=%q) → %q escapes OutputDir",
 					outputDir, tc.input, got, cleaned)
 			}
 		})
 	}
 }
 
-// TestSanitizeFileName_EmptyAndUnicode 確保邊界輸入不 panic。
-func TestSanitizeFileName_EmptyAndUnicode(t *testing.T) {
+// TestSanitize_EmptyAndUnicode 確保邊界輸入不 panic。
+func TestSanitize_EmptyAndUnicode(t *testing.T) {
 	t.Run("empty_string", func(t *testing.T) {
 		// empty string fallback 為 "untitled" 避免空 filename 觸發 OS 錯誤。
-		if got := SanitizeFileName(""); got != "untitled" {
+		if got := Sanitize(""); got != "untitled" {
 			t.Errorf("empty input should fallback to 'untitled', got %q", got)
 		}
 	})
 	t.Run("reserved_name_avoided", func(t *testing.T) {
 		// Windows reserved name 加 _safe 後綴避開保留字
-		if got := SanitizeFileName("CON"); got != "CON_safe" {
+		if got := Sanitize("CON"); got != "CON_safe" {
 			t.Errorf("reserved name CON should get _safe suffix, got %q", got)
 		}
 	})
 	t.Run("unicode_preserved", func(t *testing.T) {
 		// 中文等 Unicode 字元不在 replacement table 中，應原樣保留
-		got := SanitizeFileName("受測者甲")
+		got := Sanitize("受測者甲")
 		if got != "受測者甲" {
 			t.Errorf("unicode passthrough: want %q got %q", "受測者甲", got)
 		}
 	})
 }
 
-// TestSanitizeFileName_ReservedNameWithExtension 守護
+// TestSanitize_ReservedNameWithExtension 守護
 // Windows reserved name 規則是「stem (first dot 前) 匹配」,不是「整個 filename 匹配」。
 // "CON.csv" / "CON.tar.gz" / "PRN.log" 在 Windows 上會被 OS 當成 reserved device
 // 開啟,過去只擋 "CON" alone 是不夠的。
-func TestSanitizeFileName_ReservedNameWithExtension(t *testing.T) {
+func TestSanitize_ReservedNameWithExtension(t *testing.T) {
 	cases := []struct {
 		input    string
 		expected string
@@ -102,23 +102,23 @@ func TestSanitizeFileName_ReservedNameWithExtension(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
-			got := SanitizeFileName(tc.input)
+			got := Sanitize(tc.input)
 			if got != tc.expected {
-				t.Errorf("SanitizeFileName(%q) = %q, want %q", tc.input, got, tc.expected)
+				t.Errorf("Sanitize(%q) = %q, want %q", tc.input, got, tc.expected)
 			}
 		})
 	}
 }
 
-// TestSanitizeFileName_RuneBoundaryTruncation 守護
+// TestSanitize_RuneBoundaryTruncation 守護
 // 200 byte 截斷必須在 valid UTF-8 rune 邊界,不能切到 multi-byte rune 中間。
 // 過去用 `cleaned[:maxLen]` 可能切到 3-byte 中文中間,產生 invalid UTF-8。
-func TestSanitizeFileName_RuneBoundaryTruncation(t *testing.T) {
+func TestSanitize_RuneBoundaryTruncation(t *testing.T) {
 	t.Run("chinese_runes_no_truncation_within_rune", func(t *testing.T) {
 		// 每個中文字 3 bytes,200 bytes ≈ 66.67 個中文字。
 		// 構造剛好需要截斷的長度 (70 個中文字 = 210 bytes > 200)。
 		input := strings.Repeat("一", 70)
-		got := SanitizeFileName(input)
+		got := Sanitize(input)
 
 		// 結果必須 <= 200 bytes
 		if len(got) > 200 {
@@ -138,7 +138,7 @@ func TestSanitizeFileName_RuneBoundaryTruncation(t *testing.T) {
 	t.Run("mixed_ascii_chinese", func(t *testing.T) {
 		// 100 個 ASCII (100 bytes) + 50 個中文 (150 bytes) = 250 bytes
 		input := strings.Repeat("a", 100) + strings.Repeat("一", 50)
-		got := SanitizeFileName(input)
+		got := Sanitize(input)
 
 		if len(got) > 200 {
 			t.Errorf("truncated length %d exceeds maxLen 200", len(got))
@@ -151,7 +151,7 @@ func TestSanitizeFileName_RuneBoundaryTruncation(t *testing.T) {
 	t.Run("pure_ascii_truncation_unchanged", func(t *testing.T) {
 		// 全 ASCII (1 byte per rune) 行為與舊版完全一致
 		input := strings.Repeat("a", 250)
-		got := SanitizeFileName(input)
+		got := Sanitize(input)
 		if len(got) != 200 {
 			t.Errorf("pure ASCII truncation should give exactly 200 bytes, got %d", len(got))
 		}
@@ -160,14 +160,14 @@ func TestSanitizeFileName_RuneBoundaryTruncation(t *testing.T) {
 	t.Run("under_max_unchanged", func(t *testing.T) {
 		// 200 bytes 以下不該被改
 		input := strings.Repeat("一", 60) // 180 bytes
-		got := SanitizeFileName(input)
+		got := Sanitize(input)
 		if got != input {
 			t.Errorf("short input should be unchanged: want %q got %q", input, got)
 		}
 	})
 }
 
-// TestSanitizeFileName_LeadingDotReservedName 守護
+// TestSanitize_LeadingDotReservedName 守護
 //
 // past stem 取法 `SplitN(name, ".", 2)[0]` 對 ".CON.csv" 會回 ""
 // → 空 stem 跑進 reserved-name switch 永遠不命中 → leading-dot 變形完全
@@ -176,7 +176,7 @@ func TestSanitizeFileName_RuneBoundaryTruncation(t *testing.T) {
 // 而 reject(或在某些版本寫入打開實體 console)— 這是實質的 bypass。
 //
 // 修法:先 TrimLeft "." 再取 stem 比對,保留原 leading dot 在輸出。
-func TestSanitizeFileName_LeadingDotReservedName(t *testing.T) {
+func TestSanitize_LeadingDotReservedName(t *testing.T) {
 	cases := []struct {
 		input    string
 		expected string
@@ -205,9 +205,9 @@ func TestSanitizeFileName_LeadingDotReservedName(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
-			got := SanitizeFileName(tc.input)
+			got := Sanitize(tc.input)
 			if got != tc.expected {
-				t.Errorf("SanitizeFileName(%q) = %q, want %q (leading-dot reserved-name bypass)",
+				t.Errorf("Sanitize(%q) = %q, want %q (leading-dot reserved-name bypass)",
 					tc.input, got, tc.expected)
 			}
 		})

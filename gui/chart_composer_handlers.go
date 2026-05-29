@@ -9,7 +9,7 @@
 //     family（ADR-0002）— 不寫 CSV、無多步驟 pipeline，只做 manifest load / EMG
 //     load / chart render，因此不走 [[AnalysisHandler[P, R]]] Tier 2。
 //   - Handler 4（DownloadChartComposerImage）鏡像既有 `DownloadCCIChart` 模式
-//     — adapter 端做 SanitizeFileName + .png normalization 推導 outputPath,再把
+//     — adapter 端做 filename.Sanitize + .png normalization 推導 outputPath,再把
 //     共用 PNG 安全管線（base64 → DecodeAndValidatePNG → validateExternalPathInputs
 //     → fsperm.WriteFileNoFollow）委派給 downloadValidatedPNG（ADR-0009），自己加
 //     recoverHandlerPanic defer。**不**走 HandlerRun 因為 download 路徑的特殊安全鏈
@@ -36,7 +36,6 @@ import (
 	"strconv"
 	"strings"
 
-	"count_mean/internal/calculator"
 	"count_mean/internal/chart"
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
@@ -44,6 +43,7 @@ import (
 	"count_mean/internal/security"
 	"count_mean/internal/security/redact"
 	"count_mean/internal/synchronizer"
+	"count_mean/internal/validation/filename"
 )
 
 // err113 sentinel — 純承載 user-facing 訊息(caller 把 err.Error() 灌入
@@ -361,11 +361,11 @@ func (a *App) DownloadChartComposerImage(
 		return nil, ErrChartComposerNilParams
 	}
 
-	// SanitizeFileName 只處理 base file 名稱,目錄部分保留原樣供 path validator
+	// filename.Sanitize 只處理 base file 名稱,目錄部分保留原樣供 path validator
 	// 二次驗證。鏡像 DownloadCCIChart:params.Subject 是「檔名片段」,DownloadCCIChart
-	// 也是 calculator.SanitizeFileName(params.Subject)。
+	// 也是 filename.Sanitize(params.Subject)。
 	outputDir := filepath.Dir(params.OutputPath)
-	outputBase := calculator.SanitizeFileName(filepath.Base(params.OutputPath))
+	outputBase := filename.Sanitize(filepath.Base(params.OutputPath))
 	if outputBase == "" {
 		return nil, ErrChartComposerEmptyOutputName
 	}
