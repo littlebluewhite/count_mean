@@ -362,6 +362,49 @@ test('8. spec.runBtnLabelKey:default 為 button.start_analyze、override 走 spe
     }
 });
 
+// ---------- spec.extraRunButtons(D6 prep:標準化視圖按鈕注入 seam）----------
+
+test('8d. spec.extraRunButtons 提供時其輸出出現在 button-group(#mpRunBtn 之後)', async () => {
+    // D6 UI extension(ADR-0013 後續任務 D4 prep):button-group 內 #mpRunBtn 之後
+    // 加 optional extraRunButtons(tH) hook,供「標準化視圖」按鈕注入。本 test 釘
+    // 「提供時輸出出現在 shell」— 對齊 test #18 afterRender 那種 spec-hook 測法。
+    const { window, mp } = await setup();
+    try {
+        mp.run(minimalSpec({
+            extraRunButtons: (tH) => `<button id="mpExtraBtnProbe">${tH('button.extra_probe')}</button>`,
+        }));
+        const probe = window.document.getElementById('mpExtraBtnProbe');
+        assert.ok(probe, 'extraRunButtons 輸出應 render 進 shell');
+        // 必須在 button-group 內、緊跟 #mpRunBtn(seam 位置正確)
+        const runBtn = window.document.getElementById('mpRunBtn');
+        assert.ok(runBtn, 'run button 仍須存在');
+        assert.equal(probe.parentElement, runBtn.parentElement, 'extra button 應與 run button 同在 button-group');
+        // extraRunButtons 收到 tHtml(production translator),走 i18n key
+        assert.match(probe.textContent, /button\.extra_probe/, 'extraRunButtons 收到 tHtml translator');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('8e. spec.extraRunButtons 省略時 button-group 只含 run button、不含額外鈕', async () => {
+    // 其他 4 panel 省略 extraRunButtons → 渲染空字串,button-group 不受影響。
+    // 同時釘 D6 共用 shell 第二返回鈕刪除後:button-group 內無第二顆 showMainMenu back。
+    const { window, mp } = await setup();
+    try {
+        mp.run(minimalSpec()); // 不傳 extraRunButtons
+        const runBtn = window.document.getElementById('mpRunBtn');
+        assert.ok(runBtn, 'run button 仍須存在');
+        const buttonGroup = runBtn.parentElement;
+        assert.ok(buttonGroup.classList.contains('button-group'), 'run button 應在 button-group');
+        // button-group 內只剩 run button 一顆 <button>(無 extraRunButtons、無第二返回鈕）
+        const buttons = buttonGroup.querySelectorAll('button');
+        assert.equal(buttons.length, 1, 'button-group 內應只有 run button 一顆(無第二返回鈕 / 無 extra)');
+        assert.equal(buttons[0], runBtn, '唯一的 button 應為 #mpRunBtn');
+    } finally {
+        await teardown(window);
+    }
+});
+
 // ---------- spec.hideSubject(M4 prep)----------
 
 test('8b. spec.hideSubject 省略(default):shell render subject select(#mpSubject 存在)', async () => {

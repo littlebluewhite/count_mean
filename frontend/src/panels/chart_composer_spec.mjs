@@ -6,14 +6,15 @@
 // 設計:
 //   * spec.formBody 刪去 shell 已提供的 panel-header / manifest / dataFolder /
 //     subject 三段 form-group + run button + result section(由 shell 透過
-//     #mpResult / #mpResultContent 統一持有)。ADR-0013 後僅留 Composer 獨有的
-//     phase selector(load_emg_channels button / channel selector / warning banner
-//     已隨一鍵生成流程刪除)。
+//     #mpResult / #mpResultContent 統一持有)。ADR-0013(D1/D6)後 formBody
+//     **收斂為空** —— load_emg_channels button / channel selector / warning banner
+//     已隨一鍵生成流程(D1)刪除;分期點 selector 則搬到結果區(D6,onResult 內
+//     由 bindPhaseCheckboxes 動態填),不再留在表單區。
 //   * spec.rpc:呼 `GenerateChartComposer`(僅 manifest / dataFolder / subject
 //     三參數,ADR-0013)並把 result.success=false 升為 throw,讓 ManifestPanel
 //     envelope 統一走 ShowError。
-//   * spec.onResult:「inject iframe → await ready → render phase checkboxes」整段
-//     closure 化,直接呼 `mp.attachIframe` + `mp.bindPhaseCheckboxes`。
+//   * spec.onResult:「inject phase selector + iframe → await ready → render phase
+//     checkboxes」整段 closure 化,直接呼 `mp.attachIframe` + `mp.bindPhaseCheckboxes`。
 //   * silentSuccess: true — 對齊 ADR-0007 §6 + handoff 的鎖定行為(chart 顯現
 //     即為成功訊號,不彈 dialog)。
 //   * runBtnLabelKey: 'button.generate_chart' — shell #mpRunBtn 是「生成圖表」
@@ -29,9 +30,10 @@
 //     讓既有 downloadComposerChart 路徑無痛工作。
 //
 // invariant(由 chart_composer_spec.test.mjs 釘):
-//   * spec.formBody 內所有 user-visible text 必經 translator(無繁中字元)
-//   * spec.formBody 呼 translator ≥ 2 次(ADR-0013 後 formBody 僅 phase selector:
-//     form.label.composer_phases + form.helptext.composer_phases_pending)
+//   * spec.formBody 收斂為空(D6 後分期點移結果區):無 user-visible text、
+//     不呼 translator(舊「≥ 2 次」下界已隨 phase selector 搬移取消)
+//   * spec.onResult render 後 #composerPhaseSelector 容器存在於結果區
+//     (bindPhaseCheckboxes 找得到容器,非 silent no-op)
 //   * silentSuccess === true、runBtnLabelKey === 'button.generate_chart'
 
 import { bridge } from '../charts/iframeBridge.mjs';
@@ -41,32 +43,25 @@ import { GenerateChartComposer, LoadChartComposerSubjects } from '../../wailsjs/
 /**
  * Chart Composer panel HTML body(注入 ManifestPanel shell 的 spec.formBody)。
  *
- * ADR-0013 一鍵生成:不再有「載入 EMG 欄位」按鈕 / channel 勾選 UI / channel
- * reconcile warning banner — Generate 直接預設全通道。
+ * ADR-0013(D1/D6)後 **收斂為空字串**:
+ *   - D1 一鍵生成:刪除「載入 EMG 欄位」按鈕 / channel 勾選 UI / channel
+ *     reconcile warning banner — Generate 直接預設全通道。
+ *   - D6 版面:分期點 selector 從表單區搬到結果區(onResult 在 #mpResultContent
+ *     的 chart container 之前注入 #composerPhaseSelector,再由 bindPhaseCheckboxes
+ *     動態填),故表單區不再持有任何 Composer 獨有欄位。
  *
- * 跟 shell 比較,差異:
- *   - 刪除 panel-header(shell 持有)
- *   - 刪除 manifest / dataFolder / subject 三段 form-group(shell 持有,
- *     id 改為 mpManifestPath / mpDataFolder / mpSubject)
- *   - 刪除 run button + back button group(shell 持有,run 為 #mpRunBtn)
- *   - 刪除 result section(shell 提供 #mpResult / #mpResultContent,
- *     onResult 動態填入 chart container + download button)
+ * shell 已持有 panel-header / manifest / dataFolder / subject 三段 form-group /
+ * run button / result section(#mpResult / #mpResultContent),formBody 無內容可加。
  *
- * 保留:
- *   - composerPhaseSelector(phase checkbox,由 mp.bindPhaseCheckboxes 在 onResult 內動態填)
+ * 仍保留為 builder function(spec.formBody 契約是 `(t) => string`,shell 會呼
+ * `spec.formBody(tH)`),回空字串。
  *
- * @param {(key: string) => string} t - translator(production: tHtml,test: fake)
- * @returns {string} formBody HTML
+ * @param {(key: string) => string} _t - translator(production: tHtml,test: fake);
+ *   formBody 收斂為空後不再使用,保留簽名以符合 spec.formBody 契約。
+ * @returns {string} formBody HTML(空字串)
  */
-export function composerFormBody(t) {
-    return `
-            <div class="form-group">
-                <label>${t('form.label.composer_phases')}</label>
-                <div id="composerPhaseSelector" class="checkbox-group" style="display:flex; flex-wrap:wrap; gap:0.5rem;">
-                    <p class="help-text">${t('form.helptext.composer_phases_pending')}</p>
-                </div>
-            </div>
-        `;
+export function composerFormBody(_t) {
+    return '';
 }
 
 /**
@@ -168,26 +163,37 @@ export function makeChartComposerSpec(app) {
         },
 
         /**
-         * Render chart iframe + download button + phase checkboxes。
+         * Render phase selector + chart iframe + download button + phase checkboxes。
          *
          * 流程(對齊 main.js:1908-1967):
-         *   1. 在 #mpResultContent 內填 chart container + PNG download button
+         *   1. 在 #mpResultContent 內填(由上而下)分期點容器 #composerPhaseSelector
+         *      → chart container → PNG download button。分期點容器排在 chart 之前
+         *      (D6:從表單區搬到結果區),且必須在 bindPhaseCheckboxes(步驟 5)之前
+         *      就存在於 DOM,否則 bindPhaseCheckboxes 會 silent no-op
+         *      (manifestPanel.mjs:`if (!container) return`)→ checkbox 不 render。
          *   2. 持久化 phaseTimes 給 _updateComposerPhaseLines / downloadComposerChart
          *   3. attachIframe — sandbox=allow-scripts、height=1300px(image #18 經驗)
          *   4. 記 _composerIframeReady promise(downloadComposerChart 之前 await 它)
-         *   5. await ready 後 bindPhaseCheckboxes(M1 review I1 precondition:
-         *      必須在 iframe-side listener 掛好之後再送首次 update)
+         *   5. await ready 後 bindPhaseCheckboxes(containerId='composerPhaseSelector',
+         *      指向步驟 1 注入的結果區容器;M1 review I1 precondition:必須在 iframe-side
+         *      listener 掛好之後再送首次 update)
          *
          * @param {object} result - ChartComposerResult {html, phaseTimes, success, message}
          * @param {object} ctx - ManifestPanel _gatherCtx 規範化結果
          * @param {object} mp - ManifestPanel 實例(`attachIframe` / `bindPhaseCheckboxes` 用)
          */
         onResult: async (result, _ctx, mp) => {
-            // 1. Build #mpResultContent — chart container + PNG download button。
-            //    沿用 innerHTML + tHtml(對齊 ADR-0007 §6 既有 convention,不引 DOM builder)。
+            // 1. Build #mpResultContent — 分期點容器(chart 之前)+ chart container +
+            //    PNG download button。沿用 innerHTML + tHtml(對齊 ADR-0007 §6 既有
+            //    convention,不引 DOM builder)。#composerPhaseSelector 必須在此就位,
+            //    步驟 5 的 bindPhaseCheckboxes 才找得到容器(否則 silent no-op)。
             const wrapper = document.getElementById('mpResultContent');
             const tH = globalThis.tHtml;
             wrapper.innerHTML = `
+                <div class="form-group">
+                    <label>${tH('form.label.composer_phases')}</label>
+                    <div id="composerPhaseSelector" class="checkbox-group" style="display:flex; flex-wrap:wrap; gap:0.5rem;"></div>
+                </div>
                 <div id="composerChartContent"></div>
                 <div class="button-group" style="margin-top:0.5rem;">
                     <button class="btn btn-primary" onclick="app.downloadComposerChart()">${tH('button.download_png')}</button>

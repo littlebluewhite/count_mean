@@ -178,24 +178,95 @@ test('Chart Composer spec.formBody 內 user-visible text 均來自 translator(�
     );
 });
 
-test('Chart Composer spec.formBody 必呼叫 translator 至少 2 次(phase selector label/helptext)', () => {
-    // 2 = ADR-0013 後 formBody 內 translator call 數的下界;新增 label 時連同此數 bump。
-    //
-    // 對應 2 個 translator call site:form.label.composer_phases /
-    // form.helptext.composer_phases_pending(channel/load 相關標籤已隨一鍵生成刪除)。
-    //
-    // 此 lower bound 抓「人為把翻譯整段砍光」regression。
+test('Chart Composer spec.formBody 收斂為空:無 user-visible 內容、不呼 translator(分期點已移結果區)', () => {
+    // D6(ADR-0013):phase selector 從表單區搬到結果區(onResult 內由
+    // bindPhaseCheckboxes 動態填),formBody 不再持有任何 user-visible 內容。
+    // channel/load/warning 相關 UI 已於 D1 刪除。故 formBody 應收斂為空 —
+    // 不呼 translator、無任何可見文字節點。此正向 test 取代舊「translator ≥ 2 次」
+    // 下界,釘「formBody 收斂後無 hardcoded 內容」。
     const calls = [];
     const trackingT = (key) => {
         calls.push(key);
         return `__T:${key}__`;
     };
-    composerFormBody(trackingT);
+    const html = composerFormBody(trackingT);
 
-    assert.ok(
-        calls.length >= 2,
-        `formBody 至少應呼叫 translator 2 次,實際只呼叫 ${calls.length} 次:${calls.join(', ')}`
+    assert.equal(calls.length, 0, `formBody 收斂為空後不應呼 translator,實際呼了:${calls.join(', ')}`);
+
+    // formBody 不得含任何 user-visible 文字(parse 後 textContent 去空白應為空)。
+    const window = new Window();
+    const parser = new window.DOMParser();
+    const doc = parser.parseFromString(`<!doctype html><body>${html}</body>`, 'text/html');
+    assert.equal(
+        doc.body.textContent.trim(),
+        '',
+        'formBody 收斂後不應有 user-visible 文字(分期點已移結果區)'
     );
+});
+
+// ---------- spec.onResult(D6:分期點容器搬到結果區)----------
+
+test('spec.onResult render 後 #composerPhaseSelector 容器存在於結果區', async () => {
+    // D6:phase selector 從 formBody 搬到 onResult 的 #mpResultContent innerHTML
+    //(chart container 之前)。bindPhaseCheckboxes(manifestPanel.mjs)是
+    //「container 不存在則 silent no-op」,故必須確認 onResult 注入的 innerHTML
+    // 在呼 bindPhaseCheckboxes 之前就已含 #composerPhaseSelector,checkbox 才會 render。
+    // 此 test 釘:onResult 跑完後結果區存在 #composerPhaseSelector,且其內有
+    // bindPhaseCheckboxes 填入的 phase checkbox(代表容器確實被找到、非 silent no-op)。
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    globalThis.document = window.document;
+    globalThis.tHtml = (key) => `__T:${key}__`;
+    try {
+        // 結果區 shell(ManifestPanel _renderShell 提供 #mpResult / #mpResultContent)
+        const result = window.document.createElement('div');
+        result.id = 'mpResult';
+        result.style.display = 'none';
+        const content = window.document.createElement('div');
+        content.id = 'mpResultContent';
+        result.appendChild(content);
+        window.document.body.appendChild(result);
+
+        // 用真 ManifestPanel(attachIframe / bindPhaseCheckboxes)— onResult 依賴它。
+        const { ManifestPanel } = await import('../manifestPanel.mjs');
+        const app = {};
+        const mp = new ManifestPanel(app);
+
+        const spec = makeChartComposerSpec(app);
+        // onResult 內 attachIframe 會掛 iframe,await ready(load event)。happy-dom
+        // 對 srcdoc iframe 會自動 fire load,但保險起見在 microtask 後主動 dispatch。
+        const onResultPromise = spec.onResult(
+            { success: true, html: '<html><body>chart</body></html>', phaseTimes: { P0: 0, P1: 100, P2: 200 } },
+            {},
+            mp
+        );
+        // 推進 microtask 讓 attachIframe 把 iframe append 進 DOM,再手動觸發 load
+        await Promise.resolve();
+        const iframe = window.document.querySelector('#composerChartContent iframe');
+        if (iframe) iframe.dispatchEvent(new window.Event('load'));
+        await onResultPromise;
+
+        // 結果區應顯示
+        assert.equal(window.document.getElementById('mpResult').style.display, 'block', 'onResult 應顯示結果區');
+        // 分期點容器存在於結果區
+        const phaseSelector = window.document.getElementById('composerPhaseSelector');
+        assert.ok(phaseSelector, '#composerPhaseSelector 容器應存在於結果區');
+        // chart container 也在,且分期點容器排在 chart container 之前(DOM 順序)
+        const chartContent = window.document.getElementById('composerChartContent');
+        assert.ok(chartContent, '#composerChartContent 容器應存在');
+        assert.ok(
+            phaseSelector.compareDocumentPosition(chartContent) & window.Node.DOCUMENT_POSITION_FOLLOWING,
+            '分期點容器應排在 chart container 之前'
+        );
+        // bindPhaseCheckboxes 確實找到容器並填入 checkbox(非 silent no-op)
+        const checkboxes = phaseSelector.querySelectorAll('input[type="checkbox"]');
+        assert.equal(checkboxes.length, 3, 'bindPhaseCheckboxes 應填入 3 個 phase checkbox(P0/P1/P2)');
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+        delete globalThis.document;
+        delete globalThis.tHtml;
+    }
 });
 
 // ---------- spec.rpc(ADR-0013 一鍵生成:只 forward 三參數 + success=false throw)----------
