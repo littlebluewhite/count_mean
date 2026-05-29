@@ -241,6 +241,183 @@ func TestWritePhaseAnalysis_Empty(t *testing.T) {
 	require.ErrorIs(t, err, errEmptyPhaseAnalysis)
 }
 
+// TestWriteNormalizedPhaseSyncResult_NilStats 驗證 nil stats 回 errEmptyPhaseSyncResult。
+func TestWriteNormalizedPhaseSyncResult_NilStats(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newFormatAwareTestHandler(t)
+
+	_, err := handler.WriteNormalizedPhaseSyncResult(WriteRequest{}, nil,
+		models.PhaseP0, models.PhaseL)
+	require.ErrorIs(t, err, errEmptyPhaseSyncResult)
+}
+
+// TestWriteNormalizedPhaseSyncResult_FilenameTemplate 驗證 filename 包含 norm/stats 兩窗口資訊。
+func TestWriteNormalizedPhaseSyncResult_FilenameTemplate(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	stats := &models.EMGStatistics{
+		Subject:      "testSubject",
+		StartPhase:   models.PhaseP1,
+		EndPhase:     models.PhaseC,
+		StartTime:    0.0,
+		EndTime:      2.0,
+		ChannelNames: []string{"Ch1"},
+		ChannelMeans: map[string]float64{"Ch1": 1.0},
+		ChannelMaxes: map[string]float64{"Ch1": 2.0},
+	}
+
+	outputPath, err := handler.WriteNormalizedPhaseSyncResult(WriteRequest{}, stats,
+		models.PhaseP0, models.PhaseL)
+	require.NoError(t, err)
+
+	base := filepath.Base(outputPath)
+	require.Contains(t, base, "_normalized_norm-P0-L_stats-P1-C.csv",
+		"filename must embed norm and stats windows")
+	require.True(t, strings.HasPrefix(outputPath, tempDir),
+		"outputPath must stay inside tempDir")
+}
+
+// TestWriteNormalizedPhaseSyncResult_RoundTrip 驗證 8-row layout 與 ConvertPhaseSyncResult 完全對應。
+func TestWriteNormalizedPhaseSyncResult_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newFormatAwareTestHandler(t)
+
+	stats := &models.EMGStatistics{
+		Subject:      "subject_norm",
+		StartPhase:   models.PhaseS,
+		StartTime:    1.0,
+		EndPhase:     models.PhaseT,
+		EndTime:      3.0,
+		ChannelNames: []string{"RA", "ES"},
+		ChannelMeans: map[string]float64{"RA": 0.11, "ES": 0.22},
+		ChannelMaxes: map[string]float64{"RA": 1.1, "ES": 2.2},
+	}
+
+	outputPath, err := handler.WriteNormalizedPhaseSyncResult(WriteRequest{}, stats,
+		models.PhaseP0, models.PhaseL)
+	require.NoError(t, err)
+
+	rows := readCSVRows(t, outputPath)
+	expected := newCSVConverter(1.0, 4).ConvertPhaseSyncResult(stats)
+	require.Len(t, rows, len(expected), "row count must match ConvertPhaseSyncResult")
+	for i, row := range rows {
+		require.Equal(t, expected[i], row, "row %d mismatch", i)
+	}
+}
+
+// TestWriteNormalizedPhaseSyncResult_SubDir 驗證 req.SubDir 自動 mkdir 並寫到子目錄。
+func TestWriteNormalizedPhaseSyncResult_SubDir(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	stats := &models.EMGStatistics{
+		Subject:      "subj_norm",
+		StartPhase:   models.PhaseP0,
+		EndPhase:     models.PhaseL,
+		StartTime:    0.0,
+		EndTime:      1.0,
+		ChannelNames: []string{"Ch1"},
+		ChannelMeans: map[string]float64{"Ch1": 1.0},
+		ChannelMaxes: map[string]float64{"Ch1": 2.0},
+	}
+
+	outputPath, err := handler.WriteNormalizedPhaseSyncResult(
+		WriteRequest{SubDir: "run_norm"}, stats, models.PhaseP0, models.PhaseL)
+	require.NoError(t, err)
+
+	require.True(t, strings.HasPrefix(outputPath, filepath.Join(tempDir, "run_norm")),
+		"outputPath should be inside SubDir")
+	_, err = os.Stat(outputPath)
+	require.NoError(t, err, "SubDir path should exist (auto mkdir)")
+}
+
+// TestWriteNormalizedPhaseSyncResult_SubjectSanitization 驗證 Subject 中的危險字元不出現在 filename 中。
+func TestWriteNormalizedPhaseSyncResult_SubjectSanitization(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		subject string
+		mustNot []rune
+	}{
+		{name: "rtl_override", subject: "evil‮gsp.csv", mustNot: []rune{0x202E}},
+		{name: "null_byte", subject: "Sub\x00ject", mustNot: []rune{0x00}},
+		{name: "zero_width_space", subject: "Sub​ject", mustNot: []rune{0x200B}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, tempDir := newFormatAwareTestHandler(t)
+
+			stats := &models.EMGStatistics{
+				Subject:      tc.subject,
+				StartPhase:   models.PhaseP0,
+				EndPhase:     models.PhaseL,
+				StartTime:    0.0,
+				EndTime:      1.0,
+				ChannelNames: []string{"Ch1"},
+				ChannelMeans: map[string]float64{"Ch1": 1.0},
+				ChannelMaxes: map[string]float64{"Ch1": 2.0},
+			}
+
+			outputPath, err := handler.WriteNormalizedPhaseSyncResult(WriteRequest{}, stats,
+				models.PhaseP0, models.PhaseL)
+			require.NoError(t, err)
+
+			base := filepath.Base(outputPath)
+			for _, ch := range tc.mustNot {
+				require.NotContainsf(t, base, string(ch),
+					"output filename %q still contains forbidden rune U+%04X (subject=%q)",
+					base, ch, tc.subject)
+			}
+
+			cleaned := filepath.Clean(outputPath)
+			require.True(t, strings.HasPrefix(cleaned, tempDir),
+				"sanitized output path %q must stay inside %q", cleaned, tempDir)
+
+			_, statErr := os.Stat(outputPath)
+			require.NoError(t, statErr)
+		})
+	}
+}
+
+// TestWriteNormalizedPhaseSyncResult_NoStrayTmpFiles 驗證 happy-path 不留任何 tmp orphan。
+func TestWriteNormalizedPhaseSyncResult_NoStrayTmpFiles(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	stats := &models.EMGStatistics{
+		Subject:      "clean_subj",
+		StartPhase:   models.PhaseP0,
+		EndPhase:     models.PhaseL,
+		StartTime:    0.0,
+		EndTime:      1.0,
+		ChannelNames: []string{"Ch1"},
+		ChannelMeans: map[string]float64{"Ch1": 1.0},
+		ChannelMaxes: map[string]float64{"Ch1": 2.0},
+	}
+
+	_, err := handler.WriteNormalizedPhaseSyncResult(WriteRequest{}, stats,
+		models.PhaseP0, models.PhaseL)
+	require.NoError(t, err)
+
+	entries, readErr := os.ReadDir(tempDir)
+	require.NoError(t, readErr)
+
+	for _, e := range entries {
+		require.False(t, strings.Contains(e.Name(), ".tmp."),
+			"no stray tmp file should remain in output dir, found: %s", e.Name())
+	}
+}
+
 // TestWritePhaseAnalysis_NilResult 驗證 nil result 也走同樣 fail-fast.
 func TestWritePhaseAnalysis_NilResult(t *testing.T) {
 	t.Parallel()
