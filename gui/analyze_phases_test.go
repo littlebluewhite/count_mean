@@ -1,0 +1,72 @@
+package gui
+
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/config"
+)
+
+// TestAnalyzePhases_HonorsFrontendPhasesAndNames 釘住 fe_core 完整修(whole-project
+// review P1)。前端「階段分析」panel 送 {inputFile, phases:[{name,startTime,endTime}]}。
+// 後端 PhaseParams 先前只讀 phaseLabels(且被當時間點解析、phase 名來自 config),與
+// 前端 payload 不對盤 → 每次必中 ErrNoPhaseLabels,panel 全壞。
+//
+// 完整修:PhaseParams 改收 Phases []PhaseSpec,honor 前端名稱與邊界、去除 config 耦合。
+func TestAnalyzePhases_HonorsFrontendPhasesAndNames(t *testing.T) {
+	inDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.InputDir = inDir
+	cfg.OutputDir = t.TempDir()
+	app := NewApp(cfg, "test")
+
+	csvPath := filepath.Join(inDir, "phase.csv")
+	writeEMGCSVForMaxMean(t, csvPath, 100) // 0~0.099s,100 列
+
+	result, err := app.AnalyzePhases(PhaseParams{
+		InputFile: csvPath,
+		Phases: []PhaseSpec{
+			{Name: "站立期", StartTime: 0.0, EndTime: 0.05},
+			{Name: "擺動期", StartTime: 0.05, EndTime: 0.099},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Success, "Message: %s", result.Message)
+	require.Len(t, result.Results, 2, "應產出 2 個 phase 結果")
+	assert.Equal(t, "站立期", result.Results[0].PhaseLabel,
+		"phase 名稱必須來自前端傳入,不耦合 config.PhaseLabels")
+	assert.Equal(t, "擺動期", result.Results[1].PhaseLabel)
+	assert.NotEmpty(t, result.OutputPath)
+}
+
+// TestValidatePhaseParams_RejectsBadInput 釘住新 contract 的驗證邊界。
+func TestValidatePhaseParams_RejectsBadInput(t *testing.T) {
+	t.Run("no_input_file", func(t *testing.T) {
+		_, _, err := validatePhaseParams(PhaseParams{
+			Phases: []PhaseSpec{{Name: "a", StartTime: 0, EndTime: 1}},
+		})
+		assert.ErrorIs(t, err, ErrNoInputFile)
+	})
+	t.Run("no_phases", func(t *testing.T) {
+		_, _, err := validatePhaseParams(PhaseParams{InputFile: "x.csv"})
+		assert.ErrorIs(t, err, ErrNoPhaseLabels)
+	})
+	t.Run("empty_name", func(t *testing.T) {
+		_, _, err := validatePhaseParams(PhaseParams{
+			InputFile: "x.csv",
+			Phases:    []PhaseSpec{{Name: "  ", StartTime: 0, EndTime: 1}},
+		})
+		assert.ErrorIs(t, err, ErrNoValidPhaseLabels)
+	})
+	t.Run("start_not_before_end", func(t *testing.T) {
+		_, _, err := validatePhaseParams(PhaseParams{
+			InputFile: "x.csv",
+			Phases:    []PhaseSpec{{Name: "a", StartTime: 1, EndTime: 1}},
+		})
+		assert.ErrorIs(t, err, ErrInvalidPhaseRange)
+	})
+}

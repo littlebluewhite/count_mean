@@ -234,6 +234,26 @@ func (p *PhaseAnalyzer) AnalyzeFromRawData(records [][]string, phaseStrings []st
 	return p.Analyze(dataset, phases)
 }
 
+// AnalyzeFromRawDataWithRanges 從原始字串資料 + 顯式 phase 時間區間進行分析。
+// 與 AnalyzeFromRawData 不同:phase 邊界由 caller 直接提供(不從 phaseStrings 解析
+// 時間點);phase 名稱來自建構 analyzer 時注入的 phaseLabels。供 GUI 用前端傳入的
+// {name, startTime, endTime} 直接驅動,與 config.PhaseLabels 解耦。
+func (p *PhaseAnalyzer) AnalyzeFromRawDataWithRanges(
+	records [][]string, phases []models.TimeRange,
+) (*AnalyzeResult, error) {
+	if p == nil {
+		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "階段分析器為空")
+	}
+
+	dataset, err := p.dataParser.ParseRawData(records)
+	if err != nil {
+		p.logger.Error("階段分析數據解析失敗", err)
+		return nil, fmt.Errorf("解析數據失敗: %w", err)
+	}
+
+	return p.Analyze(dataset, phases)
+}
+
 // parsePhases 解析階段字符串為時間範圍.
 func (p *PhaseAnalyzer) parsePhases(phaseStrings []string) ([]models.TimeRange, error) {
 	if len(phaseStrings) < MinTimePointsForPhases {

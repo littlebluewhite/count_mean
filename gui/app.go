@@ -40,6 +40,7 @@ var (
 	ErrLocaleEmpty        = errors.New("locale 不可為空字串")
 	ErrLocaleUnsupported  = errors.New("不支援的 locale")
 	ErrInvalidPhasePoint  = errors.New("無效的分期點代碼")
+	ErrInvalidPhaseRange  = errors.New("分期時間區間不合法（起始須小於結束且為有限值）")
 	ErrNoCSVFilesInFolder = errors.New("資料夾中沒有找到CSV文件")
 )
 
@@ -753,30 +754,37 @@ func (a *App) NormalizeData(params NormalizeParams) (result *NormalizeResult, er
 	}, nil
 }
 
-// validatePhaseParams validates phase analysis parameters and returns cleaned labels.
-func validatePhaseParams(params PhaseParams) ([]string, error) {
+// validatePhaseParams validates phase analysis parameters and returns the phase
+// labels and time ranges parsed from params.Phases. 名稱與邊界皆來自前端傳入,
+// 不再耦合 config.PhaseLabels。
+func validatePhaseParams(params PhaseParams) (labels []string, ranges []models.TimeRange, err error) {
 	if params.InputFile == "" {
-		return nil, ErrNoInputFile
+		return nil, nil, ErrNoInputFile
 	}
 
-	if len(params.PhaseLabels) == 0 {
-		return nil, ErrNoPhaseLabels
+	if len(params.Phases) == 0 {
+		return nil, nil, ErrNoPhaseLabels
 	}
 
-	// 清理階段標籤（移除空白）
-	cleanLabels := make([]string, 0, len(params.PhaseLabels))
+	labels = make([]string, 0, len(params.Phases))
+	ranges = make([]models.TimeRange, 0, len(params.Phases))
 
-	for _, label := range params.PhaseLabels {
-		if trimmed := strings.TrimSpace(label); trimmed != "" {
-			cleanLabels = append(cleanLabels, trimmed)
+	for _, ph := range params.Phases {
+		name := strings.TrimSpace(ph.Name)
+		if name == "" {
+			return nil, nil, ErrNoValidPhaseLabels
 		}
+
+		// start < end 同時擋 NaN(NaN 的任何比較皆為 false)與反序 / 零長度區間。
+		if !(ph.StartTime < ph.EndTime) {
+			return nil, nil, ErrInvalidPhaseRange
+		}
+
+		labels = append(labels, name)
+		ranges = append(ranges, models.TimeRange{Start: ph.StartTime, End: ph.EndTime})
 	}
 
-	if len(cleanLabels) == 0 {
-		return nil, ErrNoValidPhaseLabels
-	}
-
-	return cleanLabels, nil
+	return labels, ranges, nil
 }
 
 // generatePhaseOutputName generates the output filename for phase analysis.
@@ -828,7 +836,7 @@ type phaseRunData struct {
 // AnalyzePhases performs phase analysis.
 //
 // 走 [[AnalysisHandler[P, R]]] 樣板:Validate / Execute / WriteCSV 三 closure 分別綁
-// `validatePhaseParams`、`readCSVWithPathValidation + phaseAnalyzer.AnalyzeFromRawData`、
+// `validatePhaseParams`、`readCSVWithPathValidation + per-call analyzer.AnalyzeFromRawDataWithRanges`、
 // `csvHandler.WritePhaseAnalysis`。panic safety + entry/exit log 由樣板透過
 // [[HandlerRun]] 收乾;handler body 只剩 metadata log + result envelope 組裝。
 //
@@ -838,28 +846,32 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 	s := a.state.Load()
 
 	a.logger.Info("階段分析參數", map[string]any{
-		"input_file":   params.InputFile,
-		"phase_labels": params.PhaseLabels,
-		"output_path":  params.OutputPath,
+		"input_file":  params.InputFile,
+		"phase_count": len(params.Phases),
+		"output_path": params.OutputPath,
 	})
 
-	// cleanLabels 跨 closure 共用:Validate 內由 validatePhaseParams 產出,
-	// Execute 內餵給 phaseAnalyzer.AnalyzeFromRawData,result envelope 組裝時
-	// 用 len(cleanLabels) 作為 phase loop guard。closure capture 是必要 trick —
-	// 樣板的 Validate 簽章 `func(P) error` 不允許多回傳值,但 cleanLabels 又是
-	// validate 副產物,放 P 裡會把 caller 還沒做的驗證提前到組 P 階段。
-	var cleanLabels []string
+	// labels / ranges 跨 closure 共用:Validate 內由 validatePhaseParams 產出(名稱與
+	// 時間區間皆來自前端 params.Phases),Execute 內以 labels 建 per-call analyzer、
+	// ranges 作為顯式 phase 邊界,result envelope 組裝時用 len(labels) 作為 phase loop
+	// guard。closure capture 是必要 trick — 樣板的 Validate 簽章 `func(P) error` 不允許
+	// 多回傳值。
+	var (
+		labels []string
+		ranges []models.TimeRange
+	)
 
 	handler := &AnalysisHandler[PhaseParams, phaseRunData]{
 		Name:   "階段分析",
 		Logger: a.logger,
 		CSV:    s.csvHandler,
 		Validate: func(p PhaseParams) error {
-			labels, validateErr := validatePhaseParams(p)
+			ls, rs, validateErr := validatePhaseParams(p)
 			if validateErr != nil {
 				return validateErr
 			}
-			cleanLabels = labels
+			labels = ls
+			ranges = rs
 			return nil
 		},
 		Execute: func(ctx context.Context, p PhaseParams) (phaseRunData, error) {
@@ -868,7 +880,11 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 				return phaseRunData{}, fmt.Errorf("讀取資料檔案失敗: %w", readErr)
 			}
 
-			analysisResult, analyzeErr := s.phaseAnalyzer.AnalyzeFromRawData(records, cleanLabels)
+			// per-call analyzer:phase 名稱用前端 labels、邊界用前端 ranges
+			// (AnalyzeFromRawDataWithRanges 不從字串解析時間點),與 config.PhaseLabels 解耦。
+			analyzer := calculator.NewPhaseAnalyzer(s.config.ScalingFactor, labels)
+
+			analysisResult, analyzeErr := analyzer.AnalyzeFromRawDataWithRanges(records, ranges)
 			if analyzeErr != nil {
 				return phaseRunData{}, fmt.Errorf("階段分析失敗: %w", analyzeErr)
 			}
@@ -902,7 +918,7 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 	results := make([]PhaseAnalysis, 0, len(data.analysisResult.PhaseResults))
 
 	for i, phaseResult := range data.analysisResult.PhaseResults {
-		if i >= len(cleanLabels) {
+		if i >= len(labels) {
 			break
 		}
 
@@ -1029,11 +1045,19 @@ type ChartResult struct {
 	Message     string `json:"message"`
 }
 
-// PhaseParams holds parameters for phase analysis.
+// PhaseSpec 是單一分期的名稱與時間邊界,對應前端送出的 {name, startTime, endTime}。
+type PhaseSpec struct {
+	Name      string  `json:"name"`
+	StartTime float64 `json:"startTime"`
+	EndTime   float64 `json:"endTime"`
+}
+
+// PhaseParams holds parameters for phase analysis. Phases 由前端提供(名稱 + 邊界),
+// 後端據此分析並以該名稱標記結果,不再耦合 config.PhaseLabels。
 type PhaseParams struct {
-	InputFile   string   `json:"inputFile"`
-	PhaseLabels []string `json:"phaseLabels"`
-	OutputPath  string   `json:"outputPath"`
+	InputFile  string      `json:"inputFile"`
+	Phases     []PhaseSpec `json:"phases"`
+	OutputPath string      `json:"outputPath"`
 }
 
 // PhaseResult holds the result of phase analysis.
