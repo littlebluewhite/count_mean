@@ -448,6 +448,13 @@ func setComposerGlobalOptions(line *charts.Line, subject string, grids []gridSpe
 			Feature: &opts.ToolBoxFeature{
 				DataZoom: &opts.ToolBoxFeatureDataZoom{
 					Show: opts.Bool(true),
+					// YAxisIndex:false → 區域縮放只控制 x 軸,與 inside/slider(皆 x-only,
+					// XAxisIndex 涵蓋 0..2n-1)一致。預設 toolbox dataZoom 控制「全部 y 軸」,
+					// 會讓 echarts 為每個 y 軸偷偷建立隱藏的 select 型 dataZoom(不出現在
+					// getOption().dataZoom)。標準化視圖的無索引 dispatchAction({type:'dataZoom',
+					// start,end}) 會打中那些隱藏 y-model → 三個 y 軸一起塌縮、線消失。設 false
+					// 從源頭不生成 y-model,根治此 bug,且時序圖本就只該縮時間軸(x)。
+					YAxisIndex: false,
 					Title: map[string]string{
 						"zoom": "區域縮放",
 						"back": "縮放還原",

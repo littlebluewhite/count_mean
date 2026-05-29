@@ -312,6 +312,30 @@ func TestRenderComposer_DataZoomSliderPosition(t *testing.T) {
 		"customJS 應明確設 dataZoom slider height=30")
 }
 
+// TestRenderComposer_ToolboxDataZoomXOnly — 標準化視圖 y 軸塌縮 regression(2026-05-29)。
+//
+// User 報:點「標準化視圖」後線幾乎消失。根因:toolbox.feature.dataZoom 的 YAxisIndex
+// 預設「控制全部 y 軸」,echarts 因此為每個 y 軸偷偷建立隱藏的 select 型 dataZoom
+// (不出現在 getOption().dataZoom)。標準化視圖的無索引 dispatchAction({type:'dataZoom',
+// start,end}) 會打中那些隱藏 y-model → 三個 y 軸一起被縮到 [startPct,endPct] 窄帶 →
+// 塌縮。瀏覽器實證:11 個 dataZoom model(2 顯式 x + 6 toolbox x + 3 toolbox y)。
+//
+// 防線:toolbox dataZoom 必須序列化出 yAxisIndex:false,從源頭不生成 y-model
+// (區域縮放只縮 x,與 inside/slider 一致)。
+func TestRenderComposer_ToolboxDataZoomXOnly(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(50, "RA"),
+		SelectedChannels: []string{"RA"},
+		MuscleRatioData:  makeMuscleRatioData(50, "RA/ES"),
+		MotionData:       makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	assert.Contains(t, html, `"dataZoom":{"show":true,"yAxisIndex":false`,
+		"toolbox dataZoom 必須 yAxisIndex:false(只縮 x 軸),否則標準化視圖會把 y 軸一起縮塌")
+}
+
 // TestRenderComposer_ContainerHeightAccommodatesZoomBar — Bug D regression(2026-05-27):
 //
 // User 報「整體圖長度太短,zoom bar 被切掉」。修法:擴大 composerContainerHeight
