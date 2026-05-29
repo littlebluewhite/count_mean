@@ -223,18 +223,18 @@ func (a *Analyzer) analyzeSubject(
 		return result
 	}
 
-	ioPhasePoints := make([]io.MuscleRatioPhasePoint, len(points))
-	for i, p := range points {
-		ioPhasePoints[i] = io.MuscleRatioPhasePoint{Name: p.name, Time: p.time}
+	ioPhasePoints := buildPhasePoints(points, ratiosAll, emg.Time)
+
+	avgLabels := make([]string, len(pairLabels))
+	for i, l := range pairLabels {
+		avgLabels[i] = fmt.Sprintf("%s (%dpt avg)", l, 2*phaseWindowHalf+1)
 	}
 
 	outPhasePath, writePhaseErr := params.CSVHandler.WriteMuscleRatioOutputPhases(
 		io.WriteRequest{},
 		io.MuscleRatioOutputPhasesPayload{
 			Subject:    m.Subject,
-			PairLabels: pairLabels,
-			Times:      emg.Time,
-			Ratios:     ratiosAll,
+			PairLabels: avgLabels,
 			Points:     ioPhasePoints,
 		},
 	)
@@ -256,6 +256,24 @@ func (a *Analyzer) analyzeSubject(
 type phasePoint struct {
 	name string
 	time float64 // EMG-time-aligned
+}
+
+// phaseWindowHalf 是 Output-2 11 點 window mean 的半徑:center ± 5。(ADR-0014)
+const phaseWindowHalf = 5
+
+// buildPhasePoints 把 collected phase points 轉成 Output-2 payload points:
+// 每個 pair 取 11 點(center ± phaseWindowHalf)window mean,顯示時間 snap 到最近 sample。(ADR-0014)
+func buildPhasePoints(points []phasePoint, ratiosAll [][]float64, times []float64) []io.MuscleRatioPhasePoint {
+	out := make([]io.MuscleRatioPhasePoint, len(points))
+	for i, p := range points {
+		idx := synchronizer.FindNearestTimeIndex(times, p.time)
+		values := make([]float64, len(ratiosAll))
+		for k := range ratiosAll {
+			values[k] = WindowMean(ratiosAll[k], idx, phaseWindowHalf)
+		}
+		out[i] = io.MuscleRatioPhasePoint{Name: p.name, Time: times[idx], Values: values}
+	}
+	return out
 }
 
 // biomechanicalIntervalMidpoints defines extra "interval" midpoints whose endpoints

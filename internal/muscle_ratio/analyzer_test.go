@@ -199,7 +199,7 @@ func TestAnalyze_PhasePoints_FullPhasesYieldRows(t *testing.T) {
 	// 1 header + 10 phases + 9 adjacent-pair midpoints + 2 biomechanical-interval midpoints
 	// (mid_S_D, mid_D_T) = 22 rows total (1 header + 21 data rows)
 	assert.Equal(t, 1+21, len(rows), "10 phases → 19 adjacent + 2 interval = 21 data rows expected")
-	assert.Equal(t, []string{"Phase", "Time (s)", "RA/ES", "IL/GMax", "RF/BF", "TAIO/MF"}, rows[0])
+	assert.Equal(t, []string{"Phase", "Time (s)", "RA/ES (11pt avg)", "IL/GMax (11pt avg)", "RF/BF (11pt avg)", "TAIO/MF (11pt avg)"}, rows[0])
 
 	// 抽查一個 data row 的 ratio：RA/ES = 2/1 = 2.000000
 	for _, row := range rows[1:] {
@@ -642,7 +642,7 @@ func TestAnalyze_ConcurrentCallsNoRace(t *testing.T) {
 					ManifestFile: manifestPath,
 					DataFolder:   dataDir,
 					OutputDir:    outDir,
-				CSVHandler:   newTestCSVHandler(outDir),
+					CSVHandler:   newTestCSVHandler(outDir),
 				})
 				// 不 assert err — concurrent writes 到同個 outDir 可能有檔案 race（O_TRUNC），
 				// 但本 test 是 race detector 守門：只要 -race 不報 race 就行
@@ -1175,7 +1175,7 @@ func TestAnalyze_Output2WriteFailure_StickyOutput1Success(t *testing.T) {
 
 	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
 
-	phasesPath := filepath.Join(outDir, "S1_muscle_ratio_phases.csv")
+	phasesPath := filepath.Join(outDir, "S1_muscle_ratio_phases_avg11.csv")
 	require.NoError(t, os.MkdirAll(phasesPath, 0o755))
 
 	manifestPath := filepath.Join(tempDir, "manifest.csv")
