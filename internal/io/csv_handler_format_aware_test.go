@@ -345,9 +345,9 @@ func TestWriteNormalizedPhaseSyncResult_SubjectSanitization(t *testing.T) {
 		subject string
 		mustNot []rune
 	}{
-		{name: "rtl_override", subject: "evil‮gsp.csv", mustNot: []rune{0x202E}},
+		{name: "rtl_override", subject: "evil\u202egsp.csv", mustNot: []rune{0x202E}},
 		{name: "null_byte", subject: "Sub\x00ject", mustNot: []rune{0x00}},
-		{name: "zero_width_space", subject: "Sub​ject", mustNot: []rune{0x200B}},
+		{name: "zero_width_space", subject: "Sub\u200bject", mustNot: []rune{0x200B}},
 	}
 
 	for _, tc := range cases {
