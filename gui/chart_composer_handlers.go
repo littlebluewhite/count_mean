@@ -63,28 +63,16 @@ type LoadChartComposerSubjectsParams struct {
 	DataFolder   string `json:"dataFolder"`
 }
 
-// LoadChartComposerEMGChannelsParams Wails RPC params for EMG channel lookup
-// scoped to a specific Subject.
-type LoadChartComposerEMGChannelsParams struct {
+// GenerateChartComposerParams Wails RPC params for composer chart generation.
+//
+// ADR-0013:一鍵生成、預設全通道。前端不再先打 LoadChartComposerEMGChannels
+// 取 channel 清單 / EMGMotionOffset 再回傳;handler 自己從 manifest row 讀
+// EMGMotionOffset(單一來源),EMG channel 交給 chart composer 的「空 → fallback
+// 全選」行為。
+type GenerateChartComposerParams struct {
 	ManifestPath string `json:"manifestPath"`
 	DataFolder   string `json:"dataFolder"`
 	Subject      string `json:"subject"`
-}
-
-// GenerateChartComposerParams Wails RPC params for composer chart generation.
-//
-// SelectedChannels 為前端 checkbox 選擇的 EMG channel name 清單；空 slice 代表
-// 「不選任何 channel」（與 chart.RenderComposer 的 empty=fallback-all-channels
-// 行為刻意分開 — 前端預設不勾就是不顯示，由 Slice D 控制 UI）。
-//
-// EMGMotionOffset 由前端從 manifest row metadata 帶過來；handler 不重新從
-// manifest 解析（避免兩個來源不一致）。
-type GenerateChartComposerParams struct {
-	ManifestPath     string   `json:"manifestPath"`
-	DataFolder       string   `json:"dataFolder"`
-	Subject          string   `json:"subject"`
-	SelectedChannels []string `json:"selectedChannels"`
-	EMGMotionOffset  int      `json:"emgMotionOffset"`
 }
 
 // DownloadChartComposerImageParams Wails RPC params for PNG download.
@@ -121,25 +109,6 @@ type ChartComposerSubjectsResult struct {
 	Message      string           `json:"message"`
 }
 
-// ChartComposerChannelsResult Wails RPC result for EMG channel lookup.
-//
-// HasMuscleRatio 為 V.14 manifest schema 信號：若指定 Subject 對應的 manifest
-// row 內 MuscleRatioFile 非空，則前端應顯示 3-grid 模式（EMG + muscle_ratio +
-// motion）；空 → 2-grid 模式（EMG + motion）。
-//
-// EMGMotionOffset 為該 Subject 的 sync offset（EMG 第一筆樣本對應的 motion
-// index，1-based）。前端 Generate 時要原封不動回傳給 backend，讓 phase markers
-// 與 motion 時間軸正確對齊；若硬編 0，V.14 典型 offset=600+ 會產生 ~2.4s 視覺
-// 錯位（已在 Slice C P1 codex 修補過 backend 端 conversion，但 frontend 需正確
-// 提供該值才能達成 cross-domain 對齊）。
-type ChartComposerChannelsResult struct {
-	Channels        []string `json:"channels"`
-	HasMuscleRatio  bool     `json:"hasMuscleRatio"`
-	EMGMotionOffset int      `json:"emgMotionOffset"`
-	Success         bool     `json:"success"`
-	Message         string   `json:"message"`
-}
-
 // ChartComposerResult Wails RPC result for chart generation.
 //
 // HTML 為 echarts.NewLine().Render() 的完整 HTML 串（含 inline JS），前端塞進
@@ -169,14 +138,6 @@ func failedChartComposerResult(message string) *ChartComposerResult {
 // failedChartComposerSubjectsResult builds a subjects result indicating failure.
 func failedChartComposerSubjectsResult(message string) *ChartComposerSubjectsResult {
 	return &ChartComposerSubjectsResult{
-		Success: false,
-		Message: message,
-	}
-}
-
-// failedChartComposerChannelsResult builds a channels result indicating failure.
-func failedChartComposerChannelsResult(message string) *ChartComposerChannelsResult {
-	return &ChartComposerChannelsResult{
 		Success: false,
 		Message: message,
 	}
@@ -248,75 +209,6 @@ func (a *App) LoadChartComposerSubjects(
 	})
 }
 
-// LoadChartComposerEMGChannels 給定 Subject 回 EMG channel checkbox 列表。
-//
-// HasMuscleRatio 反映 V.14 manifest schema：若該 Subject 對應的 manifest row
-// 內 MuscleRatioFile 非空,前端會切到 3-grid (EMG + muscle_ratio + motion) UI。
-//
-// channel 列表來自 EMG dataset Headers[1:](第一欄是時間)。Headers 順序由
-// CSV 檔本身決定,前端不必再排序;預設前端不勾任何 channel(由 Slice D 控制)。
-func (a *App) LoadChartComposerEMGChannels(
-	params *LoadChartComposerEMGChannelsParams,
-) (result *ChartComposerChannelsResult, err error) {
-	return HandlerRun(a.logger, "Chart Composer 載入 EMG 通道", func() (*ChartComposerChannelsResult, error) {
-		if params == nil {
-			return failedChartComposerChannelsResult("參數為空"), nil
-		}
-
-		if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
-			return failedChartComposerChannelsResult(err.Error()), nil
-		}
-
-		if params.Subject == "" {
-			return failedChartComposerChannelsResult("Subject 不可為空"), nil
-		}
-
-		manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
-		if parseErr != nil {
-			a.logger.Error("Chart Composer 載入 manifest 失敗", parseErr, map[string]any{})
-			return failedChartComposerChannelsResult(
-				fmt.Sprintf("載入分期總檔案失敗: %s", redact.RedactForMessage(parseErr)),
-			), nil
-		}
-
-		row, found := findManifestBySubject(manifests, params.Subject)
-		if !found {
-			return failedChartComposerChannelsResult(
-				fmt.Sprintf("Subject %q 不存在於分期總檔案", params.Subject),
-			), nil
-		}
-
-		emgPath, resolveErr := manifest.ResolveEMGFile(params.DataFolder, row.EMGFile)
-		if resolveErr != nil {
-			a.logger.Error("Chart Composer 解析 EMG 路徑失敗", resolveErr, map[string]any{})
-			return failedChartComposerChannelsResult(
-				fmt.Sprintf("EMG 檔案路徑解析失敗: %s", redact.RedactForMessage(resolveErr)),
-			), nil
-		}
-
-		emgData, _, emgErr := parsers.NewEMGParser().ParseFile(emgPath)
-		if emgErr != nil {
-			a.logger.Error("Chart Composer 解析 EMG 失敗", emgErr, map[string]any{})
-			return failedChartComposerChannelsResult(
-				fmt.Sprintf("解析 EMG 失敗: %s", redact.RedactForMessage(emgErr)),
-			), nil
-		}
-
-		// emg.Headers 已是 channel name slice(parsers.initEMGData 已 strip
-		// time header,直接給前端即可)。
-		channels := make([]string, len(emgData.Headers))
-		copy(channels, emgData.Headers)
-
-		return &ChartComposerChannelsResult{
-			Channels:        channels,
-			HasMuscleRatio:  strings.TrimSpace(row.MuscleRatioFile) != "",
-			EMGMotionOffset: row.EMGMotionOffset,
-			Success:         true,
-			Message:         fmt.Sprintf("已載入 %d 個 EMG 通道", len(channels)),
-		}, nil
-	})
-}
-
 // GenerateChartComposer 呼叫 chart.RenderComposer 並回 HTML preview。
 //
 // 工作流程:
@@ -326,8 +218,10 @@ func (a *App) LoadChartComposerEMGChannels(
 //  4. 把 PhaseSyncEMGData / MotionData / muscle_ratio CSV 轉成 chart.ComposerInput
 //  5. 呼叫 chart.RenderComposer 渲染成 HTML
 //
-// EMGMotionOffset 由前端從 manifest row 傳入(避免 handler 與前端對同一 manifest
-// row 解讀不一致)。motion-index 轉時間透過 TimeSynchronizer.MotionIndexToEMGTime。
+// ADR-0013:EMGMotionOffset 直接讀 row.EMGMotionOffset(本函式已 load manifest +
+// findManifestBySubject,offset 當場可得,不再經前端往返 — 消除 stale-offset 風險)。
+// SelectedChannels 一律傳 nil(空),交給 chart composer 的「空 → fallback 全選」,
+// 達成「預設全通道」。motion-index 轉時間透過 TimeSynchronizer.MotionIndexToEMGTime。
 func (a *App) GenerateChartComposer(
 	params *GenerateChartComposerParams,
 ) (result *ChartComposerResult, err error) {
@@ -359,18 +253,6 @@ func (a *App) GenerateChartComposer(
 			), nil
 		}
 
-		// SelectedChannels 空 slice → fail-fast。
-		// chart.RenderComposer 內部對 empty SelectedChannels 走「fallback 全
-		// channel」(buildEMGSeries line 235-241)是 composer 合理 default;但
-		// Slice D frontend 預設「不勾」,使用者沒勾就不該渲染任何 EMG。handler
-		// 是兩個語意之間的守門點 — 在這裡 fail-fast 讓 UI 行為一致。
-		// 放在 manifest+subject 解析之後 — 維持「邊界路徑 → 結構性檢查 → 業務
-		// 參數」的 fail-fast 順序;對 sibling test (UnknownSubject /
-		// RejectsTraversalPath) 不形成 short-circuit 蓋過。
-		if len(params.SelectedChannels) == 0 {
-			return failedChartComposerResult("請至少選擇一個 EMG 通道"), nil
-		}
-
 		// 載入 EMG(必要)
 		emgPath, emgPathErr := manifest.ResolveEMGFile(params.DataFolder, row.EMGFile)
 		if emgPathErr != nil {
@@ -390,7 +272,7 @@ func (a *App) GenerateChartComposer(
 
 		// 載入 motion(必要 — composer 至少 2-grid,motion 是其中一個 grid)
 		composerMotion, motionErr := loadComposerMotion(
-			params.DataFolder, row.MotionFile, params.EMGMotionOffset,
+			params.DataFolder, row.MotionFile, row.EMGMotionOffset,
 		)
 		if motionErr != nil {
 			a.logger.Error("Chart Composer 解析 Motion 失敗", motionErr, map[string]any{})
@@ -418,16 +300,18 @@ func (a *App) GenerateChartComposer(
 		// 若不換算直接 attach,markLine 會早 / 晚整個 sync offset — silent visual bug。
 		// 這份 map 同時供後端預設 markLine(composerInput.PhaseTimesEMG)與前端 checkbox
 		// /動態 markLine(回傳的 PhaseTimes)使用,兩端共用來源不會分歧。
-		phaseTimes := composerPhaseTimesEMG(row.PhasePoints, params.EMGMotionOffset)
+		phaseTimes := composerPhaseTimesEMG(row.PhasePoints, row.EMGMotionOffset)
 
+		// SelectedChannels 傳 nil(空)— chart composer 對空走「fallback 全選」
+		// (composer.go:267-273),達成 ADR-0013 的「預設全通道」。
 		composerInput := chart.ComposerInput{
 			Subject:          row.Subject,
 			EMGDataset:       emgDataset,
-			SelectedChannels: params.SelectedChannels,
+			SelectedChannels: nil,
 			MuscleRatioData:  muscleRatioData,
 			MotionData:       composerMotion,
 			PhaseTimesEMG:    phaseTimes,
-			EMGMotionOffset:  params.EMGMotionOffset,
+			EMGMotionOffset:  row.EMGMotionOffset,
 		}
 
 		var buf bytes.Buffer

@@ -113,8 +113,8 @@ export class ManifestPanel {
      *   綁 mirror。CCI/Composer/MuscleRatio 省略。
      * @param {(mp: ManifestPanel) => void} [spec.onSubjectChange] - Optional。
      *   `#mpSubject` change 時呼叫(經 onMpSubjectChange delegator)。Composer 用來
-     *   reset state(_composerEMGMotionOffset / _composerLoadedSubject)+ 清 chart。
-     *   其他 panel 省略(subject change 無特殊行為)。
+     *   清 chart container + 清勾選分期 Set(ADR-0013)。其他 panel 省略(subject
+     *   change 無特殊行為)。
      */
     run(spec) {
         this._currentSpec = spec;

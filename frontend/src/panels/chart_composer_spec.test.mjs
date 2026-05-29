@@ -7,18 +7,17 @@
 //   1. spec 必填欄位:titleKey / statusRunningKey / runBtnLabelKey /
 //      silentSuccess / formBody / rpc / onResult
 //   2. formBody 內 user-visible text 均來自 translator(無繁中字元洩漏)
-//   3. formBody 呼叫 translator ≥ 6 次(每個 hardcoded label/button 一次,sanity bound)
-//   4. spec.rpc 在 _composerSelectedChannels 空時 throw
-//   5. spec.rpc 在 _composerLoadedSubject 與 ctx.subjectName 不一致時 throw
+//   3. formBody 呼叫 translator ≥ 2 次(ADR-0013 後僅 phase selector,sanity bound)
+//   4. spec.rpc 只傳 manifest/dataFolder/subject 三參數給 GenerateChartComposer
+//      (ADR-0013:不再有 channel-empty / loadedSubject pre-validation guard)
+//   5. spec.rpc 在 result.success=false 時 throw
 //
 // Mock 策略:
 //   * happy-dom 提供 DOM(formBody 內 textContent 抽繁中字元)
 //   * fake translator 回 ASCII key — 任何未經 translator 的字串會以繁中字元洩漏到
 //     textContent,被 cjkRange regex 抓到
-//   * makeChartComposerSpec(app) factory 接 stub app — rpc test 只測 throw 條件,
-//     不真正觸發 GenerateChartComposer(後者透過 import 拉到 wailsjs,在 happy-dom
-//     下 globalThis.go 缺失會 throw,但 throw 在 pre-validation 前已先觸發,本 test
-//     不會走到 GenerateChartComposer 那段)
+//   * makeChartComposerSpec(app) factory 接 stub app;rpc test 透過 window.go stub
+//     GenerateChartComposer 觀察 forward 的參數 / success=false throw
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
@@ -144,8 +143,8 @@ test('Composer spec.loadSubjects 在 result.success=false 時 throw(對齊舊 lo
 });
 
 test('Composer spec.onSubjectChange 呼叫 app.onComposerSubjectChange()', () => {
-    // onSubjectChange 對齊舊 onComposerSubjectChange(reset _composerEMGMotionOffset /
-    // _composerLoadedSubject + 清 chart)。
+    // ADR-0013 後 onComposerSubjectChange 清 chart container + 清勾選分期 Set
+    //(不再 reset channel / offset state)。
     let changeCalled = 0;
     const app = { onComposerSubjectChange: () => { changeCalled += 1; } };
     const spec = makeChartComposerSpec(app);
@@ -179,12 +178,11 @@ test('Chart Composer spec.formBody 內 user-visible text 均來自 translator(�
     );
 });
 
-test('Chart Composer spec.formBody 必呼叫 translator 至少 5 次(各 label/button 一次)', () => {
-    // 5 = 當前 formBody 內 translator call 數的下界;新增 label 時連同此數 bump。
+test('Chart Composer spec.formBody 必呼叫 translator 至少 2 次(phase selector label/helptext)', () => {
+    // 2 = ADR-0013 後 formBody 內 translator call 數的下界;新增 label 時連同此數 bump。
     //
-    // 對應 5 個 translator call site:load_emg_channels / form.label.composer_channels /
-    // form.helptext.load_channels_first / form.label.composer_phases /
-    // form.helptext.composer_phases_pending。
+    // 對應 2 個 translator call site:form.label.composer_phases /
+    // form.helptext.composer_phases_pending(channel/load 相關標籤已隨一鍵生成刪除)。
     //
     // 此 lower bound 抓「人為把翻譯整段砍光」regression。
     const calls = [];
@@ -195,74 +193,85 @@ test('Chart Composer spec.formBody 必呼叫 translator 至少 5 次(各 label/b
     composerFormBody(trackingT);
 
     assert.ok(
-        calls.length >= 5,
-        `formBody 至少應呼叫 translator 5 次,實際只呼叫 ${calls.length} 次:${calls.join(', ')}`
+        calls.length >= 2,
+        `formBody 至少應呼叫 translator 2 次,實際只呼叫 ${calls.length} 次:${calls.join(', ')}`
     );
 });
 
-// ---------- spec.rpc pre-validation throw ----------
+// ---------- spec.rpc(ADR-0013 一鍵生成:只 forward 三參數 + success=false throw)----------
 
-test('spec.rpc 在 _composerSelectedChannels 為空時 throw(對齊 main.js:1875-1878)', async () => {
-    // 構造 stub app:_composerSelectedChannels 為空 Set
-    const stubApp = {
-        _composerSelectedChannels: new Set(),
-        _composerLoadedSubject: 'Rudolph',
-        _composerEMGMotionOffset: 0,
-    };
-    const spec = makeChartComposerSpec(stubApp);
+test('spec.rpc 只 forward manifest/dataFolder/subject 三參數給 GenerateChartComposer', async () => {
+    // ADR-0013:rpc 不再讀 _composerSelectedChannels / _composerEMGMotionOffset,
+    // 也不帶 selectedChannels / emgMotionOffset 參數(offset 由 backend 從 row 讀、
+    // channel 預設全選)。
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    try {
+        let argObj = null;
+        window.go = {
+            gui: {
+                App: {
+                    GenerateChartComposer: async (o) => {
+                        argObj = o;
+                        return { success: true, html: '<div></div>', phaseTimes: {} };
+                    },
+                },
+            },
+        };
+        const spec = makeChartComposerSpec({});
+        const ctx = {
+            manifestPath: '/tmp/manifest.csv',
+            dataFolder: '/tmp/data',
+            subjectIdx: NaN,
+            subjectName: 'Rudolph',
+            subjects: [],
+        };
 
-    const ctx = {
-        manifestPath: '/tmp/manifest.csv',
-        dataFolder: '/tmp/data',
-        subjectIdx: NaN,
-        subjectName: 'Rudolph',
-        subjects: [],
-    };
+        const result = await spec.rpc(ctx);
 
-    await assert.rejects(
-        async () => {
-            await spec.rpc(ctx);
-        },
-        (err) => {
-            // 對齊 main.js:1876 既有錯誤文案 — i18n key 在 M5 wiring 補。
-            assert.match(err.message, /至少選擇一個 EMG 通道|EMG 通道/, 'throw 訊息含「至少選擇一個 EMG 通道」語意');
-            return true;
-        },
-        'rpc 應 throw 而非 return falsy'
-    );
+        assert.equal(argObj.manifestPath, '/tmp/manifest.csv', 'forward manifestPath');
+        assert.equal(argObj.dataFolder, '/tmp/data', 'forward dataFolder');
+        assert.equal(argObj.subjectName, undefined, 'rpc 用 ctx.subjectName 填 subject 欄位');
+        assert.equal(argObj.subject, 'Rudolph', 'forward subject(name-mode)');
+        assert.ok(!('selectedChannels' in argObj), 'ADR-0013:不再帶 selectedChannels');
+        assert.ok(!('emgMotionOffset' in argObj), 'ADR-0013:不再帶 emgMotionOffset');
+        assert.equal(result.success, true);
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+    }
 });
 
-test('spec.rpc 在 _composerLoadedSubject 與 ctx.subjectName 不一致時 throw(codex P2#3 guard)', async () => {
-    // 構造 stub:有勾選 channel,但 loadedSubject ≠ ctx.subjectName。
-    // 對齊 main.js:1883-1889 — 防上個 subject 的 emgMotionOffset silent 套到新 subject。
-    const stubApp = {
-        _composerSelectedChannels: new Set(['ch1', 'ch2']),
-        _composerLoadedSubject: 'SubjectA',
-        _composerEMGMotionOffset: 600,
-    };
-    const spec = makeChartComposerSpec(stubApp);
+test('spec.rpc 在 result.success=false 時 throw(envelope 統一 ShowError)', async () => {
+    const window = new Window({ url: 'http://localhost:34115/' });
+    globalThis.window = window;
+    try {
+        window.go = {
+            gui: {
+                App: {
+                    GenerateChartComposer: async () => ({ success: false, message: '生成失敗訊息' }),
+                },
+            },
+        };
+        const spec = makeChartComposerSpec({});
+        const ctx = {
+            manifestPath: '/tmp/manifest.csv',
+            dataFolder: '/tmp/data',
+            subjectIdx: NaN,
+            subjectName: 'Rudolph',
+            subjects: [],
+        };
 
-    const ctx = {
-        manifestPath: '/tmp/manifest.csv',
-        dataFolder: '/tmp/data',
-        subjectIdx: NaN,
-        subjectName: 'SubjectB',   // 與 loadedSubject 不一致
-        subjects: [],
-    };
-
-    await assert.rejects(
-        async () => {
-            await spec.rpc(ctx);
-        },
-        (err) => {
-            // 對齊 main.js:1884-1887 既有錯誤文案。
-            assert.match(
-                err.message,
-                /主題已變更|EMG 欄位/,
-                'throw 訊息含「主題已變更但未重新載入 EMG 欄位」語意'
-            );
-            return true;
-        },
-        'rpc 應 throw 而非 return falsy'
-    );
+        await assert.rejects(
+            async () => { await spec.rpc(ctx); },
+            (err) => {
+                assert.match(err.message, /生成失敗訊息|Chart Composer 生成失敗/, 'throw 帶 backend message 或 fallback');
+                return true;
+            },
+            'rpc 應 throw 而非 return falsy'
+        );
+    } finally {
+        if (window?.happyDOM?.close) await window.happyDOM.close();
+        delete globalThis.window;
+    }
 });

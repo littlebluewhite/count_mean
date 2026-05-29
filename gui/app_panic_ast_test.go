@@ -317,14 +317,13 @@ func knownGapEntries() map[string]string {
 		"AnalyzeCCI":                 "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
 		"AnalyzeMuscleRatio":         "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
 		"AnalyzeNormalizedPhaseSync": "panic safety via HandlerRun (Tier 1, PRD #7 / wave-6)",
-		// Chart Composer family (Slice C, PRD #15) — 3 個 handler 走 HandlerRun
+		// Chart Composer family (Slice C, PRD #15) — 2 個 handler 走 HandlerRun
 		// Tier 1 拿 panic safety;body 內不再 `defer recoverHandlerPanic`。
 		// DownloadChartComposerImage 不在此 known-gap 列表 — 該 handler 鏡像
 		// DownloadCCIChart 的 dual-channel 模式,顯式 `defer recoverHandlerPanic`
 		// 在 body 第一行,AST 直接掃得到。
-		"LoadChartComposerSubjects":    "panic safety via HandlerRun (Tier 1, Chart Composer PRD #15)",
-		"LoadChartComposerEMGChannels": "panic safety via HandlerRun (Tier 1, Chart Composer PRD #15)",
-		"GenerateChartComposer":        "panic safety via HandlerRun (Tier 1, Chart Composer PRD #15)",
+		"LoadChartComposerSubjects": "panic safety via HandlerRun (Tier 1, Chart Composer PRD #15)",
+		"GenerateChartComposer":     "panic safety via HandlerRun (Tier 1, Chart Composer PRD #15)",
 	}
 }
 
