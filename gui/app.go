@@ -430,11 +430,15 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 		return nil, fmt.Errorf("寫入輸出檔案失敗: %w", writeErr)
 	}
 
-	// 準備回傳結果
+	// 準備回傳結果。Success/Message 必須顯式設定 — 前端依 result.success 判定成敗,
+	// 漏設會讓 bool 零值 false 使成功計算被誤判為失敗(對齊批次 executeBatchLoop 與
+	// NormalizeData 的 envelope)。
 	return &MaxMeanResult{
 		OutputPath: outputPath,
 		Headers:    records[0],
 		Results:    convertMaxMeanResultsToArray(results),
+		Success:    true,
+		Message:    fmt.Sprintf("最大平均值計算成功完成，結果已保存到: %s", outputPath),
 	}, nil
 }
 
