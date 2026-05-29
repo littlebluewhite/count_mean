@@ -319,3 +319,23 @@ func TestValidateCell_BodyBlocksShadowedFunctionCall(t *testing.T) {
 		t.Error(`body cell "wash system(1)" 含真實函式呼叫 system(,必須被拒(no-shadowing),實際通過`)
 	}
 }
+
+// TestValidateCell_BodyBlocksMultilineFunctionCall 釘住 no-bypass 端到端:body cell
+// 內危險函式名與 `(` 之間夾換行(quoted CSV multiline cell — checkControlChars 放行
+// `\n`/`\r`,且 checkDangerousFunctions 先於 checkControlChars 跑)仍須被拒。
+func TestValidateCell_BodyBlocksMultilineFunctionCall(t *testing.T) {
+	v := NewCellValidator()
+
+	cases := map[string]string{
+		"lf":   "system\n(1)",
+		"crlf": "system\r\n(1)",
+	}
+	for name, cell := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := NewCellContext(1, 1, "evil.csv")
+			if err := v.ValidateCell(cell, ctx); err == nil {
+				t.Errorf("body cell %q 跨行函式呼叫須被拒,實際通過(換行繞過)", cell)
+			}
+		})
+	}
+}

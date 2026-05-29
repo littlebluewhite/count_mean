@@ -2,6 +2,7 @@ package patterns
 
 import (
 	"strings"
+	"unicode"
 )
 
 // InjectionDetectorImpl implements InjectionDetector interface.
@@ -50,8 +51,13 @@ func (d *InjectionDetectorImpl) DetectFormula(content string) (bool, string) {
 }
 
 // isFunctionCall 回報 fn 是否在 content 中以「呼叫」形式出現 — 即某個 fn 出現位置
-// 之後(略過空白 / tab)緊接 `(`。content 與 fn 須皆已 lower-case。掃描每個出現
-// 位置,因此早期良性子串(如 `wash` 裡的 `sh`)不會 shadow 後面真正的呼叫(`system(`)。
+// 之後(略過所有空白:空白 / tab / 換行 / CR / Unicode 空白)緊接 `(`。content 與
+// fn 須皆已 lower-case。掃描每個出現位置,因此早期良性子串(如 `wash` 裡的 `sh`)
+// 不會 shadow 後面真正的呼叫(`system(`)。
+//
+// 略過「全部」空白而非僅空白 / tab:試算表在函式名與 `(` 之間容忍各種空白(含換行),
+// 且 quoted CSV multiline cell 可合法夾帶 `\n`/`\r`(cell_validator 的 checkControlChars
+// 放行 `\t`/`\n`/`\r`)— 只略過空白 / tab 會讓 `system\n(1)` 繞過危險函式偵測。
 func isFunctionCall(content, fn string) bool {
 	from := 0
 	for {
@@ -60,12 +66,8 @@ func isFunctionCall(content, fn string) bool {
 			return false
 		}
 
-		pos := from + idx + len(fn)
-		for pos < len(content) && (content[pos] == ' ' || content[pos] == '\t') {
-			pos++
-		}
-
-		if pos < len(content) && content[pos] == '(' {
+		rest := strings.TrimLeftFunc(content[from+idx+len(fn):], unicode.IsSpace)
+		if strings.HasPrefix(rest, "(") {
 			return true
 		}
 

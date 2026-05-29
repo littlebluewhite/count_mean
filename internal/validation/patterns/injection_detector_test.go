@@ -246,3 +246,28 @@ func TestDetectFormula_RequiresCallSyntax(t *testing.T) {
 		})
 	}
 }
+
+// TestDetectFormula_RejectsMultilineCallSyntax 釘住 no-bypass:危險函式名與 `(`
+// 之間夾換行 / CR / 其他空白不可繞過偵測。quoted CSV multiline cell 內可含 `\n`/`\r`
+// (cell_validator 的 checkControlChars 放行 `\t`/`\n`/`\r`),而試算表在函式名與
+// `(` 之間容忍各種空白(含換行),故 `system\n(1)` 仍是呼叫。call-syntax gate 只跳
+// 空白 / tab 會被換行繞過(weaken 原 substring 守門)— 須跳過全部 ASCII 空白。
+func TestDetectFormula_RejectsMultilineCallSyntax(t *testing.T) {
+	det := NewInjectionDetector()
+
+	// map key 為可讀名稱,避免 subtest 名含換行。
+	cases := map[string]string{
+		"lf_before_paren":     "system\n(1)",
+		"crlf_before_paren":   "system\r\n(1)",
+		"tab_lf_before_paren": "importxml\t\n (x)",
+		"shadowed_lf":         "wash system\n(1)", // wash 的 sh 不可 shadow 後面 system\n(
+		"nbsp_before_paren":   "system\u00a0(1)",  // Unicode 空白(NBSP)同屬繞過類別
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			if hit, _ := det.DetectFormula(content); !hit {
+				t.Errorf("DetectFormula(%q) 應命中(跨行函式呼叫),實際為 false — 換行繞過", content)
+			}
+		})
+	}
+}
