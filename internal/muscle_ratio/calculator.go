@@ -84,7 +84,7 @@ func Ratio(num, den float64) float64 {
 }
 
 // WindowMean returns the mean of series over the centered window
-// [center-half, center+half], clamped to [0, len-1], skipping NaN entries.
+// [center-half, center+half], clamped to [0, len-1], skipping non-finite (NaN/Inf) entries.
 // Returns NaN when series is empty or the clamped window has no finite value. (ADR-0014)
 func WindowMean(series []float64, center, half int) float64 {
 	n := len(series)
@@ -102,7 +102,7 @@ func WindowMean(series []float64, center, half int) float64 {
 	sum, count := 0.0, 0
 	for i := lo; i <= hi; i++ {
 		v := series[i]
-		if math.IsNaN(v) {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
 			continue
 		}
 		sum += v

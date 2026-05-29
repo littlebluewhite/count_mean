@@ -149,6 +149,7 @@ func TestBuildRightSideChannelMap_AllChannels(t *testing.T) {
 
 func TestWindowMean(t *testing.T) {
 	nan := math.NaN()
+	inf := math.Inf(1)
 	cases := []struct {
 		name    string
 		series  []float64
@@ -189,6 +190,26 @@ func TestWindowMean(t *testing.T) {
 			name:   "all-NaN every entry in window is NaN",
 			series: []float64{nan, nan, nan},
 			center: 1, half: 1,
+			wantNaN: true,
+		},
+		{
+			name:   "skip-Inf window contains +Inf",
+			series: []float64{2.0, inf, 4.0},
+			center: 1, half: 1,
+			// window [0,2]: 2+Inf+4 → finite: 2+4=6 / 2 = 3.0 (Inf skipped, ADR-0014)
+			wantNaN: false, want: 3.0,
+		},
+		{
+			name:   "skip mixed NaN and Inf",
+			series: []float64{1.0, nan, inf, 5.0},
+			center: 1, half: 2,
+			// window [0,3]: 1+NaN+Inf+5 → finite: 1+5=6 / 2 = 3.0
+			wantNaN: false, want: 3.0,
+		},
+		{
+			name:   "all-Inf window is empty of finite values",
+			series: []float64{inf, inf},
+			center: 0, half: 1,
 			wantNaN: true,
 		},
 		{
