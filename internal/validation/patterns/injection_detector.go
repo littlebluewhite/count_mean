@@ -174,14 +174,5 @@ func (d *InjectionDetectorImpl) DetectDangerousChars(content string) (bool, stri
 
 // IsReservedName checks if the name is a Windows reserved name.
 func (d *InjectionDetectorImpl) IsReservedName(name string) bool {
-	nameUpper := strings.ToUpper(name)
-	reserved := d.registry.Get(ReservedNames)
-
-	for _, r := range reserved {
-		if nameUpper == r {
-			return true
-		}
-	}
-
-	return false
+	return IsReservedName(name)
 }
