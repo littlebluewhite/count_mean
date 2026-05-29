@@ -15,7 +15,8 @@ import (
 )
 
 // setupNormalizedPhaseSyncTestApp 構造一個僅含 AnalyzeNormalizedPhaseSync 所需依賴
-// 的最小 App：logger、config（OutputDir）、phaseSyncAnalyzer。
+// 的最小 App：logger、config（OutputDir）、phaseSyncAnalyzer、csvHandler。
+// csvHandler 由 buildAppState 統一建立，確保 Output 2 的 WriteNormalizedPhaseSyncResult 呼叫不 nil-deref。
 // 其他 field 留 nil，被該 handler 觸及時會立刻 panic 暴露問題。
 func setupNormalizedPhaseSyncTestApp(t *testing.T) *App {
 	t.Helper()
@@ -28,7 +29,7 @@ func setupNormalizedPhaseSyncTestApp(t *testing.T) *App {
 		logger:            logging.GetLogger("normalized_phase_sync_test"),
 		phaseSyncAnalyzer: phase_sync.NewPhaseSyncAnalyzer(),
 	}
-	app.state.Store(&appState{config: cfg})
+	app.state.Store(buildAppState(cfg))
 	return app
 }
 
