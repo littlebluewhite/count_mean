@@ -1,6 +1,7 @@
 package security
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -477,4 +478,82 @@ func TestResolveLenientPath_RejectsLongPath(t *testing.T) {
 	require.Error(t, err, "joined > 4096 chars 應被拒")
 	assert.Contains(t, err.Error(), "路徑過長",
 		"err 應來自 path length 守門，實際 err=%v", err)
+}
+
+// ─── OpenLenientValidated（ADR-0017 Phase B：fused lenient-resolve + atomic open）─────
+
+// TestOpenLenientValidated_HappyPath：base 內真實檔案經 OpenLenientValidated 開出非 nil
+// *os.File，讀回內容確認開到「正確」的檔（非 base 目錄、非別的檔）。
+func TestOpenLenientValidated_HappyPath(t *testing.T) {
+	base := t.TempDir()
+	want := []byte("emg,sample,data\n1,2,3\n")
+	require.NoError(t, os.WriteFile(filepath.Join(base, "emg.csv"), want, 0o600))
+
+	f, err := OpenLenientValidated(base, "emg.csv")
+	require.NoError(t, err, "base 內真實檔案應成功開啟")
+	require.NotNil(t, f, "成功時應回非 nil *os.File")
+	defer func() { _ = f.Close() }()
+
+	got, err := io.ReadAll(f)
+	require.NoError(t, err)
+	assert.Equal(t, want, got, "讀回內容應與寫入一致（證明開到正確的檔）")
+}
+
+// TestOpenLenientValidated_AcceptsLiteralPercent 為 ADR-0017 的 load-bearing regression
+// guard：BTS EMG 匯出檔名常含字面 "%"（例 "SF_8_BTS%_6.10.csv"）。ResolveLenientPath 接受
+// "%"、fsperm.OpenReadValidated 不做 URL-decode 把 "%" 當普通 path byte，故端到端必須開得成。
+func TestOpenLenientValidated_AcceptsLiteralPercent(t *testing.T) {
+	base := t.TempDir()
+	name := "SF_8_BTS%_6.10_BP30450_RMS0.5_0.49.csv"
+	want := []byte("percent-in-name-ok\n")
+	require.NoError(t, os.WriteFile(filepath.Join(base, name), want, 0o600))
+
+	f, err := OpenLenientValidated(base, name)
+	require.NoError(t, err, "含字面 %% 的檔名應端到端成功開啟，error=%v", err)
+	require.NotNil(t, f)
+	defer func() { _ = f.Close() }()
+
+	got, err := io.ReadAll(f)
+	require.NoError(t, err)
+	assert.Equal(t, want, got, "含 %% 檔名讀回內容應一致")
+}
+
+// TestOpenLenientValidated_RejectsTraversal：".." traversal 在 ResolveLenientPath 階段
+// 即被拒，OpenLenientValidated 必須 propagate error 且不回 file handle。
+func TestOpenLenientValidated_RejectsTraversal(t *testing.T) {
+	base := t.TempDir()
+	f, err := OpenLenientValidated(base, "../escape.csv")
+	require.Error(t, err, "../ traversal 應被拒")
+	assert.Nil(t, f, "被拒時不應回 file handle")
+	assert.Contains(t, err.Error(), "路徑元素",
+		"err 應來自 lenient traversal 守門，實際 err=%v", err)
+}
+
+// TestOpenLenientValidated_RejectsParentSymlinkEscape：base 內有 symlinked 子目錄指向
+// 外部，manifest 引用 "link/secret.csv" 會解析到 base 外。OpenLenientValidated 必須拒（不
+// 跟 parent symlink 讀外部檔），且不回 file handle。
+func TestOpenLenientValidated_RejectsParentSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows symlink 需要 admin 權限，跳過")
+	}
+
+	base := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.csv"), []byte("secret"), 0o600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(base, "link")))
+
+	f, err := OpenLenientValidated(base, "link/secret.csv")
+	require.Error(t, err, "parent symlink 跨出 base 的 path 應被拒")
+	assert.Nil(t, f, "被拒時不應回 file handle")
+	assert.Contains(t, err.Error(), "資料夾外",
+		"err 應來自 symlink-aware boundary check，實際 err=%v", err)
+}
+
+// TestOpenLenientValidated_RejectsMissingFile：base 內但檔案不存在 → open 失敗回 error，
+// 不回 file handle。
+func TestOpenLenientValidated_RejectsMissingFile(t *testing.T) {
+	base := t.TempDir()
+	f, err := OpenLenientValidated(base, "nonexistent.csv")
+	require.Error(t, err, "不存在的檔案應 open 失敗")
+	assert.Nil(t, f, "失敗時不應回 file handle")
 }
