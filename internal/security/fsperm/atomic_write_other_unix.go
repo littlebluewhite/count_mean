@@ -35,6 +35,7 @@ func openAtomicWrite(_ /* resolvedParent */, _ /* tmpBase */, _ /* targetBase */
 // renameatDir / unlinkatDir / closeFD 在其他 Unix 上不可達 — openAtomicWrite 永遠
 // 回 dirfd==fdNone。存在僅為滿足跨平台 Commit / Abort 的符號需求;若被呼叫代表
 // dirfd 生命週期有 bug,回明確錯誤而非 panic。
+//
 //nolint:err113 // unreachable defensive stub; static sentinel would be dead weight (dirfd path never taken on this platform)
 func renameatDir(_ int, _, _ string) error {
 	return fmt.Errorf("fsperm: renameatDir 在此平台不該被呼叫 (dirfd 路徑不存在)")
