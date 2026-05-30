@@ -48,8 +48,8 @@ func TestValidateAllEMGFiles_PartialMissing(t *testing.T) {
 		t.Errorf("MissingRow.EMGFile = %q, want %q", m.EMGFile, "missing.csv")
 	}
 
-	if !errors.Is(m.Err, ErrManifestEMGFileMissing) {
-		t.Errorf("MissingRow.Err 應命中 ErrManifestEMGFileMissing 哨兵,實際 err=%v", m.Err)
+	if !errors.Is(m.Err, ErrManifestDataFileMissing) {
+		t.Errorf("MissingRow.Err 應命中 ErrManifestDataFileMissing 哨兵,實際 err=%v", m.Err)
 	}
 }
 

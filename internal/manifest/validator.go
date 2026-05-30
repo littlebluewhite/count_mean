@@ -4,23 +4,23 @@ import (
 	"count_mean/internal/models"
 )
 
-// MissingRow 標示一筆 manifest row 對應的 EMG 檔在 disk 上解析失敗(可能是
+// MissingRow 標示一筆 manifest row 對應的 EMG 檔在 disk 上開檔失敗(可能是
 // 不存在,也可能是路徑驗證失敗如 traversal 等)。
 //
-// caller 可用 errors.Is(Err, ErrManifestEMGFileMissing) 區分「檔案不存在」與
-// 「路徑驗證失敗」(ErrManifestEMGPathInvalid)。
+// caller 可用 errors.Is(Err, ErrManifestDataFileMissing) 區分「檔案不存在」與
+// 「路徑驗證失敗」(ErrManifestDataFilePathInvalid)。
 //
-// Err.Error() 內含 ResolveEMGFile 解析後的絕對路徑(missing 分支),適合
-// 直接給 UI 顯示讓 user 看到「期待的檔放在哪」。
+// Err.Error() 內含 OpenDataFile 解析後的絕對路徑(missing 分支經雙層 %w 保留
+// 底層 *os.PathError 的路徑),適合直接給 UI 顯示讓 user 看到「期待的檔放在哪」。
 type MissingRow struct {
 	Subject string // 對應 PhaseManifest.Subject
 	EMGFile string // 對應 PhaseManifest.EMGFile(raw,manifest 內字面)
-	Err     error  // 原始 error;可 errors.Is 命中 ErrManifestEMGFileMissing / ErrManifestEMGPathInvalid
+	Err     error  // 原始 error;可 errors.Is 命中 ErrManifestDataFileMissing / ErrManifestDataFilePathInvalid
 }
 
-// ValidateAllEMGFiles 掃過整批 manifest,把每筆 EMGFile 走 ResolveEMGFile,
-// 收集所有失敗 row 給 caller 在 Load 階段早一步 surface(而非等到 per-subject
-// Generate 才炸)。
+// ValidateAllEMGFiles 掃過整批 manifest,把每筆 EMGFile 走 OpenDataFile(開檔即
+// 存在性確認,確認後立即 Close),收集所有失敗 row 給 caller 在 Load 階段早一步
+// surface(而非等到 per-subject Generate 才炸)。
 //
 // 動機:V.14 manifest 升級 NSF1/2/3 EMGFile 欄誤改 → user 在 Chart Composer
 // Generate 才看到「EMG 檔案不存在」,沒有早期警示。Load 階段跑 validator
@@ -35,13 +35,19 @@ func ValidateAllEMGFiles(manifests []models.PhaseManifest, dataFolder string) []
 	var missing []MissingRow
 
 	for _, m := range manifests {
-		if _, err := ResolveEMGFile(dataFolder, m.EMGFile); err != nil {
+		// OpenDataFile 開檔成功即確認存在;立即 Close(此處只做存在性檢查,不讀內容)。
+		// 失敗則 append + continue — 不在首個 error abort,自然保留 order-aligned、
+		// one-row-per-failure 的 cardinality(含 baseFolder 不存在時每筆 row 同樣失敗)。
+		f, err := OpenDataFile(dataFolder, m.EMGFile)
+		if err != nil {
 			missing = append(missing, MissingRow{
 				Subject: m.Subject,
 				EMGFile: m.EMGFile,
 				Err:     err,
 			})
+			continue
 		}
+		_ = f.Close() //nolint:errcheck // existence-check only; close error not actionable
 	}
 
 	return missing

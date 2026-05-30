@@ -144,18 +144,20 @@ func (a *CCIAnalyzer) loadAndValidate(params *CCIParams) (*models.PhaseManifest,
 	return &manifests[params.SubjectIndex], nil
 }
 
-// loadEMGData resolves EMG file path and parses EMG data.
-// 路徑解析委派給 manifest.ResolveEMGFile（內部走 security.ResolveLenientPath，
-// 允許含字面 "%" 的 BTS 匯出檔名 — 見該套件 doc）。
+// loadEMGData opens the EMG file through the hardened read door and parses it.
+// 開檔走 manifest.OpenDataFile（內部走 security.OpenLenientValidated，允許含字面
+// "%" 的 BTS 匯出檔名 — 見該套件 doc）；交出已驗證的 *os.File 後 caller defer Close。
+// CCI fail-fast：開檔或解析任一失敗立即 return。
 func (a *CCIAnalyzer) loadEMGData(
 	dataFolder string, m *models.PhaseManifest,
 ) (*models.PhaseSyncEMGData, error) {
-	emgPath, err := manifest.ResolveEMGFile(dataFolder, m.EMGFile)
+	f, err := manifest.OpenDataFile(dataFolder, m.EMGFile)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
 
-	emgData, _, err := parsers.NewEMGParser().ParseFile(emgPath)
+	emgData, _, err := parsers.NewEMGParser().Parse(f, m.EMGFile)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIParseEMGFailed), err)
 	}
