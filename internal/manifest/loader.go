@@ -27,6 +27,16 @@ var (
 	ErrManifestEMGFileMissing = errors.New("EMG 檔案不存在")
 )
 
+// data-file sentinels:OpenDataFile 這道門服務 EMG / Motion / Force / muscle_ratio
+// 四類 manifest 資料檔，message 採泛化「資料檔案…」措辭（非 EMG-specific）。
+// caller 用 errors.Is 區分三類失敗：路徑驗證失敗（traversal/escape/絕對路徑/null-byte/
+// 過長）vs 檔案不存在 vs baseFolder 本身無法解析。
+var (
+	ErrManifestDataFileMissing     = errors.New("資料檔案不存在")
+	ErrManifestDataFilePathInvalid = errors.New("資料檔案路徑驗證失敗")
+	ErrBaseFolderNotFound          = errors.New("baseFolder 不存在或無法解析")
+)
+
 // LoadManifests 解析分期總檔案，回傳所有 manifest 紀錄。
 func LoadManifests(filepath string) ([]models.PhaseManifest, error) {
 	return parsers.NewPhaseManifestParser().ParseFile(filepath)
@@ -51,4 +61,45 @@ func ResolveEMGFile(baseFolder, emgFile string) (string, error) {
 	}
 
 	return emgPath, nil
+}
+
+// OpenDataFile 是開啟 manifest 引用之資料檔（EMG / Motion / Force / muscle_ratio）的
+// **單一加固讀檔門**：整合過去散落的 ResolveEMGFile 與手寫 security.ResolveLenientPath
+// 站點，把「解析路徑 → 邊界檢查 → 原子化開檔」收斂成一道入口。
+//
+// 流程：EvalSymlinks(baseFolder) → security.OpenLenientValidated（lenient 解析 + 原子
+// validated-open，fused 一道門關閉 validate-vs-open TOCTOU 縫隙）。回傳「已開啟且已驗證」
+// 的 *os.File，**caller 必須自行 defer Close**（與回傳 path 的 ResolveEMGFile 不同，這裡
+// 直接交出開好的 fd，避免 caller 拿 path 重開時再生 TOCTOU）。
+//
+// # 錯誤分類契約（caller 用 errors.Is 區分）
+//
+//   - ErrBaseFolderNotFound — baseFolder 本身無法 EvalSymlinks（不存在 / 壞 symlink）。
+//     刻意與 ResolveEMGFile 不同：ResolveEMGFile 容忍無法解析的 base（解析失敗時保留原值
+//     續走），本門明確 fail-closed。
+//   - ErrManifestDataFileMissing — 路徑合法但檔案不存在（OpenLenientValidated 的 ENOENT
+//     經雙層 %w 包裝仍保留 os.ErrNotExist，故以 errors.Is(err, os.ErrNotExist) 判定）。
+//   - ErrManifestDataFilePathInvalid — 其餘一切「路徑本身有問題」的 catch-all：traversal
+//     (".." element) / 絕對路徑 / null-byte / 過長 / 解析後落在 base 外（fsperm 的
+//     ErrPathEscapesBase）。這些在 lenient 解析或 open 階段被擋，皆非 os.ErrNotExist。
+//
+// # 字面 "%" 不可 regress
+//
+// BTS EMG 匯出檔名常含字面 "%"（例 "SF_8_BTS%_*.csv"）。OpenLenientValidated 端到端接受
+// 字面 "%"，本門不另加 "%" 處理 — 只需不誤拒。
+func OpenDataFile(baseFolder, filename string) (*os.File, error) {
+	resolvedBase, err := filepath.EvalSymlinks(baseFolder)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrBaseFolderNotFound, baseFolder)
+	}
+
+	f, err := security.OpenLenientValidated(resolvedBase, filename)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrManifestDataFileMissing, filename)
+		}
+		return nil, fmt.Errorf("%w: %w", ErrManifestDataFilePathInvalid, err)
+	}
+
+	return f, nil
 }
