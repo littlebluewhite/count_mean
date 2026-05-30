@@ -112,6 +112,15 @@ type SafeWriteOptions struct {
 	// 注意：傳入 emit 的 row 會自動經 SanitizeCellForWrite 過 — 阻擋 CSV 公式
 	// 注入。Caller 不需要自己呼叫 SanitizeRow / SanitizeAllRows。
 	Emit RowEmitter
+	// BasePaths is optional. When non-empty, the tmp-create + rename are
+	// dirfd-anchored via fsperm.OpenAtomicWriteValidated — the whole tmp →
+	// rename sequence runs relative to a single dirfd of the *validated,
+	// resolved* parent directory, closing the atomic-write parent-swap TOCTOU
+	// (ADR-0017 Decision 6 / #34). The parent must resolve under one of these
+	// bases or the write is rejected (ErrPathEscapesBase). When empty,
+	// WriteCSVAtomic falls back to the legacy os.OpenFile + os.Rename path,
+	// byte-identical to today.
+	BasePaths []string
 }
 
 // WriteCSVAtomic writes a CSV to path using a tmp+rename atomic flow:
@@ -148,15 +157,38 @@ func WriteCSVAtomic(path string, opts SafeWriteOptions) (err error) {
 		return err
 	}
 
-	//nolint:gosec // G304: path validated by caller (e.g. config.Validate + PathValidator)
-	file, err := os.OpenFile(tmp, fsperm.TmpCreateFlags, fsperm.FilePerm)
-	if err != nil {
-		return fmt.Errorf("建立 tmp 檔案失敗: %w", err)
+	// Branch on BasePaths: non-empty → dirfd-anchored primitive (closes the
+	// parent-swap TOCTOU); empty → legacy os.OpenFile (byte-identical to before).
+	// Both branches hand a writable tmp *os.File to the shared write body below.
+	var (
+		file   *os.File
+		handle *fsperm.AtomicWriteHandle
+	)
+	if len(opts.BasePaths) > 0 {
+		handle, err = fsperm.OpenAtomicWriteValidated(path, tmp, opts.BasePaths)
+		if err != nil {
+			return fmt.Errorf("建立 tmp 檔案失敗: %w", err)
+		}
+		file = handle.File()
+	} else {
+		//nolint:gosec // G304: path validated by caller (e.g. config.Validate + PathValidator)
+		file, err = os.OpenFile(tmp, fsperm.TmpCreateFlags, fsperm.FilePerm)
+		if err != nil {
+			return fmt.Errorf("建立 tmp 檔案失敗: %w", err)
+		}
 	}
 
 	committed := false
 	defer func() {
-		if !committed {
+		if committed {
+			return
+		}
+		// dirfd path: handle.Abort() unlinks tmp AND closes the dirfd — a bare
+		// os.Remove(tmp) would leak the dirfd (security-review invariant). Legacy
+		// path has no dirfd, so best-effort os.Remove of the orphan tmp.
+		if handle != nil {
+			_ = handle.Abort() //nolint:errcheck // best-effort cleanup; closes dirfd + unlinks tmp
+		} else {
 			_ = os.Remove(tmp) //nolint:errcheck // best-effort cleanup of orphan tmp
 		}
 	}()
@@ -225,7 +257,15 @@ func WriteCSVAtomic(path string, opts SafeWriteOptions) (err error) {
 		return fmt.Errorf("關閉 tmp 檔案失敗: %w", err)
 	}
 
-	if err := os.Rename(tmp, path); err != nil {
+	// Commit branches with the open: dirfd path → handle.Commit() (renameat
+	// anchored under the same dirfd, then closes the dirfd; does NOT re-close the
+	// already-closed file); legacy path → os.Rename. handle.Commit on its own
+	// error leaves the dirfd open for the deferred Abort to clean up.
+	if handle != nil {
+		if err := handle.Commit(); err != nil {
+			return fmt.Errorf("rename tmp → final 失敗: %w", err)
+		}
+	} else if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("rename tmp → final 失敗: %w", err)
 	}
 
