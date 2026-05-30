@@ -193,9 +193,23 @@ func TestGenerateAnalysisReport(t *testing.T) {
 }
 
 func TestPhaseSyncAnalyzer_AnalyzePhaseSync_Integration(t *testing.T) {
-	// This test would require setting up complete test data files
-	// For now, we'll test the basic error handling paths
+	// This test exercises the basic error-handling path: with EMG present but Motion
+	// absent, the pipeline must surface "Motion 檔案不存在".
+	//
+	// Pipeline order is EMG → Motion → Force. After migrating to the manifest.OpenDataFile
+	// door, EMG validation opens the file atomically and so now also checks existence
+	// (the old lexical resolver did not). We therefore provide a real EMG file in the
+	// data folder so EMG validation passes and Motion becomes the first *missing* file —
+	// keeping this test focused on the Motion-not-found error contract.
 	analyzer := NewPhaseSyncAnalyzer()
+
+	dataFolder := t.TempDir()
+	emgContent := `Time,Ch1,Ch2,Ch3,Ch4,Ch5,Ch6
+0.0,10,20,30,40,50,60
+0.001,11,21,31,41,51,61
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dataFolder, "emg.csv"),
+		[]byte(emgContent), fsperm.FilePerm))
 
 	// Create a basic manifest
 	manifestContent := `Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
@@ -205,17 +219,17 @@ TestSubject,motion.csv,force.csv,emg.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350
 
 	params := &models.AnalysisParams{
 		ManifestFile: manifestFile,
-		DataFolder:   t.TempDir(), // platform-correct base; motion.csv inside doesn't exist → "Motion 檔案不存在"
+		DataFolder:   dataFolder, // EMG present; motion.csv inside doesn't exist → "Motion 檔案不存在"
 		StartPhase:   "P0",
 		EndPhase:     "P2",
 		SubjectIndex: 0,
 	}
 
-	// This will fail because the Motion file doesn't exist (validated first before EMG)
+	// EMG validation passes (file present); Motion file is absent and is validated next.
 	stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)
 	assert.Error(t, err)
 	assert.Nil(t, stats)
-	// The error should be about Motion file validation since it's checked before EMG
+	// The error should be about Motion file validation since EMG passed and Motion is next.
 	assert.Contains(t, err.Error(), "Motion 檔案不存在")
 }
 

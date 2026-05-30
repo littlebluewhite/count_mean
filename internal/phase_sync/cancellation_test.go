@@ -3,6 +3,7 @@ package phase_sync //nolint:revive // underscore in package name matches directo
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,7 +97,7 @@ func TestAnalyzePhaseSync_InFlightCancelReturnsQuickly(t *testing.T) {
 	// 改 SetParseEMGFileFnForTest 注入 hook (atomic.Pointer),避免裸 var
 	// 在 t.Parallel() 場景的 data race。
 	unblockCh := make(chan struct{})
-	cleanup := SetParseEMGFileFnForTest(func(_ string) (*models.PhaseSyncEMGData, float64, error) {
+	cleanup := SetParseEMGFileFnForTest(func(_ io.Reader, _ string) (*models.PhaseSyncEMGData, float64, error) {
 		<-unblockCh
 		const nSamples = 2100 // 0..2.099s @ 1ms step,涵蓋 P0=1.0 / P1=2.0
 		times := make([]float64, nSamples)
