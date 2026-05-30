@@ -8,7 +8,7 @@ import (
 )
 
 // openAtomicWrite 在其他 Unix (FreeBSD / OpenBSD / NetBSD 等) 沒有走 openat2 /
-// O_NOFOLLOW_ANY 的 dirfd 錨定路徑 — 直接 os.OpenFile(tmpPath, TmpCreateFlags) 建
+// O_NOFOLLOW_ANY 的 dirfd 錨定路徑 — 直接 os.OpenFile(tmpFull, TmpCreateFlags) 建
 // .tmp,dirfd 設 fdNone 讓 Commit / Abort 走 os.Rename / os.Remove。O_NOFOLLOW
 // (TmpCreateFlags) 擋 leaf-symlink TOCTOU;parent-component symlink 在這條 fallback
 // 仍有殘餘 TOCTOU 風險,與 validated_open_other_unix.go 對稱。
@@ -16,19 +16,19 @@ import (
 // 專案主要支援 linux / darwin / windows;此 fallback 僅為編譯完整性。若未來需在
 // *BSD 強化,可改用 FreeBSD O_RESOLVE_BENEATH 模仿 atomic_write_linux.go 的 dirfd
 // 錨定路徑。
-func openAtomicWrite(_ /* resolvedParent */, _ /* tmpBase */, _ /* targetBase */, tmpPath, targetPath string) (
+func openAtomicWrite(_ /* anchorDir */, _ /* tmpRel */, _ /* targetRel */, tmpFull, targetFull string) (
 	*AtomicWriteHandle, error,
 ) {
-	//nolint:gosec // tmpPath 父目錄已 EvalSymlinks + matchAnyBase 校驗 (caller-side)
-	f, err := os.OpenFile(tmpPath, TmpCreateFlags, FilePerm)
+	//nolint:gosec // tmpFull 父目錄已 EvalSymlinks + matchAnyBase 校驗 (caller-side)
+	f, err := os.OpenFile(tmpFull, TmpCreateFlags, FilePerm)
 	if err != nil {
-		return nil, fmt.Errorf("OpenFile(%s): %w", tmpPath, err)
+		return nil, fmt.Errorf("OpenFile(%s): %w", tmpFull, err)
 	}
 	return &AtomicWriteHandle{
 		file:       f,
 		dirfd:      fdNone,
-		tmpPath:    tmpPath,
-		targetPath: targetPath,
+		tmpPath:    tmpFull,
+		targetPath: targetFull,
 	}, nil
 }
 

@@ -8,8 +8,8 @@ import (
 )
 
 // openAtomicWrite 在 Windows 上沒有 dirfd / openat2 / renameat 等價物,直接以
-// os.OpenFile(tmpPath, TmpCreateFlags, FilePerm) 建 .tmp,dirfd 設 fdNone 讓
-// Commit / Abort 走 os.Rename(tmpPath, targetPath) / os.Remove(tmpPath) — 與今日
+// os.OpenFile(tmpFull, TmpCreateFlags, FilePerm) 建 .tmp,dirfd 設 fdNone 讓
+// Commit / Abort 走 os.Rename(tmpFull, targetFull) / os.Remove(tmpFull) — 與今日
 // csvutil.WriteCSVAtomic 在 Windows 上的行為完全一致。
 //
 // 安全性:parent-swap TOCTOU 的 kernel-level 防護在 Windows 不可得 (需
@@ -20,19 +20,19 @@ import (
 //
 // 此處不嘗試 CreateFile reparse-point 處理 — Windows symlink-atomic 列為 follow-up
 // (見 flags_windows.go "Future work",需 Windows CI 才能可信驗證)。
-func openAtomicWrite(_ /* resolvedParent */, _ /* tmpBase */, _ /* targetBase */, tmpPath, targetPath string) (
+func openAtomicWrite(_ /* anchorDir */, _ /* tmpRel */, _ /* targetRel */, tmpFull, targetFull string) (
 	*AtomicWriteHandle, error,
 ) {
-	//nolint:gosec // tmpPath 父目錄已 EvalSymlinks + matchAnyBase 校驗 (caller-side)
-	f, err := os.OpenFile(tmpPath, TmpCreateFlags, FilePerm)
+	//nolint:gosec // tmpFull 父目錄已 EvalSymlinks + matchAnyBase 校驗 (caller-side)
+	f, err := os.OpenFile(tmpFull, TmpCreateFlags, FilePerm)
 	if err != nil {
-		return nil, fmt.Errorf("OpenFile(%s): %w", tmpPath, err)
+		return nil, fmt.Errorf("OpenFile(%s): %w", tmpFull, err)
 	}
 	return &AtomicWriteHandle{
 		file:       f,
 		dirfd:      fdNone,
-		tmpPath:    tmpPath,
-		targetPath: targetPath,
+		tmpPath:    tmpFull,
+		targetPath: targetFull,
 	}, nil
 }
 

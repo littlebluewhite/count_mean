@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"fmt"
+
 	"count_mean/internal/models"
 )
 
@@ -19,8 +21,10 @@ type MissingRow struct {
 }
 
 // ValidateAllEMGFiles 掃過整批 manifest,把每筆 EMGFile 走 OpenDataFile(開檔即
-// 存在性確認,確認後立即 Close),收集所有失敗 row 給 caller 在 Load 階段早一步
-// surface(而非等到 per-subject Generate 才炸)。
+// 存在性確認),再 fstat 確認是一般檔案後立即 Close,收集所有失敗 row 給 caller 在
+// Load 階段早一步 surface(而非等到 per-subject Generate 才炸)。non-regular file
+// (FIFO / device 等)被明確列為 MissingRow;ReadFlags 的 O_NONBLOCK 確保 FIFO open
+// 不阻塞,避免一筆壞 row 卡死整批載入(codex P2 DoS)。
 //
 // 動機:V.14 manifest 升級 NSF1/2/3 EMGFile 欄誤改 → user 在 Chart Composer
 // Generate 才看到「EMG 檔案不存在」,沒有早期警示。Load 階段跑 validator
@@ -47,7 +51,24 @@ func ValidateAllEMGFiles(manifests []models.PhaseManifest, dataFolder string) []
 			})
 			continue
 		}
+
+		// fstat 已開檔再 Close — 拒絕 non-regular file(FIFO / device / socket 等)。
+		// ReadFlags 帶 O_NONBLOCK 讓 FIFO open 不阻塞(否則一筆壞 row 卡死整批載入,
+		// codex P2 DoS);這裡的 fstat 把這類「開得起來但非一般檔」的 row 明確列為
+		// MissingRow,避免後續 ParseFile 在 special file 上有非預期行為。
+		info, statErr := f.Stat()
 		_ = f.Close() //nolint:errcheck // existence-check only; close error not actionable
+		if statErr != nil {
+			missing = append(missing, MissingRow{Subject: m.Subject, EMGFile: m.EMGFile, Err: statErr})
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			missing = append(missing, MissingRow{
+				Subject: m.Subject, EMGFile: m.EMGFile,
+				Err: fmt.Errorf("%w: 非一般檔案 (mode %s)", ErrManifestDataFilePathInvalid, info.Mode().Type()),
+			})
+			continue
+		}
 	}
 
 	return missing

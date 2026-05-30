@@ -4,13 +4,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-// AtomicWriteHandle holds an open tmp file anchored under a validated parent
+// AtomicWriteHandle holds an open tmp file anchored under a validated base
 // directory, ready to be written, then atomically committed (renameat tmp →
 // target) or aborted (unlink tmp). The whole tmp-create → rename sequence is
-// performed relative to a single O_DIRECTORY dirfd of the *validated, resolved*
-// parent, so an attacker cannot swap a path component between the tmp-create and
+// performed relative to a single O_DIRECTORY dirfd of the *validated base* (the
+// trust root that matchAnyBase confirmed), with tmp/target addressed by their
+// path RELATIVE to that base, so an attacker cannot swap a path component
+// (including a parent component of a subdir target) between the tmp-create and
 // the rename — the classic atomic-write parent-swap TOCTOU race (ADR-0017
 // Decision 6, #34 fold-in).
 //
@@ -40,10 +43,12 @@ type AtomicWriteHandle struct {
 	// dirfd anchors both the tmp-create and the rename. fdNone on the fallback
 	// path (no dirfd available).
 	dirfd int
-	// tmpBase / targetBase are the basenames used for the dirfd-relative
-	// renameat/unlinkat. Empty on the fallback path.
-	tmpBase    string
-	targetBase string
+	// tmpRel / targetRel are the base-relative paths (possibly multi-component
+	// for a subdir target) used for the dirfd-relative renameat/unlinkat. The
+	// dirfd anchors on the validated base, so these address tmp/target *under*
+	// that base. Empty on the fallback path.
+	tmpRel    string
+	targetRel string
 	// tmpPath / targetPath are the full paths used by the fallback path's
 	// os.Rename / os.Remove. Always populated.
 	tmpPath    string
@@ -78,8 +83,11 @@ func (h *AtomicWriteHandle) File() *os.File { return h.file }
 //     miss → ErrPathEscapesBase. (Common case: parent == hitBase, since every
 //     WriteCSVAtomic caller targets the OutputDir root — but the parent is
 //     validated generically, not assumed to be a base.)
-//  5. openAtomicWrite(resolvedParent, tmpBase, targetBase, tmpPath, targetPath)
-//     — platform dispatch. See atomic_write_<os>.go.
+//  5. openAtomicWrite(hitBase, relTmp, relTarget, resolvedTmp, resolvedTarget) —
+//     platform dispatch. The dirfd anchors on the validated base (hitBase) and
+//     tmp/target are addressed by their path RELATIVE to it, so a post-matchAnyBase
+//     swap of a parent component cannot redirect the dirfd (codex P1). See
+//     atomic_write_<os>.go.
 func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*AtomicWriteHandle, error) {
 	if len(basePaths) == 0 {
 		return nil, ErrBasePathsEmpty
@@ -120,13 +128,30 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 	if !ok {
 		return nil, fmt.Errorf("%w: 父目錄 %s 不在 %v 之下", ErrPathEscapesBase, resolvedParent, basePaths)
 	}
-	// hitBase is the resolved base that contains resolvedParent; for the dirfd
-	// anchor we open resolvedParent itself (the validated, fully-resolved parent
-	// directory), so renameat/openat2 operate inside the exact directory we
-	// boundary-checked, not merely somewhere under hitBase.
-	_ = hitBase
 
-	h, err := openAtomicWrite(resolvedParent, filepath.Base(tmpPath), filepath.Base(targetPath), tmpPath, targetPath)
+	// Anchor on the validated base (trust root) and address tmp/target RELATIVE to
+	// it, so the platform layer opens hitBase as the dirfd and resolves the rel path
+	// under it with RESOLVE_BENEATH|NO_SYMLINKS / O_NOFOLLOW_ANY. Reopening the
+	// absolute resolvedParent would let a post-matchAnyBase parent-component swap
+	// redirect the dirfd (codex P1). matchAnyBase guarantees resolvedParent is under
+	// hitBase, so the rel paths never start with "..".
+	resolvedTmp := filepath.Join(resolvedParent, filepath.Base(tmpPath))
+	resolvedTarget := filepath.Join(resolvedParent, filepath.Base(targetPath))
+	relTmp, relErr := filepath.Rel(hitBase, resolvedTmp)
+	if relErr != nil {
+		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: rel(%s,%s): %w", hitBase, resolvedTmp, relErr)
+	}
+	relTarget, relErr := filepath.Rel(hitBase, resolvedTarget)
+	if relErr != nil {
+		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: rel(%s,%s): %w", hitBase, resolvedTarget, relErr)
+	}
+	// belt-and-suspenders: rel must stay within hitBase
+	if relTmp == ".." || strings.HasPrefix(relTmp, ".."+string(filepath.Separator)) ||
+		relTarget == ".." || strings.HasPrefix(relTarget, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("%w: tmp/target escape base %s", ErrPathEscapesBase, hitBase)
+	}
+
+	h, err := openAtomicWrite(hitBase, relTmp, relTarget, resolvedTmp, resolvedTarget)
 	if err != nil {
 		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: %w", err)
 	}
@@ -134,7 +159,7 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 }
 
 // Commit atomically renames the tmp file to the target, anchored under the same
-// dirfd the tmp was created in (renameat(dirfd, tmpBase, dirfd, targetBase)) so
+// dirfd the tmp was created in (renameat(dirfd, tmpRel, dirfd, targetRel)) so
 // no path component can be swapped between create and rename, then closes the
 // dirfd. The caller MUST have already Sync()+Close()'d h.File(); Commit does NOT
 // re-close the file.
@@ -159,10 +184,10 @@ func (h *AtomicWriteHandle) Commit() error {
 		return nil
 	}
 
-	if err := renameatDir(h.dirfd, h.tmpBase, h.targetBase); err != nil {
+	if err := renameatDir(h.dirfd, h.tmpRel, h.targetRel); err != nil {
 		// dirfd stays open for the caller's deferred Abort to clean the tmp up.
 		return fmt.Errorf("fsperm.AtomicWriteHandle.Commit: renameat(%s → %s): %w",
-			h.tmpBase, h.targetBase, err)
+			h.tmpRel, h.targetRel, err)
 	}
 	h.closeDirfd()
 	h.done = true
@@ -174,7 +199,7 @@ func (h *AtomicWriteHandle) Commit() error {
 // was renamed to the target — and the dirfd is already closed). Errors removing
 // the tmp are returned but the dirfd is always closed.
 //
-// On the dirfd path Abort uses unlinkat(dirfd, tmpBase); on the fallback path it
+// On the dirfd path Abort uses unlinkat(dirfd, tmpRel); on the fallback path it
 // uses os.Remove(tmpPath).
 func (h *AtomicWriteHandle) Abort() error {
 	if h.done {
@@ -189,10 +214,10 @@ func (h *AtomicWriteHandle) Abort() error {
 		return nil
 	}
 
-	err := unlinkatDir(h.dirfd, h.tmpBase)
+	err := unlinkatDir(h.dirfd, h.tmpRel)
 	h.closeDirfd()
 	if err != nil {
-		return fmt.Errorf("fsperm.AtomicWriteHandle.Abort: unlinkat tmp %s: %w", h.tmpBase, err)
+		return fmt.Errorf("fsperm.AtomicWriteHandle.Abort: unlinkat tmp %s: %w", h.tmpRel, err)
 	}
 	return nil
 }
