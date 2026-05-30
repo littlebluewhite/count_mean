@@ -13,7 +13,7 @@ const (
 
 	// phaseSyncPrecision 是 PhaseSync 統計輸出的固定小數位數。
 	// EMG 統計報告的數字格式視為跨 config 的物理單位常規,不從 config.Precision 拿;
-	// 與舊路徑 phase_sync.defaultEMGStatsPrecision 對齊以保證 migrate 前後輸出等效。
+	// 與舊路徑 phase_sync 統計輸出的小數位數 (6) 對齊以保證 migrate 前後輸出等效。
 	phaseSyncPrecision = 6
 )
 

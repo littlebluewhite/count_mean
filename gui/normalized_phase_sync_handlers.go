@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/io"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security/redact"
@@ -12,7 +13,7 @@ import (
 )
 
 // normalizedPhaseSyncPrecision 為 Output 1 (標準化 EMG CSV) 的小數位數，
-// 與分期同步分析統計輸出 (defaultEMGStatsPrecision = 6) 保持一致。
+// 與分期同步分析統計輸出的小數位數 (固定 6) 保持一致。
 const normalizedPhaseSyncPrecision = 6
 
 // NormalizedPhaseSyncParams 標準化分期同步分析參數。
@@ -85,7 +86,8 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 	// 也由 body 自行維護。
 	a.logger.Info("標準化分期同步分析參數", map[string]any{"params": params})
 	return HandlerRun(a.logger, "標準化分期同步分析", func() (*NormalizedPhaseSyncResult, error) {
-		outputDir := a.state.Load().config.OutputDir
+		s := a.state.Load()
+		outputDir := s.config.OutputDir
 
 		// 抓取 Wails lifecycle ctx,讓 Shutdown / 使用者中止可在
 		// step 之間早停(analyzer.Load / ResolvePhaseRange 內部目前還沒 ctx,
@@ -181,7 +183,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("擷取統計區間失敗: %s", redact.RedactForMessage(rangeErr))), nil
 		}
 
-		statsCalc := calculator.NewEMGStatisticsCalculator(normalizedPhaseSyncPrecision)
+		statsCalc := calculator.NewEMGStatisticsCalculator()
 
 		stats, statsErr := statsCalc.CalculateStatistics(
 			rangeResult.Data,
@@ -198,30 +200,20 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("計算統計失敗: %s", redact.RedactForMessage(statsErr))), nil
 		}
 
-		// 6. 撰寫 Output 2：標準化資料的分期同步統計 CSV
-		// 檔名同時帶 norm 與 stats 兩組分期點，避免不同設定的輸出互相覆蓋或混淆。
-		phaseSyncCSVPath := filepath.Join(
-			outputDir,
-			fmt.Sprintf(
-				"%s_normalized_norm-%s-%s_stats-%s-%s.csv",
-				safeSubject,
-				params.NormStartPhase, params.NormEndPhase,
-				params.StatsStartPhase, params.StatsEndPhase,
-			),
-		)
-
-		// 同 Output 1,Output 2 路徑也走 boundary validation。
-		if pathErr := validateExternalPathInputs("統計輸出路徑", phaseSyncCSVPath); pathErr != nil {
-			return failedNormalizedPhaseSyncResult(pathErr.Error()), nil
-		}
-
+		// 6. 撰寫 Output 2：Subject-based atomic write;filename + 路徑守門由 CSVHandler 持有。
 		// 第二輪 ctx 檢查,寫檔前再給一次 cancel 機會。
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("分析已取消: %s", redact.RedactForMessage(ctxErr))), nil
 		}
 
-		if statsWriteErr := statsCalc.ExportToCSV(stats, phaseSyncCSVPath); statsWriteErr != nil {
-			a.logger.Error("寫入標準化統計 CSV 失敗", statsWriteErr, map[string]any{"path": phaseSyncCSVPath})
+		phaseSyncCSVPath, statsWriteErr := s.csvHandler.WriteNormalizedPhaseSyncResult(
+			io.WriteRequest{}, stats, params.NormStartPhase, params.NormEndPhase,
+		)
+		if statsWriteErr != nil {
+			// 對齊 CCI/muscle_ratio sibling:atomic 寫入失敗時不另記 path 欄位
+			// (writePhaseSyncAtomic 失敗回空 path);statsWriteErr 已 wrap「PhaseSync
+			// 輸出...」帶 context,redact 後進 result.Message。
+			a.logger.Error("寫入標準化統計 CSV 失敗", statsWriteErr, map[string]any{})
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("寫入統計失敗: %s", redact.RedactForMessage(statsWriteErr))), nil
 		}
 

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"unicode/utf8"
 
 	"count_mean/internal/security/fsperm"
 )
@@ -39,6 +41,14 @@ const midWriteErrorCheckInterval = 1024
 // 8 bytes → 16 hex chars,2^64 entropy 足以擋 birthday attack。
 const tmpRandSuffixLen = 8
 
+// fsNameMaxBytes 為單一路徑元件 (basename) 的保守 byte 上限。ext4 / APFS / XFS /
+// NTFS 皆為 255 bytes。atomic tmp basename = final basename + ".tmp." + 16 hex;
+// 即使 final basename 合法 (caller + filename.Sanitize 截到 200 bytes),tmp 疊上
+// 隨機後綴後仍可能跨越此限 → ENAMETOOLONG。makeTmpPath 對 tmp basename 做預算
+// 截斷,避免「最終檔名合法但 atomic 寫入失敗」—— 長 subject + 長後綴 writer
+// (如 normalized PhaseSync,後綴 ~38 bytes) 在 ~196+ byte subject 下會踩到。
+const fsNameMaxBytes = 255
+
 // makeTmpPath 為 atomic-write 流程產生不可預測的 tmp 路徑。
 //
 // 釘住:舊版 tmp = `path + ".tmp"` 完全可預測,攻擊者可在 OpenFile 前 plant
@@ -47,12 +57,41 @@ const tmpRandSuffixLen = 8
 //
 // 失敗回 error,caller 應 surface — 沒有 crypto/rand 的環境屬於異常狀態,
 // 不該 silently fall back 到 deterministic 名稱 (那等於 disable 此防護)。
+//
+// tmp basename = base + suffix 可能跨越 NAME_MAX (見 fsNameMaxBytes):截 base
+// 前綴讓 tmp 元件 fit (截的是 base 而非 suffix — 後者是 collision-resistance
+// 隨機熵,削了會降低撞名抵抗);final os.Rename 仍用完整 path,對外檔名與
+// 目錄不變。用 filepath.Split 而非字串拼接,確保 dir+base==path 不被 clean 改寫。
 func makeTmpPath(path string) (string, error) {
 	b := make([]byte, tmpRandSuffixLen)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("crypto/rand 失敗,無法為 tmp 產生 random suffix: %w", err)
 	}
-	return path + ".tmp." + hex.EncodeToString(b), nil
+
+	suffix := ".tmp." + hex.EncodeToString(b)
+	dir, base := filepath.Split(path)
+	if len(base)+len(suffix) > fsNameMaxBytes {
+		base = truncateToBytes(base, fsNameMaxBytes-len(suffix))
+	}
+
+	return dir + base + suffix, nil
+}
+
+// truncateToBytes 把 s 截到最多 maxBytes,且不切斷 multi-byte UTF-8 rune
+// (退回最後一個完整 rune 邊界) — 避免 tmp basename 含半個 rune 被 strict
+// filesystem (FAT32 reject / APFS 顯示亂碼) 拒絕。
+func truncateToBytes(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	// maxBytes 落在 s 內部;若切到 multi-byte rune 中段,退到 rune 邊界。
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
 }
 
 // RowEmitter is the iterator callback passed to WriteCSVAtomic. Caller iterates

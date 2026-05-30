@@ -1,16 +1,12 @@
 package calculator
 
 import (
-	"encoding/csv"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
-	"count_mean/internal/csvutil"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
-	"count_mean/internal/security/fsperm"
 	"count_mean/internal/validation/filename"
 )
 
@@ -30,19 +26,11 @@ var (
 )
 
 // EMGStatisticsCalculator EMG 統計計算器.
-type EMGStatisticsCalculator struct {
-	precision int // 小數位數精度
-}
+type EMGStatisticsCalculator struct{}
 
 // NewEMGStatisticsCalculator 創建新的 EMG 統計計算器.
-func NewEMGStatisticsCalculator(precision int) *EMGStatisticsCalculator {
-	if precision <= 0 {
-		precision = 6
-	}
-
-	return &EMGStatisticsCalculator{
-		precision: precision,
-	}
+func NewEMGStatisticsCalculator() *EMGStatisticsCalculator {
+	return &EMGStatisticsCalculator{}
 }
 
 // CalculateStatistics 計算 EMG 數據的統計信息.
@@ -71,118 +59,6 @@ func (*EMGStatisticsCalculator) CalculateStatistics(
 	}
 
 	return stats, nil
-}
-
-// buildUniformRow creates a row with the same value repeated for all channels.
-func buildUniformRow(label, value string, channelCount int) []string {
-	row := make([]string, 0, channelCount+1)
-	row = append(row, label)
-
-	for i := 0; i < channelCount; i++ {
-		row = append(row, value)
-	}
-
-	return row
-}
-
-// buildChannelValueRow creates a row with values from a channel map.
-func buildChannelValueRow(
-	label string,
-	channelNames []string,
-	values map[string]float64,
-	calc *EMGStatisticsCalculator,
-) []string {
-	row := make([]string, 0, len(channelNames)+1)
-	row = append(row, label)
-
-	for _, name := range channelNames {
-		row = append(row, calc.formatFloat(values[name]))
-	}
-
-	return row
-}
-
-// writeCSVWithBOM creates a file with UTF-8 BOM and returns a CSV writer.
-//
-// fsperm.WriteFlags 含 O_NOFOLLOW (unix) 拒絕 symlink；攻擊者無法在 OutputDir
-// 植入 symlink 把寫入導向 /etc/passwd 等敏感檔。
-func writeCSVWithBOM(outputPath string) (*os.File, *csv.Writer, error) {
-	//nolint:gosec // G304: outputPath is validated by caller
-	file, err := os.OpenFile(outputPath, fsperm.WriteFlags, fsperm.FilePerm)
-	if err != nil {
-		return nil, nil, fmt.Errorf("無法創建輸出檔案 %s: %w", outputPath, err)
-	}
-
-	if err := csvutil.WriteBOM(file); err != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			_ = closeErr
-		}
-
-		return nil, nil, fmt.Errorf("無法寫入 BOM: %w", err)
-	}
-
-	return file, csv.NewWriter(file), nil
-}
-
-// ExportToCSV 將統計結果導出為 CSV 檔案.
-// Flush 與 Close 的錯誤都會被回傳：磁碟滿等狀況下 csv.Writer 把錯誤延後到 Flush 才丟，
-// 若僅在 defer 中忽略，caller 會看到 nil 但檔案內容不完整。
-//
-// ADR-0001 migration status: 主流 PhaseSync export 已搬到
-// io.CSVHandler.WritePhaseSyncResult (Analysis pipeline family 統一路徑)。
-// 剩餘 caller: gui/normalized_phase_sync_handlers.go — 該 handler 用自訂 filename +
-// 自訂 precision (normalizedPhaseSyncPrecision),不符合 WritePhaseSyncResult 的
-// auto-filename + 固定 phaseSyncPrecision 契約,後續若擴展 csvHandler 支援 filename
-// override 與可選 precision 才能完成 migrate。
-func (calc *EMGStatisticsCalculator) ExportToCSV(
-	stats *models.EMGStatistics,
-	outputPath string,
-) (err error) {
-	file, writer, err := writeCSVWithBOM(outputPath)
-	if err != nil {
-		return err
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("關閉檔案失敗: %w", closeErr)
-		}
-	}()
-
-	channelCount := len(stats.ChannelNames)
-
-	rows := []struct {
-		row      []string
-		errorMsg string
-	}{
-		{csvutil.SanitizeHeaderRow(append([]string{""}, stats.ChannelNames...)), "寫入標題行失敗"},
-		{buildUniformRow("開始分期點", string(stats.StartPhase), channelCount), "寫入開始分期點失敗"},
-		{buildUniformRow("開始時間", calc.formatFloat(stats.StartTime), channelCount), "寫入開始時間失敗"},
-		{buildUniformRow("結束分期點", string(stats.EndPhase), channelCount), "寫入結束分期點失敗"},
-		{buildUniformRow("結束時間", calc.formatFloat(stats.EndTime), channelCount), "寫入結束時間失敗"},
-		{buildUniformRow("時間差值", calc.formatFloat(stats.EndTime-stats.StartTime), channelCount), "寫入時間差值失敗"},
-		{buildChannelValueRow("平均值", stats.ChannelNames, stats.ChannelMeans, calc), "寫入平均值失敗"},
-		{buildChannelValueRow("最大值", stats.ChannelNames, stats.ChannelMaxes, calc), "寫入最大值失敗"},
-	}
-
-	for _, r := range rows {
-		if err := writer.Write(r.row); err != nil {
-			return fmt.Errorf("%s: %w", r.errorMsg, err)
-		}
-	}
-
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("CSV flush 失敗: %w", err)
-	}
-
-	return nil
-}
-
-// formatFloat 格式化浮點數.
-func (calc *EMGStatisticsCalculator) formatFloat(value float64) string {
-	format := fmt.Sprintf("%%.%df", calc.precision)
-	return fmt.Sprintf(format, value)
 }
 
 // GenerateOutputFileName 生成輸出檔案名.

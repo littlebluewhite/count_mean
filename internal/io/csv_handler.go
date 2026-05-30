@@ -625,10 +625,10 @@ func (h *CSVHandler) ProcessLargeFile(
 // 以便 GUI 顯示「無分析結果可匯出」而非吞 nil。
 var errEmptyPhaseAnalysis = stderrors.New("WritePhaseAnalysis: 沒有 phase 結果可寫")
 
-// errEmptyPhaseSyncResult 標示 WritePhaseSyncResult 收到 nil stats。
-// 對稱於 errEmptyPhaseAnalysis: caller 應確保 stats 非 nil,但對外仍給明確 error
-// 避免 nil-deref panic 上拋到 GUI。
-var errEmptyPhaseSyncResult = stderrors.New("WritePhaseSyncResult: stats 不可為 nil")
+// errEmptyPhaseSyncResult 標示 WritePhaseSyncResult / WriteNormalizedPhaseSyncResult
+// 收到 nil stats。對稱於 errEmptyPhaseAnalysis: caller 應確保 stats 非 nil,但對外仍
+// 給明確 error 避免 nil-deref panic 上拋到 GUI。
+var errEmptyPhaseSyncResult = stderrors.New("PhaseSync stats 不可為 nil")
 
 // WriteRequest 是 format-aware write 共用的目的地請求。
 //
@@ -742,6 +742,42 @@ func (h *CSVHandler) writeToTarget(req WriteRequest, data [][]string) error {
 	return h.WriteCSVToOutput(req.Filename, data)
 }
 
+// writePhaseSyncAtomic 是 WritePhaseSyncResult / WriteNormalizedPhaseSyncResult
+// 的共用寫檔 helper:path join → validate → mkdir → WriteCSVAtomic。
+// data[0] 是 header,data[1:] 是 body rows(由 converter.ConvertPhaseSyncResult 產生)。
+// ConvertPhaseSyncResult 恆回固定 8-row layout,故 data 至少 1 row,data[0] 不會 panic。
+func (h *CSVHandler) writePhaseSyncAtomic(subDir, filename string, data [][]string) (string, error) {
+	outputPath, joinErr := h.safeJoinOutput(subDir, filename)
+	if joinErr != nil {
+		return "", fmt.Errorf("PhaseSync 輸出路徑無效: %w", joinErr)
+	}
+
+	if err := h.pathValidator.ValidateExternalPath(outputPath); err != nil {
+		return "", fmt.Errorf("PhaseSync 輸出路徑無效: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), fsperm.DirPerm); err != nil {
+		return "", fmt.Errorf("PhaseSync 輸出目錄建立失敗: %w", err)
+	}
+
+	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header: data[0],
+		Emit: func(emit func([]string) error) error {
+			for _, row := range data[1:] {
+				if err := emit(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return outputPath, nil
+}
+
 // WritePhaseSyncResult 把 PhaseSync 分析結果 (EMGStatistics) 寫成 CSV。
 //
 // Filename 由 calculator.GenerateOutputFileName(Subject, StartPhase, EndPhase)
@@ -750,9 +786,8 @@ func (h *CSVHandler) writeToTarget(req WriteRequest, data [][]string) error {
 //
 // row layout (8-row: header / 開始分期點 / 開始時間 / 結束分期點 / 結束時間 /
 // 時間差值 / 平均值 / 最大值)、precision (phaseSyncPrecision=6) 由 implementation 持有。
-// 路徑驗證 / BOM / fsperm symlink reject / 兩段式 fsync 沿用 WriteCSV 既有守門 —
-// 比舊 calculator.EMGStatisticsCalculator.ExportToCSV 多了 SanitizePath /
-// SanitizeAllRows / OpenWriteValidated 三道守門 (ADR-0001 invariant 擴張的順手紅利)。
+// 路徑由 writePhaseSyncAtomic 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
+// ADR-0001 invariant: Subject-based write ⟹ WriteCSVAtomic。
 func (h *CSVHandler) WritePhaseSyncResult(
 	req WriteRequest,
 	stats *models.EMGStatistics,
@@ -767,14 +802,35 @@ func (h *CSVHandler) WritePhaseSyncResult(
 
 	data := h.converter.ConvertPhaseSyncResult(stats)
 
-	writeReq := WriteRequest{Filename: filename, SubDir: req.SubDir}
-	if err := h.writeToTarget(writeReq, data); err != nil {
-		return "", err
+	return h.writePhaseSyncAtomic(req.SubDir, filename, data)
+}
+
+// WriteNormalizedPhaseSyncResult 把 normalized PhaseSync 分析結果寫成 CSV。
+//
+// Filename 由 stats.Subject 經 filename.Sanitize 後與 normStart/normEnd/stats 分期
+// 自動推導 — req.Filename 被忽略,僅 req.SubDir 生效。
+// Filename template: {safeSubject}_normalized_norm-{normStart}-{normEnd}_stats-{StartPhase}-{EndPhase}.csv
+// (對齊 GUI 現行 template)。
+//
+// row layout 與 WritePhaseSyncResult 相同 (8-row,由 ConvertPhaseSyncResult 持有)。
+// 路徑由 writePhaseSyncAtomic 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
+// ADR-0001 invariant: Subject-based write ⟹ WriteCSVAtomic。
+func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
+	req WriteRequest,
+	stats *models.EMGStatistics,
+	normStart, normEnd models.PhasePoint,
+) (string, error) {
+	if stats == nil {
+		return "", errEmptyPhaseSyncResult
 	}
 
-	outputPath := filepath.Join(h.config.OutputDir, req.SubDir, filename)
+	safeSubject := filename.Sanitize(stats.Subject)
+	fname := fmt.Sprintf("%s_normalized_norm-%s-%s_stats-%s-%s.csv",
+		safeSubject, normStart, normEnd, stats.StartPhase, stats.EndPhase)
 
-	return outputPath, nil
+	data := h.converter.ConvertPhaseSyncResult(stats)
+
+	return h.writePhaseSyncAtomic(req.SubDir, fname, data)
 }
 
 // WriteCCIResult 把 CCI 分析結果寫成 CSV。
