@@ -269,3 +269,54 @@ func TestOpenAtomicWriteValidated_AcceptsInternalSymlinkParent(t *testing.T) {
 		t.Errorf("commit 後檔案應落在 real 目錄: %v", err)
 	}
 }
+
+// TestOpenAtomicWriteValidated_RelativeTargetAbsoluteBase 釘住 codex review 抓到的
+// P1 regression:target 相對(預設 config OutputDir "./output" → safeJoinOutput 回
+// "output/...")而 basePaths 絕對(NewPathValidator 對每個 base 跑 filepath.Abs)時,
+// matchAnyBase 的 filepath.Rel(absBase, relTarget) 會報錯 → 誤判逸出 base →
+// ErrPathEscapesBase,開箱即用的相對輸出目錄下 PhaseSync/CCI/muscle_ratio 匯出全壞。
+// primitive 現在於入口先把 target/tmp 絕對化(filepath.Abs 對絕對路徑是 no-op)。
+// 非 parallel:t.Chdir 改 process CWD,讓相對 "output" 在 tmp 下解析。
+func TestOpenAtomicWriteValidated_RelativeTargetAbsoluteBase(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("setup: EvalSymlinks(tmp): %v", err)
+	}
+	t.Chdir(tmp)
+
+	// 模擬 config 的相對 OutputDir "output"(存在於 cwd 下)。
+	if err := os.Mkdir("output", 0o750); err != nil {
+		t.Fatalf("setup: Mkdir output: %v", err)
+	}
+	// base 如 NewPathValidator 一樣 abs-ify。
+	absBase, err := filepath.Abs("output")
+	if err != nil {
+		t.Fatalf("setup: Abs(output): %v", err)
+	}
+
+	// target + tmp 為相對,完全比照 safeJoinOutput 的輸出。
+	relTarget := filepath.Join("output", "out.csv")
+	relTmp := filepath.Join("output", "out.csv.tmp.deadbeef")
+
+	h, err := fsperm.OpenAtomicWriteValidated(relTarget, relTmp, []string{absBase})
+	if err != nil {
+		t.Fatalf("relative target + absolute base 應被接受 (codex P1 regression): %v", err)
+	}
+	if _, err := h.File().Write([]byte("ok")); err != nil {
+		t.Fatalf("write tmp: %v", err)
+	}
+	if err := h.File().Close(); err != nil {
+		t.Fatalf("close tmp: %v", err)
+	}
+	if err := h.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(tmp, "output", "out.csv"))
+	if err != nil {
+		t.Fatalf("read committed: %v", err)
+	}
+	if string(got) != "ok" {
+		t.Errorf("committed content = %q, want %q", got, "ok")
+	}
+}

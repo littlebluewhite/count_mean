@@ -85,6 +85,23 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 		return nil, ErrBasePathsEmpty
 	}
 
+	// Normalize to absolute before boundary-matching. basePaths arrive already
+	// abs-ified (PathValidator.NewPathValidator runs filepath.Abs on each), but a
+	// relative targetPath — which the default config produces (OutputDir
+	// "./output" → safeJoinOutput returns "output/...") — would leave resolvedParent
+	// relative, and matchAnyBase's filepath.Rel(absBase, relTarget) then errors out
+	// and wrongly rejects the write with ErrPathEscapesBase. filepath.Abs is a
+	// no-op on an already-absolute path, so absolute callers are unaffected.
+	absTarget, absErr := filepath.Abs(targetPath)
+	if absErr != nil {
+		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: 無法絕對化 target %s: %w", targetPath, absErr)
+	}
+	absTmp, absErr := filepath.Abs(tmpPath)
+	if absErr != nil {
+		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: 無法絕對化 tmp %s: %w", tmpPath, absErr)
+	}
+	targetPath, tmpPath = absTarget, absTmp
+
 	targetDir := filepath.Dir(targetPath)
 	tmpDir := filepath.Dir(tmpPath)
 	if targetDir != tmpDir {
