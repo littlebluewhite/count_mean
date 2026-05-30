@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -221,22 +220,15 @@ TestSubject,motion.csv,force.csv,emg.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350
 }
 
 func TestPhaseSyncAnalyzer_AnalyzePhaseSync_AbsolutePath(t *testing.T) {
-	// TODO: manifest 內 absolute path 在 production code 是跨平台 broken 的 ——
-	// validateEMGFilePath/validateMotionFile 用 GetSafePath 把 absolute path Join
-	// 進 baseFolder，Unix 上 Join("/A", "/B") = "/A/B"（巢狀但合法、配合 macOS
-	// /var→/private/var symlink 在 isPathWithinBase 內巧合 pass），Windows 上
-	// Join("C:\A", "C:\B") 產生含 `\C:` 中段的 syntax-error 路徑，OS API 直接擋。
-	// 修這個需要 production 重構（IsAbs branch + EvalSymlinks 對齊 + 不存在 path
-	// 的 fallback），超出 CI cross-platform 修補的 scope。本 test 在 Windows skip，
-	// 留給後續 PR 處理「absolute manifest path」這個 feature 的跨平台一致性。
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows: production code 對 manifest 內 absolute path 處理跨平台不一致，需獨立 PR 重構")
-	}
-
-	// Test handling of absolute paths in manifest
+	// manifest 檔名契約為「相對於 DataFolder」。phase_sync 改走 security.ResolveLenientPath
+	// 後，manifest 內的 absolute path 一律被拒（Unix `/...` 與 Windows `C:\...` 皆然，
+	// 見 lenient_path.go 的 IsAbs / leading-slash 守門），對齊 cci/muscle_ratio。
+	//
+	// 這同時消除了舊 GetSafePath 對 absolute manifest path 的跨平台不一致（Unix 把
+	// 絕對路徑 Join 進 baseFolder 巧合 nested-pass、Windows 產生 syntax-error 路徑），
+	// 因此本 test 不再需要 Windows skip——拒絕行為現在跨平台一致。
 	analyzer := NewPhaseSyncAnalyzer()
 
-	// Create a manifest with absolute path
 	tmpDir := t.TempDir()
 	emgFile := filepath.Join(tmpDir, "emg.csv")
 	motionFile := filepath.Join(tmpDir, "motion.csv")
@@ -248,21 +240,19 @@ TestSubject,%s,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, motion
 
 	params := &models.AnalysisParams{
 		ManifestFile: manifestFile,
-		// DataFolder is ignored for absolute motion paths; use t.TempDir() to avoid
-		// Windows path concatenation syntax error (/some/other/path/C:\... 在 Windows
-		// 上被 OS 先以 syntax error 攔截，無法觸達 "Motion 檔案不存在" 那條路徑）。
 		DataFolder:   t.TempDir(),
 		StartPhase:   "P0",
 		EndPhase:     "P2",
 		SubjectIndex: 0,
 	}
 
-	// This will fail because the Motion file doesn't exist (validated first)
+	// EMG 在 pipeline 中先於 Motion 驗證；absolute EMG path 直接被 ResolveLenientPath 拒，
+	// 錯誤是 EMG 路徑驗證失敗（相對路徑契約），而非下游的「Motion 檔案不存在」。
 	stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)
 	assert.Error(t, err)
 	assert.Nil(t, stats)
-	// The error should mention the Motion file path since it's validated first
-	assert.Contains(t, err.Error(), "Motion 檔案不存在")
+	assert.Contains(t, err.Error(), "EMG 檔案路徑驗證失敗",
+		"manifest 內 absolute path 應被拒（檔名須相對於 DataFolder）")
 }
 
 // TestPhaseSyncAnalyzer_ResolvePhaseRange_RejectsNegativeForceTime釘住:
