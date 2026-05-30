@@ -215,8 +215,12 @@ func TestExportPhaseSyncDataToCSV_RoundTripParseAndWrite(t *testing.T) {
 	original := newWriterTestData()
 	require.NoError(t, ExportPhaseSyncDataToCSV(original, outPath, 6))
 
+	f, err := os.Open(outPath)
+	require.NoError(t, err)
+	defer f.Close()
+
 	parser := NewEMGParser()
-	parsed, _, err := parser.ParseFile(outPath)
+	parsed, _, err := parser.Parse(f, outPath)
 	require.NoError(t, err)
 
 	require.Equal(t, original.Headers, parsed.Headers)

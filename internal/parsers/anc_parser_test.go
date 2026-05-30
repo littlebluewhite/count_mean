@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -23,7 +22,7 @@ func TestNewANCParser(t *testing.T) {
 	assert.Equal(t, 0.0, parser.GetSampleInterval()) // 尚未解析資料，頻率為 0
 }
 
-func TestANCParser_ParseFile(t *testing.T) {
+func TestANCParser_Parse(t *testing.T) {
 	tests := []struct {
 		name        string
 		fileContent string
@@ -141,11 +140,15 @@ invalid_time	0.1	0.2
 
 			_, err = tmpFile.WriteString(tt.fileContent)
 			require.NoError(t, err)
-			tmpFile.Close()
+			require.NoError(t, tmpFile.Close())
 
-			// 測試解析
+			// 測試解析 via open + Parse
+			f, err := os.Open(tmpFile.Name())
+			require.NoError(t, err)
+			defer f.Close()
+
 			parser := NewANCParser()
-			data, err := parser.ParseFile(tmpFile.Name())
+			data, err := parser.Parse(f, tmpFile.Name())
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -185,25 +188,22 @@ func TestANCParser_StripsBOM(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tmpFile.WriteString(content)
 	require.NoError(t, err)
-	tmpFile.Close()
+	require.NoError(t, tmpFile.Close())
+
+	f, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer f.Close()
 
 	parser := NewANCParser()
-	data, err := parser.ParseFile(tmpFile.Name())
+	data, err := parser.Parse(f, tmpFile.Name())
 	require.NoError(t, err)
 	require.NotNil(t, data)
 	assert.Equal(t, []string{"Fx", "Fy"}, data.Headers,
 		"channel names should not be prefixed with BOM")
 }
 
-func TestANCParser_ParseFile_FileNotFound(t *testing.T) {
-	parser := NewANCParser()
-	_, err := parser.ParseFile("nonexistent_file.anc")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "無法開啟 ANC 檔案")
-}
-
 // TestANCParser_Parse_TextFromReader 釘住 reader-based 入口的 text 分支：
-// name 以 .anc 結尾 → 走文字解析；結果須與 ParseFile（path wrapper）相同。
+// name 以 .anc 結尾 → 走文字解析。
 func TestANCParser_Parse_TextFromReader(t *testing.T) {
 	const content = `1	File_Type:	AMTI_FORCE_PLATE	Generation#:	4
 2	Board_Type:	OR6-5-1000
@@ -317,32 +317,6 @@ func TestANCParser_Parse_XLSXFromReader(t *testing.T) {
 	})
 }
 
-// TestANCParser_Parse_XLSXMatchesParseFile 對同一 xlsx 內容比對 reader 入口與
-// path wrapper 結果一致（wrapper 開檔後以 OpenReader 走同一核心）。
-func TestANCParser_Parse_XLSXMatchesParseFile(t *testing.T) {
-	headers := []string{"Time", "Fx", "Fy", "Fz"}
-	data := [][]string{
-		{"0.000", "1.1", "2.2", "3.3"},
-		{"0.001", "1.2", "2.3", "3.4"},
-	}
-
-	// path wrapper 路徑：寫到檔案再用 ParseFile。
-	xlsxPath := createTestXLSXFile(t, headers, data)
-	t.Cleanup(func() { _ = os.Remove(xlsxPath) })
-
-	parser := NewANCParser()
-	fromFile, err := parser.ParseFile(xlsxPath)
-	require.NoError(t, err)
-
-	// reader 路徑：相同內容的 in-memory buffer。
-	buf := buildSimpleXLSXBuffer(t, headers, data)
-	fromReader, err := parser.Parse(bytes.NewReader(buf), "match.xlsx")
-	require.NoError(t, err)
-
-	assert.Equal(t, fromFile, fromReader,
-		"xlsx reader entry and path wrapper must agree on data")
-}
-
 // TestANCParser_Parse_TextReaderError 釘住 text 分支的 reader-boundary 失敗面：
 // .anc name 走文字解析，第一個讀取點是 BOM 偵測，底層 io.Reader 在串流途中報錯
 // （iotest.ErrReader）必須往上傳，不得 panic、不得回傳「err==nil 但 data 非 nil」。
@@ -379,24 +353,6 @@ func TestANCParser_Parse_MalformedXLSX(t *testing.T) {
 	assert.Nil(t, data, "malformed xlsx 必須回傳 nil ForceData")
 }
 
-// TestANCParser_Parse_EmptyTextMatchesEmptyFile 把「reader 空輸入」與「空 .anc
-// 檔案經 ParseFile wrapper」綁在一起：不硬編碼 ANC text 對空輸入的契約，只斷言
-// 兩條路徑的 error-ness 與結果一致（reader empty 必須與 file empty 行為相同）。
-func TestANCParser_Parse_EmptyTextMatchesEmptyFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	emptyPath := filepath.Join(tmpDir, "empty.anc")
-	require.NoError(t, os.WriteFile(emptyPath, []byte(""), 0o600))
-
-	parser := NewANCParser()
-	fromFile, fileErr := parser.ParseFile(emptyPath)
-	fromReader, readerErr := parser.Parse(strings.NewReader(""), emptyPath)
-
-	assert.Equal(t, fileErr == nil, readerErr == nil,
-		"reader 空輸入與空檔案必須有相同的 error-ness")
-	assert.Equal(t, fromFile, fromReader,
-		"reader 空輸入與空 .anc 檔案必須產生相同的 ForceData")
-}
-
 // leading blank line 必須不會讓 handler map 偏移。
 // 原本 parseHeader 對 leading blank line 仍 `lineNum++`,後續每一行的 dispatch
 // key 整個錯位 1 — File_Type 被當 Board_Type 處理、ChannelNames 被當 Rates...
@@ -427,8 +383,12 @@ func TestANCParser_ParseHeader_LeadingBlankLine_NoMisalignment(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
+	f, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer f.Close()
+
 	parser := NewANCParser()
-	data, err := parser.ParseFile(tmpFile.Name())
+	data, err := parser.Parse(f, tmpFile.Name())
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
@@ -468,8 +428,12 @@ func TestANCParser_ChannelName_ContainsSpace_NotSplit(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
+	fSpace, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer fSpace.Close()
+
 	parser := NewANCParser()
-	data, err := parser.ParseFile(tmpFile.Name())
+	data, err := parser.Parse(fSpace, tmpFile.Name())
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
@@ -577,7 +541,11 @@ func TestANCParser_GetSampleInterval(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
-	_, err = parser.ParseFile(tmpFile.Name())
+	fFreq, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer fFreq.Close()
+
+	_, err = parser.Parse(fFreq, tmpFile.Name())
 	require.NoError(t, err)
 
 	interval := parser.GetSampleInterval()
@@ -796,8 +764,12 @@ func TestANCParser_FileType_ColonInValue(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
+	fColon, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer fColon.Close()
+
 	parser := NewANCParser()
-	data, err := parser.ParseFile(tmpFile.Name())
+	data, err := parser.Parse(fColon, tmpFile.Name())
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
@@ -836,11 +808,15 @@ func TestANCParser_Integration(t *testing.T) {
 
 		_, err = tmpFile.WriteString(ancContent)
 		require.NoError(t, err)
-		tmpFile.Close()
+		require.NoError(t, tmpFile.Close())
+
+		f, err := os.Open(tmpFile.Name())
+		require.NoError(t, err)
+		defer f.Close()
 
 		// 解析文件
 		parser := NewANCParser()
-		data, err := parser.ParseFile(tmpFile.Name())
+		data, err := parser.Parse(f, tmpFile.Name())
 		require.NoError(t, err)
 
 		// 驗證數據完整性
@@ -917,8 +893,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f1, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f1.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f1, xlsxPath)
 
 		require.NoError(t, err)
 		assert.NotNil(t, forceData)
@@ -954,8 +934,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f2, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f2.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f2, xlsxPath)
 
 		require.NoError(t, err)
 		assert.Len(t, forceData.Time, 1000)
@@ -1002,8 +986,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		err = f.Close()
 		require.NoError(t, err)
 
+		f3, err := os.Open(tmpFile.Name())
+		require.NoError(t, err)
+		defer f3.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(tmpFile.Name())
+		forceData, err := parser.Parse(f3, tmpFile.Name())
 
 		require.NoError(t, err)
 		assert.Len(t, forceData.Time, 2)
@@ -1022,8 +1010,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f4, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f4.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f4, xlsxPath)
 
 		require.NoError(t, err)
 		// 應該只有 2 個有效數據點（跳過空行）
@@ -1041,8 +1033,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f5, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f5.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f5, xlsxPath)
 
 		require.NoError(t, err)
 		assert.Len(t, forceData.Time, 3)
@@ -1054,14 +1050,6 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		assert.Equal(t, 6.0, forceData.Forces["Fz"][2])
 	})
 
-	t.Run("xlsx file not found", func(t *testing.T) {
-		parser := NewANCParser()
-		_, err := parser.ParseFile("nonexistent_file.xlsx")
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "無法開啟 Excel 檔案")
-	})
-
 	t.Run("xlsx file with only header row", func(t *testing.T) {
 		headers := []string{"Time", "Fx", "Fy"}
 		data := [][]string{} // 沒有數據
@@ -1069,8 +1057,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f6, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f6.Close()
+
 		parser := NewANCParser()
-		_, err := parser.ParseFile(xlsxPath)
+		_, err = parser.Parse(f6, xlsxPath)
 
 		assert.Error(t, err)
 		// 錯誤訊息可能是 "數據不足" 或 "沒有有效的數據行"
@@ -1092,8 +1084,12 @@ func TestANCParser_ParseXLSXFile_Validation(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f7, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f7.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f7, xlsxPath)
 		require.NoError(t, err)
 
 		// 使用 ValidateForceData 驗證
@@ -1114,8 +1110,12 @@ func TestANCParser_ParseXLSXFile_Validation(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f8, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f8.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f8, xlsxPath)
 		require.NoError(t, err)
 
 		// 獲取時間範圍內的數據
@@ -1160,8 +1160,12 @@ func TestANCParser_XLSX_RowIndexContract(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		t.Cleanup(func() { _ = os.Remove(xlsxPath) })
 
+		fR1, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer fR1.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(fR1, xlsxPath)
 		require.NoError(t, err)
 		require.NotNil(t, forceData)
 
@@ -1206,8 +1210,12 @@ func TestANCParser_XLSX_RowIndexContract(t *testing.T) {
 		xlsxPath := buildANCFormatXLSX(t)
 		t.Cleanup(func() { _ = os.Remove(xlsxPath) })
 
+		fR2, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer fR2.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(fR2, xlsxPath)
 		require.NoError(t, err)
 		require.NotNil(t, forceData)
 

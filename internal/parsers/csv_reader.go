@@ -5,40 +5,14 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"os"
 
 	"count_mean/internal/csvutil"
-	"count_mean/internal/security/fsperm"
 )
-
-// ReadCSVDirect reads a CSV file directly without path validation.
-// Used for phase synchronization analysis.
-//
-// Thin wrapper: opens with fsperm.ReadFlags (O_NOFOLLOW, symmetric with the
-// write side) then delegates to ReadCSVRecords for the BOM-aware parse. The
-// reader-based core lets the Phase-D validated-open door hand an already-open
-// *os.File straight to ReadCSVRecords without re-opening by path.
-func ReadCSVDirect(filepath string) ([][]string, error) {
-	file, err := os.OpenFile(filepath, fsperm.ReadFlags, 0) //nolint:gosec // filepath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
-	if err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	return ReadCSVRecords(file)
-}
 
 // ReadCSVRecords reads BOM-aware CSV records from an io.Reader.
 //
-// Shared core for ReadCSVDirect (path-based wrapper) and the reader-based
-// Parse entry points. BOM handling + csv.Reader settings (TrimLeadingSpace /
-// LazyQuotes / FieldsPerRecord=-1) are load-bearing and identical to the
-// historical ReadCSVDirect behavior.
+// Reader-based parse entry point. BOM handling + csv.Reader settings
+// (TrimLeadingSpace / LazyQuotes / FieldsPerRecord=-1) are load-bearing.
 func ReadCSVRecords(r io.Reader) ([][]string, error) {
 	// Buffered single-pass：bufio.Reader 提供 Peek/Discard 介面給 PeekBOM，
 	// csv.Reader 直接吃 bufio.Reader 省下「ReadAll 整檔到 []byte 後再 bytes.NewReader」

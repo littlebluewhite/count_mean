@@ -3,7 +3,6 @@ package parsers
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -19,7 +18,7 @@ func TestNewEMGParser(t *testing.T) {
 	assert.NotNil(t, parser)
 }
 
-func TestEMGParser_ParseFile(t *testing.T) {
+func TestEMGParser_Parse(t *testing.T) {
 	tests := []struct {
 		name       string
 		csvContent string
@@ -129,11 +128,15 @@ invalid_time_2,102.1,198.9`,
 
 			_, err = tmpFile.WriteString(tt.csvContent)
 			require.NoError(t, err)
-			tmpFile.Close()
+			require.NoError(t, tmpFile.Close())
 
-			// 測試解析
+			// 測試解析 via open + Parse
+			f, err := os.Open(tmpFile.Name())
+			require.NoError(t, err)
+			defer f.Close()
+
 			parser := NewEMGParser()
-			data, _, err := parser.ParseFile(tmpFile.Name())
+			data, _, err := parser.Parse(f, tmpFile.Name())
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -150,15 +153,8 @@ invalid_time_2,102.1,198.9`,
 	}
 }
 
-func TestEMGParser_ParseFile_FileNotFound(t *testing.T) {
-	parser := NewEMGParser()
-	_, _, err := parser.ParseFile("nonexistent_file.csv")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "無法開啟 EMG 檔案")
-}
-
 // TestEMGParser_Parse_FromReader 釘住 reader-based 入口：feed io.Reader 給
-// Parse 必須得到與 ParseFile（path-based wrapper）相同的結果，包含 frequency 推算。
+// Parse 必須正確解析，包含 frequency 推算。
 func TestEMGParser_Parse_FromReader(t *testing.T) {
 	const csvContent = `Time,Ch1,Ch2,Ch3
 0.000,100.5,200.3,150.8
@@ -198,32 +194,6 @@ func TestEMGParser_Parse_FromReaderWithBOM(t *testing.T) {
 	assert.Equal(t, 1.0, data.Channels["Ch1"][0])
 }
 
-// TestEMGParser_Parse_MatchesParseFile 對同一輸入比對 reader 入口與 path wrapper
-// 的結果一致（wrapper 只是「開檔 + delegate」）。
-func TestEMGParser_Parse_MatchesParseFile(t *testing.T) {
-	const csvContent = `Time,Ch1,Ch2
-0.000,10.0,20.0
-0.001,11.0,21.0
-0.002,12.0,22.0`
-
-	tmpFile, err := os.CreateTemp(t.TempDir(), "emg_match_*.csv")
-	require.NoError(t, err)
-	_, err = tmpFile.WriteString(csvContent)
-	require.NoError(t, err)
-	require.NoError(t, tmpFile.Close())
-
-	parser := NewEMGParser()
-
-	fromFile, freqFile, err := parser.ParseFile(tmpFile.Name())
-	require.NoError(t, err)
-
-	fromReader, freqReader, err := parser.Parse(strings.NewReader(csvContent), "match.csv")
-	require.NoError(t, err)
-
-	assert.Equal(t, fromFile, fromReader, "reader entry and path wrapper must agree on data")
-	assert.InDelta(t, freqFile, freqReader, 1e-9, "frequency must match")
-}
-
 // TestEMGParser_Parse_ReaderError 釘住 reader-boundary 失敗面：當底層 io.Reader 在
 // 串流途中報錯（iotest.ErrReader），Parse 必須把錯誤往上傳（含 name context），
 // 不得 panic、不得回傳「err==nil 但 data 非 nil」的偽結果。
@@ -235,22 +205,6 @@ func TestEMGParser_Parse_ReaderError(t *testing.T) {
 	assert.Contains(t, err.Error(), "err.csv", "錯誤需帶上 name context")
 	assert.Nil(t, data, "reader 出錯時不得回傳偽造的非 nil data")
 	assert.Zero(t, freq)
-}
-
-// TestEMGParser_Parse_EmptyMatchesEmptyFile 把「reader 空輸入」與「空檔案經
-// ParseFile wrapper」綁在一起：不硬編碼 EMG 對空輸入的契約，只斷言兩條路徑的
-// error-ness 一致（reader empty 必須與 file empty 行為相同）。
-func TestEMGParser_Parse_EmptyMatchesEmptyFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	emptyPath := filepath.Join(tmpDir, "empty_emg.csv")
-	require.NoError(t, os.WriteFile(emptyPath, []byte(""), 0o600))
-
-	parser := NewEMGParser()
-	_, _, fileErr := parser.ParseFile(emptyPath)
-	_, _, readerErr := parser.Parse(strings.NewReader(""), emptyPath)
-
-	assert.Equal(t, fileErr == nil, readerErr == nil,
-		"reader 空輸入與空檔案必須有相同的 error-ness")
 }
 
 func TestEMGParser_GetDataInTimeRange(t *testing.T) {
@@ -472,7 +426,11 @@ func TestEMGParser_DynamicFrequencyDetection(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, tmpFile.Close())
 
-			_, frequency, err := parser.ParseFile(tmpFile.Name())
+			f, err := os.Open(tmpFile.Name())
+			require.NoError(t, err)
+			defer f.Close()
+
+			_, frequency, err := parser.Parse(f, tmpFile.Name())
 			require.NoError(t, err)
 
 			assert.InDelta(t, tt.expectedFrequency, frequency, 1e-9)
@@ -619,9 +577,13 @@ func TestEMGParser_parseHeaders(t *testing.T) {
 
 			_, err = tmpFile.WriteString(csvContent)
 			require.NoError(t, err)
-			tmpFile.Close()
+			require.NoError(t, tmpFile.Close())
 
-			data, _, err := parser.ParseFile(tmpFile.Name())
+			f, err := os.Open(tmpFile.Name())
+			require.NoError(t, err)
+			defer f.Close()
+
+			data, _, err := parser.Parse(f, tmpFile.Name())
 
 			if len(tt.expected) <= 1 { // 如果只有時間列或沒有列，應該出錯
 				assert.Error(t, err)
@@ -649,11 +611,15 @@ func TestEMGParser_Integration(t *testing.T) {
 
 		_, err = tmpFile.WriteString(emgContent)
 		require.NoError(t, err)
-		tmpFile.Close()
+		require.NoError(t, tmpFile.Close())
 
 		// 解析文件
+		f, err := os.Open(tmpFile.Name())
+		require.NoError(t, err)
+		defer f.Close()
+
 		parser := NewEMGParser()
-		data, _, err := parser.ParseFile(tmpFile.Name())
+		data, _, err := parser.Parse(f, tmpFile.Name())
 		require.NoError(t, err)
 
 		// 驗證數據完整性

@@ -3,13 +3,11 @@ package parsers
 import (
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
-	"count_mean/internal/security/fsperm"
 )
 
 // MotionParser Motion檔案解析器.
@@ -52,33 +50,6 @@ func NewMotionParserWithLogger(logger *logging.Logger) *MotionParser {
 		dataRow:     MotionDataRow,
 		logger:      logger,
 	}
-}
-
-// readCSVRecords 讀取 CSV 檔案並返回記錄.
-//
-// Thin wrapper: opens with fsperm.ReadFlags (O_NOFOLLOW) then delegates to the
-// shared BOM-aware ReadCSVRecords core. BOM 偵測對 Motion CSV 是 load-bearing —
-// Excel 匯出含 UTF-8 BOM (0xEF 0xBB 0xBF) 時第一欄（Series header label）會被汙染。
-//
-//nolint:revive // keep consistent API
-func (p *MotionParser) readCSVRecords(filepath string) ([][]string, error) {
-	file, err := os.OpenFile(filepath, fsperm.ReadFlags, 0) //nolint:gosec // filepath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
-	if err != nil {
-		return nil, fmt.Errorf("無法開啟 Motion 檔案 %s: %w", filepath, err)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	records, err := ReadCSVRecords(file)
-	if err != nil {
-		return nil, fmt.Errorf("讀取 Motion CSV 失敗: %w", err)
-	}
-
-	return records, nil
 }
 
 // validateRecordStructure 驗證記錄結構.
@@ -212,22 +183,8 @@ func (p *MotionParser) validateDataIntegrity(motionData *models.MotionData) erro
 	return nil
 }
 
-// ParseFile 解析 Motion CSV 檔案.
-//
-// Thin wrapper: readCSVRecords opens with fsperm.ReadFlags (O_NOFOLLOW) then
-// delegates to the shared parseMotionRecords core. The reader-based Parse lets
-// the Phase-D validated-open door hand an already-open *os.File straight in.
-func (p *MotionParser) ParseFile(filepath string) (*models.MotionData, error) {
-	records, err := p.readCSVRecords(filepath)
-	if err != nil {
-		return nil, err
-	}
-
-	return p.parseMotionRecords(records)
-}
-
 // Parse 從 io.Reader 解析 Motion CSV 資料。name 僅用於 error context（reader 不知道
-// 自己的檔名）。語意與 ParseFile 相同。
+// 自己的檔名）。
 //
 //nolint:err113 // dynamic errors with Chinese messages; Motion is proper noun
 func (p *MotionParser) Parse(r io.Reader, name string) (*models.MotionData, error) {
@@ -239,7 +196,7 @@ func (p *MotionParser) Parse(r io.Reader, name string) (*models.MotionData, erro
 	return p.parseMotionRecords(records)
 }
 
-// parseMotionRecords 由 ParseFile / Parse 共用的 Motion record 解析核心。
+// parseMotionRecords 由 Parse 呼叫的 Motion record 解析核心。
 //
 //nolint:err113 // dynamic errors with Chinese messages; Motion is proper noun
 func (p *MotionParser) parseMotionRecords(records [][]string) (*models.MotionData, error) {

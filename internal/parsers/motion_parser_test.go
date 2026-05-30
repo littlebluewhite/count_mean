@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"testing/iotest"
 
@@ -24,7 +23,7 @@ func TestNewMotionParser(t *testing.T) {
 	assert.Equal(t, 0.004, parser.GetSampleInterval()) // 250Hz = 0.004s interval
 }
 
-func TestMotionParser_ParseFile(t *testing.T) {
+func TestMotionParser_Parse(t *testing.T) {
 	tests := []struct {
 		name       string
 		csvContent string
@@ -179,11 +178,15 @@ text,text,text`,
 
 			_, err = tmpFile.WriteString(tt.csvContent)
 			require.NoError(t, err)
-			tmpFile.Close()
+			require.NoError(t, tmpFile.Close())
 
-			// 測試解析
+			// 測試解析 via open + Parse
+			f, err := os.Open(tmpFile.Name())
+			require.NoError(t, err)
+			defer f.Close()
+
 			parser := NewMotionParser()
-			data, err := parser.ParseFile(tmpFile.Name())
+			data, err := parser.Parse(f, tmpFile.Name())
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -200,15 +203,8 @@ text,text,text`,
 	}
 }
 
-func TestMotionParser_ParseFile_FileNotFound(t *testing.T) {
-	parser := NewMotionParser()
-	_, err := parser.ParseFile("nonexistent_file.csv")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "無法開啟 Motion 檔案")
-}
-
 // TestMotionParser_Parse_FromReader 釘住 reader-based 入口：feed io.Reader 給
-// Parse 必須得到與 ParseFile（path-based wrapper）相同的結果。
+// Parse 必須正確解析 Motion CSV 資料。
 func TestMotionParser_Parse_FromReader(t *testing.T) {
 	const csvContent = `Line 1: Metadata
 Line 2: More metadata
@@ -255,34 +251,6 @@ Index,X,Y,Z
 	}
 }
 
-// TestMotionParser_Parse_MatchesParseFile 對同一輸入比對 reader 入口與 path
-// wrapper 結果一致。
-func TestMotionParser_Parse_MatchesParseFile(t *testing.T) {
-	const csvContent = `Line 1
-Line 2
-Line 3
-Index,X,Y
-1,10.5,20.3
-2,11.2,21.7
-3,9.8,19.1`
-
-	tmpFile, err := os.CreateTemp(t.TempDir(), "motion_match_*.csv")
-	require.NoError(t, err)
-	_, err = tmpFile.WriteString(csvContent)
-	require.NoError(t, err)
-	require.NoError(t, tmpFile.Close())
-
-	parser := NewMotionParser()
-
-	fromFile, err := parser.ParseFile(tmpFile.Name())
-	require.NoError(t, err)
-
-	fromReader, err := parser.Parse(bytes.NewReader([]byte(csvContent)), "match.csv")
-	require.NoError(t, err)
-
-	assert.Equal(t, fromFile, fromReader, "reader entry and path wrapper must agree on data")
-}
-
 // TestMotionParser_Parse_ReaderError 釘住 reader-boundary 失敗面：當底層 io.Reader
 // 在串流途中報錯（iotest.ErrReader），Parse 必須把錯誤往上傳（含 name context），
 // 不得 panic、不得回傳「err==nil 但 data 非 nil」的偽結果。
@@ -293,22 +261,6 @@ func TestMotionParser_Parse_ReaderError(t *testing.T) {
 	require.ErrorContains(t, err, "boom", "底層 reader 錯誤必須往上傳遞")
 	assert.Contains(t, err.Error(), "err.csv", "錯誤需帶上 name context")
 	assert.Nil(t, data, "reader 出錯時不得回傳偽造的非 nil data")
-}
-
-// TestMotionParser_Parse_EmptyMatchesEmptyFile 把「reader 空輸入」與「空檔案經
-// ParseFile wrapper」綁在一起：不硬編碼 Motion 對空輸入的契約，只斷言兩條路徑的
-// error-ness 一致（reader empty 必須與 file empty 行為相同）。
-func TestMotionParser_Parse_EmptyMatchesEmptyFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	emptyPath := filepath.Join(tmpDir, "empty_motion.csv")
-	require.NoError(t, os.WriteFile(emptyPath, []byte(""), 0o600))
-
-	parser := NewMotionParser()
-	_, fileErr := parser.ParseFile(emptyPath)
-	_, readerErr := parser.Parse(strings.NewReader(""), emptyPath)
-
-	assert.Equal(t, fileErr == nil, readerErr == nil,
-		"reader 空輸入與空檔案必須有相同的 error-ness")
 }
 
 func TestMotionParser_IndexToTime(t *testing.T) {
@@ -744,11 +696,15 @@ Index,Series,Series,Series
 
 			_, err = tmpFile.WriteString(tt.csvContent)
 			require.NoError(t, err)
-			tmpFile.Close()
+			require.NoError(t, tmpFile.Close())
+
+			f, err := os.Open(tmpFile.Name())
+			require.NoError(t, err)
+			defer f.Close()
 
 			// 測試解析
 			parser := NewMotionParser()
-			data, err := parser.ParseFile(tmpFile.Name())
+			data, err := parser.Parse(f, tmpFile.Name())
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -795,7 +751,11 @@ Index,Series,,,Series
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
-	data, err := NewMotionParser().ParseFile(tmpFile.Name())
+	f, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer f.Close()
+
+	data, err := NewMotionParser().Parse(f, tmpFile.Name())
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
@@ -835,7 +795,11 @@ Index,Series,,Series,Series
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
-	data, err := NewMotionParser().ParseFile(tmpFile.Name())
+	f2, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer f2.Close()
+
+	data, err := NewMotionParser().Parse(f2, tmpFile.Name())
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
@@ -871,11 +835,15 @@ Index,X,Y,Z,RX,RY,RZ
 
 		_, err = tmpFile.WriteString(motionContent)
 		require.NoError(t, err)
-		tmpFile.Close()
+		require.NoError(t, tmpFile.Close())
+
+		f, err := os.Open(tmpFile.Name())
+		require.NoError(t, err)
+		defer f.Close()
 
 		// 解析文件
 		parser := NewMotionParser()
-		data, err := parser.ParseFile(tmpFile.Name())
+		data, err := parser.Parse(f, tmpFile.Name())
 		require.NoError(t, err)
 
 		// 驗證數據完整性
@@ -918,7 +886,7 @@ Index,X,Y,Z,RX,RY,RZ
 // 會汙染 records[0][0]。
 //
 // 對稱修復後的契約：
-//  1. BOM-prefixed Motion CSV 能順利 ParseFile，不報錯。
+//  1. BOM-prefixed Motion CSV 能順利 Parse，不報錯。
 //  2. 解析結果（Headers、Data keys）不含 BOM bytes。
 //
 // 若未來 Motion structure 改成「第一列當 header 用」，此 test 會立刻發現
@@ -944,7 +912,11 @@ Index,X,Y,Z
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	data, err := NewMotionParser().ParseFile(path)
+	fRead, err := os.Open(path)
+	require.NoError(t, err)
+	defer fRead.Close()
+
+	data, err := NewMotionParser().Parse(fRead, path)
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
@@ -1001,7 +973,11 @@ Index,X,Y
 	logger := logging.NewLogger(logging.LevelInfo, &buf, true) // JSON 方便穩定 assert
 	parser := NewMotionParserWithLogger(logger)
 
-	data, err := parser.ParseFile(path)
+	fBlank, err := os.Open(path)
+	require.NoError(t, err)
+	defer fBlank.Close()
+
+	data, err := parser.Parse(fBlank, path)
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
@@ -1040,7 +1016,11 @@ not_an_int,11.2,21.7
 	logger := logging.NewLogger(logging.LevelWarn, &buf, true) // JSON for stable assertion
 	parser := NewMotionParserWithLogger(logger)
 
-	data, err := parser.ParseFile(path)
+	fWarn, err := os.Open(path)
+	require.NoError(t, err)
+	defer fWarn.Close()
+
+	data, err := parser.Parse(fWarn, path)
 	require.NoError(t, err)
 	require.NotNil(t, data)
 	assert.Equal(t, []int{1, 3}, data.Indices, "malformed row must still be skipped")
