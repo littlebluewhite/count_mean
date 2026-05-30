@@ -1,11 +1,15 @@
 package parsers
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -278,6 +282,84 @@ func TestReadCSVDirect_UTF8WithBOM(t *testing.T) {
 	assert.Contains(t, data[0][0], "Name") // 可能是 "\uFEFFName" 或 "Name"
 	assert.Equal(t, "Value", data[0][1])
 	assert.Equal(t, []string{"測試", "123"}, data[1])
+}
+
+// TestReadCSVRecords_FromReader 釘住 reader-based 核心：feed io.Reader 給
+// ReadCSVRecords 必須得到與 ReadCSVDirect（path-based wrapper）相同的結果，
+// 含 csv.Reader 設定（TrimLeadingSpace / LazyQuotes / FieldsPerRecord=-1）。
+func TestReadCSVRecords_FromReader(t *testing.T) {
+	csvContent := "Time,Ch1,Ch2\n1.0,100,50\n2.0,200,100\n3.0,300,150"
+
+	records, err := ReadCSVRecords(strings.NewReader(csvContent))
+	require.NoError(t, err)
+	require.Len(t, records, 4)
+	assert.Equal(t, []string{"Time", "Ch1", "Ch2"}, records[0])
+	assert.Equal(t, []string{"1.0", "100", "50"}, records[1])
+	assert.Equal(t, []string{"3.0", "300", "150"}, records[3])
+}
+
+// TestReadCSVRecords_FromReaderWithBOM pins that the reader-based core keeps the
+// load-bearing PeekBOM step — a BOM-prefixed payload must be consumed so the
+// first field is not polluted with U+FEFF.
+func TestReadCSVRecords_FromReaderWithBOM(t *testing.T) {
+	payload := append([]byte{}, csvutil.BOMBytes()...)
+	payload = append(payload, []byte("Name,Value\n測試,123\n")...)
+
+	records, err := ReadCSVRecords(bytes.NewReader(payload))
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	// BOM 已被 PeekBOM 消化，第一欄不應殘留 U+FEFF。
+	assert.Equal(t, "Name", records[0][0], "BOM must be stripped, first field should be clean")
+	assert.Equal(t, "Value", records[0][1])
+	assert.Equal(t, []string{"測試", "123"}, records[1])
+}
+
+// TestReadCSVRecords_MatchesReadCSVDirect 確認 wrapper 與 reader 核心對同一輸入
+// 產生 byte-for-byte 相同的 records（wrapper 只是「開檔 + delegate」不改語意）。
+func TestReadCSVRecords_MatchesReadCSVDirect(t *testing.T) {
+	csvContent := "A,B,C\n1,2\n3,4,5,6\n  7,  8,  9"
+
+	tmpDir := t.TempDir()
+	tmpFilePath := filepath.Join(tmpDir, "match.csv")
+	require.NoError(t, os.WriteFile(tmpFilePath, []byte(csvContent), fsperm.FilePerm))
+
+	fromPath, err := ReadCSVDirect(tmpFilePath)
+	require.NoError(t, err)
+
+	fromReader, err := ReadCSVRecords(strings.NewReader(csvContent))
+	require.NoError(t, err)
+
+	assert.Equal(t, fromPath, fromReader,
+		"reader-based core and path-based wrapper must produce identical records")
+}
+
+// TestReadCSVRecords_ReaderError 釘住 reader-boundary 失敗面：當底層 io.Reader 在
+// 串流途中報錯（iotest.ErrReader），ReadCSVRecords 必須把錯誤往上傳（不得 panic、
+// 不得回傳「err==nil 但 records 看似有效」的偽結果）。BOM peek 是第一個讀取點，
+// 因此 reader 的錯誤在 "peek BOM" 階段被包裝傳出。
+func TestReadCSVRecords_ReaderError(t *testing.T) {
+	records, err := ReadCSVRecords(iotest.ErrReader(errors.New("boom")))
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "boom", "底層 reader 的錯誤必須往上傳遞")
+	assert.Nil(t, records, "reader 出錯時不得回傳偽造的非 nil records")
+}
+
+// TestReadCSVRecords_EmptyMatchesEmptyFile 把「reader 空輸入」與「空檔案經 path
+// wrapper」綁在一起：不硬編碼空輸入是否算錯誤，只斷言兩條路徑的 error-ness 與
+// 結果一致（reader empty 必須與 file empty 行為相同）。
+func TestReadCSVRecords_EmptyMatchesEmptyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	emptyPath := filepath.Join(tmpDir, "empty.csv")
+	require.NoError(t, os.WriteFile(emptyPath, []byte(""), fsperm.FilePerm))
+
+	fromFile, fileErr := ReadCSVDirect(emptyPath)
+	fromReader, readerErr := ReadCSVRecords(strings.NewReader(""))
+
+	assert.Equal(t, fileErr == nil, readerErr == nil,
+		"reader 空輸入與空檔案必須有相同的 error-ness")
+	assert.Equal(t, fromFile, fromReader,
+		"reader 空輸入與空檔案必須產生相同的 records")
 }
 
 func TestReadCSVDirect_RelativeAndAbsolutePaths(t *testing.T) {

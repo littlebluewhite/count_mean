@@ -1,8 +1,12 @@
 package parsers
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -151,6 +155,102 @@ func TestEMGParser_ParseFile_FileNotFound(t *testing.T) {
 	_, _, err := parser.ParseFile("nonexistent_file.csv")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "無法開啟 EMG 檔案")
+}
+
+// TestEMGParser_Parse_FromReader 釘住 reader-based 入口：feed io.Reader 給
+// Parse 必須得到與 ParseFile（path-based wrapper）相同的結果，包含 frequency 推算。
+func TestEMGParser_Parse_FromReader(t *testing.T) {
+	const csvContent = `Time,Ch1,Ch2,Ch3
+0.000,100.5,200.3,150.8
+0.001,101.2,199.7,151.2
+0.002,99.8,201.1,149.5
+0.003,102.1,198.9,152.0`
+
+	parser := NewEMGParser()
+	data, frequency, err := parser.Parse(strings.NewReader(csvContent), "reader.csv")
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	assert.Len(t, data.Time, 4)
+	assert.Equal(t, 0.000, data.Time[0])
+	assert.Equal(t, 0.003, data.Time[3])
+	assert.Equal(t, []string{"Ch1", "Ch2", "Ch3"}, data.Headers)
+	assert.Equal(t, 100.5, data.Channels["Ch1"][0])
+	assert.Equal(t, 152.0, data.Channels["Ch3"][3])
+	// 0.001s 間隔 → 1000Hz
+	assert.InDelta(t, 1000.0, frequency, 1e-9)
+}
+
+// TestEMGParser_Parse_FromReaderWithBOM 確認 reader 入口仍會剝 BOM —
+// BOM-prefixed CSV 的第一個 header (Time) 不應殘留 U+FEFF 而導致 header 解析錯亂。
+func TestEMGParser_Parse_FromReaderWithBOM(t *testing.T) {
+	const bom = "\xEF\xBB\xBF"
+	content := bom + "Time,Ch1,Ch2\n0.000,1.0,2.0\n0.001,3.0,4.0\n"
+
+	parser := NewEMGParser()
+	data, _, err := parser.Parse(strings.NewReader(content), "bom.csv")
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	assert.Equal(t, []string{"Ch1", "Ch2"}, data.Headers,
+		"BOM must be stripped so first header is not polluted")
+	assert.Len(t, data.Time, 2)
+	assert.Equal(t, 1.0, data.Channels["Ch1"][0])
+}
+
+// TestEMGParser_Parse_MatchesParseFile 對同一輸入比對 reader 入口與 path wrapper
+// 的結果一致（wrapper 只是「開檔 + delegate」）。
+func TestEMGParser_Parse_MatchesParseFile(t *testing.T) {
+	const csvContent = `Time,Ch1,Ch2
+0.000,10.0,20.0
+0.001,11.0,21.0
+0.002,12.0,22.0`
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "emg_match_*.csv")
+	require.NoError(t, err)
+	_, err = tmpFile.WriteString(csvContent)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	parser := NewEMGParser()
+
+	fromFile, freqFile, err := parser.ParseFile(tmpFile.Name())
+	require.NoError(t, err)
+
+	fromReader, freqReader, err := parser.Parse(strings.NewReader(csvContent), "match.csv")
+	require.NoError(t, err)
+
+	assert.Equal(t, fromFile, fromReader, "reader entry and path wrapper must agree on data")
+	assert.InDelta(t, freqFile, freqReader, 1e-9, "frequency must match")
+}
+
+// TestEMGParser_Parse_ReaderError 釘住 reader-boundary 失敗面：當底層 io.Reader 在
+// 串流途中報錯（iotest.ErrReader），Parse 必須把錯誤往上傳（含 name context），
+// 不得 panic、不得回傳「err==nil 但 data 非 nil」的偽結果。
+func TestEMGParser_Parse_ReaderError(t *testing.T) {
+	data, freq, err := NewEMGParser().Parse(iotest.ErrReader(errors.New("boom")), "err.csv")
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "boom", "底層 reader 錯誤必須往上傳遞")
+	assert.Contains(t, err.Error(), "err.csv", "錯誤需帶上 name context")
+	assert.Nil(t, data, "reader 出錯時不得回傳偽造的非 nil data")
+	assert.Zero(t, freq)
+}
+
+// TestEMGParser_Parse_EmptyMatchesEmptyFile 把「reader 空輸入」與「空檔案經
+// ParseFile wrapper」綁在一起：不硬編碼 EMG 對空輸入的契約，只斷言兩條路徑的
+// error-ness 一致（reader empty 必須與 file empty 行為相同）。
+func TestEMGParser_Parse_EmptyMatchesEmptyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	emptyPath := filepath.Join(tmpDir, "empty_emg.csv")
+	require.NoError(t, os.WriteFile(emptyPath, []byte(""), 0o600))
+
+	parser := NewEMGParser()
+	_, _, fileErr := parser.ParseFile(emptyPath)
+	_, _, readerErr := parser.Parse(strings.NewReader(""), emptyPath)
+
+	assert.Equal(t, fileErr == nil, readerErr == nil,
+		"reader 空輸入與空檔案必須有相同的 error-ness")
 }
 
 func TestEMGParser_GetDataInTimeRange(t *testing.T) {

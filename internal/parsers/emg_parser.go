@@ -2,9 +2,12 @@ package parsers
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"count_mean/internal/models"
+	"count_mean/internal/security/fsperm"
 	"count_mean/util"
 )
 
@@ -92,13 +95,39 @@ func validateEMGDataIntegrity(emgData *models.PhaseSyncEMGData) error {
 
 // ParseFile 解析 EMG CSV 檔案。回傳 (data, frequency, error)：frequency 由前兩個時間點差值
 // 推算（Hz）；當資料不足或計算失敗時，frequency 為 0。
+//
+// Thin wrapper: opens with fsperm.ReadFlags (O_NOFOLLOW) then delegates to
+// Parse. The reader-based core (Parse) lets the Phase-D validated-open door
+// hand an already-open *os.File straight in without re-opening by path.
 func (p *EMGParser) ParseFile(filepath string) (*models.PhaseSyncEMGData, float64, error) {
-	records, err := ReadCSVDirect(filepath)
+	file, err := os.OpenFile(filepath, fsperm.ReadFlags, 0) //nolint:gosec // filepath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
 	if err != nil {
 		return nil, 0, fmt.Errorf("無法開啟 EMG 檔案 %s: %w", filepath, err)
 	}
 
-	// acknowledgement：ReadCSVDirect 走 jagged-row 容忍模式
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	return p.Parse(file, filepath)
+}
+
+// Parse 從 io.Reader 解析 EMG CSV 資料。name 僅用於 error context（reader 不知道
+// 自己的檔名）。回傳 (data, frequency, error)，語意與 ParseFile 相同。
+func (p *EMGParser) Parse(r io.Reader, name string) (*models.PhaseSyncEMGData, float64, error) {
+	records, err := ReadCSVRecords(r)
+	if err != nil {
+		return nil, 0, fmt.Errorf("無法讀取 EMG 檔案 %s: %w", name, err)
+	}
+
+	return p.parseEMGRecords(records)
+}
+
+// parseEMGRecords 由 ParseFile / Parse 共用的 EMG record 解析核心。
+func (p *EMGParser) parseEMGRecords(records [][]string) (*models.PhaseSyncEMGData, float64, error) {
+	// acknowledgement：ReadCSVRecords 走 jagged-row 容忍模式
 	// （FieldsPerRecord=-1, LazyQuotes=true），無法靠 csv.Reader 本身擋 formula
 	// injection / script / SQL / command injection。理想是進入 EMG 語意層前用
 	// ValidateCSVRow 對每筆 cell 過 cell-level injection 守門。

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -71,22 +72,65 @@ type ANCHeader struct {
 }
 
 // ParseFile 解析 ANC 檔案（支援 .anc 文字格式和 .xlsx Excel 格式）.
+//
+// Thin wrapper: opens with fsperm.ReadFlags (O_NOFOLLOW) then delegates to
+// Parse. Routing the XLSX branch through this fsperm.ReadFlags open + the
+// reader-based excelize.OpenReader (instead of a raw excelize.OpenFile(path))
+// closes the pre-existing "excelize.OpenFile bypasses O_NOFOLLOW" symlink hole
+// on the live path — keep this property.
 func (p *ANCParser) ParseFile(filePath string) (*models.ForceData, error) {
-	// 根據副檔名選擇解析方式
-	ext := strings.ToLower(filepath.Ext(filePath))
+	file, err := os.OpenFile(filePath, fsperm.ReadFlags, 0) //nolint:gosec // filePath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
+	if err != nil {
+		// 與既有契約對齊：text 路徑用「無法開啟 ANC 檔案」、xlsx 路徑用「無法開啟 Excel
+		// 檔案」。ext 在 open 失敗時就決定錯誤前綴，維持 caller 既有的 errors.Contains 斷言。
+		return nil, p.wrapOpenError(filePath, err)
+	}
+
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	return p.Parse(file, filePath)
+}
+
+// wrapOpenError 依副檔名選擇開檔失敗的錯誤前綴，保留 ParseFile 既有的 caller 契約
+// （xlsx 走 "無法開啟 Excel 檔案"、其餘走 "無法開啟 ANC 檔案"）。
+func (p *ANCParser) wrapOpenError(name string, err error) error {
+	if isXLSXName(name) {
+		return fmt.Errorf("無法開啟 Excel 檔案 %s: %w", name, err)
+	}
+
+	return fmt.Errorf("無法開啟 ANC 檔案 %s: %w", name, err)
+}
+
+// isXLSXName 依副檔名判斷是否為 xlsx（含複合副檔名如 .anc.xlsx）。
+func isXLSXName(name string) bool {
+	return strings.HasSuffix(strings.ToLower(name), ".xlsx")
+}
+
+// Parse 從 io.Reader 解析 ANC 資料，依 name 的副檔名分流 text / xlsx。
+// name 同時提供 (a) 副檔名分流 與 (b) error context（reader 不知道自己的檔名）。
+//
+// xlsx 走 excelize.OpenReader 而非 excelize.OpenFile(path)，因此 caller（含 ParseFile
+// wrapper）以 fsperm.ReadFlags 開檔後傳入的 reader 仍享 O_NOFOLLOW 保護 —
+// 補上 excelize.OpenFile 原本繞過 O_NOFOLLOW 的破口。
+func (p *ANCParser) Parse(r io.Reader, name string) (*models.ForceData, error) {
+	ext := strings.ToLower(filepath.Ext(name))
 
 	switch ext {
 	case ".xlsx":
-		return p.parseXLSXFile(filePath)
+		return p.parseXLSXReader(r, name)
 	case ".anc":
-		return p.parseANCTextFile(filePath)
+		return p.parseANCTextReader(r, name)
 	default:
 		// 對於複合副檔名如 .anc.xlsx，檢查是否以 .xlsx 結尾
-		if strings.HasSuffix(strings.ToLower(filePath), ".xlsx") {
-			return p.parseXLSXFile(filePath)
+		if isXLSXName(name) {
+			return p.parseXLSXReader(r, name)
 		}
 		// 默認使用文字解析（向後兼容）
-		return p.parseANCTextFile(filePath)
+		return p.parseANCTextReader(r, name)
 	}
 }
 
@@ -228,24 +272,14 @@ func validateForceDataIntegrity(forceData *models.ForceData) error {
 	return nil
 }
 
-// parseANCTextFile 解析文字格式的 ANC 檔案.
-func (p *ANCParser) parseANCTextFile(filePath string) (*models.ForceData, error) {
-	file, err := os.OpenFile(filePath, fsperm.ReadFlags, 0) //nolint:gosec // filePath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
-	if err != nil {
-		return nil, fmt.Errorf("無法開啟 ANC 檔案 %s: %w", filePath, err)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			// Log error but don't override original error
-			_ = closeErr
-		}
-	}()
-
+// parseANCTextReader 解析文字格式的 ANC 資料（reader-based 核心）。
+// name 僅用於 error context（reader 不知道自己的檔名）。
+// 由 Parse 分流呼叫；ParseFile 經 Parse 走到此處。
+func (p *ANCParser) parseANCTextReader(r io.Reader, _ string) (*models.ForceData, error) {
 	// BOM 偵測：與 phase_manifest_parser.go / csv_handler.go 對稱。Excel 匯出帶
 	// UTF-8 BOM (0xEF 0xBB 0xBF) 的 ANC 文字檔，第一欄首字含 U+FEFF 會讓
 	// `File_Type:` 比對失敗、channel name 多前綴 → 下游 silent miscalculation。
-	bufReader := bufio.NewReaderSize(file, BufferInitKB*KilobyteMultiplier)
+	bufReader := bufio.NewReaderSize(r, BufferInitKB*KilobyteMultiplier)
 	if _, err := csvutil.PeekBOM(bufReader); err != nil {
 		return nil, fmt.Errorf("BOM 偵測失敗: %w", err)
 	}
@@ -292,14 +326,22 @@ func (p *ANCParser) parseANCTextFile(filePath string) (*models.ForceData, error)
 	return forceData, nil
 }
 
+// parseXLSXReader 解析 xlsx 格式的 ANC 資料（reader-based 核心）。
+// name 僅用於 error context（reader 不知道自己的檔名）。
+//
 // 2. ANC 格式的 xlsx（有 11 行頭部資訊，第 9 行是通道名稱，第 12 行開始是數據）.
 //
+// 用 excelize.OpenReader 而非 excelize.OpenFile(path)：caller（ParseFile wrapper）
+// 已以 fsperm.ReadFlags（O_NOFOLLOW）開檔，OpenReader 直接吃該 reader，避免 excelize
+// 自行以 path 重開而繞過 O_NOFOLLOW symlink 保護。OpenReader 回傳的 *excelize.File
+// 仍須 Close（持有解壓暫存資源），保留原本的 defer Close。
+//
 //nolint:err113 // dynamic errors with Chinese messages; Excel is proper noun
-func (p *ANCParser) parseXLSXFile(filePath string) (*models.ForceData, error) {
-	// 開啟 Excel 檔案
-	excelFile, err := excelize.OpenFile(filePath)
+func (p *ANCParser) parseXLSXReader(r io.Reader, name string) (*models.ForceData, error) {
+	// 從 reader 開啟 Excel；O_NOFOLLOW 保護由 caller 的 OpenFile 提供，此處不再以 path 重開。
+	excelFile, err := excelize.OpenReader(r)
 	if err != nil {
-		return nil, fmt.Errorf("無法開啟 Excel 檔案 %s: %w", filePath, err)
+		return nil, fmt.Errorf("無法開啟 Excel 檔案 %s: %w", name, err)
 	}
 
 	defer func() {
@@ -311,7 +353,7 @@ func (p *ANCParser) parseXLSXFile(filePath string) (*models.ForceData, error) {
 	// 獲取第一個工作表名稱
 	sheetName := excelFile.GetSheetName(0)
 	if sheetName == "" {
-		return nil, fmt.Errorf("Excel 檔案沒有工作表: %s", filePath)
+		return nil, fmt.Errorf("Excel 檔案沒有工作表: %s", name)
 	}
 
 	// 讀取所有行
@@ -321,7 +363,7 @@ func (p *ANCParser) parseXLSXFile(filePath string) (*models.ForceData, error) {
 	}
 
 	if len(rows) < 2 {
-		return nil, fmt.Errorf("Excel 檔案數據不足（需要至少標題行和一行數據）: %s", filePath)
+		return nil, fmt.Errorf("Excel 檔案數據不足（需要至少標題行和一行數據）: %s", name)
 	}
 
 	// 檢測檔案格式：ANC 格式的第一行通常以 "File_Type:" 開頭
@@ -333,10 +375,10 @@ func (p *ANCParser) parseXLSXFile(filePath string) (*models.ForceData, error) {
 	}
 
 	if isANCFormat {
-		return p.parseANCFormatXLSX(rows, filePath)
+		return p.parseANCFormatXLSX(rows, name)
 	}
 
-	return p.parseSimpleXLSX(rows, filePath)
+	return p.parseSimpleXLSX(rows, name)
 }
 
 // parseANCFormatXLSX 解析 ANC 格式的 xlsx 檔案（有頭部資訊）.

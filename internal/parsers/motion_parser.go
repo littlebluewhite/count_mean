@@ -1,14 +1,12 @@
 package parsers
 
 import (
-	"bufio"
-	"encoding/csv"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 
-	"count_mean/internal/csvutil"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
 	"count_mean/internal/security/fsperm"
@@ -58,6 +56,10 @@ func NewMotionParserWithLogger(logger *logging.Logger) *MotionParser {
 
 // readCSVRecords 讀取 CSV 檔案並返回記錄.
 //
+// Thin wrapper: opens with fsperm.ReadFlags (O_NOFOLLOW) then delegates to the
+// shared BOM-aware ReadCSVRecords core. BOM 偵測對 Motion CSV 是 load-bearing —
+// Excel 匯出含 UTF-8 BOM (0xEF 0xBB 0xBF) 時第一欄（Series header label）會被汙染。
+//
 //nolint:revive // keep consistent API
 func (p *MotionParser) readCSVRecords(filepath string) ([][]string, error) {
 	file, err := os.OpenFile(filepath, fsperm.ReadFlags, 0) //nolint:gosec // filepath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
@@ -71,21 +73,7 @@ func (p *MotionParser) readCSVRecords(filepath string) ([][]string, error) {
 		}
 	}()
 
-	// Buffered single-pass 與 ReadCSVDirect 對稱：bufio + PeekBOM 取代過去
-	// 直接 csv.NewReader(file) 無 BOM 偵測的不對稱 — Motion CSV 若由 Excel 匯出
-	// 含 UTF-8 BOM (0xEF 0xBB 0xBF)，第一個欄位（如 Series header label）會被汙染。
-	// reader.ReadAll() 仍會 materialize [][]string；非 row-by-row 流式（cross-compare review）。
-	bufReader := bufio.NewReaderSize(file, csvReaderBufSize)
-	if _, err := csvutil.PeekBOM(bufReader); err != nil {
-		return nil, fmt.Errorf("讀取 Motion BOM 失敗: %w", err)
-	}
-
-	reader := csv.NewReader(bufReader)
-	reader.TrimLeadingSpace = true
-	reader.LazyQuotes = true
-	reader.FieldsPerRecord = -1
-
-	records, err := reader.ReadAll()
+	records, err := ReadCSVRecords(file)
 	if err != nil {
 		return nil, fmt.Errorf("讀取 Motion CSV 失敗: %w", err)
 	}
@@ -226,13 +214,35 @@ func (p *MotionParser) validateDataIntegrity(motionData *models.MotionData) erro
 
 // ParseFile 解析 Motion CSV 檔案.
 //
-//nolint:err113 // dynamic errors with Chinese messages; Motion is proper noun
+// Thin wrapper: readCSVRecords opens with fsperm.ReadFlags (O_NOFOLLOW) then
+// delegates to the shared parseMotionRecords core. The reader-based Parse lets
+// the Phase-D validated-open door hand an already-open *os.File straight in.
 func (p *MotionParser) ParseFile(filepath string) (*models.MotionData, error) {
 	records, err := p.readCSVRecords(filepath)
 	if err != nil {
 		return nil, err
 	}
 
+	return p.parseMotionRecords(records)
+}
+
+// Parse 從 io.Reader 解析 Motion CSV 資料。name 僅用於 error context（reader 不知道
+// 自己的檔名）。語意與 ParseFile 相同。
+//
+//nolint:err113 // dynamic errors with Chinese messages; Motion is proper noun
+func (p *MotionParser) Parse(r io.Reader, name string) (*models.MotionData, error) {
+	records, err := ReadCSVRecords(r)
+	if err != nil {
+		return nil, fmt.Errorf("讀取 Motion 檔案 %s 失敗: %w", name, err)
+	}
+
+	return p.parseMotionRecords(records)
+}
+
+// parseMotionRecords 由 ParseFile / Parse 共用的 Motion record 解析核心。
+//
+//nolint:err113 // dynamic errors with Chinese messages; Motion is proper noun
+func (p *MotionParser) parseMotionRecords(records [][]string) (*models.MotionData, error) {
 	if err := p.validateRecordStructure(records); err != nil {
 		return nil, err
 	}
