@@ -47,7 +47,8 @@ type PhaseSyncAnalyzer struct {
 }
 
 // NewPhaseSyncAnalyzer 創建新的分期同步分析器.
-// 不持有 PathValidator — 改為每個分析請求在 validateEMGFilePath 內基於 baseFolder 建立。
+// 不持有 PathValidator — manifest 檔案路徑解析改走無狀態的 security.ResolveLenientPath
+// （見 validateEMGFilePath），無 request-scoped validator 狀態需要管理。
 func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 	return &PhaseSyncAnalyzer{
 		manifestParser:  parsers.NewPhaseManifestParser(),
@@ -60,15 +61,15 @@ func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 }
 
 // validationContext 驗證上下文，用於在驗證步驟之間傳遞數據.
-// pathValidator 在 validateEMGFilePath 內基於 baseFolder 建立，後續驗證共用，
-// 改為 request-scoped 後 analyzer 不再持有 PathValidator 欄位 — 避免並發污染。
+// baseFolder 在 validateEMGFilePath 內解析後存入，後續 validateMotionFile /
+// validateForceFile 共用。路徑解析改走無狀態的 security.ResolveLenientPath，
+// ctx 不再持有 PathValidator — 避免並發污染，且接受 BTS 字面 "%" 檔名。
 type validationContext struct {
-	params        *models.AnalysisParams
-	manifests     []models.PhaseManifest
-	manifest      models.PhaseManifest
-	baseFolder    string
-	emgFilePath   string
-	pathValidator *security.PathValidator
+	params      *models.AnalysisParams
+	manifests   []models.PhaseManifest
+	manifest    models.PhaseManifest
+	baseFolder  string
+	emgFilePath string
 }
 
 // validationStep 定義驗證步驟函數類型.
@@ -117,12 +118,18 @@ func validatePhaseOrder(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 }
 
 // validateEMGFilePath 驗證 EMG 檔案路徑.
-// 第一個用到 PathValidator 的步驟負責 lazily 建立 request-scoped instance；
-// 後續 validateMotionFile / validateForceFile 共用 ctx.pathValidator。
 //
 // 先 Stat baseFolder 確認存在，否則 EvalSymlinks 失敗會 silently 落回
-// 原始字串，再下游 PathValidator.GetSafePath 才以一個不存在的 base 失敗，錯誤
-// 訊息對使用者沒有直接幫助。顯式擋下，配合 ErrBaseFolderNotFound 給明確訊息。
+// 原始字串，再下游路徑解析才以一個不存在的 base 失敗，錯誤訊息對使用者沒有
+// 直接幫助。顯式擋下，配合 ErrBaseFolderNotFound 給明確訊息。baseFolder 解析後
+// 存入 ctx，後續 validateMotionFile / validateForceFile 共用。
+//
+// EMG / Motion / Force 路徑解析走 security.ResolveLenientPath（允許含 literal "%"
+// 的 BTS 匯出檔名，如 "NSF_1_BTS%_*.csv"），對齊 cci / muscle_ratio 與 lenient_path.go
+// 的 decision matrix。ResolveLenientPath 內部已對 joined 與 baseFolder 做
+// EvalSymlinks + Rel 邊界檢查（涵蓋舊版「再解析 symlink 後重新 ValidateFilePath」
+// 那一步的 symlink-escape 防護）；不再額外跑 strict ValidateFilePath —— 後者
+// strictPercent=true 會把合法的字面 "%" 誤判為 URL-encoded 殘留而拒載。
 func validateEMGFilePath(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 	baseFolder := ctx.params.DataFolder
 	if info, err := os.Stat(baseFolder); err != nil {
@@ -139,22 +146,10 @@ func validateEMGFilePath(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 	}
 
 	ctx.baseFolder = baseFolder
-	ctx.pathValidator = security.NewPathValidator([]string{baseFolder})
 
-	emgFilePath, err := ctx.pathValidator.GetSafePath(baseFolder, ctx.manifest.EMGFile)
+	emgFilePath, err := security.ResolveLenientPath(baseFolder, ctx.manifest.EMGFile)
 	if err != nil {
 		return fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
-	}
-
-	// 解析符號連結並再次驗證
-	if resolvedPath, err := filepath.EvalSymlinks(emgFilePath); err == nil {
-		if err := ctx.pathValidator.ValidateFilePath(resolvedPath); err != nil {
-			return fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
-		}
-
-		emgFilePath = resolvedPath
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("EMG 檔案路徑解析失敗: %w", err)
 	}
 
 	ctx.emgFilePath = emgFilePath
@@ -170,7 +165,7 @@ func validateMotionFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 		return nil
 	}
 
-	motionFilePath, err := ctx.pathValidator.GetSafePath(ctx.baseFolder, ctx.manifest.MotionFile)
+	motionFilePath, err := security.ResolveLenientPath(ctx.baseFolder, ctx.manifest.MotionFile)
 	if err != nil {
 		return fmt.Errorf("Motion 檔案路徑驗證失敗: %w", err) //nolint:staticcheck // Chinese error message
 	}
@@ -223,7 +218,7 @@ func validateForceFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) erro
 		return nil
 	}
 
-	forceFilePath, err := ctx.pathValidator.GetSafePath(ctx.baseFolder, ctx.manifest.ForceFile)
+	forceFilePath, err := security.ResolveLenientPath(ctx.baseFolder, ctx.manifest.ForceFile)
 	if err != nil {
 		return fmt.Errorf("Force Plate 檔案路徑驗證失敗: %w", err) //nolint:staticcheck // Chinese error message
 	}
@@ -350,8 +345,8 @@ func SetParseEMGFileFnForTest(fn parseEMGFileFunc) (cleanup func()) {
 // 不同分期區間的工作流共用（例如標準化分期同步分析需要分別解析 normalize 範圍與
 // statistics 範圍）。後續呼叫 ResolvePhaseRange 取得具體時間區間。
 //
-// validateEMGFilePath 內部會 lazily 建立 request-scoped PathValidator 存入 ctx，
-// 不再對 analyzer-level singleton 做 SetAllowedBasePaths。
+// validateEMGFilePath 內部解析並存入 ctx.baseFolder，後續 Motion / Force 路徑解析
+// 共用；三者皆走無狀態的 security.ResolveLenientPath，無 request-scoped validator。
 //
 // 走 parseEMGFileFn test hook 取得 parser (production 預設 nil → 走
 // analyzer.emgParser.ParseFile)。
