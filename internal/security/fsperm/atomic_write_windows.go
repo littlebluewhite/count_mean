@@ -20,7 +20,7 @@ import (
 //
 // 此處不嘗試 CreateFile reparse-point 處理 — Windows symlink-atomic 列為 follow-up
 // (見 flags_windows.go "Future work",需 Windows CI 才能可信驗證)。
-func openAtomicWrite(_ /* anchorDir */, _ /* tmpRel */, _ /* targetRel */, tmpFull, targetFull string) (
+func openAtomicWrite(_ /* baseDir */, _ /* relParent */, _ /* tmpBase */, _ /* targetBase */, tmpFull, targetFull string) (
 	*AtomicWriteHandle, error,
 ) {
 	//nolint:gosec // tmpFull 父目錄已 EvalSymlinks + matchAnyBase 校驗 (caller-side)

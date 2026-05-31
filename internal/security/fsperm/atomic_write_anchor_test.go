@@ -2,10 +2,14 @@
 
 // Package fsperm internal test: pins the dirfd-anchor contract of the public
 // OpenAtomicWriteValidated entry. Lives in the internal `fsperm` package (not
-// `fsperm_test`) so it can read the unexported AtomicWriteHandle.tmpRel field to
-// assert that the entry now anchors the dirfd on the validated BASE and addresses
-// tmp/target by their path RELATIVE to that base (multi-component for a subdir
-// target) — closing the parent-component swap TOCTOU (codex P1).
+// `fsperm_test`) so it can read the unexported AtomicWriteHandle.tmpRel/targetRel
+// fields to assert that, for a subdir target, the entry anchors the dirfd on the
+// target's VALIDATED LEAF PARENT (reached by descending from the base) and
+// addresses tmp/target by their BASENAME — so the commit renameat traverses no
+// intermediate component a post-create swap could follow (codex r3 P2 / ADR-0017
+// Process-note pt14). The companion black-box test
+// TestOpenAtomicWriteValidated_SubdirCommitSurvivesParentSwap pins the runtime
+// security outcome; this one pins the internal representation.
 package fsperm
 
 import (
@@ -14,18 +18,14 @@ import (
 	"testing"
 )
 
-// TestOpenAtomicWriteValidated_AnchorsSubdirTargetRelativeToBase 釘住 codex P1:
-// 對位於 base 子目錄 (base/sub) 的 target,OpenAtomicWriteValidated 不可再把
-// resolvedParent (= base/sub) 當 dirfd 錨點 + basename 定址,而必須錨定在 base 並以
-// base-relative 多段路徑 (sub/out.csv.tmp.x) 定址 — 這樣 platform 層的
-// openat2(RESOLVE_BENEATH|NO_SYMLINKS) / openat(O_NOFOLLOW_ANY) 才會在「受信任的
-// base 之下」解析整段 rel path,杜絕 matchAnyBase 之後 parent component 被 swap 把
-// dirfd 導向攻擊者目錄。
-//
-// 紅綠:修正前 entry 設 handle.tmpRel = "out.csv.tmp.x" (僅 basename,錨在 parent);
-// 修正後設為 filepath.Join("sub","out.csv.tmp.x") (base-relative、多段)。本測試對前者
-// 紅、對後者綠。
-func TestOpenAtomicWriteValidated_AnchorsSubdirTargetRelativeToBase(t *testing.T) {
+// TestOpenAtomicWriteValidated_AnchorsSubdirTargetOnValidatedLeaf 釘住 codex r3 P2 的
+// Option A 修法:對 base 子目錄 (base/sub) 的 target,OpenAtomicWriteValidated 把 dirfd
+// 錨定在「從 base 下行解析出的 leaf 父目錄 (base/sub)」,並以 BASENAME 定址 tmp/target
+// (tmpRel="out.csv.tmp.x"、targetRel="out.csv",而非 round-2 的多段 "sub/out.csv.tmp.x")
+// —— 這樣 commit 的 renameat(leafDirfd, basename, leafDirfd, basename) 沒有中間 component
+// 可被 swap 跟穿,且 leaf dirfd PIN 住 inode。完整 open → write → commit 仍落在
+// base/sub/out.csv。
+func TestOpenAtomicWriteValidated_AnchorsSubdirTargetOnValidatedLeaf(t *testing.T) {
 	t.Parallel()
 
 	base, err := filepath.EvalSymlinks(t.TempDir())
@@ -44,15 +44,14 @@ func TestOpenAtomicWriteValidated_AnchorsSubdirTargetRelativeToBase(t *testing.T
 		t.Fatalf("OpenAtomicWriteValidated(subdir target): %v", err)
 	}
 
-	// 核心斷言:tmpRel 必須是 base-relative 多段路徑,而非 parent-anchored basename。
-	wantRel := filepath.Join("sub", "out.csv.tmp.x")
-	if h.tmpRel != wantRel {
-		t.Fatalf("handle.tmpRel = %q, want %q (entry 必須錨定 base 並以 base-relative 多段定址, codex P1)",
-			h.tmpRel, wantRel)
+	// 核心斷言:Option A 以 leaf 為 anchor,tmpRel/targetRel 是 BASENAME (單段),非
+	// round-2 的 base-relative 多段。基名單段 → commit renameat 無中間 component 可 swap。
+	if h.tmpRel != "out.csv.tmp.x" {
+		t.Fatalf("handle.tmpRel = %q, want %q (Option A: leaf-anchored basename, codex r3 P2)",
+			h.tmpRel, "out.csv.tmp.x")
 	}
-	wantTargetRel := filepath.Join("sub", "out.csv")
-	if h.targetRel != wantTargetRel {
-		t.Errorf("handle.targetRel = %q, want %q", h.targetRel, wantTargetRel)
+	if h.targetRel != "out.csv" {
+		t.Errorf("handle.targetRel = %q, want %q", h.targetRel, "out.csv")
 	}
 
 	// 完整 open → write → commit:檔案應落在 base/sub/out.csv。

@@ -320,3 +320,70 @@ func TestOpenAtomicWriteValidated_RelativeTargetAbsoluteBase(t *testing.T) {
 		t.Errorf("committed content = %q, want %q", got, "ok")
 	}
 }
+
+// TestOpenAtomicWriteValidated_SubdirCommitSurvivesParentSwap 釘住 codex r3 P2 的
+// Option A 修法 (nested validated leaf anchor):對 base 子目錄 target,primitive 把
+// dirfd 錨定在「以 openat2 RESOLVE_NO_SYMLINKS / openat O_NOFOLLOW_ANY 從 base 下行
+// 解析出的 leaf 父目錄」,並以 basename 定址 tmp/target。該 fd PIN 住 leaf inode,
+// 故即使在 open 之後、commit 之前把中間 component (sub) 抽換成指向 base 外的 symlink,
+// commit 的 renameat 仍落在被 pin 的原 inode、絕不跟穿 symlink 逃出 base。
+//
+// 紅綠:51cb437 (base-anchored、多段 rel) 的 Commit 走 renameat(baseDirfd,
+// "sub/…tmp", baseDirfd, "sub/…") —— swap 後 source "sub/…tmp" 經 symlink 解析到
+// evil/ 找不到 tmp (實體在被移走的 real sub) → renameat ENOENT → Commit 報錯 (紅)。
+// Option A 經 pinned leaf dirfd 以 basename renameat → 落在原 inode、成功 (綠)。
+// 非 parallel:在 open 與 commit 之間變更目錄結構。
+func TestOpenAtomicWriteValidated_SubdirCommitSurvivesParentSwap(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("setup: EvalSymlinks(base): %v", err)
+	}
+	sub := filepath.Join(base, "sub")
+	if err := os.MkdirAll(sub, 0o750); err != nil {
+		t.Fatalf("setup: MkdirAll sub: %v", err)
+	}
+	evil := filepath.Join(base, "evil")
+	if err := os.MkdirAll(evil, 0o750); err != nil {
+		t.Fatalf("setup: MkdirAll evil: %v", err)
+	}
+
+	target := filepath.Join(sub, "out.csv")
+	tmp := tmpFor(target)
+	h, err := fsperm.OpenAtomicWriteValidated(target, tmp, []string{base})
+	if err != nil {
+		t.Fatalf("subdir target 應被接受 (Option A leaf-anchor): %v", err)
+	}
+	if _, err := h.File().Write([]byte("ok")); err != nil {
+		t.Fatalf("write tmp: %v", err)
+	}
+	if err := h.File().Close(); err != nil {
+		t.Fatalf("close tmp: %v", err)
+	}
+
+	// 攻擊:open 之後、commit 之前,把 real sub 移走、讓 name "sub" 指向 base 外的 evil。
+	subMoved := filepath.Join(base, "sub_moved")
+	if err := os.Rename(sub, subMoved); err != nil {
+		t.Fatalf("attack: rename sub aside: %v", err)
+	}
+	if err := os.Symlink(evil, sub); err != nil {
+		t.Fatalf("attack: symlink sub → evil: %v", err)
+	}
+
+	// Option A:renameat 經 pinned leaf dirfd、basename → 落在原 inode (現 sub_moved)。
+	if err := h.Commit(); err != nil {
+		t.Fatalf("commit 應成功 (pinned leaf dirfd 不受 swap 影響): %v", err)
+	}
+
+	// 落在被 pin 的原 inode (sub_moved),內容完整。
+	got, err := os.ReadFile(filepath.Join(subMoved, "out.csv")) //nolint:gosec // test path
+	if err != nil {
+		t.Fatalf("committed 檔應在 pinned inode (sub_moved): %v", err)
+	}
+	if string(got) != "ok" {
+		t.Errorf("committed content = %q, want %q", got, "ok")
+	}
+	// 絕不逃逸:evil 下不該出現任何檔。
+	if _, statErr := os.Stat(filepath.Join(evil, "out.csv")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("rename 不得跟穿被抽換的 symlink 逃進 evil, Stat err = %v", statErr)
+	}
+}

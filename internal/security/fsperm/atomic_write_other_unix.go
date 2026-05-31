@@ -16,7 +16,7 @@ import (
 // 專案主要支援 linux / darwin / windows;此 fallback 僅為編譯完整性。若未來需在
 // *BSD 強化,可改用 FreeBSD O_RESOLVE_BENEATH 模仿 atomic_write_linux.go 的 dirfd
 // 錨定路徑。
-func openAtomicWrite(_ /* anchorDir */, _ /* tmpRel */, _ /* targetRel */, tmpFull, targetFull string) (
+func openAtomicWrite(_ /* baseDir */, _ /* relParent */, _ /* tmpBase */, _ /* targetBase */, tmpFull, targetFull string) (
 	*AtomicWriteHandle, error,
 ) {
 	//nolint:gosec // tmpFull 父目錄已 EvalSymlinks + matchAnyBase 校驗 (caller-side)

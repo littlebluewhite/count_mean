@@ -10,60 +10,92 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// openAtomicWrite 在 macOS 上以單一 dirfd 錨定整段 tmp-create → rename:
+// openAtomicWrite 在 macOS 上以單一 dirfd 錨定整段 tmp-create → rename。dirfd 是 target
+// 的「已驗證 leaf 父目錄」:
 //
-//  1. unix.Open(anchorDir, O_DIRECTORY|O_CLOEXEC) 拿 validated base 的 dirfd
-//  2. unix.Openat(dirfd, tmpRel, TmpCreateFlags|O_NOFOLLOW_ANY, FilePerm) 建 .tmp
-//  3. (commit 時) unix.Renameat(dirfd, tmpRel, dirfd, targetRel)
+//  1. unix.Open(baseDir, O_DIRECTORY|O_CLOEXEC) 拿 trust-root base 的 dirfd
+//  2. (subdir target) unix.Openat(baseDirfd, relParent, O_DIRECTORY|O_NOFOLLOW_ANY|
+//     O_CLOEXEC) 從 base 下行到 leaf、關掉 baseDirfd;relParent=="." 時 leaf 即 base
+//     (見 openLeafAnchor)
+//  3. openatTmp(leafDirfd, tmpBase, O_NOFOLLOW_ANY) 以 basename 建 .tmp
+//  4. (commit 時) unix.Renameat(leafDirfd, tmpBase, leafDirfd, targetBase)
 //
-// create 與 rename 都相對同一 dirfd → 攻擊者無法在兩步間 swap path component,關死
-// parent-swap TOCTOU (ADR-0017 Decision 6)。這是 openValidated (darwin) 的「寫一個
-// 檔」對映,差別在 dirfd 須跨 create→rename 存活 (由 handle 持有,Commit/Abort 關)。
+// 兩個關鍵安全性質:
+//   - 下行用 openat(O_NOFOLLOW_ANY) 從 base 開始 → matchAnyBase 之後 swap 進來、survive
+//     到 syscall 的 parent-component symlink 以 ELOOP 被擋 (codex P1),與 Linux
+//     RESOLVE_NO_SYMLINKS 對齊。
+//   - leaf dirfd PIN 住 leaf inode;tmp-create 與 rename 都以 basename 相對它,故 rename
+//     沒有中間 component 可被 swap,open 之後抽換 leaf 名也不影響經 fd 的操作 (codex r3 P2)。
 //
-// anchorDir 是 caller 已 boundary-check 的 base (trust root);tmpRel/targetRel 是
-// tmp/target 相對該 base 的路徑 (subdir target 時為多段)。macOS 無 RESOLVE_BENEATH
-// 等價;boundary 已在 caller-side matchAnyBase 完成。O_NOFOLLOW_ANY (macOS 12+) 讓
-// kernel 在 openat 階段拒絕「任一 component 為 symlink」,擋 EvalSymlinks→openat 之間
-// swap 進來的 parent-component symlink TOCTOU,與 Linux RESOLVE_NO_SYMLINKS 對齊。
-//
-// O_CLOEXEC:dirfd 帶 O_CLOEXEC;tmp fd 則因 TmpCreateFlags 已含 O_CLOEXEC? — 不,
-// TmpCreateFlags 不含 O_CLOEXEC。但 unix.Openat 與 os.OpenFile 不同,raw syscall 不
-// 自動帶 CLOEXEC。darwin 上 openValidated 透過 os.OpenFile 取得自動 CLOEXEC;此處走
-// raw openat 故顯式 OR O_CLOEXEC 進 flags,避免 Wails 子行程 inherit tmp fd。
+// macOS 無 RESOLVE_BENEATH 等價;boundary 已在 caller-side matchAnyBase 完成。O_CLOEXEC:
+// unix.Open/Openat raw syscall 不自動帶 CLOEXEC (os.OpenFile 才會),顯式 OR 進 flags,
+// 避免 Wails 子行程 inherit dirfd / tmp fd。
 //
 // macOS 11 與更舊 (Go 1.26 baseline 為 macOS 12+,理論上不 hit) 不認 O_NOFOLLOW_ANY,
-// openat 回 EINVAL;fallback 移除該 flag 重試,dirfd 錨定仍在 (只失去 per-component
-// symlink rejection,與 validated_open_darwin.go EINVAL fallback 同語義)。
-func openAtomicWrite(anchorDir, tmpRel, targetRel, tmpFull, targetFull string) (*AtomicWriteHandle, error) {
-	dirfd, err := unix.Open(anchorDir, unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+// openat 回 EINVAL;leaf 下行與 tmp-create 都移除該 flag 重試,dirfd 錨定仍在 (只失去
+// per-component symlink rejection,與 validated_open_darwin.go EINVAL fallback 同語義)。
+func openAtomicWrite(baseDir, relParent, tmpBase, targetBase, tmpFull, targetFull string) (*AtomicWriteHandle, error) {
+	anchorFD, err := openLeafAnchor(baseDir, relParent)
 	if err != nil {
-		return nil, fmt.Errorf("open dirfd(%s): %w", anchorDir, err)
+		return nil, err // ErrPathEscapesBase (ELOOP) 或已 wrap 的 open 錯誤
 	}
 
-	fd, err := openatTmp(dirfd, tmpRel, unix.O_NOFOLLOW_ANY)
+	fd, err := openatTmp(anchorFD, tmpBase, unix.O_NOFOLLOW_ANY)
 	if errors.Is(err, unix.EINVAL) {
 		// macOS 11 / 更舊不認 O_NOFOLLOW_ANY → 移除 flag 重試 (dirfd 錨定保留)。
-		fd, err = openatTmp(dirfd, tmpRel, 0)
+		fd, err = openatTmp(anchorFD, tmpBase, 0)
 	}
 	if err != nil {
-		_ = unix.Close(dirfd) //nolint:errcheck // cleanup-only;nothing written through dirfd
+		_ = unix.Close(anchorFD) //nolint:errcheck // cleanup-only;nothing written through dirfd
 		// ELOOP:O_NOFOLLOW_ANY 觸發 (path 含 symlink component)。當 escape 處理,
 		// 回 ErrPathEscapesBase 與 Linux EXDEV/ELOOP 路徑一致。
 		if errors.Is(err, unix.ELOOP) {
-			return nil, fmt.Errorf("%w: openat(%s under %s, tmp-create) rejected: %w",
-				ErrPathEscapesBase, tmpRel, anchorDir, err)
+			return nil, fmt.Errorf("%w: openat(%s under leaf, tmp-create) rejected: %w",
+				ErrPathEscapesBase, tmpBase, err)
 		}
-		return nil, fmt.Errorf("openat(%s under %s, tmp-create): %w", tmpRel, anchorDir, err)
+		return nil, fmt.Errorf("openat(%s under leaf, tmp-create): %w", tmpBase, err)
 	}
 
 	return &AtomicWriteHandle{
 		file:       os.NewFile(uintptr(fd), tmpFull),
-		dirfd:      dirfd,
-		tmpRel:     tmpRel,
-		targetRel:  targetRel,
+		dirfd:      anchorFD,
+		tmpRel:     tmpBase,
+		targetRel:  targetBase,
 		tmpPath:    tmpFull,
 		targetPath: targetFull,
 	}, nil
+}
+
+// openLeafAnchor 開 baseDir 為 dirfd;relParent != "." 時再以 openat(O_NOFOLLOW_ANY) 從
+// base 下行到 target 的 leaf 父目錄,回傳該 leaf 作為 anchor 並關掉 baseDir。
+// relParent=="." (或 "") → baseDir 本身即 anchor。
+//
+// 回傳的 fd PIN 住 leaf inode (codex r3 P2);下行從 base dirfd 開始、O_NOFOLLOW_ANY 擋
+// 任一 component 為 symlink (codex P1)。EINVAL (舊 macOS 不認 O_NOFOLLOW_ANY) → 移除 flag
+// 重試。ELOOP → ErrPathEscapesBase。
+func openLeafAnchor(baseDir, relParent string) (int, error) {
+	baseDirFD, err := unix.Open(baseDir, unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fdNone, fmt.Errorf("open base dirfd(%s): %w", baseDir, err)
+	}
+	if relParent == "." || relParent == "" {
+		return baseDirFD, nil
+	}
+
+	leafFD, err := unix.Openat(baseDirFD, relParent, unix.O_DIRECTORY|unix.O_NOFOLLOW_ANY|unix.O_CLOEXEC, 0)
+	if errors.Is(err, unix.EINVAL) {
+		// 舊 macOS 不認 O_NOFOLLOW_ANY → 移除 flag 重試 (錨定仍在)。
+		leafFD, err = unix.Openat(baseDirFD, relParent, unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	}
+	_ = unix.Close(baseDirFD) //nolint:errcheck // base 只用來錨定 leaf 下行
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return fdNone, fmt.Errorf("%w: leaf openat(%s under %s) rejected: %w",
+				ErrPathEscapesBase, relParent, baseDir, err)
+		}
+		return fdNone, fmt.Errorf("leaf openat(%s under %s): %w", relParent, baseDir, err)
+	}
+	return leafFD, nil
 }
 
 // openatTmp 以 dirfd 為錨點 + TmpCreateFlags|extraFlags|O_CLOEXEC 建立 tmpRel。

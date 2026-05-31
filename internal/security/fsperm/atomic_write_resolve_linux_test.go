@@ -1,23 +1,22 @@
 //go:build linux
 
 // Package fsperm internal test: exercises the RESOLVE_NO_SYMLINKS edge for the
-// dirfd-anchored atomic-write primitive (openAtomicWrite). Lives in the internal
-// `fsperm` package (not `fsperm_test`) so it can call the unexported
-// openAtomicWrite directly with a crafted multi-component tmpBase whose
-// intermediate component is an in-base symlink — the only way to place a
-// surviving symlink at the openat2 tmp-create boundary deterministically.
+// dirfd-anchored atomic-write primitive (openAtomicWrite / openLeafAnchor). Lives
+// in the internal `fsperm` package (not `fsperm_test`) so it can call the
+// unexported openAtomicWrite directly with a crafted relParent whose component is
+// an in-base symlink — the only way to place a surviving symlink at the
+// leaf-descent openat2 boundary deterministically.
 //
 // Why the public OpenAtomicWriteValidated cannot exercise this: it runs
-// evalSymlinksWithFallback(parent) FIRST and only the tmp/target *basenames*
-// reach the platform openAtomicWrite, so the resolved parent never contains a
-// symlink component by the time openat2 runs. To assert that RESOLVE_NO_SYMLINKS
-// rejects a parent-component symlink that DOES survive to the openat2 syscall —
-// the TOCTOU swap the flag exists to close — we hand openAtomicWrite a tmpBase
-// of the form "linkdir/out.csv.tmp" where linkdir is an in-base symlink,
-// simulating "a symlink was swapped in after EvalSymlinks". The PARENT component
-// (not the leaf) isolates RESOLVE_NO_SYMLINKS: a leaf-symlink tmpBase would
-// already be rejected by O_NOFOLLOW (from TmpCreateFlags) alone (see the
-// secondary subtest), so it cannot prove the new flag. Deterministic, non-flaky.
+// evalSymlinksWithFallback(parent) FIRST, so the relParent it hands the platform
+// layer is already symlink-free by the time openat2 runs. To assert that
+// RESOLVE_NO_SYMLINKS rejects a parent-component symlink that DOES survive to the
+// openat2 syscall — the TOCTOU swap the flag exists to close — we hand
+// openAtomicWrite a relParent of "linkdir" where linkdir is an in-base symlink,
+// simulating "a symlink was swapped in after EvalSymlinks". openLeafAnchor's
+// descent openat2 must reject it with ELOOP; a leaf-symlink (not a parent
+// component) would instead be caught by O_EXCL / O_NOFOLLOW (see the secondary
+// subtest), so it cannot prove the descent flag. Deterministic, non-flaky.
 package fsperm
 
 import (
@@ -30,20 +29,20 @@ import (
 )
 
 // TestOpenAtomicWrite_RejectsSurvivingInBaseParentSymlink_Linux 釘住 ADR-0017
-// Decision 6 的 atomic-write 安全契約:openAtomicWrite 的 openat2 tmp-create 必須帶
+// Decision 6 的 atomic-write 安全契約:openLeafAnchor 的 leaf 下行 openat2 必須帶
 // RESOLVE_NO_SYMLINKS。模擬 parent-swap TOCTOU — 一個「在 evalSymlinksWithFallback
 // 之後才被換進來、survive 到 openat2 那一步」的 in-base parent-component symlink —
-// openat2 必須以 ELOOP 拒絕,openAtomicWrite 再 wrap 成 ErrPathEscapesBase。
+// openat2 必須以 ELOOP 拒絕,openLeafAnchor 再 wrap 成 ErrPathEscapesBase。
 //
-// 構型:resolvedParent=base (dirfd 錨點),tmpBase="linkdir/out.csv.tmp" 其中
-// base/linkdir → base/realdir (relative、in-base symlink)。
-//   - target relative 留在 base 內 → RESOLVE_BENEATH 不先回 EXDEV;
-//   - symlink 在中間 (linkdir) 不在 leaf → O_NOFOLLOW (TmpCreateFlags) 不適用;
+// 構型:relParent="linkdir" 其中 base/linkdir → base/realdir (relative、in-base
+// symlink),openLeafAnchor 以 openat2(baseDirfd, "linkdir", RESOLVE_NO_SYMLINKS) 下行。
+//   - relParent 留在 base 內 → RESOLVE_BENEATH 不先回 EXDEV;
+//   - symlink 是 leaf 下行的 component → RESOLVE_NO_SYMLINKS 命中;
 //   - 於是 reject 完全來自 RESOLVE_NO_SYMLINKS → ELOOP。
 //
-// mutation:把 openAtomicWrite 的 Resolve 拿掉 RESOLVE_NO_SYMLINKS 後,在真實 Linux
-// 上此 parent-symlink tmp-create 會成功 (kernel 跟 linkdir → realdir 建出 .tmp),
-// 測試轉紅 — 證明本測例釘的正是該 flag,而非 RESOLVE_BENEATH 或 O_NOFOLLOW。
+// mutation:把 openLeafAnchor 的 Resolve 拿掉 RESOLVE_NO_SYMLINKS 後,在真實 Linux 上
+// 此 parent-symlink 下行會成功 (kernel 跟 linkdir → realdir 開出 leaf dirfd),測試轉紅
+// — 證明本測例釘的正是該 flag,而非 RESOLVE_BENEATH 或 O_NOFOLLOW。
 func TestOpenAtomicWrite_RejectsSurvivingInBaseParentSymlink_Linux(t *testing.T) {
 	requireOpenat2(t)
 
@@ -61,15 +60,16 @@ func TestOpenAtomicWrite_RejectsSurvivingInBaseParentSymlink_Linux(t *testing.T)
 		t.Fatalf("setup: Symlink linkdir: %v", err)
 	}
 
-	// tmpBase 的中間 component (linkdir) 仍是 symlink — 模擬 EvalSymlinks 之後、
-	// openat2 之前被 swap 進來的 parent symlink。targetBase 同樣以 linkdir/ 為前綴
-	// (commit 不會走到,open 先被擋)。
-	tmpBase := filepath.Join("linkdir", "out.csv.tmp.deadbeef")
-	targetBase := filepath.Join("linkdir", "out.csv")
-	tmpPath := filepath.Join(base, tmpBase)
-	targetPath := filepath.Join(base, targetBase)
+	// relParent (linkdir) 仍是 symlink — 模擬 EvalSymlinks 之後、openLeafAnchor 的 leaf
+	// 下行 openat2 之前被 swap 進來的 parent symlink。leaf 下行以 RESOLVE_NO_SYMLINKS 解析
+	// relParent,遇 linkdir → ELOOP,open 先被擋 (tmp-create / commit 都走不到)。
+	relParent := "linkdir"
+	tmpName := "out.csv.tmp.deadbeef"
+	targetName := "out.csv"
+	tmpPath := filepath.Join(base, relParent, tmpName)
+	targetPath := filepath.Join(base, relParent, targetName)
 
-	h, err := openAtomicWrite(base, tmpBase, targetBase, tmpPath, targetPath)
+	h, err := openAtomicWrite(base, relParent, tmpName, targetName, tmpPath, targetPath)
 	if err == nil {
 		_ = h.Abort()
 		t.Fatalf("openAtomicWrite: survive-to-openat2 的 in-base parent symlink 應被 " +
@@ -114,10 +114,10 @@ func TestOpenAtomicWrite_LeafSymlinkRejectedByOExcl_Linux_Secondary(t *testing.T
 		t.Fatalf("setup: Symlink leaf: %v", err)
 	}
 
-	// tmpBase = "swapped" (leaf 即已存在 symlink)。O_EXCL 應以 EEXIST 拒絕。
+	// tmpBase = "swapped" (leaf 即已存在 symlink)、relParent="." (直屬 base)。O_EXCL 以 EEXIST 拒絕。
 	tmpBase := "swapped"
 	targetBase := "out.csv"
-	h, err := openAtomicWrite(base, tmpBase, targetBase,
+	h, err := openAtomicWrite(base, ".", tmpBase, targetBase,
 		filepath.Join(base, tmpBase), filepath.Join(base, targetBase))
 	if err == nil {
 		_ = h.Abort()
@@ -151,7 +151,7 @@ func TestOpenAtomicWrite_AcceptsPreResolvedInBase_Linux(t *testing.T) {
 	}
 	tmpBase := "data.csv.tmp.cafef00d"
 	targetBase := "data.csv"
-	h, err := openAtomicWrite(base, tmpBase, targetBase,
+	h, err := openAtomicWrite(base, ".", tmpBase, targetBase,
 		filepath.Join(base, tmpBase), filepath.Join(base, targetBase))
 	if err != nil {
 		t.Fatalf("openAtomicWrite: 已解析的合法 in-base 路徑不該被 NO_SYMLINKS 擋: %v", err)

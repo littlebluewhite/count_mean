@@ -9,13 +9,14 @@ import (
 
 // AtomicWriteHandle holds an open tmp file anchored under a validated base
 // directory, ready to be written, then atomically committed (renameat tmp →
-// target) or aborted (unlink tmp). The whole tmp-create → rename sequence is
-// performed relative to a single O_DIRECTORY dirfd of the *validated base* (the
-// trust root that matchAnyBase confirmed), with tmp/target addressed by their
-// path RELATIVE to that base, so an attacker cannot swap a path component
-// (including a parent component of a subdir target) between the tmp-create and
-// the rename — the classic atomic-write parent-swap TOCTOU race (ADR-0017
-// Decision 6, #34 fold-in).
+// target) or aborted (unlink tmp). The tmp-create → rename sequence is performed
+// relative to a single O_DIRECTORY dirfd of the target's *validated leaf parent*,
+// reached by descending from the trust-root base (matchAnyBase) via openat2
+// RESOLVE_NO_SYMLINKS / openat O_NOFOLLOW_ANY. tmp/target are addressed by their
+// BASENAME relative to that pinned dirfd, so (a) the descent follows no swapped
+// parent component (codex P1) and (b) the rename has no intermediate component a
+// post-create swap could redirect through (codex r3 P2) — closing the atomic-write
+// parent-swap TOCTOU race (ADR-0017 Decision 6, #34 fold-in).
 //
 // Lifecycle (caller's contract — mirrors WriteCSVAtomic's flow):
 //
@@ -40,13 +41,14 @@ type AtomicWriteHandle struct {
 	// file is the open tmp *os.File the caller writes to. nil only after a
 	// failed open (handle is never returned to the caller in that case).
 	file *os.File
-	// dirfd anchors both the tmp-create and the rename. fdNone on the fallback
-	// path (no dirfd available).
+	// dirfd anchors both the tmp-create and the rename on the target's validated
+	// leaf parent (the immediate parent of tmp/target). fdNone on the fallback path
+	// (no dirfd available).
 	dirfd int
-	// tmpRel / targetRel are the base-relative paths (possibly multi-component
-	// for a subdir target) used for the dirfd-relative renameat/unlinkat. The
-	// dirfd anchors on the validated base, so these address tmp/target *under*
-	// that base. Empty on the fallback path.
+	// tmpRel / targetRel are the BASENAMES of tmp/target relative to dirfd (the leaf
+	// parent), used for the dirfd-relative renameat/unlinkat. Single-component by
+	// construction — the leaf parent IS the dirfd, so a rename through it traverses
+	// no swappable intermediate component (codex r3 P2). Empty on the fallback path.
 	tmpRel    string
 	targetRel string
 	// tmpPath / targetPath are the full paths used by the fallback path's
@@ -80,14 +82,14 @@ func (h *AtomicWriteHandle) File() *os.File { return h.file }
 //  2. Require filepath.Dir(targetPath) == filepath.Dir(tmpPath) — else error.
 //  3. evalSymlinksWithFallback(parent) — resolve the parent's symlinks.
 //  4. matchAnyBase(resolvedParent, basePaths) — confirm parent is under a base;
-//     miss → ErrPathEscapesBase. (Common case: parent == hitBase, since every
-//     WriteCSVAtomic caller targets the OutputDir root — but the parent is
-//     validated generically, not assumed to be a base.)
-//  5. openAtomicWrite(hitBase, relTmp, relTarget, resolvedTmp, resolvedTarget) —
-//     platform dispatch. The dirfd anchors on the validated base (hitBase) and
-//     tmp/target are addressed by their path RELATIVE to it, so a post-matchAnyBase
-//     swap of a parent component cannot redirect the dirfd (codex P1). See
-//     atomic_write_<os>.go.
+//     miss → ErrPathEscapesBase.
+//  5. relParent = Rel(hitBase, resolvedParent) ("." when the parent IS the base);
+//     belt-and-suspenders reject a ".." escape.
+//  6. openAtomicWrite(hitBase, relParent, tmpBase, targetBase, resolvedTmp,
+//     resolvedTarget) — platform dispatch. It opens hitBase, descends relParent to
+//     the leaf with RESOLVE_NO_SYMLINKS / O_NOFOLLOW_ANY, PINS it as the dirfd, and
+//     addresses tmp/target by basename — so neither the descent nor the rename can
+//     follow a swapped component (codex P1 + r3 P2). See atomic_write_<os>.go.
 func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*AtomicWriteHandle, error) {
 	if len(basePaths) == 0 {
 		return nil, ErrBasePathsEmpty
@@ -129,29 +131,31 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 		return nil, fmt.Errorf("%w: 父目錄 %s 不在 %v 之下", ErrPathEscapesBase, resolvedParent, basePaths)
 	}
 
-	// Anchor on the validated base (trust root) and address tmp/target RELATIVE to
-	// it, so the platform layer opens hitBase as the dirfd and resolves the rel path
-	// under it with RESOLVE_BENEATH|NO_SYMLINKS / O_NOFOLLOW_ANY. Reopening the
-	// absolute resolvedParent would let a post-matchAnyBase parent-component swap
-	// redirect the dirfd (codex P1). matchAnyBase guarantees resolvedParent is under
-	// hitBase, so the rel paths never start with "..".
-	resolvedTmp := filepath.Join(resolvedParent, filepath.Base(tmpPath))
-	resolvedTarget := filepath.Join(resolvedParent, filepath.Base(targetPath))
-	relTmp, relErr := filepath.Rel(hitBase, resolvedTmp)
+	// Anchor on the target's *validated leaf parent*, reached by descending from the
+	// trust-root base. The platform layer opens hitBase, then (for a subdir target)
+	// descends relParent to the leaf with RESOLVE_NO_SYMLINKS / O_NOFOLLOW_ANY and
+	// PINS it as the dirfd; tmp-create + rename + unlink then use the leaf-relative
+	// BASENAMES. Descending from the base (not reopening the absolute resolvedParent)
+	// keeps a post-matchAnyBase component swap from redirecting the dirfd (codex P1);
+	// anchoring on the leaf (not the base) keeps the rename free of intermediate
+	// components a post-create swap could follow at commit time (codex r3 P2).
+	// matchAnyBase guarantees resolvedParent is under hitBase, so relParent never
+	// starts with ".." ("." when the parent IS the base).
+	relParent, relErr := filepath.Rel(hitBase, resolvedParent)
 	if relErr != nil {
-		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: rel(%s,%s): %w", hitBase, resolvedTmp, relErr)
+		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: rel(%s,%s): %w", hitBase, resolvedParent, relErr)
 	}
-	relTarget, relErr := filepath.Rel(hitBase, resolvedTarget)
-	if relErr != nil {
-		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: rel(%s,%s): %w", hitBase, resolvedTarget, relErr)
-	}
-	// belt-and-suspenders: rel must stay within hitBase
-	if relTmp == ".." || strings.HasPrefix(relTmp, ".."+string(filepath.Separator)) ||
-		relTarget == ".." || strings.HasPrefix(relTarget, ".."+string(filepath.Separator)) {
-		return nil, fmt.Errorf("%w: tmp/target escape base %s", ErrPathEscapesBase, hitBase)
+	// belt-and-suspenders: the leaf must stay within hitBase.
+	if relParent == ".." || strings.HasPrefix(relParent, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("%w: leaf %s escapes base %s", ErrPathEscapesBase, resolvedParent, hitBase)
 	}
 
-	h, err := openAtomicWrite(hitBase, relTmp, relTarget, resolvedTmp, resolvedTarget)
+	tmpBase := filepath.Base(tmpPath)
+	targetBase := filepath.Base(targetPath)
+	resolvedTmp := filepath.Join(resolvedParent, tmpBase)
+	resolvedTarget := filepath.Join(resolvedParent, targetBase)
+
+	h, err := openAtomicWrite(hitBase, relParent, tmpBase, targetBase, resolvedTmp, resolvedTarget)
 	if err != nil {
 		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: %w", err)
 	}
