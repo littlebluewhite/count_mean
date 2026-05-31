@@ -2,13 +2,19 @@ package security
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	"count_mean/internal/security/fsperm"
 )
 
-// ResolveLenientPath joins baseFolder + filename for the manifest-driven EMG loading scenario,
+// resolveLenientPath joins baseFolder + filename for the manifest-driven EMG loading scenario,
 // defending against path traversal but **allowing literal "%" in the filename**.
+//
+// 為 package-internal helper：唯一 caller 是同 package 的 OpenLenientValidated（fused door）。
+// 外部 caller 一律走 OpenLenientValidated，不直接取 lexical path（避免 validate-vs-open TOCTOU）。
 //
 // # Decision matrix（lenient vs strict）
 //
@@ -16,8 +22,8 @@ import (
 //
 //	| 情境                                                      | 用哪個                            |
 //	|-----------------------------------------------------------|-----------------------------------|
-//	| manifest-driven user files、檔名可能含 vendor encoding     | security.ResolveLenientPath       |
-//	| （例：BTS EMG 匯出 "SF_8_BTS%_*.csv"，字面 "%" 屬正常）    | （此檔）                          |
+//	| manifest-driven user files、檔名可能含 vendor encoding     | security.OpenLenientValidated     |
+//	| （例：BTS EMG 匯出 "SF_8_BTS%_*.csv"，字面 "%" 屬正常）    | （經此 helper）                  |
 //	|                                                           |                                   |
 //	| internal / config / 直接 user-input 的 path               | security.PathValidator.GetSafePath|
 //	| （受控路徑，URL-decode 後殘留 "%" 視為可疑）              | （pathvalidator.go）              |
@@ -36,7 +42,7 @@ import (
 //     誤判為「URL-encoded 殘留」並拒絕，導致 muscle ratio / CCI 對標準資料完全跑不動。
 //
 //   - 本函式保留 PathValidator 的核心防護（".." element / 絕對路徑 / 結果落在 baseFolder 外）
-//     但接受字面 "%"。CCI 與 muscle_ratio 兩個 analyzer 都改 call 它。
+//     但接受字面 "%"。CCI 與 muscle_ratio 兩個 analyzer 經 OpenLenientValidated 走到這裡。
 //
 // **Threat model**：caller 已確認 baseFolder 是 user-selected directory（可信），filename 來自
 // manifest CSV（半可信，可能含 BTS 的奇怪檔名但不應有 ".."）。本函式不檢查 baseFolder 本身是否
@@ -57,7 +63,7 @@ import (
 // 新增 validation rule 時若需 i18n message，於上層 wrap，不在此檔加 catalog 依賴。
 //
 //nolint:err113 // dynamic errors for user-facing output
-func ResolveLenientPath(baseFolder, filename string) (string, error) {
+func resolveLenientPath(baseFolder, filename string) (string, error) {
 	if filename == "" {
 		return "", fmt.Errorf("檔名為空")
 	}
@@ -154,6 +160,49 @@ func ResolveLenientPath(baseFolder, filename string) (string, error) {
 	// 回傳原 lexical joined：caller 仍透過 fsperm.ReadFlags 含 O_NOFOLLOW 開最終 component；
 	// 安全 boundary 已由上面 resolved Rel 檢查保證。
 	return joined, nil
+}
+
+// OpenLenientValidated 是 manifest-driven EMG 讀檔的**單一 fused 安全入口**：
+// 把 lenient 路徑解析與 atomic validated-open 併成一道門，所有 manifest data-file
+// 讀取（Phase C/D 起經 manifest door）皆收斂於此。
+//
+// # 為何需要這道 fused 門（close validate-vs-open TOCTOU seam）
+//
+// resolveLenientPath 回傳的是 **lexical** `joined`，但 boundary 檢查做在
+// **EvalSymlinks-解析後**的 path（見 resolveLenientPath 的 symlink-aware boundary check）。caller 若直接拿
+// lexical path 去開檔，就出現「validate 解析後 / open 卻開 lexical」的 TOCTOU 縫隙：
+// check 與 open 之間若有 parent-component symlink 被 swap 進來，open 會跟著它走；
+// 而 ReadFlags 裡的 O_NOFOLLOW 只保護 **leaf** component，對中間 component 無效
+// （man 2 open: "only affects the interpretation of the last component"）。
+//
+// fsperm.OpenReadValidated 在 open 階段 **重新解析並原子化開檔**
+// （Linux openat2 + RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_SYMLINKS；
+// Darwin O_NOFOLLOW_ANY），把這道縫隙關掉。OpenLenientValidated 串起兩者，成為
+// caller 唯一該呼叫的入口。
+//
+// # 字面 "%" 不可 regress
+//
+// BTS EMG 匯出檔名常含字面 "%"（例 "SF_8_BTS%_*.csv"）。resolveLenientPath 刻意接受
+// "%"（與 PathValidator.GetSafePath 不同），fsperm.OpenReadValidated 亦不做 URL-decode、
+// 把 "%" 當普通 path byte，故端到端接受字面 "%"。
+//
+// # baseFolder 傳法
+//
+// baseFolder 原樣傳給 fsperm（[]string{baseFolder}）——fsperm.matchAnyBase 內部會自行
+// EvalSymlinks 解析 base，不需也不應在此先解析或改 resolveLenientPath 的簽章。
+//
+// 回傳：成功時 *os.File，caller 自行 Close；失敗時 nil + 包裝錯誤。resolveLenientPath
+// 的錯誤已是 well-formed 的 lenient 訊息，原樣 propagate。
+func OpenLenientValidated(baseFolder, filename string) (*os.File, error) {
+	joined, err := resolveLenientPath(baseFolder, filename)
+	if err != nil {
+		return nil, err
+	}
+	f, err := fsperm.OpenReadValidated(joined, []string{baseFolder})
+	if err != nil {
+		return nil, fmt.Errorf("OpenLenientValidated: 開啟 %s 失敗: %w", filename, err)
+	}
+	return f, nil
 }
 
 // hasTraversalElementZeroWidthStripped 為 L13 補強的本地 helper：

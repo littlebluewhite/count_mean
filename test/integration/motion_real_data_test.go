@@ -29,8 +29,12 @@ func TestMotionParser_RealNSF2Data(t *testing.T) {
 		t.Skip("Skipping test: real NSF2 Motion file not found at", filePath)
 	}
 
+	f, err := os.Open(filePath)
+	require.NoError(t, err, "Failed to open real Motion file")
+	defer f.Close()
+
 	parser := parsers.NewMotionParser()
-	data, err := parser.ParseFile(filePath)
+	data, err := parser.Parse(f, filePath)
 	require.NoError(t, err, "Failed to parse real Motion file")
 
 	// 基本驗證

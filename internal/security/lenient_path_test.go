@@ -1,6 +1,7 @@
 package security
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,7 +17,7 @@ import (
 // BTS 匯出檔名常含字面 "%"，PathValidator.GetSafePath 會誤拒，本 lenient 版本必須接受。
 func TestResolveLenientPath_AcceptsLiteralPercent(t *testing.T) {
 	base := t.TempDir()
-	got, err := ResolveLenientPath(base, "SF_8_BTS%_6.10_BP30450_RMS0.5_0.49.csv")
+	got, err := resolveLenientPath(base, "SF_8_BTS%_6.10_BP30450_RMS0.5_0.49.csv")
 	if err != nil {
 		t.Fatalf("含 %% 的檔名應被接受，error: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestResolveLenientPath_RejectsTraversal(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c, func(t *testing.T) {
-			if _, err := ResolveLenientPath(base, c); err == nil {
+			if _, err := resolveLenientPath(base, c); err == nil {
 				t.Fatalf("含 .. 的檔名 %q 應該被拒，但通過了", c)
 			}
 		})
@@ -48,7 +49,7 @@ func TestResolveLenientPath_RejectsTraversal(t *testing.T) {
 // TestResolveLenientPath_RejectsAbsolute 確認絕對路徑被拒。
 func TestResolveLenientPath_RejectsAbsolute(t *testing.T) {
 	base := t.TempDir()
-	if _, err := ResolveLenientPath(base, "/etc/passwd"); err == nil {
+	if _, err := resolveLenientPath(base, "/etc/passwd"); err == nil {
 		t.Fatalf("絕對路徑應被拒")
 	}
 }
@@ -56,7 +57,7 @@ func TestResolveLenientPath_RejectsAbsolute(t *testing.T) {
 // TestResolveLenientPath_RejectsEmpty 確認空檔名被拒。
 func TestResolveLenientPath_RejectsEmpty(t *testing.T) {
 	base := t.TempDir()
-	if _, err := ResolveLenientPath(base, ""); err == nil {
+	if _, err := resolveLenientPath(base, ""); err == nil {
 		t.Fatalf("空檔名應被拒")
 	}
 }
@@ -65,7 +66,7 @@ func TestResolveLenientPath_RejectsEmpty(t *testing.T) {
 // path element 的合法檔名不會被誤拒（與 PathValidator HasTraversalElement 同行為）。
 func TestResolveLenientPath_AcceptsLegitimateDoubleDot(t *testing.T) {
 	base := t.TempDir()
-	got, err := ResolveLenientPath(base, "report..v2.csv")
+	got, err := resolveLenientPath(base, "report..v2.csv")
 	if err != nil {
 		t.Fatalf("含雙點但非 path element 的合法檔名應被接受，error: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestResolveLenientPath_AcceptsSubdirectory(t *testing.T) {
 	// 在 base 內建立真實 subdir，這樣 EvalSymlinks 才能解析（既存目錄）
 	require.NoError(t, os.MkdirAll(filepath.Join(base, "subdir"), 0o755))
 
-	got, err := ResolveLenientPath(base, "subdir/file.csv")
+	got, err := resolveLenientPath(base, "subdir/file.csv")
 	if err != nil {
 		t.Fatalf("subdirectory 檔名應被接受，error: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestResolveLenientPath_AcceptsSubdirectory(t *testing.T) {
 // TestResolveLenientPath_RejectsParentSymlinkEscapingBase 釘住 codex review post-impl P2：
 // O_NOFOLLOW 只擋「最終 component」是 symlink；若 baseFolder 內有 symlinked 子目錄指向外部，
 // manifest 引用 `link/emg.csv` 會通過 lexical Rel 檢查，OpenFile 跟著 parent symlink 讀外部檔。
-// 修法：ResolveLenientPath 內 EvalSymlinks(joined / parent) 後再 Rel 檢查 boundary。
+// 修法：resolveLenientPath 內 EvalSymlinks(joined / parent) 後再 Rel 檢查 boundary。
 func TestResolveLenientPath_RejectsParentSymlinkEscapingBase(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows symlink 需要 admin 權限，跳過")
@@ -114,7 +115,7 @@ func TestResolveLenientPath_RejectsParentSymlinkEscapingBase(t *testing.T) {
 	require.NoError(t, os.Symlink(outside, filepath.Join(base, "link")))
 
 	// 攻擊：manifest 引用 "link/secret.csv"，期望被拒
-	_, err := ResolveLenientPath(base, "link/secret.csv")
+	_, err := resolveLenientPath(base, "link/secret.csv")
 	require.Error(t, err, "parent symlink 跨出 baseFolder 的 path 應被拒")
 	// Pin 訊息來自 boundary check（非 EvalSymlinks generic error）— 否則 refactor
 	// 把 "資料夾外" 改成模糊「無法解析」也會通過 require.Error。
@@ -137,7 +138,7 @@ func TestResolveLenientPath_NormalizesWindowsBackslash(t *testing.T) {
 	// 建 base/trial1 真實子目錄，供 EvalSymlinks 解析既存路徑
 	require.NoError(t, os.MkdirAll(filepath.Join(base, "trial1"), 0o755))
 
-	got, err := ResolveLenientPath(base, `trial1\emg.csv`)
+	got, err := resolveLenientPath(base, `trial1\emg.csv`)
 	if err != nil {
 		t.Fatalf("Windows-style \\ separator 應被 normalize 成 /，error: %v", err)
 	}
@@ -162,7 +163,7 @@ func TestResolveLenientPath_AcceptsInternalSymlink(t *testing.T) {
 	require.NoError(t, os.MkdirAll(realDir, 0o755))
 	require.NoError(t, os.Symlink(realDir, filepath.Join(base, "link")))
 
-	got, err := ResolveLenientPath(base, "link/emg.csv")
+	got, err := resolveLenientPath(base, "link/emg.csv")
 	if err != nil {
 		t.Fatalf("base 內部的 symlink 應被接受，error: %v", err)
 	}
@@ -176,7 +177,7 @@ func TestResolveLenientPath_AcceptsInternalSymlink(t *testing.T) {
 // 避免落入 os.OpenFile error path 把未清理的 byte 寫進 log。
 func TestResolveLenientPath_RejectsNullByte(t *testing.T) {
 	base := t.TempDir()
-	_, err := ResolveLenientPath(base, "a\x00b.csv")
+	_, err := resolveLenientPath(base, "a\x00b.csv")
 	require.Error(t, err, "含 null byte 的檔名應被拒")
 	assert.Contains(t, err.Error(), "null byte",
 		"err 應來自 null byte 守門，實際 err=%v", err)
@@ -186,7 +187,7 @@ func TestResolveLenientPath_RejectsNullByte(t *testing.T) {
 // baseFolder 本身；caller 後續 OpenFile 在 Unix 對目錄成功，行為未定。明確拒絕。
 func TestResolveLenientPath_RejectsDotOnly(t *testing.T) {
 	base := t.TempDir()
-	_, err := ResolveLenientPath(base, ".")
+	_, err := resolveLenientPath(base, ".")
 	require.Error(t, err, "bare \".\" 應被拒")
 	assert.Contains(t, err.Error(), "無效",
 		"err 應來自 dot-only 守門，實際 err=%v", err)
@@ -196,7 +197,7 @@ func TestResolveLenientPath_RejectsDotOnly(t *testing.T) {
 // HasTraversalElement 階段，避免 Join 後解析到 baseFolder 的 parent dir。
 func TestResolveLenientPath_RejectsBareTraversal(t *testing.T) {
 	base := t.TempDir()
-	_, err := ResolveLenientPath(base, "..")
+	_, err := resolveLenientPath(base, "..")
 	require.Error(t, err, "bare \"..\" 應被拒")
 }
 
@@ -204,7 +205,7 @@ func TestResolveLenientPath_RejectsBareTraversal(t *testing.T) {
 // TrimSpace + Clean 得到 ""，與 dot-only 同類拒絕。
 func TestResolveLenientPath_RejectsWhitespace(t *testing.T) {
 	base := t.TempDir()
-	_, err := ResolveLenientPath(base, "  ")
+	_, err := resolveLenientPath(base, "  ")
 	require.Error(t, err, "純 whitespace 檔名應被拒")
 	assert.Contains(t, err.Error(), "無效",
 		"err 應來自 whitespace 守門，實際 err=%v", err)
@@ -215,7 +216,7 @@ func TestResolveLenientPath_RejectsWhitespace(t *testing.T) {
 func TestResolveLenientPath_RejectsLongFilename(t *testing.T) {
 	base := t.TempDir()
 	longName := strings.Repeat("a", 256) + ".csv"
-	_, err := ResolveLenientPath(base, longName)
+	_, err := resolveLenientPath(base, longName)
 	require.Error(t, err, "filename > 255 chars 應被拒")
 	assert.Contains(t, err.Error(), "檔名過長",
 		"err 應來自 filename length 守門，實際 err=%v", err)
@@ -239,7 +240,7 @@ func TestResolveLenientPath_ZeroWidthIsExplicitlyRejectedEarly(t *testing.T) {
 	// `foo/..<ZWSP>/bar` — split 後 element 2 = `..<ZWSP>`，HasTraversalElement
 	// 比對 part == ".." false → 通過。Clean 不改寫含零寬字元的 element。
 	filename := "foo/.." + zwsp + "/bar"
-	_, err := ResolveLenientPath(base, filename)
+	_, err := resolveLenientPath(base, filename)
 	require.Error(t, err, "含零寬字元的 traversal element 必須被擋")
 	// Pin error 訊息來自 traversal-element 守門（明文「\"..\" 路徑元素」）。
 	// 不能只 assert.Contains(err.Error(), "..") — 因為 path 本身就含 `..`，所有 error
@@ -277,7 +278,7 @@ func TestResolveLenientPath_ZeroWidthInElementIsRejected(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := ResolveLenientPath(base, c.filename); err == nil {
+			if _, err := resolveLenientPath(base, c.filename); err == nil {
 				t.Fatalf("零寬字元偽裝的 traversal element %q 應被擋", c.filename)
 			}
 		})
@@ -323,7 +324,7 @@ func TestResolveLenientPath_RejectsZeroWidthCharacterTraversal(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := ResolveLenientPath(base, c.filename); err == nil {
+			if _, err := resolveLenientPath(base, c.filename); err == nil {
 				t.Fatalf("零寬字元偽裝的 traversal %q 應被擋", c.filename)
 			}
 		})
@@ -355,7 +356,7 @@ func TestResolveLenientPath_TraversalDefenseInDepth(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c, func(t *testing.T) {
-			_, err := ResolveLenientPath(base, c)
+			_, err := resolveLenientPath(base, c)
 			require.Error(t, err, "含 .. 的檔名（含空白變體）%q 應被拒", c)
 		})
 	}
@@ -394,7 +395,7 @@ func TestResolveLenientPath_RejectsAbsoluteRelOutput(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(outside, "deep"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(outside, "deep", "file.csv"), []byte("x"), 0o600))
 
-	_, err := ResolveLenientPath(base, "link/deep/file.csv")
+	_, err := resolveLenientPath(base, "link/deep/file.csv")
 	require.Error(t, err, "symlink 跨出 baseFolder 後 rel 即便不是 `..` 開頭也應被擋")
 	assert.Contains(t, err.Error(), "資料夾外",
 		"err 應來自 boundary check (即便 rel 形式為絕對 / 跨 volume),實際 err=%v", err)
@@ -424,9 +425,9 @@ func TestResolveLenientPath_AcceptsDeepNonExistentChild(t *testing.T) {
 	//   recurse parent = base/a/b/c
 	//   ... 直到 base (存在) 才 resolve 成功,再 join suffix
 	deepPath := "a/b/c/d/file.csv"
-	got, err := ResolveLenientPath(base, deepPath)
+	got, err := resolveLenientPath(base, deepPath)
 	if err != nil {
-		t.Fatalf("ResolveLenientPath 應接受多層 non-existent parent (manifest-driven 流程典型 case),err=%v", err)
+		t.Fatalf("resolveLenientPath 應接受多層 non-existent parent (manifest-driven 流程典型 case),err=%v", err)
 	}
 	want := filepath.Join(base, deepPath)
 	if got != want {
@@ -442,7 +443,7 @@ func TestResolveLenientPath_DepthLimitProtectsAgainstPathologicalDepth(t *testin
 
 	// 構造 7 層 non-existent nesting (剛好在 depth 8 之內,屬於 legitimate range)
 	deepLegit := "a/b/c/d/e/f/file.csv" // parent walk 約 6 層
-	_, err := ResolveLenientPath(base, deepLegit)
+	_, err := resolveLenientPath(base, deepLegit)
 	if err != nil {
 		t.Errorf("7 層 nesting 應為 legitimate (< depth limit),got err=%v", err)
 	}
@@ -456,13 +457,13 @@ func TestResolveLenientPath_DepthLimitProtectsAgainstPathologicalDepth(t *testin
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = ResolveLenientPath(base, deep)
+		_, _ = resolveLenientPath(base, deep)
 	}()
 	select {
 	case <-done:
 		// OK — 不論 success 或 error 都可接受,只要沒 hang
 	case <-time.After(5 * time.Second):
-		t.Fatalf("ResolveLenientPath 對 20 層 nested non-existent path hang 了 (depth limit 失效)")
+		t.Fatalf("resolveLenientPath 對 20 層 nested non-existent path hang 了 (depth limit 失效)")
 	}
 }
 
@@ -473,8 +474,86 @@ func TestResolveLenientPath_DepthLimitProtectsAgainstPathologicalDepth(t *testin
 func TestResolveLenientPath_RejectsLongPath(t *testing.T) {
 	base := t.TempDir()
 	longPath := strings.Repeat("a/", 2048) + "a.csv"
-	_, err := ResolveLenientPath(base, longPath)
+	_, err := resolveLenientPath(base, longPath)
 	require.Error(t, err, "joined > 4096 chars 應被拒")
 	assert.Contains(t, err.Error(), "路徑過長",
 		"err 應來自 path length 守門，實際 err=%v", err)
+}
+
+// ─── OpenLenientValidated（ADR-0017 Phase B：fused lenient-resolve + atomic open）─────
+
+// TestOpenLenientValidated_HappyPath：base 內真實檔案經 OpenLenientValidated 開出非 nil
+// *os.File，讀回內容確認開到「正確」的檔（非 base 目錄、非別的檔）。
+func TestOpenLenientValidated_HappyPath(t *testing.T) {
+	base := t.TempDir()
+	want := []byte("emg,sample,data\n1,2,3\n")
+	require.NoError(t, os.WriteFile(filepath.Join(base, "emg.csv"), want, 0o600))
+
+	f, err := OpenLenientValidated(base, "emg.csv")
+	require.NoError(t, err, "base 內真實檔案應成功開啟")
+	require.NotNil(t, f, "成功時應回非 nil *os.File")
+	defer func() { _ = f.Close() }()
+
+	got, err := io.ReadAll(f)
+	require.NoError(t, err)
+	assert.Equal(t, want, got, "讀回內容應與寫入一致（證明開到正確的檔）")
+}
+
+// TestOpenLenientValidated_AcceptsLiteralPercent 為 ADR-0017 的 load-bearing regression
+// guard：BTS EMG 匯出檔名常含字面 "%"（例 "SF_8_BTS%_6.10.csv"）。resolveLenientPath 接受
+// "%"、fsperm.OpenReadValidated 不做 URL-decode 把 "%" 當普通 path byte，故端到端必須開得成。
+func TestOpenLenientValidated_AcceptsLiteralPercent(t *testing.T) {
+	base := t.TempDir()
+	name := "SF_8_BTS%_6.10_BP30450_RMS0.5_0.49.csv"
+	want := []byte("percent-in-name-ok\n")
+	require.NoError(t, os.WriteFile(filepath.Join(base, name), want, 0o600))
+
+	f, err := OpenLenientValidated(base, name)
+	require.NoError(t, err, "含字面 %% 的檔名應端到端成功開啟，error=%v", err)
+	require.NotNil(t, f)
+	defer func() { _ = f.Close() }()
+
+	got, err := io.ReadAll(f)
+	require.NoError(t, err)
+	assert.Equal(t, want, got, "含 %% 檔名讀回內容應一致")
+}
+
+// TestOpenLenientValidated_RejectsTraversal：".." traversal 在 resolveLenientPath 階段
+// 即被拒，OpenLenientValidated 必須 propagate error 且不回 file handle。
+func TestOpenLenientValidated_RejectsTraversal(t *testing.T) {
+	base := t.TempDir()
+	f, err := OpenLenientValidated(base, "../escape.csv")
+	require.Error(t, err, "../ traversal 應被拒")
+	assert.Nil(t, f, "被拒時不應回 file handle")
+	assert.Contains(t, err.Error(), "路徑元素",
+		"err 應來自 lenient traversal 守門，實際 err=%v", err)
+}
+
+// TestOpenLenientValidated_RejectsParentSymlinkEscape：base 內有 symlinked 子目錄指向
+// 外部，manifest 引用 "link/secret.csv" 會解析到 base 外。OpenLenientValidated 必須拒（不
+// 跟 parent symlink 讀外部檔），且不回 file handle。
+func TestOpenLenientValidated_RejectsParentSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows symlink 需要 admin 權限，跳過")
+	}
+
+	base := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.csv"), []byte("secret"), 0o600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(base, "link")))
+
+	f, err := OpenLenientValidated(base, "link/secret.csv")
+	require.Error(t, err, "parent symlink 跨出 base 的 path 應被拒")
+	assert.Nil(t, f, "被拒時不應回 file handle")
+	assert.Contains(t, err.Error(), "資料夾外",
+		"err 應來自 symlink-aware boundary check，實際 err=%v", err)
+}
+
+// TestOpenLenientValidated_RejectsMissingFile：base 內但檔案不存在 → open 失敗回 error，
+// 不回 file handle。
+func TestOpenLenientValidated_RejectsMissingFile(t *testing.T) {
+	base := t.TempDir()
+	f, err := OpenLenientValidated(base, "nonexistent.csv")
+	require.Error(t, err, "不存在的檔案應 open 失敗")
+	assert.Nil(t, f, "失敗時不應回 file handle")
 }

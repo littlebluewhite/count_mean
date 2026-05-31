@@ -177,8 +177,12 @@ func TestANCParser_ParseFile_RejectsMaliciousTotalCapacity(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
+	f, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer f.Close()
+
 	parser := NewANCParser()
-	_, err = parser.ParseFile(tmpFile.Name())
+	_, err = parser.Parse(f, tmpFile.Name())
 	require.Error(t, err, "expected rejection of malicious total-capacity header")
 	assert.True(t, errors.Is(err, ErrANCTotalCapacityExceeded),
 		"err must wrap ErrANCTotalCapacityExceeded, got: %v", err)

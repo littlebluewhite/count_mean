@@ -1100,8 +1100,9 @@ func TestAnalyze_EmptySubject_Rejected(t *testing.T) {
 	}
 }
 
-// TestAnalyze_EMGFileNotFound 釘住 analyzer.go:os.Stat IsNotExist 分支：
-// 若 typo 檔名，回的 error 必須是「EMG 檔案不存在」而非更模糊的下游錯誤。
+// TestAnalyze_EMGFileNotFound 釘住 analyzer.go:OpenDataFile missing 分支：
+// 若 typo 檔名，回的 error 必須是「資料檔案不存在」(ErrManifestDataFileMissing)
+// 而非更模糊的下游錯誤。
 func TestAnalyze_EMGFileNotFound(t *testing.T) {
 	tempDir := t.TempDir()
 	dataDir := filepath.Join(tempDir, "data")
@@ -1125,7 +1126,7 @@ func TestAnalyze_EMGFileNotFound(t *testing.T) {
 
 	sr := result[0]
 	assert.False(t, sr.Success)
-	assert.Contains(t, sr.Error, "EMG 檔案不存在")
+	assert.Contains(t, sr.Error, "資料檔案不存在")
 }
 
 // TestAnalyze_PhaseTimeAtBoundary 釘住 collectPhasePoints bounds check 為 inclusive：

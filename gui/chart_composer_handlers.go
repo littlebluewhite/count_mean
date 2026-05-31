@@ -40,7 +40,6 @@ import (
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
-	"count_mean/internal/security"
 	"count_mean/internal/security/redact"
 	"count_mean/internal/synchronizer"
 	"count_mean/internal/validation/filename"
@@ -93,7 +92,7 @@ type DownloadChartComposerImageParams struct {
 type MissingFileDTO struct {
 	Subject    string `json:"subject"`    // 對應 PhaseManifest.Subject
 	EMGFile    string `json:"emgFile"`    // manifest 內字面的 EMGFile 欄
-	ErrMessage string `json:"errMessage"` // ResolveEMGFile error 訊息(含期待路徑)
+	ErrMessage string `json:"errMessage"` // OpenDataFile error 訊息(含期待路徑)
 }
 
 // ChartComposerSubjectsResult Wails RPC result for subject list lookup.
@@ -253,15 +252,16 @@ func (a *App) GenerateChartComposer(
 			), nil
 		}
 
-		// 載入 EMG(必要)
-		emgPath, emgPathErr := manifest.ResolveEMGFile(params.DataFolder, row.EMGFile)
-		if emgPathErr != nil {
-			a.logger.Error("Chart Composer 解析 EMG 路徑失敗", emgPathErr, map[string]any{})
+		// 載入 EMG(必要)— 走 manifest.OpenDataFile 硬化讀檔門,交出已驗證 *os.File。
+		emgFile, emgOpenErr := manifest.OpenDataFile(params.DataFolder, row.EMGFile)
+		if emgOpenErr != nil {
+			a.logger.Error("Chart Composer 開啟 EMG 失敗", emgOpenErr, map[string]any{})
 			return failedChartComposerResult(
-				fmt.Sprintf("EMG 檔案路徑解析失敗: %s", redact.RedactForMessage(emgPathErr)),
+				fmt.Sprintf("EMG 檔案路徑解析失敗: %s", redact.RedactForMessage(emgOpenErr)),
 			), nil
 		}
-		emgPhaseSync, _, emgErr := parsers.NewEMGParser().ParseFile(emgPath)
+		emgPhaseSync, _, emgErr := parsers.NewEMGParser().Parse(emgFile, row.EMGFile)
+		_ = emgFile.Close() //nolint:errcheck // read-only fd; close error not actionable (data materialized by Parse)
 		if emgErr != nil {
 			a.logger.Error("Chart Composer 解析 EMG 失敗", emgErr, map[string]any{})
 			return failedChartComposerResult(
@@ -446,8 +446,8 @@ func phaseSyncEMGToDataset(emg *models.PhaseSyncEMGData) *models.EMGDataset {
 // motion-index 透過 TimeSynchronizer.MotionIndexToEMGTime 換算為 EMG 時間軸,
 // 讓 motion grid 與 EMG grid 在同一條 X 軸上對齊。
 //
-// 路徑驗證走 manifest.ResolveEMGFile 同樣的 lenient path resolver(對齊
-// muscle_ratio analyzer 內的 motion file 處理風格)。
+// 開檔走 manifest.OpenDataFile 硬化讀檔門(內部 lenient resolve + atomic
+// validated-open),對齊 muscle_ratio analyzer 內的 EMG file 處理風格。
 func loadComposerMotion(
 	dataFolder, motionFile string, emgMotionOffset int,
 ) (*chart.MotionData, error) {
@@ -456,12 +456,13 @@ func loadComposerMotion(
 		return nil, ErrChartComposerMotionFileEmpty
 	}
 
-	motionPath, err := manifest.ResolveEMGFile(dataFolder, motionFile)
+	motionFileHandle, err := manifest.OpenDataFile(dataFolder, motionFile)
 	if err != nil {
 		return nil, fmt.Errorf("Motion 路徑解析失敗: %w", err)
 	}
+	defer func() { _ = motionFileHandle.Close() }() //nolint:errcheck // read-only fd; close error not actionable
 
-	motion, err := parsers.NewMotionParser().ParseFile(motionPath)
+	motion, err := parsers.NewMotionParser().Parse(motionFileHandle, motionFile)
 	if err != nil {
 		return nil, fmt.Errorf("解析 Motion 失敗: %w", err)
 	}
@@ -506,26 +507,23 @@ func loadComposerMotion(
 // header 第一欄為時間,其餘為 ratio pair 名稱。caller 把這四欄 series 餵進
 // `chart.MuscleRatioData` 即可在 muscle_ratio grid 顯示。
 //
-// 路徑解析走 security.ResolveLenientPath(透過 manifest.ResolveEMGFile)同樣
-// 支援 BTS 匯出含字面 "%" 的檔名。
+// 開檔走 manifest.OpenDataFile 硬化讀檔門(內部 lenient resolve + atomic
+// validated-open),同樣支援 BTS 匯出含字面 "%" 的檔名。
 func loadComposerMuscleRatio(dataFolder, muscleRatioFile string) (*chart.MuscleRatioData, error) {
 	if strings.TrimSpace(muscleRatioFile) == "" {
 		// caller 應在呼叫前已檢查;這裡是 defense-in-depth。
 		return nil, ErrChartComposerMuscleRatioFileEmpty
 	}
 
-	// 解析 lenient path(對齊 manifest.ResolveEMGFile 但拒絕傳出 ErrManifestEMGFileMissing,
-	// 這裡是 muscle_ratio 不是 EMG,錯誤訊息要對應)。
-	resolvedBase := dataFolder
-	if r, err := filepath.EvalSymlinks(dataFolder); err == nil {
-		resolvedBase = r
-	}
-	muscleRatioPath, err := security.ResolveLenientPath(resolvedBase, muscleRatioFile)
+	// 開檔走 manifest.OpenDataFile 硬化讀檔門(內部 lenient resolve + atomic
+	// validated-open),交出已驗證 *os.File。caller defer Close。
+	mrFile, err := manifest.OpenDataFile(dataFolder, muscleRatioFile)
 	if err != nil {
 		return nil, fmt.Errorf("muscle_ratio 路徑解析失敗: %w", err)
 	}
+	defer func() { _ = mrFile.Close() }() //nolint:errcheck // read-only fd; close error not actionable
 
-	records, err := parsers.ReadCSVDirect(muscleRatioPath)
+	records, err := parsers.ReadCSVRecords(mrFile)
 	if err != nil {
 		return nil, fmt.Errorf("讀取 muscle_ratio CSV 失敗: %w", err)
 	}
@@ -648,4 +646,3 @@ func parseFloatCell(cell string) (float64, bool) {
 	}
 	return v, true
 }
-

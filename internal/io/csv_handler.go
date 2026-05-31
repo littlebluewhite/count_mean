@@ -761,7 +761,8 @@ func (h *CSVHandler) writePhaseSyncAtomic(subDir, filename string, data [][]stri
 	}
 
 	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header: data[0],
+		Header:    data[0],
+		BasePaths: h.pathValidator.GetAllowedBasePaths(),
 		Emit: func(emit func([]string) error) error {
 			for _, row := range data[1:] {
 				if err := emit(row); err != nil {
@@ -893,7 +894,8 @@ func (h *CSVHandler) WriteCCIResult(
 	numPoints := len(result.TimeValues)
 
 	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header: header,
+		Header:    header,
+		BasePaths: h.pathValidator.GetAllowedBasePaths(),
 		Emit: func(emit func([]string) error) error {
 			for i := 0; i < numPoints; i++ {
 				if i > 0 && i%cciStreamCtxCheckInterval == 0 {
@@ -1023,7 +1025,8 @@ func (h *CSVHandler) WriteMuscleRatioOutputAll(
 	header = append(header, p.PairLabels...)
 
 	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header: header,
+		Header:    header,
+		BasePaths: h.pathValidator.GetAllowedBasePaths(),
 		Emit: func(emit func([]string) error) error {
 			for i, t := range p.Times {
 				row := make([]string, 0, 1+len(p.Ratios))
@@ -1072,7 +1075,8 @@ func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 	header = append(header, p.PairLabels...)
 
 	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header: header,
+		Header:    header,
+		BasePaths: h.pathValidator.GetAllowedBasePaths(),
 		Emit: func(emit func([]string) error) error {
 			for _, point := range p.Points {
 				row := make([]string, 0, 2+len(point.Values))

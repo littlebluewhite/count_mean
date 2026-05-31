@@ -1,10 +1,13 @@
 package parsers
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +22,7 @@ func TestNewANCParser(t *testing.T) {
 	assert.Equal(t, 0.0, parser.GetSampleInterval()) // 尚未解析資料，頻率為 0
 }
 
-func TestANCParser_ParseFile(t *testing.T) {
+func TestANCParser_Parse(t *testing.T) {
 	tests := []struct {
 		name        string
 		fileContent string
@@ -137,11 +140,15 @@ invalid_time	0.1	0.2
 
 			_, err = tmpFile.WriteString(tt.fileContent)
 			require.NoError(t, err)
-			tmpFile.Close()
+			require.NoError(t, tmpFile.Close())
 
-			// 測試解析
+			// 測試解析 via open + Parse
+			f, err := os.Open(tmpFile.Name())
+			require.NoError(t, err)
+			defer f.Close()
+
 			parser := NewANCParser()
-			data, err := parser.ParseFile(tmpFile.Name())
+			data, err := parser.Parse(f, tmpFile.Name())
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -181,21 +188,169 @@ func TestANCParser_StripsBOM(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tmpFile.WriteString(content)
 	require.NoError(t, err)
-	tmpFile.Close()
+	require.NoError(t, tmpFile.Close())
+
+	f, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer f.Close()
 
 	parser := NewANCParser()
-	data, err := parser.ParseFile(tmpFile.Name())
+	data, err := parser.Parse(f, tmpFile.Name())
 	require.NoError(t, err)
 	require.NotNil(t, data)
 	assert.Equal(t, []string{"Fx", "Fy"}, data.Headers,
 		"channel names should not be prefixed with BOM")
 }
 
-func TestANCParser_ParseFile_FileNotFound(t *testing.T) {
+// TestANCParser_Parse_TextFromReader 釘住 reader-based 入口的 text 分支：
+// name 以 .anc 結尾 → 走文字解析。
+func TestANCParser_Parse_TextFromReader(t *testing.T) {
+	const content = `1	File_Type:	AMTI_FORCE_PLATE	Generation#:	4
+2	Board_Type:	OR6-5-1000
+3	Trial_Name:	TEST_TRIAL	Trial#:	1	Duration(Sec.):	5.000	#Channels:	6
+4	BitDepth:	16	PreciseRate:	1000.000
+5
+6
+7
+8
+9	Name	Fx	Fy	Fz	Mx	My	Mz
+10	Rate	1000	1000	1000	1000	1000	1000
+11	Range	2000	2000	5000	200	200	200
+12	Units	N	N	N	Nm	Nm	Nm
+0.000000	0.1	0.2	0.3	0.4	0.5	0.6
+0.001000	0.2	0.3	0.4	0.5	0.6	0.7
+0.002000	0.3	0.4	0.5	0.6	0.7	0.8`
+
 	parser := NewANCParser()
-	_, err := parser.ParseFile("nonexistent_file.anc")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "無法開啟 ANC 檔案")
+	data, err := parser.Parse(strings.NewReader(content), "reader.anc")
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	assert.Len(t, data.Time, 3)
+	assert.Equal(t, []string{"Fx", "Fy", "Fz", "Mx", "My", "Mz"}, data.Headers)
+	assert.Equal(t, 0.1, data.Forces["Fx"][0])
+	assert.Equal(t, 0.8, data.Forces["Mz"][2])
+}
+
+// TestANCParser_Parse_TextFromReaderWithBOM 確認 text reader 分支仍剝 BOM —
+// BOM 汙染會讓 File_Type 比對失敗、channel name 多前綴 → silent miscalc。
+func TestANCParser_Parse_TextFromReaderWithBOM(t *testing.T) {
+	const bom = "\xEF\xBB\xBF"
+	content := bom + `1	File_Type:	AMTI_FORCE_PLATE	Generation#:	4
+2	Board_Type:	OR6-5-1000
+3	Trial_Name:	TEST	Trial#:	1	Duration(Sec.):	1.000	#Channels:	2
+4	BitDepth:	16	PreciseRate:	1000.000
+5
+6
+7
+8
+9	Name	Fx	Fy
+10	Rate	1000	1000
+11	Range	2000	2000
+12	Units	N	N
+0.000	0.1	0.2
+0.001	0.2	0.3`
+
+	parser := NewANCParser()
+	data, err := parser.Parse(strings.NewReader(content), "bom.anc")
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	assert.Equal(t, []string{"Fx", "Fy"}, data.Headers,
+		"channel names must not be prefixed with BOM")
+}
+
+// TestANCParser_Parse_XLSXFromReader 釘住 reader-based 入口的 xlsx 分支：
+// name 以 .xlsx 結尾 → 走 excelize.OpenReader；結果須與 ParseFile（path wrapper）相同。
+func TestANCParser_Parse_XLSXFromReader(t *testing.T) {
+	t.Run("simple xlsx from reader", func(t *testing.T) {
+		headers := []string{"Time", "Fx", "Fy", "Fz"}
+		data := [][]string{
+			{"0.000", "1.1", "2.2", "3.3"},
+			{"0.001", "1.2", "2.3", "3.4"},
+			{"0.002", "1.3", "2.4", "3.5"},
+		}
+		buf := buildSimpleXLSXBuffer(t, headers, data)
+
+		parser := NewANCParser()
+		forceData, err := parser.Parse(bytes.NewReader(buf), "reader.xlsx")
+		require.NoError(t, err)
+		require.NotNil(t, forceData)
+
+		assert.Len(t, forceData.Time, 3)
+		assert.Equal(t, 0.000, forceData.Time[0])
+		assert.Equal(t, []string{"Fx", "Fy", "Fz"}, forceData.Headers)
+		assert.Equal(t, 1.1, forceData.Forces["Fx"][0])
+		assert.Equal(t, 3.5, forceData.Forces["Fz"][2])
+	})
+
+	t.Run("ANC-format xlsx from reader", func(t *testing.T) {
+		buf := buildANCFormatXLSXBuffer(t)
+
+		parser := NewANCParser()
+		forceData, err := parser.Parse(bytes.NewReader(buf), "anc.xlsx")
+		require.NoError(t, err)
+		require.NotNil(t, forceData)
+
+		// 通道名稱來自 xlsx row 9（內部 rows[8]），資料從 row 12 起。
+		assert.Equal(t, []string{"Fx", "Fy", "Fz"}, forceData.Headers)
+		require.Len(t, forceData.Time, 3)
+		assert.Equal(t, 0.000, forceData.Time[0])
+		assert.Equal(t, 1.1, forceData.Forces["Fx"][0])
+		assert.Equal(t, 9.9, forceData.Forces["Fz"][2])
+	})
+
+	t.Run("anc.xlsx compound extension routes to xlsx", func(t *testing.T) {
+		headers := []string{"Time", "Fx", "Fy"}
+		data := [][]string{
+			{"0.0", "10.0", "20.0"},
+			{"1.0", "11.0", "21.0"},
+		}
+		buf := buildSimpleXLSXBuffer(t, headers, data)
+
+		parser := NewANCParser()
+		// .anc.xlsx 複合副檔名必須仍走 xlsx 分支（OpenReader），而非 text。
+		forceData, err := parser.Parse(bytes.NewReader(buf), "trial.anc.xlsx")
+		require.NoError(t, err)
+		require.NotNil(t, forceData)
+		assert.Len(t, forceData.Time, 2)
+		assert.Equal(t, 0.0, forceData.Time[0])
+	})
+}
+
+// TestANCParser_Parse_TextReaderError 釘住 text 分支的 reader-boundary 失敗面：
+// .anc name 走文字解析，第一個讀取點是 BOM 偵測，底層 io.Reader 在串流途中報錯
+// （iotest.ErrReader）必須往上傳，不得 panic、不得回傳「err==nil 但 data 非 nil」。
+func TestANCParser_Parse_TextReaderError(t *testing.T) {
+	data, err := NewANCParser().Parse(iotest.ErrReader(errors.New("boom")), "err.anc")
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "boom", "底層 reader 錯誤必須往上傳遞")
+	assert.Nil(t, data, "reader 出錯時不得回傳偽造的非 nil ForceData")
+}
+
+// TestANCParser_Parse_XLSXReaderError 釘住 xlsx 分支的 reader-boundary 失敗面：
+// .xlsx name 走 excelize.OpenReader，底層 io.Reader 報錯必須被包成 name-wrapped
+// open error 往上傳，並回傳 nil *ForceData。
+func TestANCParser_Parse_XLSXReaderError(t *testing.T) {
+	data, err := NewANCParser().Parse(iotest.ErrReader(errors.New("boom")), "err.xlsx")
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "無法開啟 Excel 檔案",
+		"xlsx open 失敗須走 name-wrapped 開檔錯誤前綴")
+	assert.ErrorContains(t, err, "boom", "底層 reader 錯誤必須往上傳遞")
+	assert.Nil(t, data, "open 失敗時必須回傳 nil ForceData")
+}
+
+// TestANCParser_Parse_MalformedXLSX 把非 zip 的位元組餵給 xlsx 分支
+// （excelize.OpenReader），必須回傳 name-wrapped 的開檔錯誤與 nil *ForceData，
+// 對應 anc_parser.go 約 344 行的 "無法開啟 Excel 檔案" 包裝。
+func TestANCParser_Parse_MalformedXLSX(t *testing.T) {
+	data, err := NewANCParser().Parse(bytes.NewReader([]byte("PK-not-a-real-xlsx")), "x.xlsx")
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "無法開啟 Excel 檔案 x.xlsx",
+		"malformed xlsx 必須回傳 name-wrapped 開檔錯誤")
+	assert.Nil(t, data, "malformed xlsx 必須回傳 nil ForceData")
 }
 
 // leading blank line 必須不會讓 handler map 偏移。
@@ -228,8 +383,12 @@ func TestANCParser_ParseHeader_LeadingBlankLine_NoMisalignment(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
+	f, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer f.Close()
+
 	parser := NewANCParser()
-	data, err := parser.ParseFile(tmpFile.Name())
+	data, err := parser.Parse(f, tmpFile.Name())
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
@@ -269,8 +428,12 @@ func TestANCParser_ChannelName_ContainsSpace_NotSplit(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
+	fSpace, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer fSpace.Close()
+
 	parser := NewANCParser()
-	data, err := parser.ParseFile(tmpFile.Name())
+	data, err := parser.Parse(fSpace, tmpFile.Name())
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
@@ -378,7 +541,11 @@ func TestANCParser_GetSampleInterval(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
-	_, err = parser.ParseFile(tmpFile.Name())
+	fFreq, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer fFreq.Close()
+
+	_, err = parser.Parse(fFreq, tmpFile.Name())
 	require.NoError(t, err)
 
 	interval := parser.GetSampleInterval()
@@ -597,8 +764,12 @@ func TestANCParser_FileType_ColonInValue(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
+	fColon, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer fColon.Close()
+
 	parser := NewANCParser()
-	data, err := parser.ParseFile(tmpFile.Name())
+	data, err := parser.Parse(fColon, tmpFile.Name())
 	require.NoError(t, err)
 	require.NotNil(t, data)
 
@@ -637,11 +808,15 @@ func TestANCParser_Integration(t *testing.T) {
 
 		_, err = tmpFile.WriteString(ancContent)
 		require.NoError(t, err)
-		tmpFile.Close()
+		require.NoError(t, tmpFile.Close())
+
+		f, err := os.Open(tmpFile.Name())
+		require.NoError(t, err)
+		defer f.Close()
 
 		// 解析文件
 		parser := NewANCParser()
-		data, err := parser.ParseFile(tmpFile.Name())
+		data, err := parser.Parse(f, tmpFile.Name())
 		require.NoError(t, err)
 
 		// 驗證數據完整性
@@ -718,8 +893,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f1, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f1.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f1, xlsxPath)
 
 		require.NoError(t, err)
 		assert.NotNil(t, forceData)
@@ -755,8 +934,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f2, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f2.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f2, xlsxPath)
 
 		require.NoError(t, err)
 		assert.Len(t, forceData.Time, 1000)
@@ -803,8 +986,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		err = f.Close()
 		require.NoError(t, err)
 
+		f3, err := os.Open(tmpFile.Name())
+		require.NoError(t, err)
+		defer f3.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(tmpFile.Name())
+		forceData, err := parser.Parse(f3, tmpFile.Name())
 
 		require.NoError(t, err)
 		assert.Len(t, forceData.Time, 2)
@@ -823,8 +1010,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f4, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f4.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f4, xlsxPath)
 
 		require.NoError(t, err)
 		// 應該只有 2 個有效數據點（跳過空行）
@@ -842,8 +1033,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f5, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f5.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f5, xlsxPath)
 
 		require.NoError(t, err)
 		assert.Len(t, forceData.Time, 3)
@@ -855,14 +1050,6 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		assert.Equal(t, 6.0, forceData.Forces["Fz"][2])
 	})
 
-	t.Run("xlsx file not found", func(t *testing.T) {
-		parser := NewANCParser()
-		_, err := parser.ParseFile("nonexistent_file.xlsx")
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "無法開啟 Excel 檔案")
-	})
-
 	t.Run("xlsx file with only header row", func(t *testing.T) {
 		headers := []string{"Time", "Fx", "Fy"}
 		data := [][]string{} // 沒有數據
@@ -870,8 +1057,12 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f6, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f6.Close()
+
 		parser := NewANCParser()
-		_, err := parser.ParseFile(xlsxPath)
+		_, err = parser.Parse(f6, xlsxPath)
 
 		assert.Error(t, err)
 		// 錯誤訊息可能是 "數據不足" 或 "沒有有效的數據行"
@@ -893,8 +1084,12 @@ func TestANCParser_ParseXLSXFile_Validation(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f7, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f7.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f7, xlsxPath)
 		require.NoError(t, err)
 
 		// 使用 ValidateForceData 驗證
@@ -915,8 +1110,12 @@ func TestANCParser_ParseXLSXFile_Validation(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		defer os.Remove(xlsxPath)
 
+		f8, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer f8.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(f8, xlsxPath)
 		require.NoError(t, err)
 
 		// 獲取時間範圍內的數據
@@ -961,8 +1160,12 @@ func TestANCParser_XLSX_RowIndexContract(t *testing.T) {
 		xlsxPath := createTestXLSXFile(t, headers, data)
 		t.Cleanup(func() { _ = os.Remove(xlsxPath) })
 
+		fR1, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer fR1.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(fR1, xlsxPath)
 		require.NoError(t, err)
 		require.NotNil(t, forceData)
 
@@ -1007,8 +1210,12 @@ func TestANCParser_XLSX_RowIndexContract(t *testing.T) {
 		xlsxPath := buildANCFormatXLSX(t)
 		t.Cleanup(func() { _ = os.Remove(xlsxPath) })
 
+		fR2, err := os.Open(xlsxPath)
+		require.NoError(t, err)
+		defer fR2.Close()
+
 		parser := NewANCParser()
-		forceData, err := parser.ParseFile(xlsxPath)
+		forceData, err := parser.Parse(fR2, xlsxPath)
 		require.NoError(t, err)
 		require.NotNil(t, forceData)
 
@@ -1074,4 +1281,71 @@ func buildANCFormatXLSX(t *testing.T) string {
 func formatFloat(f float64) string {
 	return strings.TrimRight(strings.TrimRight(
 		fmt.Sprintf("%.6f", f), "0"), ".")
+}
+
+// buildSimpleXLSXBuffer 建立 simple (header + data) xlsx 並回傳 in-memory bytes，
+// 供 reader-based Parse 測試使用（不落地檔案）。
+func buildSimpleXLSXBuffer(t *testing.T, headers []string, data [][]string) []byte {
+	t.Helper()
+
+	f := excelize.NewFile()
+	sheetName := f.GetSheetName(0)
+
+	for colIdx, header := range headers {
+		cell, err := excelize.CoordinatesToCellName(colIdx+1, 1)
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellValue(sheetName, cell, header))
+	}
+
+	for rowIdx, row := range data {
+		for colIdx, value := range row {
+			cell, err := excelize.CoordinatesToCellName(colIdx+1, rowIdx+2)
+			require.NoError(t, err)
+			require.NoError(t, f.SetCellValue(sheetName, cell, value))
+		}
+	}
+
+	buf, err := f.WriteToBuffer()
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	return buf.Bytes()
+}
+
+// buildANCFormatXLSXBuffer 建立完整 ANC-format xlsx（rows 1-11 頭部、row 9 通道名稱、
+// row 12+ 資料）並回傳 in-memory bytes，供 reader-based Parse 測試使用。
+func buildANCFormatXLSXBuffer(t *testing.T) []byte {
+	t.Helper()
+
+	f := excelize.NewFile()
+	sheetName := f.GetSheetName(0)
+
+	setCell := func(row int, vals ...string) {
+		for col, v := range vals {
+			cell, err := excelize.CoordinatesToCellName(col+1, row)
+			require.NoError(t, err)
+			require.NoError(t, f.SetCellValue(sheetName, cell, v))
+		}
+	}
+
+	setCell(1, "File_Type:", "AMTI_FORCE_PLATE")
+	setCell(2, "Board_Type:", "OR6-5-1000")
+	setCell(3, "Trial_Name:", "TEST")
+	setCell(4, "BitDepth:", "16")
+	setCell(5, "")
+	setCell(6, "")
+	setCell(7, "")
+	setCell(8, "")
+	setCell(9, "Name", "Fx", "Fy", "Fz") // row 9 → internal rows[8]
+	setCell(10, "Rate", "1000", "1000", "1000")
+	setCell(11, "Range", "2000", "2000", "5000")
+	setCell(12, "0.000", "1.1", "2.2", "3.3") // row 12 → internal rows[11]; first data
+	setCell(13, "0.001", "4.4", "5.5", "6.6")
+	setCell(14, "0.002", "7.7", "8.8", "9.9")
+
+	buf, err := f.WriteToBuffer()
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	return buf.Bytes()
 }

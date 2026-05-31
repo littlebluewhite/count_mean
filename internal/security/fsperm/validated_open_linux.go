@@ -65,7 +65,8 @@ func emitOpenat2FallbackWarning() {
 	})
 }
 
-// openValidated 在 Linux 上以 openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS)
+// openValidated 在 Linux 上以
+// openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS)
 // 開啟 resolvedPath,kernel-level 保證:
 //
 //   - 開出來的 fd 不會逃出 hitBase 目錄
@@ -108,10 +109,14 @@ func openValidated(resolvedPath, hitBase string) (*os.File, error) {
 		Mode:  uint64(FilePerm),
 		// RESOLVE_BENEATH:不允許 walk 出 dirfd 範圍。
 		// RESOLVE_NO_MAGICLINKS:擋 /proc/$$/fd 等 magic link 攻擊。
-		// 不加 RESOLVE_NO_SYMLINKS,允許 hitBase 內部合法 symlink (例如 OutputDir 內
-		// 使用者建的 symlink 指向同 base 下另一 dir);RESOLVE_BENEATH 已足夠保證
-		// 不會逃出 base。
-		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS,
+		// RESOLVE_NO_SYMLINKS:任一 path component 為 symlink 即 reject (ELOOP)。
+		// 之所以安全 — resolvedPath 是 caller-side evalSymlinksWithFallback 的產物,
+		// hitBase 內部合法 symlink 早已被解析掉 (例如 OutputDir 內使用者建的 symlink
+		// 指向同 base 下另一 dir,EvalSymlinks 已展開成 real path),故此 flag 不會誤殺
+		// 合法 in-base symlink。它擋的是 EvalSymlinks 與 openat2 之間 TOCTOU 窗口被 swap
+		// 進來的 symlink — 把 Linux 提升到與 Darwin O_NOFOLLOW_ANY 一致的嚴格度,消除
+		// read/write 平台 symlink 政策不對稱 (ADR-0017 Decision 7)。
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS,
 	}
 
 	fd, err := unix.Openat2(dirfd, relPath, how)
@@ -124,7 +129,7 @@ func openValidated(resolvedPath, hitBase string) (*os.File, error) {
 			return os.OpenFile(resolvedPath, WriteFlags, FilePerm) //nolint:gosec,wrapcheck // resolvedPath 已校驗;fallback 透出原始 *PathError 利 caller 偵測 OS 錯誤
 		}
 		// EXDEV:RESOLVE_BENEATH 違反 (路徑逃出 dirfd 範圍)。
-		// ELOOP:RESOLVE_NO_MAGICLINKS 違反或 O_NOFOLLOW 觸發。
+		// ELOOP:RESOLVE_NO_SYMLINKS / RESOLVE_NO_MAGICLINKS 違反或 O_NOFOLLOW 觸發。
 		// 兩者都當作 escape,回 ErrPathEscapesBase 讓 caller 收到一致錯誤型別。
 		if errors.Is(err, unix.EXDEV) || errors.Is(err, unix.ELOOP) {
 			return nil, fmt.Errorf("%w: openat2(%s under %s) rejected: %w",
@@ -138,9 +143,9 @@ func openValidated(resolvedPath, hitBase string) (*os.File, error) {
 }
 
 // openReadValidated 是 openValidated 的 read-side 對稱版本:
-// 同樣以 openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS) 為基礎,但 flags
-// 使用 ReadFlags (O_RDONLY | O_NOFOLLOW),提供與寫盤對稱的 atomic symlink
-// rejection。fallback / 錯誤碼路徑與 openValidated 一致;警告共用同一
+// 同樣以 openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS)
+// 為基礎,但 flags 使用 ReadFlags (O_RDONLY | O_NOFOLLOW),提供與寫盤對稱的
+// atomic symlink rejection。fallback / 錯誤碼路徑與 openValidated 一致;警告共用同一
 // sync.Once,因 write 與 read fallback 對 operator 屬於同一 kernel 降級事件。
 func openReadValidated(resolvedPath, hitBase string) (*os.File, error) {
 	relPath, err := filepath.Rel(hitBase, resolvedPath)
@@ -158,9 +163,12 @@ func openReadValidated(resolvedPath, hitBase string) (*os.File, error) {
 		// O_CLOEXEC:與 openValidated 對稱 — openat2 raw syscall 不會像 os.OpenFile
 		// 自動帶 CLOEXEC,明確 OR 補回,避免子行程 inherit read fd 後讀走 config /
 		// translations 等內部檔。
-		Flags:   uint64(ReadFlags) | unix.O_CLOEXEC,
-		Mode:    0,
-		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS,
+		Flags: uint64(ReadFlags) | unix.O_CLOEXEC,
+		Mode:  0,
+		// RESOLVE_NO_SYMLINKS 與 openValidated 寫盤端對稱:resolvedPath 已 EvalSymlinks
+		// 展開,合法 in-base symlink 不會誤殺;此 flag 擋 EvalSymlinks→openat2 之間
+		// swap 進來的 symlink,與 Darwin O_NOFOLLOW_ANY 對齊 (見 openValidated 詳述)。
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS,
 	}
 
 	fd, err := unix.Openat2(dirfd, relPath, how)

@@ -66,7 +66,12 @@ func BenchmarkCSVReading(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err := parsers.ReadCSVDirect(tempFile)
+		f, err := os.Open(tempFile)
+		if err != nil {
+			b.Fatalf("開啟CSV失敗: %v", err)
+		}
+		_, err = parsers.ReadCSVRecords(f)
+		_ = f.Close()
 		if err != nil {
 			b.Fatalf("讀取CSV失敗: %v", err)
 		}
@@ -81,7 +86,12 @@ func BenchmarkCSVParsing(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err := parsers.ReadCSVDirect(tempFile)
+		f, err := os.Open(tempFile)
+		if err != nil {
+			b.Fatalf("開啟CSV失敗: %v", err)
+		}
+		_, err = parsers.ReadCSVRecords(f)
+		_ = f.Close()
 		if err != nil {
 			b.Fatalf("解析CSV失敗: %v", err)
 		}

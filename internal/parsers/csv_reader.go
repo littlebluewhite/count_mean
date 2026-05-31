@@ -4,26 +4,16 @@ import (
 	"bufio"
 	"encoding/csv"
 	"fmt"
-	"os"
+	"io"
 
 	"count_mean/internal/csvutil"
-	"count_mean/internal/security/fsperm"
 )
 
-// ReadCSVDirect reads a CSV file directly without path validation.
-// Used for phase synchronization analysis.
-func ReadCSVDirect(filepath string) ([][]string, error) {
-	file, err := os.OpenFile(filepath, fsperm.ReadFlags, 0) //nolint:gosec // filepath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
-	if err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
+// ReadCSVRecords reads BOM-aware CSV records from an io.Reader.
+//
+// Reader-based parse entry point. BOM handling + csv.Reader settings
+// (TrimLeadingSpace / LazyQuotes / FieldsPerRecord=-1) are load-bearing.
+func ReadCSVRecords(r io.Reader) ([][]string, error) {
 	// Buffered single-pass：bufio.Reader 提供 Peek/Discard 介面給 PeekBOM，
 	// csv.Reader 直接吃 bufio.Reader 省下「ReadAll 整檔到 []byte 後再 bytes.NewReader」
 	// 的中間複本（記憶體峰值 ↓50%）。
@@ -31,7 +21,7 @@ func ReadCSVDirect(filepath string) ([][]string, error) {
 	// 真正的 row-by-row 流式（cross-compare review Claude P2）。如果要支援多 GB 檔，
 	// 必須改成 reader.Read() loop + 即時 process per-row；目前 Motion / Phase CSV
 	// 規模在 MB 量級，buffered single-pass 已是合適的成本/複雜度平衡。
-	bufReader := bufio.NewReaderSize(file, csvReaderBufSize)
+	bufReader := bufio.NewReaderSize(r, csvReaderBufSize)
 	if _, err := csvutil.PeekBOM(bufReader); err != nil {
 		return nil, fmt.Errorf("peek BOM: %w", err)
 	}

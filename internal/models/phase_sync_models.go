@@ -6,7 +6,7 @@ import "time"
 //
 // 欄位語意：
 //   - Subject：受試者 ID，作為 output 檔名前綴；經 filename.Sanitize 處理路徑分隔符與特殊字元
-//   - MotionFile / ForceFile / EMGFile：相對於 DataFolder 的檔名，路徑解析走 manifest.ResolveEMGFile（lenient）
+//   - MotionFile / ForceFile / EMGFile：相對於 DataFolder 的檔名，開檔走 manifest.OpenDataFile（lenient）
 //   - EMGMotionOffset：EMG 第一筆樣本對應的 Motion index；用於 motion-time ↔ EMG-time 轉換
 //     （見 synchronizer.TimeSynchronizer.MotionIndexToEMGTime）
 //   - PhasePoints：10 個分期點，混合 force-time（OptFloat 秒，可區分 t=0 與「未提供」）

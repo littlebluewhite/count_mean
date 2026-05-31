@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -334,10 +335,10 @@ const literalPercentEMGName = "NSF_1_BTS%_5.9_BP30450_RMS0.1_0.09.csv"
 // "NSF_1_BTS%_5.9_BP30450_RMS0.1_0.09.csv"). The strict PathValidator.GetSafePath
 // rejected this as a URL-encoding residual, so phase_sync — the last
 // manifest-driven loader still on the strict API — failed to load standard data.
-// phase_sync now resolves EMG/Motion/Force manifest files via the lenient
-// security.ResolveLenientPath (matching cci/muscle_ratio and the decision matrix
-// in lenient_path.go), which accepts literal '%' while keeping real
-// traversal/symlink-escape blocked (see the attack tests above).
+// phase_sync now opens EMG/Motion/Force manifest files via the manifest.OpenDataFile
+// door (which internally uses security.ResolveLenientPath; matching cci/muscle_ratio
+// and the decision matrix in lenient_path.go), which accepts literal '%' while keeping
+// real traversal/symlink-escape blocked (see the attack tests above).
 //
 // White-box: each validator is exercised directly. Motion/Force bootstrap their
 // ctx (baseFolder) through the real validateEMGFilePath, then run on a '%' file.
@@ -370,9 +371,12 @@ func TestPhaseSyncValidators_LiteralPercentAccepted(t *testing.T) {
 	t.Run("Motion path validation accepts literal percent", func(t *testing.T) {
 		dataFolder := writePctFile(t)
 		analyzer := NewPhaseSyncAnalyzer()
+		// Bootstrap EMG uses the same '%' file (it exists in dataFolder): the door now
+		// validates existence atomically, so the bootstrap EMG must be a real file to
+		// populate ctx.baseFolder before exercising the Motion validator.
 		ctx := &validationContext{
 			params:   &models.AnalysisParams{DataFolder: dataFolder},
-			manifest: models.PhaseManifest{EMGFile: "emg.csv", MotionFile: literalPercentEMGName},
+			manifest: models.PhaseManifest{EMGFile: literalPercentEMGName, MotionFile: literalPercentEMGName},
 		}
 		require.NoError(t, validateEMGFilePath(analyzer, ctx), "bootstrap EMG validation")
 		if err := validateMotionFile(analyzer, ctx); err != nil {
@@ -384,9 +388,12 @@ func TestPhaseSyncValidators_LiteralPercentAccepted(t *testing.T) {
 	t.Run("Force path validation accepts literal percent", func(t *testing.T) {
 		dataFolder := writePctFile(t)
 		analyzer := NewPhaseSyncAnalyzer()
+		// Bootstrap EMG uses the same '%' file (it exists in dataFolder): the door now
+		// validates existence atomically, so the bootstrap EMG must be a real file to
+		// populate ctx.baseFolder before exercising the Force validator.
 		ctx := &validationContext{
 			params:   &models.AnalysisParams{DataFolder: dataFolder},
-			manifest: models.PhaseManifest{EMGFile: "emg.csv", ForceFile: literalPercentEMGName},
+			manifest: models.PhaseManifest{EMGFile: literalPercentEMGName, ForceFile: literalPercentEMGName},
 		}
 		require.NoError(t, validateEMGFilePath(analyzer, ctx), "bootstrap EMG validation")
 		if err := validateForceFile(analyzer, ctx); err != nil {
@@ -428,38 +435,92 @@ TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 		"literal '%%' EMG filename must clear path validation at the AnalyzePhaseSync seam")
 }
 
-// TestPhaseSyncValidators_EMGSymlinkNotResolved pins the intended O_NOFOLLOW posture
-// adopted by migrating to ResolveLenientPath (consistent with cci/muscle_ratio):
-// validateEMGFilePath stores the LEXICAL path, NOT the symlink-resolved target. The
-// shared EMG parser (ReadCSVDirect) then opens with fsperm.ReadFlags (O_NOFOLLOW),
-// which refuses to follow symlinks — the TOCTOU-resistant behavior all three
-// analyzers share. The previous implementation did EvalSymlinks-resolve-then-store
-// here, which (a) followed in-folder symlinks and (b) opened a TOCTOU window between
-// resolve and open. A regression that re-adds that resolve would change emgFilePath
-// to the resolved target and fail this assertion.
-func TestPhaseSyncValidators_EMGSymlinkNotResolved(t *testing.T) {
-	if os.Getenv("GOOS") == "windows" {
-		t.Skip("symlink + O_NOFOLLOW semantics are unix-specific")
-	}
-	base := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(base, "real_emg.csv"),
-		[]byte("Time,Ch1\n0,1\n"), fsperm.FilePerm))
-	link := filepath.Join(base, "link_emg.csv")
-	if err := os.Symlink("real_emg.csv", link); err != nil {
-		t.Skipf("cannot create symlink: %v", err)
-	}
-
+// TestValidateEMGFilePath_MissingFile_ReportsNotFound pins the EMG missing-file
+// contract: a valid baseFolder whose EMGFile names a file absent on disk must
+// report "EMG 檔案不存在" and satisfy errors.Is(err, ErrFileNotFound) — matching
+// Motion/Force (which route the same manifest.OpenDataFile error through
+// mapOpenDataFileErr). Before this fix the EMG path wrapped every OpenDataFile
+// error as "EMG 檔案路徑驗證失敗", so a missing EMG was misclassified and
+// errors.Is(err, ErrFileNotFound) was false — silently defeating callers.
+func TestValidateEMGFilePath_MissingFile_ReportsNotFound(t *testing.T) {
+	base := t.TempDir() // valid, existing data folder
 	ctx := &validationContext{
 		params:   &models.AnalysisParams{DataFolder: base},
-		manifest: models.PhaseManifest{EMGFile: "link_emg.csv"},
+		manifest: models.PhaseManifest{EMGFile: "does_not_exist.csv"},
 	}
-	require.NoError(t, validateEMGFilePath(NewPhaseSyncAnalyzer(), ctx),
-		"in-folder symlink target stays in base, so path validation accepts it")
-	// Compare the basename, not the full path: validateEMGFilePath deliberately
-	// EvalSymlinks-resolves the *base folder* (so on macOS /tmp→/private/tmp), but it
-	// must NOT resolve the EMG *filename* component. The leaf must stay "link_emg.csv"
-	// (the symlink), never "real_emg.csv" (the resolved target).
-	require.Equal(t, "link_emg.csv", filepath.Base(ctx.emgFilePath),
-		"EMG symlink leaf must be preserved (not resolved to the target); symlink "+
-			"safety is enforced by the parser's O_NOFOLLOW, not by resolving here")
+
+	err := validateEMGFilePath(NewPhaseSyncAnalyzer(), ctx)
+	require.Error(t, err, "missing EMG file must produce an error")
+	assert.ErrorIs(t, err, ErrFileNotFound,
+		"missing EMG file must satisfy errors.Is(err, ErrFileNotFound); got: %v", err)
+	assert.Contains(t, err.Error(), "EMG 檔案不存在",
+		"missing EMG file must report '不存在', not '路徑驗證失敗'; got: %v", err)
+}
+
+// TestPhaseSyncValidators_EMGSymlinkSafety pins the symlink posture after migrating
+// to the manifest.OpenDataFile door (ADR-0017 Decision 7 + the validate/open
+// consolidation). The door performs a fused lenient-resolve + atomic validated-open
+// (RESOLVE_NO_SYMLINKS on Linux, O_NOFOLLOW_ANY on Darwin), so the SECURITY contract
+// it enforces is "the resolved target must stay inside the data folder", not the
+// older lexical detail of "store the unresolved leaf". This test pins that property
+// directly:
+//
+//   - escape case: a symlink whose target lives OUTSIDE the data folder is rejected
+//     with the EMG path-validation error (the real attack — the door's matchAnyBase
+//     boundary check refuses the out-of-base resolved target).
+//   - in-base case: a symlink whose target stays inside the data folder is accepted
+//     (the door resolves the leaf and opens the in-base target). This is the behavioral
+//     change from the pre-migration lexical-leaf storage; the door is the single
+//     enforcement point now.
+func TestPhaseSyncValidators_EMGSymlinkSafety(t *testing.T) {
+	if os.Getenv("GOOS") == "windows" {
+		t.Skip("symlink + RESOLVE_NO_SYMLINKS/O_NOFOLLOW_ANY semantics are unix-specific")
+	}
+
+	t.Run("symlink escaping data folder is rejected", func(t *testing.T) {
+		base := t.TempDir()
+		// Target lives OUTSIDE base — the classic symlink-escape attack.
+		outside := t.TempDir()
+		secret := filepath.Join(outside, "secret.csv")
+		require.NoError(t, os.WriteFile(secret, []byte("Time,Ch1\n0,1\n"), fsperm.FilePerm))
+		link := filepath.Join(base, "escape_emg.csv")
+		if err := os.Symlink(secret, link); err != nil {
+			t.Skipf("cannot create symlink: %v", err)
+		}
+
+		ctx := &validationContext{
+			params:   &models.AnalysisParams{DataFolder: base},
+			manifest: models.PhaseManifest{EMGFile: "escape_emg.csv"},
+		}
+		err := validateEMGFilePath(NewPhaseSyncAnalyzer(), ctx)
+		require.Error(t, err,
+			"symlink whose target escapes the data folder must be rejected by the door")
+		assert.Contains(t, err.Error(), "EMG 檔案路徑驗證失敗",
+			"escape must surface as the EMG path-validation error, not a downstream parse error")
+	})
+
+	t.Run("symlink whose target stays in data folder is accepted", func(t *testing.T) {
+		base := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(base, "real_emg.csv"),
+			[]byte("Time,Ch1\n0,1\n"), fsperm.FilePerm))
+		link := filepath.Join(base, "link_emg.csv")
+		if err := os.Symlink("real_emg.csv", link); err != nil {
+			t.Skipf("cannot create symlink: %v", err)
+		}
+
+		ctx := &validationContext{
+			params:   &models.AnalysisParams{DataFolder: base},
+			manifest: models.PhaseManifest{EMGFile: "link_emg.csv"},
+		}
+		require.NoError(t, validateEMGFilePath(NewPhaseSyncAnalyzer(), ctx),
+			"in-folder symlink target stays in base, so the door accepts it")
+		// The door resolves the leaf to its in-base target and stores that resolved
+		// path; the stored path must itself be inside the (resolved) data folder.
+		resolvedBase, err := filepath.EvalSymlinks(base)
+		require.NoError(t, err)
+		rel, err := filepath.Rel(resolvedBase, ctx.emgFilePath)
+		require.NoError(t, err)
+		assert.False(t, rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)),
+			"resolved EMG path must stay within the data folder; got rel=%q", rel)
+	})
 }

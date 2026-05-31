@@ -104,7 +104,7 @@ func OpenWriteValidated(path string, basePaths []string) (*os.File, error) {
 // EvalSymlinks 防禦,callsite 反覆撞牆。
 //
 // 流程與 OpenWriteValidated 完全對稱;差異只在最終 openReadValidated dispatch:
-//   - Linux:openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS) + ReadFlags
+//   - Linux:openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS) + ReadFlags
 //   - Darwin:O_NOFOLLOW_ANY (kernel-level reject parent-component symlink)
 //   - Windows / 其他 Unix:os.OpenFile(resolvedPath, ReadFlags) —
 //     Windows 殘餘 TOCTOU 由 EvalSymlinks pre-validation 兜底

@@ -9,14 +9,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
-	"count_mean/internal/security"
 	"count_mean/internal/synchronizer"
 )
 
@@ -47,8 +48,9 @@ type PhaseSyncAnalyzer struct {
 }
 
 // NewPhaseSyncAnalyzer 創建新的分期同步分析器.
-// 不持有 PathValidator — manifest 檔案路徑解析改走無狀態的 security.ResolveLenientPath
-// （見 validateEMGFilePath），無 request-scoped validator 狀態需要管理。
+// 不持有 PathValidator — manifest 引用的資料檔改走 manifest.OpenDataFile 這道
+// fused 安全門（見 validateEMGFilePath / Load），無 request-scoped validator
+// 狀態需要管理。
 func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 	return &PhaseSyncAnalyzer{
 		manifestParser:  parsers.NewPhaseManifestParser(),
@@ -62,8 +64,8 @@ func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 
 // validationContext 驗證上下文，用於在驗證步驟之間傳遞數據.
 // baseFolder 在 validateEMGFilePath 內解析後存入，後續 validateMotionFile /
-// validateForceFile 共用。路徑解析改走無狀態的 security.ResolveLenientPath，
-// ctx 不再持有 PathValidator — 避免並發污染，且接受 BTS 字面 "%" 檔名。
+// validateForceFile 與 Load 的 EMG 解析共用。資料檔改走 manifest.OpenDataFile
+// 這道門（接受 BTS 字面 "%" 檔名），ctx 不再持有 PathValidator — 避免並發污染。
 type validationContext struct {
 	params      *models.AnalysisParams
 	manifests   []models.PhaseManifest
@@ -124,12 +126,20 @@ func validatePhaseOrder(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 // 直接幫助。顯式擋下，配合 ErrBaseFolderNotFound 給明確訊息。baseFolder 解析後
 // 存入 ctx，後續 validateMotionFile / validateForceFile 共用。
 //
-// EMG / Motion / Force 路徑解析走 security.ResolveLenientPath（允許含 literal "%"
-// 的 BTS 匯出檔名，如 "NSF_1_BTS%_*.csv"），對齊 cci / muscle_ratio 與 lenient_path.go
-// 的 decision matrix。ResolveLenientPath 內部已對 joined 與 baseFolder 做
-// EvalSymlinks + Rel 邊界檢查（涵蓋舊版「再解析 symlink 後重新 ValidateFilePath」
-// 那一步的 symlink-escape 防護）；不再額外跑 strict ValidateFilePath —— 後者
-// strictPercent=true 會把合法的字面 "%" 誤判為 URL-encoded 殘留而拒載。
+// EMG / Motion / Force 檔案改走 manifest.OpenDataFile 這道 fused 安全門（lenient
+// 路徑解析 + 原子化 validated-open，close validate-vs-open TOCTOU 縫隙），對齊
+// cci / muscle_ratio 與 ADR-0017 的 consolidation。門內接受含 literal "%" 的 BTS
+// 匯出檔名（如 "NSF_1_BTS%_*.csv"），且以 RESOLVE_NO_SYMLINKS / O_NOFOLLOW_ANY
+// 在 open 階段封死 parent-component symlink 攻擊面。
+//
+// EMG 在此「validate-early」：先開門確認存在性 + 安全性後立即 Close（驗證原子化），
+// 真正解析延後到 Load()——Load() 再開一次門取得 reader。EMG 合法地開兩次，是
+// validate-pipeline 結構的固有特性。validateEMGFilePath 仍存 ctx.emgFilePath
+// （已驗證的解析後路徑）供 LiteralPercent 等 white-box 驗證觀察。
+//
+// baseFolder 的 os.Stat 顯式守門保留：EvalSymlinks 失敗會 silently 落回原始字串，
+// 顯式擋下配合 ErrBaseFolderNotFound 給明確訊息；解析後存入 ctx.baseFolder，
+// 後續 validateMotionFile / validateForceFile 共用（OpenDataFile 接受已解析的 base）。
 func validateEMGFilePath(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 	baseFolder := ctx.params.DataFolder
 	if info, err := os.Stat(baseFolder); err != nil {
@@ -147,14 +157,31 @@ func validateEMGFilePath(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 
 	ctx.baseFolder = baseFolder
 
-	emgFilePath, err := security.ResolveLenientPath(baseFolder, ctx.manifest.EMGFile)
+	f, err := manifest.OpenDataFile(baseFolder, ctx.manifest.EMGFile)
 	if err != nil {
-		return fmt.Errorf("EMG 檔案路徑驗證失敗: %w", err)
+		return mapOpenDataFileErr("EMG", ctx.manifest.EMGFile, err)
 	}
-
-	ctx.emgFilePath = emgFilePath
+	ctx.emgFilePath = f.Name()
+	_ = f.Close() //nolint:errcheck // validate-early open; read-only fd, close error not actionable
 
 	return nil
+}
+
+// mapOpenDataFileErr 把 manifest.OpenDataFile 的 sentinel 錯誤映射回 phase_sync
+// 自有的 user-facing 錯誤契約。dataType 是 "Motion" / "Force Plate" 等資料類別
+// 標籤，filename 是 manifest 欄位（含副檔名）供「期待的檔放在哪」affordance。
+//
+//   - ErrManifestDataFileMissing → "<dataType> 檔案不存在 (<filename>)" + ErrFileNotFound
+//     （保留 phase_sync 自有 ErrFileNotFound sentinel,讓 missing-file 測試與 caller
+//     的 errors.Is 仍命中）。
+//   - 其餘（路徑驗證失敗 / baseFolder 無法解析）→ "<dataType> 檔案路徑驗證失敗"。
+func mapOpenDataFileErr(dataType, filename string, err error) error {
+	if errors.Is(err, manifest.ErrManifestDataFileMissing) {
+		//nolint:staticcheck // Chinese error message for user display
+		return fmt.Errorf("%s 檔案不存在 (%s): %w", dataType, filename, ErrFileNotFound)
+	}
+	//nolint:staticcheck // Chinese error message for user display
+	return fmt.Errorf("%s 檔案路徑驗證失敗: %w", dataType, err)
 }
 
 // validateMotionFile 驗證 Motion 檔案.
@@ -165,17 +192,13 @@ func validateMotionFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 		return nil
 	}
 
-	motionFilePath, err := security.ResolveLenientPath(ctx.baseFolder, ctx.manifest.MotionFile)
+	f, err := manifest.OpenDataFile(ctx.baseFolder, ctx.manifest.MotionFile)
 	if err != nil {
-		return fmt.Errorf("Motion 檔案路徑驗證失敗: %w", err) //nolint:staticcheck // Chinese error message
+		return mapOpenDataFileErr("Motion", ctx.manifest.MotionFile, err)
 	}
+	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
 
-	if _, err := os.Stat(motionFilePath); os.IsNotExist(err) {
-		//nolint:staticcheck // Chinese error message for user display
-		return fmt.Errorf("Motion 檔案不存在 (%s): %w", motionFilePath, ErrFileNotFound)
-	}
-
-	motionData, err := analyzer.motionParser.ParseFile(motionFilePath)
+	motionData, err := analyzer.motionParser.Parse(f, ctx.manifest.MotionFile)
 	if err != nil {
 		return fmt.Errorf("解析 Motion 檔案失敗: %w", err)
 	}
@@ -218,17 +241,13 @@ func validateForceFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) erro
 		return nil
 	}
 
-	forceFilePath, err := security.ResolveLenientPath(ctx.baseFolder, ctx.manifest.ForceFile)
+	f, err := manifest.OpenDataFile(ctx.baseFolder, ctx.manifest.ForceFile)
 	if err != nil {
-		return fmt.Errorf("Force Plate 檔案路徑驗證失敗: %w", err) //nolint:staticcheck // Chinese error message
+		return mapOpenDataFileErr("Force Plate", ctx.manifest.ForceFile, err)
 	}
+	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
 
-	if _, err := os.Stat(forceFilePath); os.IsNotExist(err) {
-		//nolint:staticcheck // Chinese error message for user display
-		return fmt.Errorf("Force Plate 檔案不存在 (%s): %w", forceFilePath, ErrFileNotFound)
-	}
-
-	forceData, err := analyzer.ancParser.ParseFile(forceFilePath)
+	forceData, err := analyzer.ancParser.Parse(f, ctx.manifest.ForceFile)
 	if err != nil {
 		return fmt.Errorf("解析 Force Plate 檔案失敗: %w", err)
 	}
@@ -304,13 +323,17 @@ type LoadedPhaseSyncContext struct {
 
 // parseEMGFileFunc 是 EMG 檔案解析 test hook 的函式型別 alias。
 // 用 named type 讓 atomic.Pointer 的型別參數可讀。
-type parseEMGFileFunc func(filepath string) (*models.PhaseSyncEMGData, float64, error)
+//
+// reader-based：隨 ADR-0017 遷至 manifest.OpenDataFile 門後,Load() 改由門取得
+// 已驗證的 *os.File（reader）再交給 parser,hook 簽章同步改成收 io.Reader + name
+// （含副檔名的 manifest 欄位,load-bearing 給 ANC text/xlsx branch 與錯誤上下文）。
+type parseEMGFileFunc func(r io.Reader, name string) (*models.PhaseSyncEMGData, float64, error)
 
 // parseEMGFileFnPtr 是 EMG 檔案解析的 test hook (P2-H24, P2-25)。
 //
-// Production 預設為 nil pointer → Load() 用 analyzer.emgParser.ParseFile;test 可
+// Production 預設為 nil pointer → Load() 用 analyzer.emgParser.Parse;test 可
 // override (用 setParseEMGFileFnForTest) 注入 fake parser,讓 in-flight cancel
-// test 可以「卡住 ParseFile 直到 cancel 被觸發」確定性化測試 cancel path。
+// test 可以「卡住 Parse 直到 cancel 被觸發」確定性化測試 cancel path。
 //
 // 從裸 package-level var 改 atomic.Pointer 以提供讀寫同步。第一個
 // t.Parallel() test 會踩到 data race — atomic.Pointer.Load/Store 提供 happens-before
@@ -345,11 +368,15 @@ func SetParseEMGFileFnForTest(fn parseEMGFileFunc) (cleanup func()) {
 // 不同分期區間的工作流共用（例如標準化分期同步分析需要分別解析 normalize 範圍與
 // statistics 範圍）。後續呼叫 ResolvePhaseRange 取得具體時間區間。
 //
-// validateEMGFilePath 內部解析並存入 ctx.baseFolder，後續 Motion / Force 路徑解析
-// 共用；三者皆走無狀態的 security.ResolveLenientPath，無 request-scoped validator。
+// validateEMGFilePath 內部解析並存入 ctx.baseFolder，後續 Motion / Force 與此處的
+// EMG 解析共用；三者皆走 manifest.OpenDataFile 這道 fused 安全門。
+//
+// EMG 走 validate-twice 結構：validateEMGFilePath 先開門驗證 + 立即 Close，此處
+// 再開門一次取得 reader 交給 parser。重開是 validate-pipeline 的固有特性,門內
+// 原子化 validated-open 保證每次都安全。
 //
 // 走 parseEMGFileFn test hook 取得 parser (production 預設 nil → 走
-// analyzer.emgParser.ParseFile)。
+// reader-based analyzer.emgParser.Parse)。
 func (analyzer *PhaseSyncAnalyzer) Load(
 	params *models.AnalysisParams,
 ) (*LoadedPhaseSyncContext, error) {
@@ -358,12 +385,18 @@ func (analyzer *PhaseSyncAnalyzer) Load(
 		return nil, err
 	}
 
-	parseFn := analyzer.emgParser.ParseFile
+	f, err := manifest.OpenDataFile(ctx.baseFolder, ctx.manifest.EMGFile)
+	if err != nil {
+		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
+	}
+	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
+
+	parseFn := analyzer.emgParser.Parse
 	if hook := parseEMGFileFnPtr.Load(); hook != nil {
 		parseFn = *hook
 	}
 
-	emgData, _, err := parseFn(ctx.emgFilePath)
+	emgData, _, err := parseFn(f, ctx.manifest.EMGFile)
 	if err != nil {
 		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
 	}

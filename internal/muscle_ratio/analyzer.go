@@ -120,7 +120,7 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorMuscleRatioMkdirFailed), err)
 	}
 
-	// EMG 路徑解析走 manifest.ResolveEMGFile（內部走 security.ResolveLenientPath，
+	// EMG 開檔走 manifest.OpenDataFile（內部走 security.OpenLenientValidated，
 	// 允許含 literal "%" 的 BTS 匯出檔名 — 見 internal/manifest 套件 doc）。
 	//
 	// 每個 subject 處理完後檢查 ctx.Done() — Wails Shutdown 或使用者中止會
@@ -171,13 +171,14 @@ func (a *Analyzer) analyzeSubject(
 		return result
 	}
 
-	emgPath, err := manifest.ResolveEMGFile(params.DataFolder, m.EMGFile)
+	f, err := manifest.OpenDataFile(params.DataFolder, m.EMGFile)
 	if err != nil {
 		result.Error = err.Error()
 		return result
 	}
+	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
 
-	emg, _, err := parsers.NewEMGParser().ParseFile(emgPath)
+	emg, _, err := parsers.NewEMGParser().Parse(f, m.EMGFile)
 	if err != nil {
 		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectParseEMGFailed, err)
 		return result

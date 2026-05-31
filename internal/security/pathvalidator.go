@@ -4,7 +4,7 @@
 //
 // 本套件提供兩條路徑驗證 API，**選用規則見 lenient_path.go 開頭的 Decision matrix**：
 //   - PathValidator (此檔)：受控內部讀寫路徑（InputDir / OutputDir / 直接 user-input）
-//   - ResolveLenientPath (lenient_path.go)：manifest-driven user files（檔名可能含 BTS 字面 "%"）
+//   - OpenLenientValidated (lenient_path.go)：manifest-driven user files（檔名可能含 BTS 字面 "%"）
 package security
 
 import (

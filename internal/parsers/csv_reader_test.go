@@ -1,21 +1,23 @@
 package parsers
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/csvutil"
 	"count_mean/internal/security/fsperm"
-	"count_mean/test/testutil"
 )
 
-func TestReadCSVDirect(t *testing.T) {
+func TestReadCSVRecords_Variants(t *testing.T) {
 	tests := []struct {
 		name        string
 		csvContent  string
@@ -139,8 +141,12 @@ func TestReadCSVDirect(t *testing.T) {
 			err := os.WriteFile(tmpFilePath, []byte(tt.csvContent), fsperm.FilePerm)
 			require.NoError(t, err)
 
-			// 測試 ReadCSVDirect
-			data, err := ReadCSVDirect(tmpFilePath)
+			// 測試 ReadCSVRecords via open + reader
+			f, err := os.Open(tmpFilePath)
+			require.NoError(t, err)
+			defer f.Close()
+
+			data, err := ReadCSVRecords(f)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -157,47 +163,7 @@ func TestReadCSVDirect(t *testing.T) {
 	}
 }
 
-func TestReadCSVDirect_FileNotFound(t *testing.T) {
-	_, err := ReadCSVDirect("nonexistent_file.csv")
-	// 用 errors.Is 比對 fs.ErrNotExist 避免依賴 OS-specific 訊息文字
-	// （Unix: "no such file or directory"，Windows: "The system cannot find the file specified."）
-	require.Error(t, err)
-	require.ErrorIs(t, err, fs.ErrNotExist)
-}
-
-func TestReadCSVDirect_FilePermissionDenied(t *testing.T) {
-	testutil.SkipIfChmodIneffective(t)
-
-	// 創建測試文件
-	tmpDir := t.TempDir()
-	tmpFilePath := filepath.Join(tmpDir, "test_permission.csv")
-
-	err := os.WriteFile(tmpFilePath, []byte("test,data\n1,2"), fsperm.FilePerm)
-	require.NoError(t, err)
-
-	// 移除讀取權限
-	err = os.Chmod(tmpFilePath, 0o000)
-	require.NoError(t, err)
-
-	defer func() {
-		_ = os.Chmod(tmpFilePath, fsperm.FilePerm) // 恢復權限以便清理
-	}()
-
-	// require.Error 在 err == nil 時直接 FailNow，根本性消除「err.Error() 對 nil 呼叫」
-	// 的 panic 機制；errors.Is 比對 fs.ErrPermission 跨平台等價。
-	_, err = ReadCSVDirect(tmpFilePath)
-	require.Error(t, err)
-	require.ErrorIs(t, err, fs.ErrPermission)
-}
-
-func TestReadCSVDirect_InvalidDirectory(t *testing.T) {
-	// 測試嘗試讀取目錄而不是文件
-	tmpDir := t.TempDir()
-	_, err := ReadCSVDirect(tmpDir)
-	assert.Error(t, err)
-}
-
-func TestReadCSVDirect_BinaryFile(t *testing.T) {
+func TestReadCSVRecords_BinaryFile(t *testing.T) {
 	// 創建二進制文件
 	tmpDir := t.TempDir()
 	tmpFilePath := filepath.Join(tmpDir, "test_binary.csv")
@@ -208,13 +174,17 @@ func TestReadCSVDirect_BinaryFile(t *testing.T) {
 	require.NoError(t, err)
 
 	// 二進制文件應該仍能讀取，但可能產生意外結果
-	data, err := ReadCSVDirect(tmpFilePath)
+	f, err := os.Open(tmpFilePath)
+	require.NoError(t, err)
+	defer f.Close()
+
+	data, err := ReadCSVRecords(f)
 	// CSV 讀取器通常不會出錯，但數據可能不符合預期
 	assert.NoError(t, err)
 	assert.NotNil(t, data)
 }
 
-func TestReadCSVDirect_LargeFile(t *testing.T) {
+func TestReadCSVRecords_LargeFile(t *testing.T) {
 	// 創建較大的 CSV 文件
 	tmpDir := t.TempDir()
 	tmpFilePath := filepath.Join(tmpDir, "test_large.csv")
@@ -237,7 +207,11 @@ func TestReadCSVDirect_LargeFile(t *testing.T) {
 	require.NoError(t, tmpFile.Close())
 
 	// 測試讀取大文件
-	data, err := ReadCSVDirect(tmpFilePath)
+	f, err := os.Open(tmpFilePath)
+	require.NoError(t, err)
+	defer f.Close()
+
+	data, err := ReadCSVRecords(f)
 	assert.NoError(t, err)
 	assert.Len(t, data, numRows+1) // 標題 + 1000 行數據
 
@@ -251,7 +225,7 @@ func TestReadCSVDirect_LargeFile(t *testing.T) {
 	assert.Equal(t, []string{"0.999", "999", "1998", "2997"}, data[numRows])
 }
 
-func TestReadCSVDirect_UTF8WithBOM(t *testing.T) {
+func TestReadCSVRecords_UTF8WithBOM(t *testing.T) {
 	// 創建包含 UTF-8 BOM 的文件
 	tmpDir := t.TempDir()
 	tmpFilePath := filepath.Join(tmpDir, "test_bom.csv")
@@ -269,46 +243,67 @@ func TestReadCSVDirect_UTF8WithBOM(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 
-	// 測試讀取包含 BOM 的文件
-	data, err := ReadCSVDirect(tmpFilePath)
+	// 測試讀取包含 BOM 的文件 via open + ReadCSVRecords
+	f, err := os.Open(tmpFilePath)
+	require.NoError(t, err)
+	defer f.Close()
+
+	data, err := ReadCSVRecords(f)
 	assert.NoError(t, err)
 	assert.Len(t, data, 2)
 
-	// 第一個欄位可能包含 BOM 字符
-	assert.Contains(t, data[0][0], "Name") // 可能是 "\uFEFFName" 或 "Name"
+	// BOM 已被 PeekBOM 消化，第一欄不應殘留 U+FEFF。
+	assert.Equal(t, "Name", data[0][0], "BOM must be stripped, first field should be clean")
 	assert.Equal(t, "Value", data[0][1])
 	assert.Equal(t, []string{"測試", "123"}, data[1])
 }
 
-func TestReadCSVDirect_RelativeAndAbsolutePaths(t *testing.T) {
-	// 創建測試文件
-	tmpDir := t.TempDir()
-	tmpFilePath := filepath.Join(tmpDir, "test_path.csv")
+// TestReadCSVRecords_FromReader 釘住 reader-based 核心：feed io.Reader 給
+// ReadCSVRecords 必須正確解析，含 csv.Reader 設定（TrimLeadingSpace / LazyQuotes /
+// FieldsPerRecord=-1）。
+func TestReadCSVRecords_FromReader(t *testing.T) {
+	csvContent := "Time,Ch1,Ch2\n1.0,100,50\n2.0,200,100\n3.0,300,150"
 
-	csvContent := "A,B\n1,2\n"
-	err := os.WriteFile(tmpFilePath, []byte(csvContent), fsperm.FilePerm)
+	records, err := ReadCSVRecords(strings.NewReader(csvContent))
 	require.NoError(t, err)
+	require.Len(t, records, 4)
+	assert.Equal(t, []string{"Time", "Ch1", "Ch2"}, records[0])
+	assert.Equal(t, []string{"1.0", "100", "50"}, records[1])
+	assert.Equal(t, []string{"3.0", "300", "150"}, records[3])
+}
 
-	// 測試絕對路徑
-	t.Run("absolute path", func(t *testing.T) {
-		absolutePath, err := filepath.Abs(tmpFilePath)
-		require.NoError(t, err)
+// TestReadCSVRecords_FromReaderWithBOM pins that the reader-based core keeps the
+// load-bearing PeekBOM step — a BOM-prefixed payload must be consumed so the
+// first field is not polluted with U+FEFF.
+func TestReadCSVRecords_FromReaderWithBOM(t *testing.T) {
+	payload := append([]byte{}, csvutil.BOMBytes()...)
+	payload = append(payload, []byte("Name,Value\n測試,123\n")...)
 
-		data, err := ReadCSVDirect(absolutePath)
-		assert.NoError(t, err)
-		assert.Len(t, data, 2)
-		assert.Equal(t, []string{"A", "B"}, data[0])
-	})
+	records, err := ReadCSVRecords(bytes.NewReader(payload))
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	// BOM 已被 PeekBOM 消化，第一欄不應殘留 U+FEFF。
+	assert.Equal(t, "Name", records[0][0], "BOM must be stripped, first field should be clean")
+	assert.Equal(t, "Value", records[0][1])
+	assert.Equal(t, []string{"測試", "123"}, records[1])
+}
 
-	// 測試相對路徑
-	t.Run("relative path", func(t *testing.T) {
-		// 改變工作目錄到臨時目錄
-		t.Chdir(tmpDir)
+// TestReadCSVRecords_ReaderError 釘住 reader-boundary 失敗面：當底層 io.Reader 在
+// 串流途中報錯（iotest.ErrReader），ReadCSVRecords 必須把錯誤往上傳（不得 panic、
+// 不得回傳「err==nil 但 records 看似有效」的偽結果）。BOM peek 是第一個讀取點，
+// 因此 reader 的錯誤在 "peek BOM" 階段被包裝傳出。
+func TestReadCSVRecords_ReaderError(t *testing.T) {
+	records, err := ReadCSVRecords(iotest.ErrReader(errors.New("boom")))
 
-		relativePath := filepath.Base(tmpFilePath)
-		data, err := ReadCSVDirect(relativePath)
-		assert.NoError(t, err)
-		assert.Len(t, data, 2)
-		assert.Equal(t, []string{"A", "B"}, data[0])
-	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "boom", "底層 reader 的錯誤必須往上傳遞")
+	assert.Nil(t, records, "reader 出錯時不得回傳偽造的非 nil records")
+}
+
+// TestReadCSVRecords_EmptyReader 確認空 reader 產生 nil/empty records 而非 error。
+func TestReadCSVRecords_EmptyReader(t *testing.T) {
+	records, err := ReadCSVRecords(strings.NewReader(""))
+
+	assert.NoError(t, err)
+	assert.Empty(t, records)
 }

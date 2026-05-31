@@ -1,8 +1,11 @@
 package parsers
 
 import (
+	"errors"
 	"os"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +18,7 @@ func TestNewEMGParser(t *testing.T) {
 	assert.NotNil(t, parser)
 }
 
-func TestEMGParser_ParseFile(t *testing.T) {
+func TestEMGParser_Parse(t *testing.T) {
 	tests := []struct {
 		name       string
 		csvContent string
@@ -125,11 +128,15 @@ invalid_time_2,102.1,198.9`,
 
 			_, err = tmpFile.WriteString(tt.csvContent)
 			require.NoError(t, err)
-			tmpFile.Close()
+			require.NoError(t, tmpFile.Close())
 
-			// 測試解析
+			// 測試解析 via open + Parse
+			f, err := os.Open(tmpFile.Name())
+			require.NoError(t, err)
+			defer f.Close()
+
 			parser := NewEMGParser()
-			data, _, err := parser.ParseFile(tmpFile.Name())
+			data, _, err := parser.Parse(f, tmpFile.Name())
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -146,11 +153,58 @@ invalid_time_2,102.1,198.9`,
 	}
 }
 
-func TestEMGParser_ParseFile_FileNotFound(t *testing.T) {
+// TestEMGParser_Parse_FromReader 釘住 reader-based 入口：feed io.Reader 給
+// Parse 必須正確解析，包含 frequency 推算。
+func TestEMGParser_Parse_FromReader(t *testing.T) {
+	const csvContent = `Time,Ch1,Ch2,Ch3
+0.000,100.5,200.3,150.8
+0.001,101.2,199.7,151.2
+0.002,99.8,201.1,149.5
+0.003,102.1,198.9,152.0`
+
 	parser := NewEMGParser()
-	_, _, err := parser.ParseFile("nonexistent_file.csv")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "無法開啟 EMG 檔案")
+	data, frequency, err := parser.Parse(strings.NewReader(csvContent), "reader.csv")
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	assert.Len(t, data.Time, 4)
+	assert.Equal(t, 0.000, data.Time[0])
+	assert.Equal(t, 0.003, data.Time[3])
+	assert.Equal(t, []string{"Ch1", "Ch2", "Ch3"}, data.Headers)
+	assert.Equal(t, 100.5, data.Channels["Ch1"][0])
+	assert.Equal(t, 152.0, data.Channels["Ch3"][3])
+	// 0.001s 間隔 → 1000Hz
+	assert.InDelta(t, 1000.0, frequency, 1e-9)
+}
+
+// TestEMGParser_Parse_FromReaderWithBOM 確認 reader 入口仍會剝 BOM —
+// BOM-prefixed CSV 的第一個 header (Time) 不應殘留 U+FEFF 而導致 header 解析錯亂。
+func TestEMGParser_Parse_FromReaderWithBOM(t *testing.T) {
+	const bom = "\xEF\xBB\xBF"
+	content := bom + "Time,Ch1,Ch2\n0.000,1.0,2.0\n0.001,3.0,4.0\n"
+
+	parser := NewEMGParser()
+	data, _, err := parser.Parse(strings.NewReader(content), "bom.csv")
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	assert.Equal(t, []string{"Ch1", "Ch2"}, data.Headers,
+		"BOM must be stripped so first header is not polluted")
+	assert.Len(t, data.Time, 2)
+	assert.Equal(t, 1.0, data.Channels["Ch1"][0])
+}
+
+// TestEMGParser_Parse_ReaderError 釘住 reader-boundary 失敗面：當底層 io.Reader 在
+// 串流途中報錯（iotest.ErrReader），Parse 必須把錯誤往上傳（含 name context），
+// 不得 panic、不得回傳「err==nil 但 data 非 nil」的偽結果。
+func TestEMGParser_Parse_ReaderError(t *testing.T) {
+	data, freq, err := NewEMGParser().Parse(iotest.ErrReader(errors.New("boom")), "err.csv")
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "boom", "底層 reader 錯誤必須往上傳遞")
+	assert.Contains(t, err.Error(), "err.csv", "錯誤需帶上 name context")
+	assert.Nil(t, data, "reader 出錯時不得回傳偽造的非 nil data")
+	assert.Zero(t, freq)
 }
 
 func TestEMGParser_GetDataInTimeRange(t *testing.T) {
@@ -372,7 +426,11 @@ func TestEMGParser_DynamicFrequencyDetection(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, tmpFile.Close())
 
-			_, frequency, err := parser.ParseFile(tmpFile.Name())
+			f, err := os.Open(tmpFile.Name())
+			require.NoError(t, err)
+			defer f.Close()
+
+			_, frequency, err := parser.Parse(f, tmpFile.Name())
 			require.NoError(t, err)
 
 			assert.InDelta(t, tt.expectedFrequency, frequency, 1e-9)
@@ -519,9 +577,13 @@ func TestEMGParser_parseHeaders(t *testing.T) {
 
 			_, err = tmpFile.WriteString(csvContent)
 			require.NoError(t, err)
-			tmpFile.Close()
+			require.NoError(t, tmpFile.Close())
 
-			data, _, err := parser.ParseFile(tmpFile.Name())
+			f, err := os.Open(tmpFile.Name())
+			require.NoError(t, err)
+			defer f.Close()
+
+			data, _, err := parser.Parse(f, tmpFile.Name())
 
 			if len(tt.expected) <= 1 { // 如果只有時間列或沒有列，應該出錯
 				assert.Error(t, err)
@@ -549,11 +611,15 @@ func TestEMGParser_Integration(t *testing.T) {
 
 		_, err = tmpFile.WriteString(emgContent)
 		require.NoError(t, err)
-		tmpFile.Close()
+		require.NoError(t, tmpFile.Close())
 
 		// 解析文件
+		f, err := os.Open(tmpFile.Name())
+		require.NoError(t, err)
+		defer f.Close()
+
 		parser := NewEMGParser()
-		data, _, err := parser.ParseFile(tmpFile.Name())
+		data, _, err := parser.Parse(f, tmpFile.Name())
 		require.NoError(t, err)
 
 		// 驗證數據完整性

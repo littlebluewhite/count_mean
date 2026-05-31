@@ -2,13 +2,14 @@ package parsers
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"count_mean/internal/models"
 	"count_mean/util"
 )
 
-// EMGParser EMG 檔案解析器。Stateless — ParseFile 不寫 instance state，
+// EMGParser EMG 檔案解析器。Stateless — Parse 不寫 instance state，
 // 同一 instance 可在多 goroutine 中安全共用（亦可 per-call 新建）。
 type EMGParser struct {
 	skipHeader bool
@@ -90,22 +91,27 @@ func validateEMGDataIntegrity(emgData *models.PhaseSyncEMGData) error {
 	return nil
 }
 
-// ParseFile 解析 EMG CSV 檔案。回傳 (data, frequency, error)：frequency 由前兩個時間點差值
-// 推算（Hz）；當資料不足或計算失敗時，frequency 為 0。
-func (p *EMGParser) ParseFile(filepath string) (*models.PhaseSyncEMGData, float64, error) {
-	records, err := ReadCSVDirect(filepath)
+// Parse 從 io.Reader 解析 EMG CSV 資料。name 僅用於 error context（reader 不知道
+// 自己的檔名）。回傳 (data, frequency, error)。
+func (p *EMGParser) Parse(r io.Reader, name string) (*models.PhaseSyncEMGData, float64, error) {
+	records, err := ReadCSVRecords(r)
 	if err != nil {
-		return nil, 0, fmt.Errorf("無法開啟 EMG 檔案 %s: %w", filepath, err)
+		return nil, 0, fmt.Errorf("無法讀取 EMG 檔案 %s: %w", name, err)
 	}
 
-	// acknowledgement：ReadCSVDirect 走 jagged-row 容忍模式
+	return p.parseEMGRecords(records)
+}
+
+// parseEMGRecords 由 Parse 呼叫的 EMG record 解析核心。
+func (p *EMGParser) parseEMGRecords(records [][]string) (*models.PhaseSyncEMGData, float64, error) {
+	// acknowledgement：ReadCSVRecords 走 jagged-row 容忍模式
 	// （FieldsPerRecord=-1, LazyQuotes=true），無法靠 csv.Reader 本身擋 formula
 	// injection / script / SQL / command injection。理想是進入 EMG 語意層前用
 	// ValidateCSVRow 對每筆 cell 過 cell-level injection 守門。
 	//
 	// 既定限制：目前 validation/patterns.go 對 CommandInjection 用 substring 比對，
 	// "invalid_time" 之類的合法 EMG row（含子字串 "id"）會被誤判為 command injection
-	// 而拒。`TestEMGParser_ParseFile/EMG_file_with_invalid_time_values` 即 pin 住「invalid
+	// 而拒。`TestEMGParser_Parse/EMG_file_with_invalid_time_values` 即 pin 住「invalid
 	// time 應被 skip 而非整檔 reject」的契約。在不犧牲此契約的前提下，EMG layer 仍仰賴
 	// 下游 util.Str2Number（嚴格 strconv.ParseFloat）作為 numeric cell 的隱式守門：
 	// formula `=cmd|/c calc!A1` 等惡意 cell 解析必失敗、被 skip。

@@ -34,10 +34,14 @@ func TestANCParser_RealXLSXFile(t *testing.T) {
 		t.Skipf("Test file not found: %s", testFilePath)
 	}
 
+	f, err := os.Open(testFilePath)
+	require.NoError(t, err, "Failed to open xlsx file")
+	defer f.Close()
+
 	parser := parsers.NewANCParser()
 
 	// 解析檔案
-	forceData, err := parser.ParseFile(testFilePath)
+	forceData, err := parser.Parse(f, testFilePath)
 	require.NoError(t, err, "Failed to parse xlsx file")
 
 	// 基本驗證
@@ -89,9 +93,13 @@ func TestANCParser_RealXLSXFile_TimeRange(t *testing.T) {
 		t.Skipf("Test file not found: %s", testFilePath)
 	}
 
+	f2, err := os.Open(testFilePath)
+	require.NoError(t, err)
+	defer f2.Close()
+
 	parser := parsers.NewANCParser()
 
-	forceData, err := parser.ParseFile(testFilePath)
+	forceData, err := parser.Parse(f2, testFilePath)
 	require.NoError(t, err)
 
 	// 測試時間範圍查詢（使用前 1 秒的數據）
