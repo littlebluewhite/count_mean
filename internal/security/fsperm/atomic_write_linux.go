@@ -112,7 +112,8 @@ func openLeafAnchor(baseDir, relParent string) (int, error) {
 	_ = unix.Close(baseDirFD) //nolint:errcheck // base 只用來錨定 leaf 下行,leaf 開完即釋放
 	if err != nil {
 		if errors.Is(err, unix.ENOSYS) {
-			return fdNone, err // 原樣 ENOSYS → caller 走 fallback
+			// 包成 %w 保留 ENOSYS(caller 的 errors.Is 透過 wrap 仍偵測得到)→ 走 non-dirfd fallback。
+			return fdNone, fmt.Errorf("leaf openat2 ENOSYS, fall back to os.Rename: %w", err)
 		}
 		if errors.Is(err, unix.EXDEV) || errors.Is(err, unix.ELOOP) {
 			return fdNone, fmt.Errorf("%w: leaf openat2(%s under %s) rejected: %w",
