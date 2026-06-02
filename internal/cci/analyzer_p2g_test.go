@@ -197,6 +197,36 @@ func TestCalculateGaitCycle_PhasePercentClampLogsWarn(t *testing.T) {
 		"正常 EMG 時間軸不該觸發 sample interval fallback warn")
 }
 
+// TestCalculateGaitCycle_ReanchorsPercentToSL 鎖定 ADR-0018 headline 行為:
+// phase percent 以 0%=S、100%=L 重錨 (gaitStart=emgTimes[S]、gaitEnd=emgTimes[L])。
+//
+// 這是本次重錨唯一 pin 具體百分比值的回歸守衛 — 純 [0,100] 範圍斷言在舊 min/max
+// 推導下也會通過,鎖不住「pct 改錨到 S/L」這條語意變更 (code review 補強)。
+//
+// 分期點 (EMGMotionOffset=0,force-time 經 +0.004 偏移,pct 對 offset 不變):
+//
+//	S=0.1→0.104 (0%)、C=0.3→0.304 (25%)、T=0.7→0.704 (75%)、L=0.9→0.904 (100%)
+//	duration = 0.904 − 0.104 = 0.8
+func TestCalculateGaitCycle_ReanchorsPercentToSL(t *testing.T) {
+	a := NewCCIAnalyzer()
+	emgData := &models.PhaseSyncEMGData{
+		Time: makeBoundsTimeSeq(0.0, 0.001, 1001),
+	}
+	manifest := newBoundsTestManifest()
+	manifest.PhasePoints.S = models.MakeOpt(0.1)
+	manifest.PhasePoints.C = models.MakeOpt(0.3)
+	manifest.PhasePoints.T = models.MakeOpt(0.7)
+	manifest.PhasePoints.L = models.MakeOpt(0.9)
+
+	_, _, percents, _, err := a.calculateGaitCycle(manifest, emgData)
+	require.NoError(t, err)
+
+	assert.InDelta(t, 0.0, percents[string(models.PhaseS)], 1e-9, "S 必須錨定為 0 (gaitStart)")
+	assert.InDelta(t, 25.0, percents[string(models.PhaseC)], 1e-9, "C = (0.304-0.104)/0.8*100 = 25")
+	assert.InDelta(t, 75.0, percents[string(models.PhaseT)], 1e-9, "T = (0.704-0.104)/0.8*100 = 75")
+	assert.InDelta(t, 100.0, percents[string(models.PhaseL)], 1e-9, "L 必須錨定為 100 (gaitEnd)")
+}
+
 // TestPhasePercentClampWarn_BypassPath 守護 (b) 的 audit-aware 行為:
 //
 // calculateGaitCycle 的 emgTimes-driven gait cycle 推導 invariant 保證
