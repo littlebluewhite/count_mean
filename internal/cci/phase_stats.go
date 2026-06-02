@@ -127,14 +127,20 @@ func (a *CCIAnalyzer) buildPhaseStats(result *CCIAnalysisResult) []CCIPhaseStatR
 	// a malformed manifest puts a mid-point (C/D/T0/T/O) beyond L — would otherwise be
 	// silently clamped by FindNearestTimeIndex to index 0 / len-1 and emit boundary-
 	// window stats at the wrong location. Treat it as absent (→ NaN row), consistent
-	// with the missing-point policy. S/L always pass (they bound the extracted range).
+	// with the missing-point policy.
+	//
+	// The tolerance MUST match validateEMGBounds' boundsEpsilon: S/L are accepted up to
+	// 1e-6 outside [emgMin, emgMax] (tolerated ULP/sync drift), and extraction clamps
+	// them to the first/last sample. A strict (zero-tolerance) check would then blank
+	// the S/L anchor rows + landing windows for an analysis that explicitly succeeded.
+	const boundsEpsilon = 1e-6
 	phaseIndex := func(p models.PhasePoint) (int, bool) {
 		t, ok := result.PhaseTimes[string(p)]
 		if !ok {
 			return 0, false
 		}
 		n := len(result.TimeValues)
-		if n == 0 || t < result.TimeValues[0] || t > result.TimeValues[n-1] {
+		if n == 0 || t < result.TimeValues[0]-boundsEpsilon || t > result.TimeValues[n-1]+boundsEpsilon {
 			return 0, false
 		}
 		return synchronizer.FindNearestTimeIndex(result.TimeValues, t), true

@@ -274,6 +274,27 @@ func TestBuildPhaseStats_OutOfRangePhaseTimeTreatedAbsent(t *testing.T) {
 	require.False(t, math.IsNaN(lLand.Values[0]), "L landing stays valid")
 }
 
+// TestBuildPhaseStats_ToleratedBoundaryDriftStaysPresent guards the codex-R2 follow-up
+// to the out-of-range fix: an anchor whose time drifts past the extracted-range boundary
+// by ≤ the 1e-6 tolerance that validateEMGBounds accepts (ULP/sync drift) must STAY
+// present — only drift BEYOND tolerance (a real typo) is treated as absent. Without the
+// matching tolerance, a strict check would blank valid S/L anchors (+ landing) for an
+// analysis that explicitly succeeded.
+func TestBuildPhaseStats_ToleratedBoundaryDriftStaysPresent(t *testing.T) {
+	fixture := makePhaseStatsFixture()
+	// S drifts 0.5e-6 below TimeValues[0]=0 — within validateEMGBounds' 1e-6 tolerance.
+	fixture.PhaseTimes[string(models.PhaseS)] = fixture.TimeValues[0] - 0.5e-6
+
+	a := NewCCIAnalyzer()
+	rows := a.buildPhaseStats(fixture)
+
+	sBand := findRow(t, rows, "S", metricBand50ms)
+	assert.True(t, sBand.HasTime, "S within 1e-6 tolerance must stay present")
+	// S maps to index 0; ±50ms = MeanRange(rampA, 0-5→0, 0+5) = mean(0..5) = 2.5.
+	require.False(t, math.IsNaN(sBand.Values[0]), "tolerated S drift must not blank the row")
+	assert.InDelta(t, 2.5, sBand.Values[0], 1e-9)
+}
+
 // TestBuildPhaseStats_SF8_EndToEnd runs the real SF8 subject through AnalyzeCCI and
 // checks shape + anchors. Skipped when the raw EMG file is untracked/absent (CI).
 // Window-mean values are NOT pinned here (would be a change-detector); the controlled
