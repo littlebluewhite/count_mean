@@ -246,6 +246,7 @@ var translationsZhCN = map[string]string{
 	KeyResultLabelPhasePositions: "分期点位置 (步态周期 %):",
 	KeyResultLabelMusclePairs:    "肌肉配对:",
 	KeyResultLabelCSVOutput:      "CSV 输出:",
+	KeyResultLabelOutputPhases:   "分期统计输出:",
 	KeyResultLabelNormRange:      "标准化区间:",
 	KeyResultLabelStatsRange:     "统计区间:",
 	KeyResultLabelOutputNorm:     "Output 1(标准化 EMG):",

@@ -250,6 +250,7 @@ var translationsZhTW = map[string]string{
 	KeyResultLabelPhasePositions: "分期點位置 (步態週期 %):",
 	KeyResultLabelMusclePairs:    "肌肉配對:",
 	KeyResultLabelCSVOutput:      "CSV 輸出:",
+	KeyResultLabelOutputPhases:   "分期統計輸出:",
 	KeyResultLabelNormRange:      "標準化區間:",
 	KeyResultLabelStatsRange:     "統計區間:",
 	KeyResultLabelOutputNorm:     "Output 1(標準化 EMG):",

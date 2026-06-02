@@ -246,6 +246,7 @@ var translationsEnUS = map[string]string{
 	KeyResultLabelPhasePositions: "Phase positions (gait cycle %):",
 	KeyResultLabelMusclePairs:    "Muscle Pairs:",
 	KeyResultLabelCSVOutput:      "CSV Output:",
+	KeyResultLabelOutputPhases:   "Phase statistics output:",
 	KeyResultLabelNormRange:      "Normalisation Range:",
 	KeyResultLabelStatsRange:     "Statistics Range:",
 	KeyResultLabelOutputNorm:     "Output 1 (Normalised EMG):",

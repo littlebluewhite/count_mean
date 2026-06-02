@@ -357,6 +357,7 @@ const (
 	KeyResultLabelPhasePositions = "result.label.phase_positions"
 	KeyResultLabelMusclePairs    = "result.label.muscle_pairs"
 	KeyResultLabelCSVOutput      = "result.label.csv_output"
+	KeyResultLabelOutputPhases   = "result.label.output_phases"
 	KeyResultLabelNormRange      = "result.label.norm_range"
 	KeyResultLabelStatsRange     = "result.label.stats_range"
 	KeyResultLabelOutputNorm     = "result.label.output_normalized"

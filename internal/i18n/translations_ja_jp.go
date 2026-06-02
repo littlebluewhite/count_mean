@@ -246,6 +246,7 @@ var translationsJaJP = map[string]string{
 	KeyResultLabelPhasePositions: "フェーズ点位置 (歩行周期 %):",
 	KeyResultLabelMusclePairs:    "筋肉ペア:",
 	KeyResultLabelCSVOutput:      "CSV 出力:",
+	KeyResultLabelOutputPhases:   "フェーズ統計出力:",
 	KeyResultLabelNormRange:      "正規化範囲:",
 	KeyResultLabelStatsRange:     "統計範囲:",
 	KeyResultLabelOutputNorm:     "Output 1 (正規化 EMG):",
