@@ -22,6 +22,7 @@ import (
 	"count_mean/internal/security/fsperm"
 	"count_mean/internal/synchronizer"
 	"count_mean/internal/validation/filename"
+	"count_mean/internal/windowmean"
 )
 
 // Params holds inputs for a batch muscle-ratio analysis run.
@@ -270,7 +271,7 @@ func buildPhasePoints(points []phasePoint, ratiosAll [][]float64, times []float6
 		idx := synchronizer.FindNearestTimeIndex(times, p.time)
 		values := make([]float64, len(ratiosAll))
 		for k := range ratiosAll {
-			values[k] = WindowMean(ratiosAll[k], idx, phaseWindowHalf)
+			values[k] = windowmean.WindowMean(ratiosAll[k], idx, phaseWindowHalf)
 		}
 		out[i] = io.MuscleRatioPhasePoint{Name: p.name, Time: times[idx], Values: values}
 	}

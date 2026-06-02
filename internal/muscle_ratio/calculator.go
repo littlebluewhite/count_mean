@@ -83,37 +83,6 @@ func Ratio(num, den float64) float64 {
 	return num / den
 }
 
-// WindowMean returns the mean of series over the centered window
-// [center-half, center+half], clamped to [0, len-1], skipping non-finite (NaN/Inf) entries.
-// Returns NaN when series is empty or the clamped window has no finite value. (ADR-0014)
-func WindowMean(series []float64, center, half int) float64 {
-	n := len(series)
-	if n == 0 {
-		return math.NaN()
-	}
-	lo := center - half
-	if lo < 0 {
-		lo = 0
-	}
-	hi := center + half
-	if hi > n-1 {
-		hi = n - 1
-	}
-	sum, count := 0.0, 0
-	for i := lo; i <= hi; i++ {
-		v := series[i]
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			continue
-		}
-		sum += v
-		count++
-	}
-	if count == 0 {
-		return math.NaN()
-	}
-	return sum / float64(count)
-}
-
 // BuildRightSideChannelMap maps the 8 right-side EMG channels (short → full header).
 //
 // 與 cci.BuildChannelMap 不同的是：本函式僅接受 "R." 前綴的標頭（例如 "R.RA: EMG 1 ..."）；
