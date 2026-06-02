@@ -133,6 +133,11 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 	result.GaitStartTime = gaitStart
 	result.GaitEndTime = gaitEnd
 
+	// ADR-0018:畸形 manifest 可能把某分期點推到抽取範圍 [S-150ms, L+150ms] 外。先從
+	// PhaseTimes/PhasePercents 移除這類點,讓 Output 2 (分期統計) 與 chart marker 一致
+	// 排除——避免「統計列空白但圖上仍有 clamp 到邊緣的誤導 marker」。S/L 恆在範圍內。
+	a.dropOutOfRangePhases(result)
+
 	// ADR-0018 Output 2:固定 32-row 分期視窗統計,欄數對齊 result.PairResults。
 	result.PhaseStats = a.buildPhaseStats(result)
 

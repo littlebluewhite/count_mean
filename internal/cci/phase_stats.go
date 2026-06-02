@@ -110,6 +110,41 @@ var phaseStatRowSpecs = []phaseStatRowSpec{
 	{item: "L", metric: metricLand50to100, kind: kindLand, point: models.PhaseL, landLo: land50Offset, landHi: land100Span},
 }
 
+// phaseTimeWithinExtractedRange reports whether a phase EMG time lies inside the
+// extracted TimeValues window, tolerating the same 1e-6 boundary drift validateEMGBounds
+// accepts (so S/L clamped to the first/last sample stay present). A phase outside the
+// window — a malformed-manifest mid-point typo — is unusable: it would otherwise be
+// clamped by FindNearestTimeIndex to a boundary index and emit stats/markers at the
+// wrong location.
+func phaseTimeWithinExtractedRange(t float64, timeValues []float64) bool {
+	n := len(timeValues)
+	if n == 0 {
+		return false
+	}
+	const boundsEpsilon = 1e-6 // matches validateEMGBounds
+	return t >= timeValues[0]-boundsEpsilon && t <= timeValues[n-1]+boundsEpsilon
+}
+
+// dropOutOfRangePhases removes phases whose EMG time falls outside the extracted window
+// from PhaseTimes + PhasePercents, keeping the chart markers consistent with Output 2:
+// an unusable phase (e.g. a manifest typo placing a mid-point beyond L+150ms) neither
+// renders a chart marker nor a stats row. Each drop is logged for manifest diagnosis.
+// S/L always bound the extracted range, so they are never dropped.
+func (a *CCIAnalyzer) dropOutOfRangePhases(result *CCIAnalysisResult) {
+	for name, t := range result.PhaseTimes {
+		if phaseTimeWithinExtractedRange(t, result.TimeValues) {
+			continue
+		}
+		delete(result.PhaseTimes, name)
+		delete(result.PhasePercents, name)
+		if a.logger != nil {
+			a.logger.Warn(
+				"分期點 EMG time 落在抽取範圍外,已從圖表 marker 與分期統計移除 (請檢查 manifest)",
+				map[string]any{"phase": name, "phase_emg_time": t})
+		}
+	}
+}
+
 // buildPhaseStats builds the fixed 32-row phase-window statistics table (ADR-0018
 // Output 2). The table always has 32 rows in the documented order; the number of
 // columns equals len(result.PairResults) (NOT forced to 12) so Output 2 stays
@@ -120,27 +155,15 @@ func (a *CCIAnalyzer) buildPhaseStats(result *CCIAnalysisResult) []CCIPhaseStatR
 
 	nPairs := len(result.PairResults)
 
-	// phaseIndex resolves a present phase point to its index in TimeValues; the
-	// second result reports presence (in PhaseTimes AND within the extracted range).
-	//
-	// A phase whose time falls OUTSIDE the extracted [S-150ms, L+150ms] window — e.g.
-	// a malformed manifest puts a mid-point (C/D/T0/T/O) beyond L — would otherwise be
-	// silently clamped by FindNearestTimeIndex to index 0 / len-1 and emit boundary-
-	// window stats at the wrong location. Treat it as absent (→ NaN row), consistent
-	// with the missing-point policy.
-	//
-	// The tolerance MUST match validateEMGBounds' boundsEpsilon: S/L are accepted up to
-	// 1e-6 outside [emgMin, emgMax] (tolerated ULP/sync drift), and extraction clamps
-	// them to the first/last sample. A strict (zero-tolerance) check would then blank
-	// the S/L anchor rows + landing windows for an analysis that explicitly succeeded.
-	const boundsEpsilon = 1e-6
+	// phaseIndex resolves a present phase point to its index in TimeValues; the second
+	// result reports presence (in PhaseTimes AND within the extracted range — shared with
+	// dropOutOfRangePhases via phaseTimeWithinExtractedRange, so Output 2 and the chart
+	// markers agree on which phases are usable). Defense-in-depth: AnalyzeCCI already
+	// drops out-of-range phases from PhaseTimes, but buildPhaseStats stays robust when
+	// called directly with an unfiltered result (e.g. in unit tests).
 	phaseIndex := func(p models.PhasePoint) (int, bool) {
 		t, ok := result.PhaseTimes[string(p)]
-		if !ok {
-			return 0, false
-		}
-		n := len(result.TimeValues)
-		if n == 0 || t < result.TimeValues[0]-boundsEpsilon || t > result.TimeValues[n-1]+boundsEpsilon {
+		if !ok || !phaseTimeWithinExtractedRange(t, result.TimeValues) {
 			return 0, false
 		}
 		return synchronizer.FindNearestTimeIndex(result.TimeValues, t), true

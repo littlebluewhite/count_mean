@@ -295,6 +295,35 @@ func TestBuildPhaseStats_ToleratedBoundaryDriftStaysPresent(t *testing.T) {
 	assert.InDelta(t, 2.5, sBand.Values[0], 1e-9)
 }
 
+// TestDropOutOfRangePhases_RemovesFromChartFacingMaps guards the codex-R3 consistency
+// fix: an out-of-window phase must be dropped from PhaseTimes AND PhasePercents (the
+// chart/marker source), not just blanked in Output 2 — otherwise the chart renders a
+// misleading edge-clamped marker for a phase the stats row reports as absent.
+func TestDropOutOfRangePhases_RemovesFromChartFacingMaps(t *testing.T) {
+	a := NewCCIAnalyzer()
+	result := makePhaseStatsFixture() // TimeValues [0..1.0], PhaseTimes S..L in range
+	// A malformed mid-point: C pushed beyond TimeValues[last]=1.0; its PhasePercent was
+	// already clamped to 100 by calculateGaitCycle — that is the misleading marker.
+	result.PhaseTimes[string(models.PhaseC)] = 1.5
+	result.PhasePercents = map[string]float64{
+		string(models.PhaseS): 0,
+		string(models.PhaseC): 100, // clamped edge marker the chart would draw
+		string(models.PhaseL): 100,
+	}
+
+	a.dropOutOfRangePhases(result)
+
+	_, hasCTime := result.PhaseTimes[string(models.PhaseC)]
+	assert.False(t, hasCTime, "out-of-range C dropped from PhaseTimes (no chart marker)")
+	_, hasCPct := result.PhasePercents[string(models.PhaseC)]
+	assert.False(t, hasCPct, "out-of-range C dropped from PhasePercents")
+	// In-range anchors/points retained — only the out-of-range phase is removed.
+	_, hasS := result.PhaseTimes[string(models.PhaseS)]
+	assert.True(t, hasS, "in-range S retained")
+	_, hasD := result.PhaseTimes[string(models.PhaseD)]
+	assert.True(t, hasD, "in-range D retained")
+}
+
 // TestBuildPhaseStats_SF8_EndToEnd runs the real SF8 subject through AnalyzeCCI and
 // checks shape + anchors. Skipped when the raw EMG file is untracked/absent (CI).
 // Window-mean values are NOT pinned here (would be a change-detector); the controlled
