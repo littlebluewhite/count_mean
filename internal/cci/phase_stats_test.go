@@ -239,7 +239,7 @@ func TestBuildPhaseStats_SF8_EndToEnd(t *testing.T) {
 		repoRelManifest = "input/分期總檔案V.14_20260527_更正資料作圖_含共收縮比值檔案與落地_BP30450_RMS0.1_0.09.csv"
 		repoRelEMGDir   = "input/NSF&SF_論文分析_BP30450_RMS0.1_0.09/SF/SF8"
 		sf8EMGFile      = "SF_8_BTS%_6.10_BP30450_RMS0.1_0.09.csv"
-		sf8SubjectIndex = 18 // 0-based row for SF8 in the manifest
+		sf8SubjectIndex = 14 // 0-based parsed index of SF8 in V.14 (header skipped; verified end-to-end 2026-06-03)
 	)
 
 	repoRoot := repoRootForTest(t)
