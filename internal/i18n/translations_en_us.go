@@ -113,6 +113,7 @@ var translationsEnUS = map[string]string{
 	KeyErrorCCIEMGEmpty:                "EMG data is empty",
 	KeyErrorCCIGaitStartBelowEMGMin:    "Gait cycle start time %.3f is below EMG min time %.3f",
 	KeyErrorCCIGaitEndAboveEMGMax:      "Gait cycle end time %.3f exceeds EMG data range (max: %.3f)",
+	KeyErrorCCIMissingSLAnchor:         "Missing S or L phase point; cannot anchor the gait cycle (0%=S, 100%=L)",
 	KeyErrorCCIOutputDirInvalid:        "OutputDir validation failed",
 	KeyErrorCCIMkdirFailed:             "Failed to create output directory",
 	KeyErrorCCIChannelLenMismatch:      "Channel data length mismatch: %d vs %d",

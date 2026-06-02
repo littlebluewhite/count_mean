@@ -113,6 +113,7 @@ var translationsJaJP = map[string]string{
 	KeyErrorCCIEMGEmpty:                "EMGデータが空です",
 	KeyErrorCCIGaitStartBelowEMGMin:    "歩行周期の開始時刻 %.3f が EMG データ最小時刻 %.3f を下回ります",
 	KeyErrorCCIGaitEndAboveEMGMax:      "歩行周期の終了時刻 %.3f が EMG データ範囲を超えています (最大: %.3f)",
+	KeyErrorCCIMissingSLAnchor:         "S または L フェーズポイントがありません。歩行周期を固定できません (0%=S、100%=L)",
 	KeyErrorCCIOutputDirInvalid:        "OutputDir の検証に失敗しました",
 	KeyErrorCCIMkdirFailed:             "出力ディレクトリの作成に失敗しました",
 	KeyErrorCCIChannelLenMismatch:      "チャネルデータの長さが一致しません: %d vs %d",

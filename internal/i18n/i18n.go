@@ -210,6 +210,7 @@ const (
 	KeyErrorCCIEMGEmpty                = "error.cci.emg_empty"
 	KeyErrorCCIGaitStartBelowEMGMin    = "error.cci.gait_start_below_emg_min"
 	KeyErrorCCIGaitEndAboveEMGMax      = "error.cci.gait_end_above_emg_max"
+	KeyErrorCCIMissingSLAnchor         = "error.cci.missing_sl_anchor"
 	KeyErrorCCIOutputDirInvalid        = "error.cci.output_dir_invalid"
 	KeyErrorCCIMkdirFailed             = "error.cci.mkdir_failed"
 	KeyErrorCCIChannelLenMismatch      = "error.cci.channel_len_mismatch"
