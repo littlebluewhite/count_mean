@@ -121,10 +121,20 @@ func (a *CCIAnalyzer) buildPhaseStats(result *CCIAnalysisResult) []CCIPhaseStatR
 	nPairs := len(result.PairResults)
 
 	// phaseIndex resolves a present phase point to its index in TimeValues; the
-	// second result reports presence in PhaseTimes.
+	// second result reports presence (in PhaseTimes AND within the extracted range).
+	//
+	// A phase whose time falls OUTSIDE the extracted [S-150ms, L+150ms] window — e.g.
+	// a malformed manifest puts a mid-point (C/D/T0/T/O) beyond L — would otherwise be
+	// silently clamped by FindNearestTimeIndex to index 0 / len-1 and emit boundary-
+	// window stats at the wrong location. Treat it as absent (→ NaN row), consistent
+	// with the missing-point policy. S/L always pass (they bound the extracted range).
 	phaseIndex := func(p models.PhasePoint) (int, bool) {
 		t, ok := result.PhaseTimes[string(p)]
 		if !ok {
+			return 0, false
+		}
+		n := len(result.TimeValues)
+		if n == 0 || t < result.TimeValues[0] || t > result.TimeValues[n-1] {
 			return 0, false
 		}
 		return synchronizer.FindNearestTimeIndex(result.TimeValues, t), true

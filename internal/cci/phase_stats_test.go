@@ -230,6 +230,50 @@ func findRow(t *testing.T, rows []CCIPhaseStatRow, item, metric string) CCIPhase
 	return CCIPhaseStatRow{}
 }
 
+// TestBuildPhaseStats_OutOfRangePhaseTimeTreatedAbsent guards a re-anchor edge case
+// (codex P2): a PRESENT mid-point whose time falls OUTSIDE the extracted
+// [S-150ms, L+150ms] window (malformed manifest — e.g. C typo'd past L) must be
+// treated as absent (NaN row, HasTime=false), NOT silently clamped by
+// FindNearestTimeIndex to a boundary index and emitted as boundary-window stats at
+// the wrong location. S/L always bound the extracted range so they never trip this.
+func TestBuildPhaseStats_OutOfRangePhaseTimeTreatedAbsent(t *testing.T) {
+	fixture := makePhaseStatsFixture()
+	// Push C beyond TimeValues[last]=1.0 (S/D/T0/T/O/L stay in range). Without the
+	// range guard, FindNearestTimeIndex clamps C to index 100 and C's windows would
+	// emit non-NaN boundary values; with the guard, C is treated as absent.
+	fixture.PhaseTimes[string(models.PhaseC)] = 1.5
+
+	a := NewCCIAnalyzer()
+	rows := a.buildPhaseStats(fixture)
+	require.Len(t, rows, 32, "still a fixed 32-row table")
+
+	assertBlank := func(item, metric string) {
+		r := findRow(t, rows, item, metric)
+		assert.Falsef(t, r.HasTime, "%s/%s must have HasTime=false (C out of range)", item, metric)
+		for k, v := range r.Values {
+			assert.Truef(t, math.IsNaN(v),
+				"%s/%s pair %d must be NaN (C out of extracted range), got %v", item, metric, k, v)
+		}
+	}
+	// Every C-dependent row is blanked: C's three point rows + the two intervals
+	// whose endpoint is C (S-C, C-D).
+	assertBlank("S-C", metricInterval)
+	assertBlank("C-D", metricInterval)
+	assertBlank("C", metricBand50ms)
+	assertBlank("C", metricBand25ms)
+	assertBlank("C", metricPre100ms)
+
+	// Rows independent of C remain valid — proves only C was blanked, not the table.
+	sd := findRow(t, rows, "S-D", metricInterval)
+	require.False(t, math.IsNaN(sd.Values[0]), "S-D needs only S,D (both in range)")
+	assert.InDelta(t, 20.0, sd.Values[0], 1e-9, "(10+30)/2")
+	sBand := findRow(t, rows, "S", metricBand50ms)
+	assert.True(t, sBand.HasTime)
+	assert.InDelta(t, 10.0, sBand.Values[0], 1e-9)
+	lLand := findRow(t, rows, "L", metricLand0to100)
+	require.False(t, math.IsNaN(lLand.Values[0]), "L landing stays valid")
+}
+
 // TestBuildPhaseStats_SF8_EndToEnd runs the real SF8 subject through AnalyzeCCI and
 // checks shape + anchors. Skipped when the raw EMG file is untracked/absent (CI).
 // Window-mean values are NOT pinned here (would be a change-detector); the controlled
