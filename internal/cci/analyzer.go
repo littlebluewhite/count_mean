@@ -133,6 +133,9 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 	result.GaitStartTime = gaitStart
 	result.GaitEndTime = gaitEnd
 
+	// ADR-0018 Output 2:固定 32-row 分期視窗統計,欄數對齊 result.PairResults。
+	result.PhaseStats = a.buildPhaseStats(result)
+
 	a.logger.Info("CCI 分析完成", map[string]any{"subject": manifest.Subject})
 
 	return result, nil

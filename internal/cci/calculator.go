@@ -44,6 +44,18 @@ type CCIAnalysisResult struct {
 	MeanCurves    map[string][]float64 // pair name -> mean CCI curve
 	GaitStartTime float64              // actual EMG time at gait cycle 0%
 	GaitEndTime   float64              // actual EMG time at gait cycle 100%
+	PhaseStats    []CCIPhaseStatRow    // ADR-0018 Output 2: fixed 32-row phase-window statistics
+}
+
+// CCIPhaseStatRow is one row of the phase-window statistics table (ADR-0018 Output 2).
+// Values has one entry per result.PairResults entry, in PairResults order; NaN where a
+// window has no usable value or the phase point is absent.
+type CCIPhaseStatRow struct {
+	Item    string    // interval label ("S-C") or bare phase point ("S")
+	Metric  string    // window description ("區間平均", "±50ms", "±25ms", "前100ms", "落地0~100ms", ...)
+	Time    float64   // EMG time of the phase point; meaningful only when HasTime
+	HasTime bool      // true for point/landing rows of a PRESENT point; false for interval rows and absent points
+	Values  []float64 // len == len(result.PairResults); per-pair window statistic
 }
 
 // DefaultMusclePairs returns the 12 standard muscle pair definitions.
