@@ -74,6 +74,20 @@ func TestWeighted25(t *testing.T) {
 		}
 	})
 
+	t.Run("B single-usable (i+3 is NaN)", func(t *testing.T) {
+		// series = [1,2,3,4,5,6,7,NaN,11], i=4 — mirror of the A-single case on the B pair
+		// A: mean(series[0],series[1]) = mean(1,2) = 1.5
+		// middle: series[2]=3, [3]=4, [4]=5, [5]=6, [6]=7
+		// B: series[7]=NaN skip, series[8]=11 → B = 11.0 (single value, not mean of pair)
+		// 7 quantities {1.5,3,4,5,6,7,11} → sum=37.5 / 7 ≈ 5.357142857
+		series := []float64{1, 2, 3, 4, 5, 6, 7, nan, 11}
+		got := weighted25(series, 4)
+		want := 37.5 / 7 // ≈ 5.357142857
+		if math.Abs(got-want) > 1e-9 {
+			t.Fatalf("B-single-usable: weighted25([1..7,NaN,11], 4) = %.9f, want %.9f (37.5/7)", got, want)
+		}
+	})
+
 	t.Run("middle NaN skip", func(t *testing.T) {
 		// series = [1,2,NaN,4,5,6,7,8,9], i=4
 		// A: mean(series[0],series[1]) = mean(1,2) = 1.5
