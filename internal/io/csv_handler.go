@@ -1273,7 +1273,7 @@ func (h *CSVHandler) WriteNormalizedPhaseSyncEMG(
 		return "", errEmptyPhaseSyncEMGData
 	}
 
-	fname := fmt.Sprintf("%s_normalized.csv", filename.Sanitize(subject))
+	fname := filename.SubjectOutputName(subject, "normalized") + ".csv"
 
 	emit := func(write func(row []string) error) error {
 		for i := range data.Time {
