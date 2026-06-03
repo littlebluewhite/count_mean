@@ -86,12 +86,14 @@ func TestCalculateGaitCycle_RejectsTinyDuration(t *testing.T) {
 		Time: makeBoundsTimeSeq(0.0, 0.001, 301),
 	}
 
-	// Manifest: P0 = 0.05, P1 = P0 + 1e-9 → duration ≈ 1e-9s,遠小於 10 個 sample interval (0.01s)
+	// ADR-0018:步態週期錨定 0%=S、100%=L,duration = L − S。把 tiny gap 放到
+	// S 與 L 上 — S=0.05、L=0.05+1e-9 → duration ≈ 1e-9s,遠小於 10 個 sample
+	// interval (0.01s),duration 守門必須 reject。(P0/P1/P2 已被排除在週期外,
+	// 不能再用它們撐 duration。)兩者皆落在 EMG [0, 0.3] 內,validateEMGBounds 先放行。
 	a := NewCCIAnalyzer()
 	manifest := newBoundsTestManifest()
-	manifest.PhasePoints.P0 = models.MakeOpt(0.05)
-	manifest.PhasePoints.P1 = models.MakeOpt(0.05 + 1e-9)
-	manifest.PhasePoints.P2 = models.MakeOpt(0.05 + 2e-9)
+	manifest.PhasePoints.S = models.MakeOpt(0.05)
+	manifest.PhasePoints.L = models.MakeOpt(0.05 + 1e-9)
 
 	_, _, _, _, err := a.calculateGaitCycle(manifest, emgData)
 	require.Error(t, err, "expected error for tiny duration")
@@ -106,10 +108,10 @@ func TestCalculateGaitCycle_AcceptsNormalDuration(t *testing.T) {
 
 	a := NewCCIAnalyzer()
 	manifest := newBoundsTestManifest()
-	// duration = 0.5 - 0.05 = 0.45s,遠大於 10 × 1ms = 0.01s 門檻
-	manifest.PhasePoints.P0 = models.MakeOpt(0.05)
-	manifest.PhasePoints.P1 = models.MakeOpt(0.3)
-	manifest.PhasePoints.P2 = models.MakeOpt(0.5)
+	// ADR-0018:duration = L − S = 0.5 − 0.05 = 0.45s,遠大於 10 × 1ms = 0.01s 門檻。
+	// 用 S/L 錨定週期(非 P0/P1/P2 — 後者已排除在週期外)。
+	manifest.PhasePoints.S = models.MakeOpt(0.05)
+	manifest.PhasePoints.L = models.MakeOpt(0.5)
 
 	_, _, _, _, err := a.calculateGaitCycle(manifest, emgData)
 	require.NoError(t, err, "valid duration should not be rejected: %v", err)

@@ -157,42 +157,24 @@ func TestCalculateGaitCycle_PhasePercentClampLogsWarn(t *testing.T) {
 		Time: makeBoundsTimeSeq(0.0, 0.001, 1001),
 	}
 
-	// 構造:S=0.1, D=0.5, T=0.9 (這三個落在 gait cycle [0.1, 0.9] 範圍邊界,不觸發 clamp)
-	// 但加入 H = 0.95 — 超出 T(0.9) 的右邊界,落在 gait cycle 外 → pct > 100 → clamp warn
+	// ADR-0018:步態週期錨定 0%=S、100%=L,gaitStart=S、gaitEnd=L。週期保留的
+	// 7 個點 (S, C, D, T0, T, O, L) 依定義都落在 [S, L] 內,raw_pct ∈ [0, 100],
+	// clamp 在正常 production path 不會觸發 — clamp 是 audit-aware dead-code
+	// defense,只有未來重構若 bypass S/L 錨定 (例如直接注入越界的 gaitStart/End)
+	// 才會 trigger。P2-G (b) 的修法把 silent clamp 改為「觸發時 Warn」(>1e-6 容忍
+	// 邊界 ULP),確保異常立刻被 audit log 捕獲。
 	//
-	// 注意:gait cycle 從 emgTimes 的 min/max 推導,如果 H 是 emgTimes 中最大值
-	// 它本身就會成為 gaitEnd,不會被 clamp。要讓 clamp 觸發,需要構造一個額外
-	// phase point 介於 min/max 之間且故意設計成 emgTimes 推導後仍 OOB —
-	// 例如:S, T 推 gait cycle 邊界,而 D 被故意丟到外面。
+	// 此 test 守的是「正常 path 不破壞」這條 invariant:構造一組全部落在 [S, L]
+	// 內的分期點,驗證 (a) 所有 pct 為 finite 且在 [0, 100],(b) 不觸發 clamp warn。
 	//
-	// 修法:利用 H phase 比 T 還大,讓 T < H 而 gaitEnd = H。那麼 D=0.5
-	// 在 [S=0.1, gaitEnd=H=0.95] 內。要觸發 clamp,需要 EMG time 大於 gaitEnd 的
-	// phase — 但 gait cycle 從 emgTimes 自動推導 max,任何 emgTime 都 ≤ gaitEnd。
-	//
-	// 正確做法:gaitStart/End 由 min/max 推導,所以 emgTimes 中所有 t 必落在
-	// [gaitStart, gaitEnd] 內,pct 永遠在 [0, 100]。clamp 在這條 flow 下不會觸發。
-	//
-	// 因此本 test 改用直接呼 validateEMGBounds + 手動構造 phasePercents loop
-	// 的 surrogate 路徑:跳過 calculateGaitCycle 的整體 flow,改測「clamp 條件
-	// 對外注入時的 logger 行為」即可。
-	//
-	// 但 P2-G (b) 的修法目標是「clamp 觸發時 Warn」— 這條 invariant 必須在
-	// 真實 production path 上有意義。實際上 gait cycle 從 emgTimes 自動推導 min/max,
-	// emgTimes 內所有 phase 都會落在 [min, max] 內,raw_pct 永遠在 [0, 100],
-	// clamp 永遠不會 trigger。
-	//
-	// 此時 clamp 是 dead-code defense — 只有 future caller bypass
-	// calculateGaitCycle 的自動推導(直接傳已知 gaitStart/End)才會觸發。
-	// P2-G (b) 的目標是讓「未來 bypass 場景觸發時不再 silent」— 修法本身
-	// 已將 dead-code 改為 audit-aware,test 只能驗 nil-safe 與「不破壞正常 path」。
-	//
-	// 驗證:正常 path (所有 phase 都在 gait cycle 內) 不該觸發 clamp warn。
+	// 分期點 (EMGMotionOffset=0,force-time 經 +0.004 偏移):
+	//   S=0.1 → 0.104 (0%)、C=0.3 → 0.304、T=0.7 → 0.704、L=0.9 → 0.904 (100%)
+	// gaitStart=0.104、gaitEnd=0.904,C/T 落在週期內 → 無 clamp。
 	manifest := newBoundsTestManifest()
-	manifest.PhasePoints.P0 = models.MakeOpt(0.1)
-	manifest.PhasePoints.P1 = models.MakeOpt(0.3)
-	manifest.PhasePoints.P2 = models.MakeOpt(0.5)
-	manifest.PhasePoints.S = models.MakeOpt(0.7)
-	manifest.PhasePoints.T = models.MakeOpt(0.9)
+	manifest.PhasePoints.S = models.MakeOpt(0.1)
+	manifest.PhasePoints.C = models.MakeOpt(0.3)
+	manifest.PhasePoints.T = models.MakeOpt(0.7)
+	manifest.PhasePoints.L = models.MakeOpt(0.9)
 
 	_, _, percents, _, err := a.calculateGaitCycle(manifest, emgData)
 	require.NoError(t, err)
@@ -213,6 +195,36 @@ func TestCalculateGaitCycle_PhasePercentClampLogsWarn(t *testing.T) {
 	// estimateSampleInterval 正常 path 也不該觸發 warn (1ms 間距,dt > 0)
 	assert.NotContains(t, out, "fallback 至預設 sample interval",
 		"正常 EMG 時間軸不該觸發 sample interval fallback warn")
+}
+
+// TestCalculateGaitCycle_ReanchorsPercentToSL 鎖定 ADR-0018 headline 行為:
+// phase percent 以 0%=S、100%=L 重錨 (gaitStart=emgTimes[S]、gaitEnd=emgTimes[L])。
+//
+// 這是本次重錨唯一 pin 具體百分比值的回歸守衛 — 純 [0,100] 範圍斷言在舊 min/max
+// 推導下也會通過,鎖不住「pct 改錨到 S/L」這條語意變更 (code review 補強)。
+//
+// 分期點 (EMGMotionOffset=0,force-time 經 +0.004 偏移,pct 對 offset 不變):
+//
+//	S=0.1→0.104 (0%)、C=0.3→0.304 (25%)、T=0.7→0.704 (75%)、L=0.9→0.904 (100%)
+//	duration = 0.904 − 0.104 = 0.8
+func TestCalculateGaitCycle_ReanchorsPercentToSL(t *testing.T) {
+	a := NewCCIAnalyzer()
+	emgData := &models.PhaseSyncEMGData{
+		Time: makeBoundsTimeSeq(0.0, 0.001, 1001),
+	}
+	manifest := newBoundsTestManifest()
+	manifest.PhasePoints.S = models.MakeOpt(0.1)
+	manifest.PhasePoints.C = models.MakeOpt(0.3)
+	manifest.PhasePoints.T = models.MakeOpt(0.7)
+	manifest.PhasePoints.L = models.MakeOpt(0.9)
+
+	_, _, percents, _, err := a.calculateGaitCycle(manifest, emgData)
+	require.NoError(t, err)
+
+	assert.InDelta(t, 0.0, percents[string(models.PhaseS)], 1e-9, "S 必須錨定為 0 (gaitStart)")
+	assert.InDelta(t, 25.0, percents[string(models.PhaseC)], 1e-9, "C = (0.304-0.104)/0.8*100 = 25")
+	assert.InDelta(t, 75.0, percents[string(models.PhaseT)], 1e-9, "T = (0.704-0.104)/0.8*100 = 75")
+	assert.InDelta(t, 100.0, percents[string(models.PhaseL)], 1e-9, "L 必須錨定為 100 (gaitEnd)")
 }
 
 // TestPhasePercentClampWarn_BypassPath 守護 (b) 的 audit-aware 行為:

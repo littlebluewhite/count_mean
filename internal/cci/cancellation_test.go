@@ -124,12 +124,14 @@ func buildLargeCCIFixture(t *testing.T) (string, string) {
 	emgPath := filepath.Join(dataFolder, "emg_large.csv")
 	writeLargeCCIEMGFile(t, emgPath, 300_000)
 
-	// manifest 需要分期點足以撐出步態週期（≥ 2 個有效點，且符合 EMG 時間範圍）
-	// EMG 從 0..299.999s，給 P0=10.0、P2=200.0 作為步態週期邊界。
+	// manifest 需要分期點足以撐出步態週期。ADR-0018 後步態週期錨定 0%=S、100%=L,
+	// 故 fixture 必須提供 S 與 L(P0/P1/P2 已被排除在週期外,不能再用它們當邊界)。
+	// EMG 從 0..299.999s,給 S=10.0、L=200.0 撐出 190s 的週期,讓 12 個 pair 在
+	// extended range [9.85, 200.15] 上的並行 CCI 計算跨越 100ms cancel 門檻。
 	manifestPath := filepath.Join(dataFolder, "manifest.csv")
 	manifestContent := "Subject,motion file,Force Plate file,EMG file," +
 		"EMG第一筆時間對應Motion的時間index值,P0,P1,P2,S,C,D,T0,T,O,L\n" +
-		fmt.Sprintf("CCICancel,m.csv,f.anc,%s,1,10.0,50.0,200.0,,,0,,,0,\n", filepath.Base(emgPath))
+		fmt.Sprintf("CCICancel,m.csv,f.anc,%s,1,,,,10.0,,0,,,0,200.0\n", filepath.Base(emgPath))
 	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o600))
 
 	return manifestPath, dataFolder

@@ -235,6 +235,7 @@ export function makeCciSpec(app) {
                 [tt('result.label.subject'), result.subject],
                 [tt('result.label.muscle_pairs'), pairNamesText],
                 [tt('result.label.csv_output'), result.outputCSVPath],
+                [tt('result.label.output_phases'), result.outputPhasesPath],
             ];
             infoRows.forEach(([label, value]) => {
                 const p = document.createElement('p');

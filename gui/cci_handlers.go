@@ -22,15 +22,16 @@ type CCIParams struct {
 
 // CCIResult 共同收縮分析結果.
 type CCIResult struct {
-	OutputCSVPath string             `json:"outputCSVPath"`
-	Subject       string             `json:"subject"`
-	PairNames     []string           `json:"pairNames"`
-	ChartHTML     string             `json:"chartHTML"`
-	PhasePercents map[string]float64 `json:"phasePercents"`
-	PhaseTimes    map[string]float64 `json:"phaseTimes"`
-	Report        string             `json:"report"`
-	Success       bool               `json:"success"`
-	Message       string             `json:"message"`
+	OutputCSVPath    string             `json:"outputCSVPath"`
+	OutputPhasesPath string             `json:"outputPhasesPath"`
+	Subject          string             `json:"subject"`
+	PairNames        []string           `json:"pairNames"`
+	ChartHTML        string             `json:"chartHTML"`
+	PhasePercents    map[string]float64 `json:"phasePercents"`
+	PhaseTimes       map[string]float64 `json:"phaseTimes"`
+	Report           string             `json:"report"`
+	Success          bool               `json:"success"`
+	Message          string             `json:"message"`
 }
 
 // CCIDownloadParams 共同收縮圖表下載參數.
@@ -129,19 +130,42 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 
 	report := cci.GenerateReport(analysisResult)
 
-	result = &CCIResult{
-		OutputCSVPath: csvPath,
-		Subject:       analysisResult.Subject,
-		PairNames:     pairNames,
-		ChartHTML:     buf.String(),
-		PhasePercents: analysisResult.PhasePercents,
-		PhaseTimes:    analysisResult.PhaseTimes,
-		Report:        report,
-		Success:       true,
-		Message:       "分析完成",
+	// Output 2(ADR-0018):分期視窗統計 CSV。PhaseStats → payload 純欄位搬移;
+	// PairLabels 沿用 Output-1 的 pairNames(同序),保 Output 1 & 2 欄位對齊。
+	// CCI 為 fail-fast(ADR-0010):導出失敗即回 failedCCIResult(對齊上方圖表錯誤)。
+	phaseRows := make([]io.CCIPhaseStatRowPayload, len(analysisResult.PhaseStats))
+	for i, r := range analysisResult.PhaseStats {
+		phaseRows[i] = io.CCIPhaseStatRowPayload{
+			Item:    r.Item,
+			Metric:  r.Metric,
+			Time:    r.Time,
+			HasTime: r.HasTime,
+			Values:  r.Values,
+		}
+	}
+	phasesPath, phasesErr := s.csvHandler.WriteCCIPhasesResult(a.context(), io.WriteRequest{}, io.CCIOutputPhasesPayload{
+		Subject:    analysisResult.Subject,
+		PairLabels: pairNames,
+		Rows:       phaseRows,
+	})
+	if phasesErr != nil {
+		return failedCCIResult(fmt.Sprintf("分期統計導出失敗: %s", redact.RedactForMessage(phasesErr))), nil
 	}
 
-	a.logger.Info("CCI 分析輸出", map[string]any{"csv": csvPath})
+	result = &CCIResult{
+		OutputCSVPath:    csvPath,
+		OutputPhasesPath: phasesPath,
+		Subject:          analysisResult.Subject,
+		PairNames:        pairNames,
+		ChartHTML:        buf.String(),
+		PhasePercents:    analysisResult.PhasePercents,
+		PhaseTimes:       analysisResult.PhaseTimes,
+		Report:           report,
+		Success:          true,
+		Message:          "分析完成",
+	}
+
+	a.logger.Info("CCI 分析輸出", map[string]any{"csv": csvPath, "phases": phasesPath})
 
 	return result, nil
 }

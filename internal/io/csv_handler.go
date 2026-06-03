@@ -978,6 +978,25 @@ type MuscleRatioOutputAllPayload struct {
 	Ratios     [][]float64 // 每個 pair 一個 inner slice,長度與 Times 對齊
 }
 
+// CCIPhaseStatRowPayload 是 Output-2 的一行:Item 為區間標籤或相位點名稱,
+// Metric 為視窗說明文字,Time 為 EMG 時間(只在 HasTime 為 true 時輸出),
+// Values 為各 pair 的統計值(與 PairLabels 同序)。對應 MuscleRatioPhasePoint。(ADR-0018)
+type CCIPhaseStatRowPayload struct {
+	Item    string
+	Metric  string
+	Time    float64
+	HasTime bool
+	Values  []float64
+}
+
+// CCIOutputPhasesPayload — handler 純 layout:verbatim emit Rows;PairLabels 由 caller
+// 設定(GUI 從 cci.CCIAnalysisResult.PhaseStats 加上 12 個 pair 名稱)。(ADR-0018)
+type CCIOutputPhasesPayload struct {
+	Subject    string
+	PairLabels []string
+	Rows       []CCIPhaseStatRowPayload
+}
+
 // MuscleRatioPhasePoint 是 Analyzer 在 collectPhasePoints + WindowMean 階段算好的
 // Output 2 條目:Name 顯示名稱,Time 為對齊到最近 EMG sample 的中心時間,
 // Values 為各 pair 已算好的 11 點 window mean(與 PairLabels 同序)。(ADR-0014)
@@ -1153,6 +1172,68 @@ func (h *CSVHandler) safeJoinOutput(subDir, filename string) (string, error) {
 
 var errEmptyMuscleRatioPayload = stderrors.New("WriteMuscleRatio*: payload 缺 Times/Points")
 
+var errEmptyCCIPhasesPayload = stderrors.New("WriteCCIPhasesResult: payload has no rows")
+
 // errOutputPathEscapesOutputDir 標示 SubDir 含 traversal 或絕對路徑導致 join
 // 後的路徑逸出 OutputDir;供 safeJoinOutput / WriteCCIResult / WriteMuscleRatio* wrap。
 var errOutputPathEscapesOutputDir = stderrors.New("輸出路徑逸出 OutputDir")
+
+// WriteCCIPhasesResult 寫 per-subject Output 2 — CCI 分期視窗統計 CSV (ADR-0018)。
+//
+// Filename 由 Subject 推導 + "_CCI_Rudolph_phases.csv";req.Filename 被忽略,
+// 僅 req.SubDir 生效。Row 數量 = len(p.Rows);Time cell 在 row.HasTime 為 false
+// 時為空字串;NaN/Inf value cell → 空字串。
+func (h *CSVHandler) WriteCCIPhasesResult(
+	ctx context.Context, req WriteRequest, p CCIOutputPhasesPayload,
+) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if len(p.Rows) == 0 {
+		return "", errEmptyCCIPhasesPayload
+	}
+
+	safeSubject := filename.Sanitize(p.Subject)
+	fname := fmt.Sprintf("%s_CCI_Rudolph_phases.csv", safeSubject)
+	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
+	if joinErr != nil {
+		return "", fmt.Errorf("CCI 輸出路徑無效: %w", joinErr)
+	}
+
+	if err := h.pathValidator.ValidateExternalPath(outputPath); err != nil {
+		return "", fmt.Errorf("CCI 輸出路徑無效: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), fsperm.DirPerm); err != nil {
+		return "", fmt.Errorf("CCI 輸出目錄建立失敗: %w", err)
+	}
+
+	header := []string{"項目", "指標", "Time (s)"}
+	header = append(header, p.PairLabels...)
+
+	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+		Header:    header,
+		BasePaths: h.pathValidator.GetAllowedBasePaths(),
+		Emit: func(emit func([]string) error) error {
+			for _, row := range p.Rows {
+				timeCell := ""
+				if row.HasTime {
+					timeCell = fmt.Sprintf("%.4f", row.Time)
+				}
+				cells := make([]string, 0, 3+len(row.Values))
+				cells = append(cells, row.Item, row.Metric, timeCell)
+				for _, v := range row.Values {
+					cells = append(cells, formatRatioValue(v))
+				}
+				if err := emit(cells); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return outputPath, nil
+}

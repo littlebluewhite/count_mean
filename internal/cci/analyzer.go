@@ -104,7 +104,18 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 		return nil, err
 	}
 
-	rangeResult, err := parsers.GetEMGDataInTimeRange(emgData, gaitStart, gaitEnd)
+	// ADR-0018 anchor-vs-extraction split:錨點 [gaitStart, gaitEnd] = [S, L] 驅動
+	// percent;抽取範圍兩側各延伸 ±150ms,讓曲線顯示 <0% lead-in 與 >100% landing。
+	// 低端不需守門:FindTimeRangeIndices 會把 startIdx 自動 clamp 到 0(established
+	// behavior);高端則 clamp 到資料末筆,避免越界。emgData.Time 此處保證非空——
+	// calculateGaitCycle 內的 validateEMGBounds 已擋下空資料。
+	extractStart := gaitStart - gaitExtensionSeconds
+	extractEnd := gaitEnd + gaitExtensionSeconds
+	if last := emgData.Time[len(emgData.Time)-1]; extractEnd > last {
+		extractEnd = last
+	}
+
+	rangeResult, err := parsers.GetEMGDataInTimeRange(emgData, extractStart, extractEnd)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIExtractGaitRangeFailed), err)
 	}
@@ -121,6 +132,14 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 
 	result.GaitStartTime = gaitStart
 	result.GaitEndTime = gaitEnd
+
+	// ADR-0018:畸形 manifest 可能把某分期點推到抽取範圍 [S-150ms, L+150ms] 外。先從
+	// PhaseTimes/PhasePercents 移除這類點,讓 Output 2 (分期統計) 與 chart marker 一致
+	// 排除——避免「統計列空白但圖上仍有 clamp 到邊緣的誤導 marker」。S/L 恆在範圍內。
+	a.dropOutOfRangePhases(result)
+
+	// ADR-0018 Output 2:固定 32-row 分期視窗統計,欄數對齊 result.PairResults。
+	result.PhaseStats = a.buildPhaseStats(result)
 
 	a.logger.Info("CCI 分析完成", map[string]any{"subject": manifest.Subject})
 
@@ -207,6 +226,11 @@ func getPhasePointDefs(manifest *models.PhaseManifest) []phasePointDef {
 // 也不會誤殺真實短週期 (典型 gait cycle ≈ 1s,遠大於 10ms)。
 const gaitMinDurationSampleCount = 10
 
+// gaitExtensionSeconds 是 ADR-0018 的 lead-in / landing 視窗:資料在錨點
+// [S, L] 兩側各延伸 ±150ms 抽取,讓曲線自然顯示 <0%(步態前導)與 >100%
+// (落地)。此延伸僅作用於 extraction range,不影響錨點驅動的 phase percent。
+const gaitExtensionSeconds = 0.150
+
 // calculateGaitCycle determines gait cycle boundaries and phase percentages.
 //
 //nolint:err113 // dynamic error for user-facing output (i18n-backed)
@@ -217,6 +241,14 @@ func (a *CCIAnalyzer) calculateGaitCycle(
 	emgTimes := make(map[string]float64)
 
 	for _, pt := range points {
+		// ADR-0018：步態週期錨定 0%=S、100%=L,P0/P1/P2 是 pre-gait 事件,
+		// 排除在週期之外(不參與錨定也不計 percent)。曲線的 lead-in 由 B3 的
+		// extended extraction range 自然帶出 <0%,而非把 P0/P1/P2 算進週期。
+		switch pt.name {
+		case string(models.PhaseP0), string(models.PhaseP1), string(models.PhaseP2):
+			continue
+		}
+
 		v, ok := pt.value.Get()
 		if !ok {
 			continue
@@ -251,13 +283,13 @@ func (a *CCIAnalyzer) calculateGaitCycle(
 		return 0, 0, nil, nil, errors.New(i18n.T(i18n.KeyErrorCCIInsufficientPhasePoints))
 	}
 
-	// Find min/max EMG times as gait cycle boundaries
-	gaitStart := math.Inf(1)
-	gaitEnd := math.Inf(-1)
-
-	for _, t := range emgTimes {
-		gaitStart = math.Min(gaitStart, t)
-		gaitEnd = math.Max(gaitEnd, t)
+	// ADR-0018：步態週期直接錨定 0%=S、100%=L,不再從所有分期點 min/max 推導。
+	// gaitStart=S、gaitEnd=L 是「週期錨點」,驅動 phase percent 與下游圖表 x 軸;
+	// 與 B3 的 extraction range(S−150ms / L+150ms)分離。
+	gaitStart, okS := emgTimes[string(models.PhaseS)]
+	gaitEnd, okL := emgTimes[string(models.PhaseL)]
+	if !okS || !okL {
+		return 0, 0, nil, nil, errors.New(i18n.T(i18n.KeyErrorCCIMissingSLAnchor))
 	}
 
 	// Validate against EMG data range
