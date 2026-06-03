@@ -472,14 +472,6 @@ func TestRenderComposer_HasComposerPhaseMarkersListener(t *testing.T) {
 // wailsParentOrigins allowlist (`wails://wails`、`http://wails.localhost` 等)
 // → iframe customJS message listener 把 parent 訊息全部 reject → PNG 下載 10s
 // timeout(user report)。
-//
-// 修法:接受 `e.source === window.parent` 作為 origin allowlist 退路。安全性
-// 推論:sandbox=allow-scripts iframe 為 opaque origin,只有 embedding parent
-// 持有 iframe.contentWindow 引用,沒有第三方注入路徑;e.source 比對等同於
-// 「來自 embedding parent」,等價於 trusted。
-//
-// 防線:customJS 必須含 `e.source === window.parent` 比對(或 `e.source!==window.parent`
-// 否定形式),避免 production-only allowlist 在 dev 環境鎖死。
 func TestRenderComposer_RelaxedOriginCheck(t *testing.T) {
 	in := ComposerInput{
 		Subject:          "S",
@@ -489,8 +481,39 @@ func TestRenderComposer_RelaxedOriginCheck(t *testing.T) {
 	}
 	html := renderToString(t, context.Background(), in)
 
-	assert.Contains(t, html, `e.source !== window.parent`,
-		"customJS 必須含 `e.source !== window.parent` 退路,讓 wails dev 也能 postMessage")
+	// INVERSION (ADR-0003 family): the wails-dev relaxed-origin fallback moved
+	// from the engine's inline negated guard `e.source !== window.parent` into
+	// the shared assets.IframeCommsJS isFromParent, expressed POSITIVELY as
+	// `e.source === window.parent`; the engine now calls
+	// `!window.__chartComms.isFromParent(e)`. Invariant preserved — only the
+	// spelling/location of the fallback changed, not its existence.
+	assert.Contains(t, html, `e.source === window.parent`,
+		"isFromParent 必須保留 e.source === window.parent 退路(wails dev 動態 port)")
+	assert.Contains(t, html, `window.__chartComms.isFromParent`,
+		"composer customJS 必須透過共用 isFromParent 做 origin 驗證")
+	// Pin the migration: the OLD inline negated guard must be GONE — a partial
+	// refactor (inject IframeCommsJS but forget to rewire the guard) would leave
+	// both literals and false-pass. (codex review R2 finding.)
+	assert.NotContains(t, html, `e.source !== window.parent`,
+		"composer 不可保留舊 inline negated guard;origin 驗證必須走 window.__chartComms.isFromParent")
+}
+
+// TestRenderComposer_ChartCommsInjected asserts the shared assets.IframeCommsJS
+// IIFE is concatenated into the Composer customJS (ADR-0003 family).
+func TestRenderComposer_ChartCommsInjected(t *testing.T) {
+	in := ComposerInput{
+		Subject:          "S",
+		EMGDataset:       makeEMGDataset(50, "RA"),
+		SelectedChannels: []string{"RA"},
+		MotionData:       makeMotionData(50, "knee"),
+	}
+	html := renderToString(t, context.Background(), in)
+
+	assert.Contains(t, html, `window.__chartComms`,
+		"IframeCommsJS IIFE 必須 attach helpers 至 window.__chartComms")
+	assert.Contains(t, html, `function postToParent`, "IframeCommsJS 必須含 postToParent")
+	assert.Contains(t, html, `function isFromParent`, "IframeCommsJS 必須含 isFromParent")
+	assert.Contains(t, html, `function handlePngRequest`, "IframeCommsJS 必須含 handlePngRequest")
 }
 
 // TestRenderComposer_BodyMarginReset — Bug 2 fix(2026-05-27 image #14):

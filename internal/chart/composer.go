@@ -911,9 +911,11 @@ func composerPhaseMarkLineOpts(phaseTimes map[string]float64) []charts.SeriesOpt
 // codex review 確立此安全策略,Composer 鏡像同樣 sandbox + 用 postMessage 達成原
 // 跨 frame 操作目的(取當下 zoom/legend 的 PNG dataURL)。
 //
-// 對齊 CCI addCCICustomJS 既有 postToParent + wailsParentOrigins allowlist pattern;
-// duplicate wailsParentOrigins string 而非 cross-package import — 兩個 chart module
-// 各自獨立、不引入新耦合,allowlist 變動風險低(只有 Wails 升級 URL scheme 才動)。
+// postToParent / isFromParent / handlePngRequest 三個 comms primitives 現在由
+// 共用 assets.IframeCommsJS IIFE 提供(ADR-0003 family / iframe-comms-preamble ADR),
+// 掛在 window.__chartComms 上。customJS 直接呼叫 window.__chartComms.isFromParent(e)
+// 做 origin 驗證,window.__chartComms.handlePngRequest(myChart, e, 'composer-png-result')
+// 取 PNG — 不再在此 inline 重複這些邏輯。
 //
 // CRITICAL — JS 模板**不可含 `//` line comments**(只能用 `/* ... */` block comments):
 // go-echarts `opts/js.go` 的 `newlineTabPat` 在 AddJSFuncStrs 時把 raw string 內所
@@ -924,26 +926,12 @@ func composerPhaseMarkLineOpts(phaseTimes map[string]float64) []charts.SeriesOpt
 // (image #5 災難)。
 //
 // `FuncStripCommentsOpts` 看似能解但**不能用**:其 regex `(//.*)\n` 不認識 string
-// literal,把 `"wails://wails"` 內的 `//` 也吃掉 → wailsParentOrigins 被切斷。
+// literal,把 assets.IframeCommsJS 內 `"wails://wails"` 的 `//` 也吃掉 → origin URL 被切斷。
 // `/* ... */` block comment 在 newline-strip 後仍正確閉合於 `*/`,是唯一安全選項。
 // 任何 future maintainer 想加註解必須用 block comment 形式。
 func addComposerCustomJS(line *charts.Line) {
-	customJS := assets.PhaseMarkersJS + `
+	customJS := assets.PhaseMarkersJS + assets.IframeCommsJS + `
 		let myChart = %MY_ECHARTS%;
-		const wailsParentOrigins = ["wails://wails","http://wails.localhost","https://wails.localhost"];
-		function postToParent(msg) {
-			for (let i = 0; i < wailsParentOrigins.length; i++) {
-				try {
-					window.parent.postMessage(msg, wailsParentOrigins[i]);
-				} catch (e) {
-					/* swallow: 非匹配 origin user-agent 靜默丟棄;保留 try/catch 防 future browser API surprise */
-				}
-			}
-			/* dev fallback:wails dev parent origin 是 http://localhost:34115(或變動 port),不在生產
-			   allowlist 內。再多 post 一次 targetOrigin='*' 給有 e.source check 的 parent。安全性
-			   仰賴 parent 端 listener 自己驗 e.origin === window.location.origin / 'null'。 */
-			try { window.parent.postMessage(msg, '*'); } catch (e) {}
-		}
 		if (myChart) {
 			/* Bug 2 fix(2026-05-27 image #14):瀏覽器預設 body 8px margin 把 1200px chart 推到
 			   viewport y=8..1208,bottom 8px(含 dataZoom slider 一部分)被 iframe 1200 viewport 切掉。
@@ -985,26 +973,14 @@ func addComposerCustomJS(line *charts.Line) {
 			   parent 端跨 frame 直接 setOption 在 sandbox=allow-scripts 下被 silent 阻擋 →
 			   phase 勾選改用同一條 postMessage 路。 */
 			window.addEventListener('message', function(e) {
-				if (e.source !== window.parent && wailsParentOrigins.indexOf(e.origin) === -1) {
+				if (!window.__chartComms.isFromParent(e)) {
 					return;
 				}
 				if (!e.data || typeof e.data !== 'object') {
 					return;
 				}
 				if (e.data.type === 'composer-request-png') {
-					const requestId = e.data.requestId;
-					try {
-						const dataURL = myChart.getDataURL({
-							type: 'png',
-							pixelRatio: 2,
-							backgroundColor: '#fff'
-						});
-						/* ADR-0003 §4 reply envelope: {requestId, payload?, error?}。
-						   bridge.requestReply resolve payload field,parent 端 await 拿到 {dataURL}。 */
-						postToParent({type: 'composer-png-result', requestId: requestId, payload: {dataURL: dataURL}});
-					} catch (err) {
-						postToParent({type: 'composer-png-result', requestId: requestId, error: String(err)});
-					}
+					window.__chartComms.handlePngRequest(myChart, e, 'composer-png-result');
 					return;
 				}
 				if (e.data.type === 'composer-standardize-zoom') {
