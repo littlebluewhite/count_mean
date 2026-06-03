@@ -63,9 +63,9 @@ func (*EMGStatisticsCalculator) CalculateStatistics(
 
 // GenerateOutputFileName 生成輸出檔案名.
 func GenerateOutputFileName(subject string, startPhase, endPhase models.PhasePoint) string {
-	safeSubject := filename.Sanitize(subject)
+	suffix := fmt.Sprintf("%s-%s_statistics", startPhase, endPhase)
 
-	return fmt.Sprintf("%s_%s-%s_statistics.csv", safeSubject, startPhase, endPhase)
+	return filename.SubjectOutputName(subject, suffix) + ".csv"
 }
 
 // ValidateStatisticsParams 驗證統計參數.

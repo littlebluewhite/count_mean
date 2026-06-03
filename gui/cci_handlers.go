@@ -172,8 +172,8 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 
 // DownloadCCIChart 下載 CCI 圖表為 PNG 檔案.
 //
-// adapter 職責:從 params.Subject 推導 OutputDir 內的固定檔名
-// ({safeSubject}_CCI_Rudolph.png),sanitize 防 traversal。共用的 PNG 安全
+// adapter 職責:從 params.Subject 經 SubjectOutputName 推導 OutputDir 內的固定
+// 檔名({subject}_CCI_Rudolph.png,內部強制 Sanitize 防 traversal)。共用的 PNG 安全
 // 管線（prefix 檢查 → decode/validate → boundary 路徑驗證 → WriteFileNoFollow）
 // 已抽到 downloadValidatedPNG（ADR-0009）— 此 handler 只負責 adapter 邏輯與
 // handler-level logging,不再內聯管線。
@@ -182,12 +182,11 @@ func (a *App) DownloadCCIChart(params CCIDownloadParams) (result *ChartResult, e
 
 	a.logger.Info("開始下載 CCI 圖表", nil)
 
-	// params.Subject 來自前端，需先 sanitize 避免路徑穿越（"../x" 之類）。
-	safeSubject := filename.Sanitize(params.Subject)
+	// params.Subject 來自前端；sanitize 防路徑穿越（"../x" 之類）由 SubjectOutputName 內部強制。
 	s := a.state.Load()
 	outputPath := filepath.Join(
 		s.config.OutputDir,
-		fmt.Sprintf("%s_CCI_Rudolph.png", safeSubject),
+		filename.SubjectOutputName(params.Subject, "CCI_Rudolph")+".png",
 	)
 
 	result, err = a.downloadValidatedPNG(params.ImageData, outputPath)

@@ -1098,22 +1098,17 @@ class EMGAnalysisApp {
     }
 
     // 下載 PNG — 從 iframe 抓 ECharts dataURL(反映當下 zoom / phase / legend 狀態)
-    // → 拼 outputDir + 自動檔名 → 呼叫 DownloadChartComposerImage。
+    // → 傳 subject 給 DownloadChartComposerImage,由 backend 拼檔名落 config.OutputDir。
     //
-    // codex P2 #4 修補:不走 `SelectFile('save', ...)`。Wails `SelectFile` 是
-    // `runtime.OpenFileDialog` 包裝(見 gui/app.go:316),`buttonType` switch case
-    // 只認 'input' / 'output' / 'operate' 設預設目錄;'save' 不在 switch case 內
-    // 會 fall through,**實際打開的仍然是 OpenFileDialog**(請選擇現有檔案)。
-    // user cancel 後舊版 fallback 寫 `<subject>.png` 到 app cwd — 是 silent 寫到
-    // 不可預期目錄(macOS 是 app bundle 內、Windows 是 install dir),屬危險。
+    // 不走 `SelectFile('save', ...)`:Wails `SelectFile` 是 OpenFileDialog 包裝,'save'
+    // 不在其 buttonType switch case、會 fall through 成「請選擇現有檔案」,user cancel
+    // 後舊版 fallback 會 silent 寫到 app cwd(不可預期目錄),屬危險。
     //
-    // 鏡像 `downloadCCIChart` baseline(gui/cci_handlers.go:159):走 config.outputDir
-    // + 自動拼檔名,不問 user。Composer backend `DownloadChartComposerImage`
-    // (gui/chart_composer_handlers.go:451)已接受 outputPath,前端只負責拼好 PATH。
-    //
-    // 檔名 pattern 沿用 CCI 風格(`<subject>_<suffix>.png`),Composer suffix 是
-    // 'chart_composer';backend 已 SanitizeFileName(filepath.Base(outputPath))
-    // 二次防 traversal,再加 validateExternalPathInputs 防 sensitive dir。
+    // 鏡像 `downloadCCIChart`(ADR-0019 對稱化):前端只傳 subject,backend 用
+    // filename.SubjectOutputName(subject, "chart_composer") 推導 config.OutputDir 內的
+    // `<subject>_chart_composer.png`(SubjectOutputName 內部 Sanitize 防 traversal),再走
+    // downloadValidatedPNG 安全管線(validateExternalPathInputs 防 sensitive dir)。空 subject
+    // 由 backend Sanitize 走 untitled fallback。
     async downloadComposerChart() {
         const iframe = document.querySelector('#composerChartContent iframe');
         if (!iframe) {
@@ -1146,17 +1141,15 @@ class EMGAnalysisApp {
             const reply = await bridge.requestReply(iframe, 'composer-request-png', {});
             const dataURL = reply.dataURL;
 
-            // 拼 outputDir + `<subject>_chart_composer.png`(對齊 CCI 用 `_CCI_Rudolph.png`)。
-            // backend 會再 SanitizeFileName(filepath.Base(...)) 做最終 sanitize +
-            // path validation(prefix '/' 視 OS 而定,前端只負責 join,不裸接受 user input)。
-            // M5:#composerSubject → 共用 #mpSubject(name-mode value=subject 字串)。
-            const subject = document.getElementById('mpSubject').value || 'chart_composer';
-            const sep = outputDir.endsWith('/') || outputDir.endsWith('\\') ? '' : '/';
-            const outputPath = outputDir + sep + subject + '_chart_composer.png';
+            // 對稱 downloadCCIChart:只傳 subject,後端用 SubjectOutputName 推導
+            // config.OutputDir 內的 `<subject>_chart_composer.png`(ADR-0019)。不再前端拼
+            // path、不再對空 subject 補預設名 — 空 subject 由後端 Sanitize 走 untitled
+            // fallback(→ untitled_chart_composer.png),消除 doubled-name smell。
+            const subject = document.getElementById('mpSubject').value;
 
             const result = await DownloadChartComposerImage({
                 base64Data: dataURL,
-                outputPath,
+                subject,
             });
             if (!result.success) {
                 await ShowError(t('dialog.error'), result.message);

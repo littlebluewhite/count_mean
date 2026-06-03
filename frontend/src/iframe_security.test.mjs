@@ -282,6 +282,24 @@ test('Slice D P2#4: downloadComposerChart 必須走 config.outputDir(鏡像 Down
     );
 });
 
+// ADR-0019:downloadComposerChart 改傳 subject 給 backend(不再前端拼 outputPath)。
+// presence + absence 都釘:payload 必含 subject、不可再含 outputPath、不可有
+// || 'chart_composer' fallback(空 subject 由 backend Sanitize 走 untitled)。
+test('ADR-0019: downloadComposerChart 傳 subject 而非 outputPath', async () => {
+    const src = await readMainJs();
+    const fnStart = src.indexOf('async downloadComposerChart()');
+    assert.ok(fnStart > 0, '找不到 downloadComposerChart');
+    const fnEnd = src.indexOf('\n    async loadNormalizedPhaseSyncPhases(', fnStart);
+    const fnBody = src.slice(fnStart, fnEnd);
+
+    assert.match(fnBody, /DownloadChartComposerImage\(\{[\s\S]*\bsubject\b[\s\S]*\}\)/,
+        'payload 必須傳 subject(後端用 SubjectOutputName 推導檔名)');
+    assert.doesNotMatch(fnBody, /outputPath/,
+        '不可再前端拼 outputPath — 後端從 config.OutputDir 推導');
+    assert.doesNotMatch(fnBody, /\|\|\s*['"]chart_composer['"]/,
+        '不可有 || "chart_composer" fallback — 空 subject 由後端走 untitled');
+});
+
 // 模擬 P2-10 的 race:downloadCCIChart 不可覆蓋 showCCIResult 設的 onload handler。
 // 用 addEventListener 之後,兩個 handler 各自獨立 → both fire。
 test('P2-10 behavioural: addEventListener("load") 可保留多個 handler 互不覆蓋', () => {

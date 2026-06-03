@@ -825,9 +825,9 @@ func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
 		return "", errEmptyPhaseSyncResult
 	}
 
-	safeSubject := filename.Sanitize(stats.Subject)
-	fname := fmt.Sprintf("%s_normalized_norm-%s-%s_stats-%s-%s.csv",
-		safeSubject, normStart, normEnd, stats.StartPhase, stats.EndPhase)
+	suffix := fmt.Sprintf("normalized_norm-%s-%s_stats-%s-%s",
+		normStart, normEnd, stats.StartPhase, stats.EndPhase)
+	fname := filename.SubjectOutputName(stats.Subject, suffix) + ".csv"
 
 	data := h.converter.ConvertPhaseSyncResult(stats)
 
@@ -869,8 +869,7 @@ func (h *CSVHandler) WriteCCIResult(
 			cci.ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
 	}
 
-	safeSubject := filename.Sanitize(result.Subject)
-	fname := fmt.Sprintf("%s_CCI_Rudolph.csv", safeSubject)
+	fname := filename.SubjectOutputName(result.Subject, "CCI_Rudolph") + ".csv"
 	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
 	if joinErr != nil {
 		return "", fmt.Errorf("CCI 輸出路徑無效: %w", joinErr)
@@ -1028,8 +1027,7 @@ func (h *CSVHandler) WriteMuscleRatioOutputAll(
 		return "", errEmptyMuscleRatioPayload
 	}
 
-	safeSubject := filename.Sanitize(p.Subject)
-	fname := fmt.Sprintf("%s_muscle_ratio.csv", safeSubject)
+	fname := filename.SubjectOutputName(p.Subject, "muscle_ratio") + ".csv"
 	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
 	if joinErr != nil {
 		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
@@ -1078,8 +1076,7 @@ func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 		return "", errEmptyMuscleRatioPayload
 	}
 
-	safeSubject := filename.Sanitize(p.Subject)
-	fname := fmt.Sprintf("%s_muscle_ratio_phases_avg11.csv", safeSubject)
+	fname := filename.SubjectOutputName(p.Subject, "muscle_ratio_phases_avg11") + ".csv"
 	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
 	if joinErr != nil {
 		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
@@ -1193,8 +1190,7 @@ func (h *CSVHandler) WriteCCIPhasesResult(
 		return "", errEmptyCCIPhasesPayload
 	}
 
-	safeSubject := filename.Sanitize(p.Subject)
-	fname := fmt.Sprintf("%s_CCI_Rudolph_phases.csv", safeSubject)
+	fname := filename.SubjectOutputName(p.Subject, "CCI_Rudolph_phases") + ".csv"
 	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
 	if joinErr != nil {
 		return "", fmt.Errorf("CCI 輸出路徑無效: %w", joinErr)

@@ -91,7 +91,7 @@ func TestComposerPhaseTimesEMG(t *testing.T) {
 // 其他 analyzer,只專注於 handler 邊界行為。
 //
 // OutputDir 與其他 sibling test 一致用 t.TempDir(),DownloadChartComposerImage
-// 走 OutputPath 直接拼接,但若有其他 handler 走 OutputDir 也不會炸。
+// 走 config.OutputDir + SubjectOutputName 推導檔名(對稱 DownloadCCIChart)。
 func setupChartComposerTestApp(t *testing.T) *App {
 	t.Helper()
 
@@ -392,18 +392,18 @@ func TestDownloadChartComposerImage_HappyPath(t *testing.T) {
 	app := setupChartComposerTestApp(t)
 	app.state.Store(&appState{config: &config.AppConfig{OutputDir: outputDir}})
 
-	outputPath := filepath.Join(outputDir, "composer.png")
 	result, err := app.DownloadChartComposerImage(&DownloadChartComposerImageParams{
 		Base64Data: validPNGDataURLForComposer(),
-		OutputPath: outputPath,
+		Subject:    "NSF1",
 	})
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.True(t, result.Success)
-	assert.Equal(t, outputPath, result.OutputPath)
+	want := filepath.Join(outputDir, "NSF1_chart_composer.png")
+	assert.Equal(t, want, result.OutputPath)
 
-	_, statErr := os.Stat(outputPath)
+	_, statErr := os.Stat(want)
 	require.NoError(t, statErr, "PNG 必須真的被寫入 disk")
 }
 
@@ -422,25 +422,26 @@ func TestDownloadChartComposerImage_NilParams(t *testing.T) {
 // 改由 helper 的 seam test（png_download_test.go:
 // TestDownloadValidatedPNG_RejectsBadPrefix /
 // TestDownloadValidatedPNG_RejectsSensitivePath_NoDoubleLabel）擁有,避免重複覆蓋。
-// 此處僅保留 Composer adapter 行為:nil params guard、base-name sanitize、
-// .png normalization、happy-path 寫到指定 OutputPath。
+// 此處僅保留 Composer adapter 行為:nil params guard、從 Subject 經
+// SubjectOutputName 推導、寫到 config.OutputDir。
 
-// TestDownloadChartComposerImage_AddsPNGExtIfMissing 釘住 ext-normalization:
-// 即使 OutputPath 沒帶 .png 副檔名,handler 應自動補上。
-func TestDownloadChartComposerImage_AddsPNGExtIfMissing(t *testing.T) {
+// TestDownloadChartComposerImage_EmptySubjectFallsBackToUntitled 釘住 ADR-0019
+// 唯一的行為變更:對稱化後空 subject 走 Sanitize 的 untitled fallback,得
+// untitled_chart_composer.png(取代舊的 degenerate chart_composer_chart_composer.png)。
+func TestDownloadChartComposerImage_EmptySubjectFallsBackToUntitled(t *testing.T) {
 	outputDir := t.TempDir()
 	app := setupChartComposerTestApp(t)
+	app.state.Store(&appState{config: &config.AppConfig{OutputDir: outputDir}})
 
-	outputPath := filepath.Join(outputDir, "composer_no_ext")
 	result, err := app.DownloadChartComposerImage(&DownloadChartComposerImageParams{
 		Base64Data: validPNGDataURLForComposer(),
-		OutputPath: outputPath,
+		Subject:    "",
 	})
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.True(t, result.Success)
-	assert.Equal(t, outputPath+".png", result.OutputPath)
+	assert.Equal(t, filepath.Join(outputDir, "untitled_chart_composer.png"), result.OutputPath)
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +496,7 @@ func TestChartComposerHandlers_PanicRecovery(t *testing.T) {
 
 		result, err := app.DownloadChartComposerImage(&DownloadChartComposerImageParams{
 			Base64Data: validPNGDataURLForComposer(),
-			OutputPath: filepath.Join(t.TempDir(), "x.png"),
+			Subject:    "S1",
 		})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInternalPanic)

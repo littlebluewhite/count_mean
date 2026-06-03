@@ -9,7 +9,8 @@
 //     family（ADR-0002）— 不寫 CSV、無多步驟 pipeline，只做 manifest load / EMG
 //     load / chart render，因此不走 [[AnalysisHandler[P, R]]] Tier 2。
 //   - Handler 4（DownloadChartComposerImage）鏡像既有 `DownloadCCIChart` 模式
-//     — adapter 端做 filename.Sanitize + .png normalization 推導 outputPath,再把
+//     — adapter 端從 params.Subject 經 filename.SubjectOutputName 推導 config.OutputDir
+//     內的 `{subject}_chart_composer.png`,再把
 //     共用 PNG 安全管線（base64 → DecodeAndValidatePNG → validateExternalPathInputs
 //     → fsperm.WriteFileNoFollow）委派給 downloadValidatedPNG（ADR-0009），自己加
 //     recoverHandlerPanic defer。**不**走 HandlerRun 因為 download 路徑的特殊安全鏈
@@ -49,7 +50,6 @@ import (
 // result.Message,不做 errors.Is 比對;test 走 substring assertion)。
 var (
 	ErrChartComposerNilParams              = errors.New("參數為空")
-	ErrChartComposerEmptyOutputName        = errors.New("輸出檔名不可為空")
 	ErrChartComposerMotionFileEmpty        = errors.New("manifest 內 MotionFile 為空")
 	ErrChartComposerMuscleRatioFileEmpty   = errors.New("manifest 內 MuscleRatioFile 為空")
 	ErrChartComposerMuscleRatioCSVEmpty    = errors.New("muscle_ratio CSV 為空或缺少資料行")
@@ -76,11 +76,12 @@ type GenerateChartComposerParams struct {
 
 // DownloadChartComposerImageParams Wails RPC params for PNG download.
 //
-// Base64Data 為前端 canvas.toDataURL() 產出的 `data:image/png;base64,...` 字串；
-// OutputPath 為前端 file dialog 選擇的目的地路徑。
+// Base64Data 為前端 canvas.toDataURL() 產出的 `data:image/png;base64,...` 字串;
+// Subject 為前端傳入的 subject 字串,後端用 SubjectOutputName 推導
+// {Subject}_chart_composer.png 落在 config.OutputDir(對稱 DownloadCCIChart)。
 type DownloadChartComposerImageParams struct {
 	Base64Data string `json:"base64Data"`
-	OutputPath string `json:"outputPath"`
+	Subject    string `json:"subject"`
 }
 
 // MissingFileDTO 把 manifest.MissingRow 轉成 JSON-marshalable form(error type
@@ -335,21 +336,18 @@ func (a *App) GenerateChartComposer(
 	})
 }
 
-// DownloadChartComposerImage 接前端 base64 PNG dataURL 並寫到指定路徑。
+// DownloadChartComposerImage 接前端 base64 PNG dataURL,從 params.Subject 推導
+// config.OutputDir 內的固定檔名({SubjectOutputName(subject, "chart_composer")}.png)
+// 並寫入(對稱 DownloadCCIChart)。
 //
-// 不走 HandlerRun — 此 handler 的 short-circuit 順序敏感（PNG decode 先於
-// path validation，避免在合法路徑寫進非 PNG 內容）,鏡像 `DownloadCCIChart`
-// 既有獨立模式而非走 template wrap。
+// 不走 HandlerRun — 此 handler 的 short-circuit 順序敏感(PNG decode 先於 path
+// validation,避免在合法路徑寫進非 PNG 內容),鏡像 `DownloadCCIChart` 既有獨立
+// 模式而非走 template wrap。
 //
-// adapter 職責:nil params guard、對 filepath.Base(OutputPath) sanitize（防
-// traversal segment 滲入,目錄部分保留原樣供 path validator）、empty-name
-// guard、.png 副檔名 normalization、最終 outputPath 推導。共用的 PNG 安全管線
-// (prefix 檢查 → DecodeAndValidatePNG → boundary 路徑驗證 → WriteFileNoFollow)
-// 已抽到 downloadValidatedPNG（ADR-0009）。
-//
-// 與 DownloadCCIChart 的差異:OutputPath 由前端 file dialog 完整給出(包含
-// 目錄 + 檔名),不是「OutputDir + sanitize(Subject) + ext」;因此 sanitize
-// 只 apply 在 filepath.Base(OutputPath),保留目錄部分原樣交給 path validator。
+// adapter 職責:從 params.Subject 經 filename.SubjectOutputName 推導檔名(內部強制
+// Sanitize 防 traversal)。共用的 PNG 安全管線(prefix 檢查 → DecodeAndValidatePNG
+// → boundary 路徑驗證 → WriteFileNoFollow)已抽到 downloadValidatedPNG(ADR-0009)
+// — 此 handler 只負責 adapter 邏輯與 logging。
 func (a *App) DownloadChartComposerImage(
 	params *DownloadChartComposerImageParams,
 ) (result *ChartResult, err error) {
@@ -361,19 +359,12 @@ func (a *App) DownloadChartComposerImage(
 		return nil, ErrChartComposerNilParams
 	}
 
-	// filename.Sanitize 只處理 base file 名稱,目錄部分保留原樣供 path validator
-	// 二次驗證。鏡像 DownloadCCIChart:params.Subject 是「檔名片段」,DownloadCCIChart
-	// 也是 filename.Sanitize(params.Subject)。
-	outputDir := filepath.Dir(params.OutputPath)
-	outputBase := filename.Sanitize(filepath.Base(params.OutputPath))
-	if outputBase == "" {
-		return nil, ErrChartComposerEmptyOutputName
-	}
-	// 確保副檔名 .png — Chart Composer 一律輸出 PNG(對齊前端 toDataURL)。
-	if !strings.HasSuffix(strings.ToLower(outputBase), ".png") {
-		outputBase += ".png"
-	}
-	outputPath := filepath.Join(outputDir, outputBase)
+	// params.Subject 來自前端;sanitize 防路徑穿越("../x" 之類)由 SubjectOutputName 內部強制。
+	s := a.state.Load()
+	outputPath := filepath.Join(
+		s.config.OutputDir,
+		filename.SubjectOutputName(params.Subject, "chart_composer")+".png",
+	)
 
 	result, err = a.downloadValidatedPNG(params.Base64Data, outputPath)
 	if err != nil {
