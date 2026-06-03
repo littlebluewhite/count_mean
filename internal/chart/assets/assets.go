@@ -15,3 +15,11 @@ import _ "embed"
 
 //go:embed phasemarkers.mjs
 var PhaseMarkersJS string
+
+// IframeCommsJS is the iframe-side shared comms preamble (ADR-0003 family):
+// postToParent / isFromParent / handlePngRequest on window.__chartComms,
+// concatenated into BOTH chart customJS strings. Unlike PhaseMarkersJS it has
+// no frontend twin, so no sync test is required.
+//
+//go:embed iframecomms.mjs
+var IframeCommsJS string
