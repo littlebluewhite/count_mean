@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"count_mean/internal/calculator"
@@ -630,6 +631,11 @@ var errEmptyPhaseAnalysis = stderrors.New("WritePhaseAnalysis: 沒有 phase 結�
 // 給明確 error 避免 nil-deref panic 上拋到 GUI。
 var errEmptyPhaseSyncResult = stderrors.New("PhaseSync stats 不可為 nil")
 
+// errEmptyPhaseSyncEMGData 標示 WriteNormalizedPhaseSyncEMG 收到 nil data。
+// 對稱於 errEmptyPhaseSyncResult:caller 應確保 data 非 nil,但對外仍給明確 error
+// 供 GUI 顯示「EMG 數據為空」而非吞 nil。i18n 契約:中文訊息直接顯示給使用者。
+var errEmptyPhaseSyncEMGData = stderrors.New("EMG 數據為空")
+
 // WriteRequest 是 format-aware write 共用的目的地請求。
 //
 // Filename 是 CSV 檔名;SubDir 為空時直接寫到 OutputDir 根,非空時自動
@@ -742,11 +748,14 @@ func (h *CSVHandler) writeToTarget(req WriteRequest, data [][]string) error {
 	return h.WriteCSVToOutput(req.Filename, data)
 }
 
-// writePhaseSyncAtomic 是 WritePhaseSyncResult / WriteNormalizedPhaseSyncResult
-// 的共用寫檔 helper:path join → validate → mkdir → WriteCSVAtomic。
-// data[0] 是 header,data[1:] 是 body rows(由 converter.ConvertPhaseSyncResult 產生)。
-// ConvertPhaseSyncResult 恆回固定 8-row layout,故 data 至少 1 row,data[0] 不會 panic。
-func (h *CSVHandler) writePhaseSyncAtomic(subDir, filename string, data [][]string) (string, error) {
+// phaseSyncAtomicWrite 是所有 PhaseSync / normalized-EMG 原子寫檔的共用 seam:
+// path join → validate → mkdir → WriteCSVAtomic{Header, BasePaths, Emit}。
+// error-wrap 字串「PhaseSync 輸出路徑無效/輸出目錄建立失敗」逐字保留供呼叫端識別。
+func (h *CSVHandler) phaseSyncAtomicWrite(
+	subDir, filename string,
+	header []string,
+	emit csvutil.RowEmitter,
+) (string, error) {
 	outputPath, joinErr := h.safeJoinOutput(subDir, filename)
 	if joinErr != nil {
 		return "", fmt.Errorf("PhaseSync 輸出路徑無效: %w", joinErr)
@@ -761,22 +770,30 @@ func (h *CSVHandler) writePhaseSyncAtomic(subDir, filename string, data [][]stri
 	}
 
 	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header:    data[0],
+		Header:    header,
 		BasePaths: h.pathValidator.GetAllowedBasePaths(),
-		Emit: func(emit func([]string) error) error {
-			for _, row := range data[1:] {
-				if err := emit(row); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
+		Emit:      emit,
 	})
 	if err != nil {
 		return "", err
 	}
 
 	return outputPath, nil
+}
+
+// writePhaseSyncAtomic 是 WritePhaseSyncResult / WriteNormalizedPhaseSyncResult
+// 的薄包裝:委派給 phaseSyncAtomicWrite,並把 data[][]string 轉換為 streaming emit。
+// data[0] 是 header,data[1:] 是 body rows(由 converter.ConvertPhaseSyncResult 產生)。
+// ConvertPhaseSyncResult 恆回固定 8-row layout,故 data 至少 1 row,data[0] 不會 panic。
+func (h *CSVHandler) writePhaseSyncAtomic(subDir, filename string, data [][]string) (string, error) {
+	return h.phaseSyncAtomicWrite(subDir, filename, data[0], func(emit func([]string) error) error {
+		for _, row := range data[1:] {
+			if err := emit(row); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // WritePhaseSyncResult 把 PhaseSync 分析結果 (EMGStatistics) 寫成 CSV。
@@ -1236,4 +1253,76 @@ func (h *CSVHandler) WriteCCIPhasesResult(
 		return "", err
 	}
 	return outputPath, nil
+}
+
+// WriteNormalizedPhaseSyncEMG 把 normalized phase-sync EMG 時序資料寫成 CSV
+// (Output 1 — 時序型 EMG,非統計摘要)。
+//
+// Filename: {sanitize(subject)}_normalized.csv (req.Filename 被忽略,僅 req.SubDir 生效)。
+// 回傳實際 outputPath (絕對路徑) 與錯誤。
+//
+// row layout: header row (Time + data.Headers 順序) + 每個時間點一列。
+// NaN/Inf → 空 cell (Output 1 missing-data 慣例;勿與 Output 2 ConvertPhaseSyncResult
+// 的 fmt.Sprintf("%.6f") 合併 — 後者寫出 "NaN" 字面)。
+// precision = phaseSyncPrecision = 6 (常數,無 precision 參數 — 與 Output 2 共享常數,不共享 formatter)。
+//
+// 路徑由 phaseSyncAtomicWrite 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
+// ADR-0001 invariant: Subject-based write ⟹ WriteCSVAtomic。
+func (h *CSVHandler) WriteNormalizedPhaseSyncEMG(
+	req WriteRequest,
+	data *models.PhaseSyncEMGData,
+	subject string,
+) (string, error) {
+	if data == nil {
+		return "", errEmptyPhaseSyncEMGData
+	}
+
+	fname := fmt.Sprintf("%s_normalized.csv", filename.Sanitize(subject))
+
+	emit := func(write func(row []string) error) error {
+		for i := range data.Time {
+			row := make([]string, 0, len(data.Headers)+1)
+			row = append(row, formatNormalizedEMGCell(data.Time[i]))
+
+			for _, name := range data.Headers {
+				channel := data.Channels[name]
+
+				if i >= len(channel) {
+					row = append(row, "")
+					continue
+				}
+
+				row = append(row, formatNormalizedEMGCell(channel[i]))
+			}
+
+			if err := write(row); err != nil {
+				return fmt.Errorf("寫入第 %d 列失敗: %w", i+1, err)
+			}
+		}
+		return nil
+	}
+
+	return h.phaseSyncAtomicWrite(req.SubDir, fname, buildEMGCSVHeader(data.Headers), emit)
+}
+
+// buildEMGCSVHeader 組合 EMG CSV 標頭：`Time` + 各肌肉名稱。
+// 從 parsers.emg_writer.go 搬入 (cross-package 同名不衝突);package io 側使用。
+func buildEMGCSVHeader(channelHeaders []string) []string {
+	header := make([]string, 0, len(channelHeaders)+1)
+	header = append(header, "Time")
+	header = append(header, channelHeaders...)
+
+	return header
+}
+
+// formatNormalizedEMGCell 將浮點數格式化為 EMG 時序 CSV cell。
+// NaN/Inf → 空字串（Output 1 missing-data 慣例）。
+// 精度固定為 phaseSyncPrecision（=6），來源為 csv_converter.go 常數，
+// 與 Output 2 共享常數而非共享 formatter（Output 2 走 fmt.Sprintf 會寫 "NaN" 字面）。
+func formatNormalizedEMGCell(v float64) string {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return ""
+	}
+
+	return strconv.FormatFloat(v, 'f', phaseSyncPrecision, 64)
 }
