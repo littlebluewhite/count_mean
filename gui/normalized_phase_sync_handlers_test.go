@@ -225,7 +225,7 @@ func TestAnalyzeNormalizedPhaseSync_StatsZeroDurationRejected(t *testing.T) {
 // WriteNormalizedPhaseSyncResult 守門,兩者均在寫檔前 reject 落入系統敏感目錄的路徑。
 //
 // 此 test 透過注入 OutputDir = "/etc/..."(系統敏感前綴)強迫 boundary check
-// 觸發。修法前:handler 直呼 ExportPhaseSyncDataToCSV;OS perm/ENOENT 錯誤
+// 觸發。修法前:Output 1 由 GUI 層自行拼路徑並直接寫檔,OS perm/ENOENT 錯誤
 // 訊息洩漏完整 absolute path 給 patient。
 // 修法後:result.Message 應含「PhaseSync 輸出路徑無效」(CSVHandler 的 wrap
 // prefix)而非 OS-level error,anti-PII-leak 意圖保持。
