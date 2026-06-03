@@ -2,19 +2,13 @@ package gui
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/io"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security/redact"
-	"count_mean/internal/validation/filename"
 )
-
-// normalizedPhaseSyncPrecision 為 Output 1 (標準化 EMG CSV) 的小數位數，
-// 與分期同步分析統計輸出的小數位數 (固定 6) 保持一致。
-const normalizedPhaseSyncPrecision = 6
 
 // NormalizedPhaseSyncParams 標準化分期同步分析參數。
 //
@@ -87,7 +81,6 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 	a.logger.Info("標準化分期同步分析參數", map[string]any{"params": params})
 	return HandlerRun(a.logger, "標準化分期同步分析", func() (*NormalizedPhaseSyncResult, error) {
 		s := a.state.Load()
-		outputDir := s.config.OutputDir
 
 		// 抓取 Wails lifecycle ctx,讓 Shutdown / 使用者中止可在
 		// step 之間早停(analyzer.Load / ResolvePhaseRange 內部目前還沒 ctx,
@@ -142,24 +135,8 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		}
 
 		// 4. 撰寫 Output 1：標準化後的 EMG CSV
-		// 與 cci_handlers.go / chart_helpers.go 對稱:同樣是「前端可控 subject 字串拼進
-		// 檔案路徑」場景,統一用 filename.Sanitize 而非各自手刻副本 —
-		// 之前的本地 safeSubjectName 副本已於 Wave 6 PR2 移除(cross-compare review P1
-		// 「對稱修補不完整」pattern 收尾)。
-		safeSubject := filename.Sanitize(loaded.Manifest.Subject)
-		normalizedEMGPath := filepath.Join(
-			outputDir,
-			fmt.Sprintf("%s_normalized.csv", safeSubject),
-		)
-
-		// 跟 CCI DownloadCCIChart / muscle_ratio 對稱 — 對合成後的
-		// output 路徑做 boundary path 驗證,擋 system-sensitive dir / traversal。
-		// 即使 OutputDir 來自 config(不是前端直接控),也可能被惡意編輯為
-		// "/etc/..." 或含 ".." 的路徑;subject 雖經 filename.Sanitize 處理,合成後
-		// 結果仍要再驗一次最保險。
-		if pathErr := validateExternalPathInputs("標準化 EMG 輸出路徑", normalizedEMGPath); pathErr != nil {
-			return failedNormalizedPhaseSyncResult(pathErr.Error()), nil
-		}
+		// CSVHandler.WriteNormalizedPhaseSyncEMG 持有 Sanitize + 路徑拼接 + boundary
+		// validation + atomic write，呼叫方只需傳 subject；不再本地拼路徑。
 
 		// 在重 IO step 之前檢查 ctx,讓 Shutdown 能及時 cancel(NormalizeByRangeMax
 		// 已跑完,寫檔即將開始 — 此處取消對使用者體驗最有感)。
@@ -167,8 +144,9 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("分析已取消: %s", redact.RedactForMessage(ctxErr))), nil
 		}
 
-		if csvWriteErr := parsers.ExportPhaseSyncDataToCSV(normalizedData, normalizedEMGPath, normalizedPhaseSyncPrecision); csvWriteErr != nil {
-			a.logger.Error("寫入標準化 EMG 失敗", csvWriteErr, map[string]any{"path": normalizedEMGPath})
+		normalizedEMGPath, csvWriteErr := s.csvHandler.WriteNormalizedPhaseSyncEMG(io.WriteRequest{}, normalizedData, loaded.Manifest.Subject)
+		if csvWriteErr != nil {
+			a.logger.Error("寫入標準化 EMG 失敗", csvWriteErr, map[string]any{})
 			return failedNormalizedPhaseSyncResult(fmt.Sprintf("寫入標準化 EMG 失敗: %s", redact.RedactForMessage(csvWriteErr))), nil
 		}
 
