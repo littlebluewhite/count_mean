@@ -12,7 +12,8 @@ import (
 )
 
 // CCI chart 的 customJS 透過 postMessage 把 restore / legendselect 事件回
-// 傳給 parent,targetOrigin 走 wailsParentOrigins allowlist;ADR-0003 後
+// 傳給 parent;origin allowlist (wailsParentOrigins) 現定義於
+// assets.IframeCommsJS,由 addCCICustomJS 拼接注入 customJS。ADR-0003 後
 // envelope 從 raw string 改為 {type: '<event>'} object,讓 iframeBridge
 // 在 parent 端可以用 type 比對 dispatch。
 //
@@ -53,7 +54,7 @@ func TestAddCCICustomJS_PostMessageOriginAllowlisted(t *testing.T) {
 		"caller 不應直接 postMessage('cci-chart-legend-changed', '*') — 走 postToParent")
 
 	// 2. 3 個 Wails origin 都要在 HTML 內找得到
-	// （他們嵌在 customJS 的 wailsParentOrigins 字串陣列）。
+	// （他們嵌在 assets.IframeCommsJS 的 wailsParentOrigins 字串陣列,拼接注入 customJS）。
 	assert.Contains(t, html, "wails://wails",
 		"darwin/linux Wails origin 應在 allowlist")
 	assert.Contains(t, html, "http://wails.localhost",
@@ -71,25 +72,24 @@ func TestAddCCICustomJS_PostMessageOriginAllowlisted(t *testing.T) {
 		"legendselectchanged envelope 必須是 {type: 'cci-chart-legend-changed'}")
 }
 
-// TestWailsParentOrigins_IsValidJSONArray 校驗 wailsParentOrigins 常數本身
-// 是合法的 JSON / JS literal — 任何破壞 array literal 結構的修改（譬如忘了
-// 加 quote、引入 newline）都會被擋下。
-func TestWailsParentOrigins_IsValidJSONArray(t *testing.T) {
-	// 必須以 [ 開頭 ] 結尾
-	trimmed := strings.TrimSpace(wailsParentOrigins)
-	require.True(t, strings.HasPrefix(trimmed, "["), "wailsParentOrigins 必須以 [ 開頭")
-	require.True(t, strings.HasSuffix(trimmed, "]"), "wailsParentOrigins 必須以 ] 結尾")
+// TestAddCCICustomJS_ChartCommsInjected mirrors PhaseMarkersInjected: the
+// shared assets.IframeCommsJS IIFE must be concatenated into the CCI customJS
+// so the inline body can call window.__chartComms.* (ADR-0003 family).
+func TestAddCCICustomJS_ChartCommsInjected(t *testing.T) {
+	html := renderCCIToString(t)
 
-	// 每個 element 必須用雙引號包起
-	expectedSchemes := []string{
-		`"wails://wails"`,
-		`"http://wails.localhost"`,
-		`"https://wails.localhost"`,
-	}
-	for _, scheme := range expectedSchemes {
-		assert.Contains(t, wailsParentOrigins, scheme,
-			"origin %s 必須以 quoted string 形式存在於 allowlist", scheme)
-	}
+	assert.Contains(t, html, `window.__chartComms`,
+		"IframeCommsJS IIFE 必須 attach helpers 至 window.__chartComms")
+	assert.Contains(t, html, `function postToParent`,
+		"IframeCommsJS 必須含 postToParent declaration")
+	assert.Contains(t, html, `function isFromParent`,
+		"IframeCommsJS 必須含 isFromParent declaration")
+	assert.Contains(t, html, `function handlePngRequest`,
+		"IframeCommsJS 必須含 handlePngRequest declaration")
+	// Pin the migration symmetrically: CCI's old inline negated guard must be
+	// GONE too (same partial-refactor false-pass risk as composer). (codex R2.)
+	assert.NotContains(t, html, `e.source !== window.parent`,
+		"CCI 不可保留舊 inline negated guard;origin 驗證必須走 window.__chartComms.isFromParent")
 }
 
 // renderCCIToString 共用 fixture — 給後續 ADR-0003 listener / syntax assertion

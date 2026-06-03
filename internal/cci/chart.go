@@ -426,62 +426,20 @@ func addCCIMeanSeries(
 	return nil
 }
 
-// wailsParentOrigins enumerates the legitimate parent-window origins for the
-// Wails v2 WebView (per platform). The CCI chart HTML is embedded into the
-// frontend via `iframe.srcdoc`, which gives the iframe a "null" origin — it
-// cannot read `window.parent.location.origin` due to cross-origin restrictions.
-//
-// postMessage 的 targetOrigin 從 "*" 改為平台 origin allowlist。
-// "*" 表示「任何 embedding context 都收得到」，在純 Wails WebView 場景下
-// 是 over-permissive — 即使現在沒人 embed Wails app 進其他頁，contract 上
-// 保留這個面就等於將來在 webview-shared / browser-preview / iframe-debug 情境
-// 下洩漏 UI 事件。改成 allowlist 後：
-//   - parent origin 命中（macOS/Linux/Windows 三者其中之一）→ message 正常送達
-//   - parent origin 是其他（攻擊或意外）→ 瀏覽器 silently 丟棄，不到 listener
-//
-// 此 const 嵌入產生的 JS 內，runtime 在 iframe 中逐一呼叫 postMessage；非匹配
-// 的 origin 不會引發錯誤、只會被 user-agent 忽略，所以 3 個 origin 都呼叫一次
-// 是安全且 zero-coupling 的策略（不需偵測 platform）。
-//
-// Wails v2 origin 來源（v2.12.0）：
-//   - internal/frontend/desktop/darwin/frontend.go:40   const startURL = "wails://wails/"
-//   - internal/frontend/desktop/linux/frontend.go:116   const startURL = "wails://wails/"
-//   - internal/frontend/desktop/windows/frontend.go:40  const startURL = "http://wails.localhost/"
-//
-// 若未來升級 Wails 版本改變 URL scheme，回頭更新此 list；無前後相容問題，
-// allowlist 過嚴只會讓 phase-line 重畫事件「不到」前端，UX degrade 但不會 crash
-// （chart 仍正常顯示）。
-const wailsParentOrigins = `["wails://wails","http://wails.localhost","https://wails.localhost"]`
-
 // addCCICustomJS adds resize handler, keyboard shortcuts, restore/legend
 // notifications, and ADR-0003 inbound listeners (phase-markers update + PNG
 // request) to the CCI chart iframe customJS.
 //
-// postMessage targetOrigin 走 wailsParentOrigins allowlist，避免 "*"
-// over-permissive — 詳細理由見 wailsParentOrigins doc。Inbound listener 接受
-// e.source === window.parent 作為 wails dev 動態 port 不在 allowlist 的退路。
+// Origin validation and postToParent/isFromParent/handlePngRequest helpers now
+// live in assets.IframeCommsJS (window.__chartComms.*); the per-platform Wails
+// origin allowlist is defined there. Inbound listener uses
+// window.__chartComms.isFromParent as the first guard.
 //
 // IMPORTANT: customJS body 只能用 /* ... */ block comments — Composer 那側
 // 已踩過 go-echarts newlineTabPat 把 // 後內容吃光的雷(見 composer.go doc)。
 func addCCICustomJS(line *charts.Line) {
-	customJS := assets.PhaseMarkersJS + `
+	customJS := assets.PhaseMarkersJS + assets.IframeCommsJS + `
 		let myChart = %MY_ECHARTS%;
-		const wailsParentOrigins = ` + wailsParentOrigins + `;
-		function postToParent(msg) {
-			for (let i = 0; i < wailsParentOrigins.length; i++) {
-				try {
-					window.parent.postMessage(msg, wailsParentOrigins[i]);
-				} catch (e) {
-					/* 非匹配 origin 不會 throw（user-agent 靜默丟棄），但保留 try/catch
-					   防 future browser API surprise（postMessage 在 detached iframe 等
-					   edge case 可能 throw）。Swallow 以免重畫事件 path 中斷後續呼叫。 */
-				}
-			}
-			/* dev fallback:wails dev parent origin 是 http://localhost:34115(或變動 port),不在生產
-			   allowlist 內。再多 post 一次 targetOrigin='*' 給有 e.source check 的 parent。安全性
-			   仰賴 parent 端 listener 自己驗 e.origin === window.location.origin / 'null'。 */
-			try { window.parent.postMessage(msg, '*'); } catch (e) {}
-		}
 		if (myChart) {
 			document.addEventListener('keydown', function(e) {
 				if (e.key === 'r' || e.key === 'R') {
@@ -492,10 +450,10 @@ func addCCICustomJS(line *charts.Line) {
 				myChart.resize();
 			});
 			myChart.on('restore', function() {
-				postToParent({type: 'cci-chart-restored'});
+				window.__chartComms.postToParent({type: 'cci-chart-restored'});
 			});
 			myChart.on('legendselectchanged', function() {
-				postToParent({type: 'cci-chart-legend-changed'});
+				window.__chartComms.postToParent({type: 'cci-chart-legend-changed'});
 			});
 			/* ADR-0003 inbound hub:
 			   - 'cci-update-phase-markers' → 解 payload.checkedPhases →
@@ -504,24 +462,14 @@ func addCCICustomJS(line *charts.Line) {
 			   - 'cci-request-png' → myChart.getDataURL → post 'cci-png-result'
 			     reply envelope {requestId, payload?, error?} */
 			window.addEventListener('message', function(e) {
-				if (e.source !== window.parent && wailsParentOrigins.indexOf(e.origin) === -1) {
+				if (!window.__chartComms.isFromParent(e)) {
 					return;
 				}
 				if (!e.data || typeof e.data !== 'object') {
 					return;
 				}
 				if (e.data.type === 'cci-request-png') {
-					const requestId = e.data.requestId;
-					try {
-						const dataURL = myChart.getDataURL({
-							type: 'png',
-							pixelRatio: 2,
-							backgroundColor: '#fff'
-						});
-						postToParent({type: 'cci-png-result', requestId: requestId, payload: {dataURL: dataURL}});
-					} catch (err) {
-						postToParent({type: 'cci-png-result', requestId: requestId, error: String(err)});
-					}
+					window.__chartComms.handlePngRequest(myChart, e, 'cci-png-result');
 					return;
 				}
 				if (e.data.type === 'cci-update-phase-markers') {
