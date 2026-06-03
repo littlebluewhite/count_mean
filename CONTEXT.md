@@ -43,7 +43,7 @@ _Avoid_: window max, rolling average, peak mean.
 **Format-aware write**
 CSVHandler 對外的一種寫入操作 —— caller 傳入 result struct（MaxMeanResult / EMGDataset / PhaseAnalysisResult）與 WriteRequest，CSVHandler 內部負責 row layout、precision、scaling、merging（多 phase 合一檔）與 sanitize 後寫檔。
 與 raw write 對比：raw write 只接受 `[][]string`；format-aware write 接受分析結果結構，CSVHandler 持有 row layout 的真相。
-**Filename ownership 隨 unit-of-work 形狀分**：Subject-based write（PhaseSync / NormalizedPhaseSync / CCI / MuscleRatioOutput*）由 CSVHandler 內部從 `result.Subject` + suffix convention 推導（`req.Filename` 被忽略）；File-based write（PhaseAnalysis / MaxMean / Normalized）由 caller 傳入 `req.Filename`。詳見 [[ADR-0004]]。
+**Filename ownership 隨 unit-of-work 形狀分**：Subject-based write（PhaseSync / NormalizedPhaseSync / CCI / MuscleRatioOutput*）由 CSVHandler 內部從 `result.Subject` + suffix convention 推導（`req.Filename` 被忽略）；File-based write（PhaseAnalysis / MaxMean / Normalized）由 caller 傳入 `req.Filename`。詳見 [[ADR-0004]]。**NormalizedPhaseSync 產兩個 Subject-based 輸出**（標準化 EMG 時序 + 統計），檔名皆由 CSVHandler 推導（見 [[ADR-0020]]）；與 File-based 的 plain **Normalized**（EMGDataset 標準化）是不同概念，勿混。
 _Avoid_: structured write, typed write, formatted output.
 
 **WriteRequest**

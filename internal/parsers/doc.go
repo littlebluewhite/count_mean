@@ -22,7 +22,6 @@
 // on unix to defeat symlink-based TOCTOU), but path traversal / allow-listing
 // is the caller's responsibility. GUI and CLI entry points must run inputs
 // through internal/security.PathValidator (or the lenient_path helper for
-// BTS-style filenames containing literal "%") before calling any ParseFile /
-// ExportPhaseSyncDataToCSV here. See gui/normalized_phase_sync_handlers.go
-// for the production wiring.
+// BTS-style filenames containing literal "%") before calling any ParseFile
+// here. See gui/normalized_phase_sync_handlers.go for the production wiring.
 package parsers

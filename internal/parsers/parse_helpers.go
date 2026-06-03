@@ -40,7 +40,7 @@ const MaxReasonableMotionIndex = 1_000_000_000
 // **缺值 vs 字面 NaN**：本函式 **無法** 區分「empty cell（missing-data）」與
 // 「字面 0」(兩者都回 `(0, false)` / `(0, true)`)；也無法區分「字面 NaN」與
 // 「missing」(後者回 `(0, false)`，前者回 `(NaN, true)`)。需要嚴格 round-trip
-// 區分 missing/NaN/Inf 的 caller (例如 emg_writer 配套讀回測試) 改用
+// 區分 missing/NaN/Inf 的 caller 改用
 // `ParseFloatCellWithMissing` + `FormatFloatCell`。
 func ParseFloatCell(s string) (float64, bool) {
 	trimmed := strings.TrimSpace(s)
@@ -99,13 +99,13 @@ func ParseFloatCellWithMissing(s string) (float64, bool) {
 //   - math.IsInf(v, -1)           → "-Inf"
 //   - 其他                        → strconv.FormatFloat(v, 'f', precision, 64)
 //
-// **與 emg_writer.go 的 formatCell 差異**：emg_writer 對 NaN / Inf 一律寫空字串,
+// **與 internal/io.formatNormalizedEMGCell 差異**：formatNormalizedEMGCell 對 NaN / Inf 一律寫空字串,
 // 這是 muscle_ratio 對 NaN-as-missing 的 legacy 契約(見 analyzer_test.go
 // TestAnalyze_NaNCellWrittenAsEmpty / TestAnalyze_EMGUpstreamNaN_OutputCellEmpty)。
 // FormatFloatCell 提供 **嚴格區分** 的新語意,讓未來真正需要 round-trip 保留
 // NaN 字面 / Inf 字面 的 writer(例如 manifest export)可以採用,不破壞既有契約。
 //
-// precision <= 0 視為 6（與 emg_writer.defaultEMGCSVPrecision 對齊）。
+// precision <= 0 視為 6（與 internal/io.phaseSyncPrecision 對齊）。
 func FormatFloatCell(v float64, isMissing bool, precision int) string {
 	if isMissing {
 		return ""
@@ -130,7 +130,7 @@ func FormatFloatCell(v float64, isMissing bool, precision int) string {
 	return strconv.FormatFloat(v, 'f', precision, 64)
 }
 
-// defaultFloatCellPrecision 為 FormatFloatCell 預設小數位數，與 emg_writer 對齊。
+// defaultFloatCellPrecision 為 FormatFloatCell 預設小數位數，與 internal/io.phaseSyncPrecision 對齊。
 const defaultFloatCellPrecision = 6
 
 // ParseTimeAndChannels parses record[0] as time and record[channelStartIdx:] as channel values.
