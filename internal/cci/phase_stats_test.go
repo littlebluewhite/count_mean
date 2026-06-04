@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/models"
+	"count_mean/internal/synchronizer"
+	"count_mean/internal/windowmean"
 )
 
 // makePhaseStatsFixture builds a controlled CCIAnalysisResult literal (no pipeline
@@ -67,20 +69,21 @@ type expectedRow struct {
 }
 
 // goldenRows is the authoritative 32-row expectation for the full fixture.
-// Every valA is hand-derived: interval = MeanRange(iFrom,iTo) = (iFrom+iTo)/2;
+// Every valA is hand-derived: interval = WindowMean at the endpoints' time-midpoint
+// (linear ramp: == whole-range mean, so valA unchanged);
 // ±50ms = MeanRange(i-5,i+5) = i; ±25ms = weighted25 = i; 前100ms = MeanRange(i-10,i) = i-5;
 // landing = MeanRange(iL+a, iL+b) = (140+a+b)/2 with iL=70.
 func goldenRows() []expectedRow {
 	return []expectedRow{
-		// INTERVAL rows (區間平均): (iFrom+iTo)/2.
-		{item: "S-C", metric: metricInterval, valA: 15},  // (10+20)/2
-		{item: "S-D", metric: metricInterval, valA: 20},  // (10+30)/2
-		{item: "C-D", metric: metricInterval, valA: 25},  // (20+30)/2
-		{item: "D-T", metric: metricInterval, valA: 40},  // (30+50)/2
-		{item: "D-T0", metric: metricInterval, valA: 35}, // (30+40)/2
-		{item: "T0-T", metric: metricInterval, valA: 45}, // (40+50)/2
-		{item: "T-O", metric: metricInterval, valA: 55},  // (50+60)/2
-		{item: "O-L", metric: metricInterval, valA: 65},  // (60+70)/2
+		// INTERVAL rows: WindowMean at the endpoints' time-midpoint (linear ramp: == whole-range mean).
+		{item: "S-C", metric: metricInterval, hasTime: true, timeIdx: 15, valA: 15},
+		{item: "S-D", metric: metricInterval, hasTime: true, timeIdx: 20, valA: 20},
+		{item: "C-D", metric: metricInterval, hasTime: true, timeIdx: 25, valA: 25},
+		{item: "D-T", metric: metricInterval, hasTime: true, timeIdx: 40, valA: 40},
+		{item: "D-T0", metric: metricInterval, hasTime: true, timeIdx: 35, valA: 35},
+		{item: "T0-T", metric: metricInterval, hasTime: true, timeIdx: 45, valA: 45},
+		{item: "T-O", metric: metricInterval, hasTime: true, timeIdx: 55, valA: 55},
+		{item: "O-L", metric: metricInterval, hasTime: true, timeIdx: 65, valA: 65},
 
 		// ±50ms = i, ±25ms = i, interleaved.
 		{item: "S", metric: metricBand50ms, hasTime: true, timeIdx: 10, valA: 10},
@@ -146,6 +149,7 @@ func assertRow(t *testing.T, idx int, got CCIPhaseStatRow, want expectedRow, tim
 // TestBuildPhaseStats_FullFixture_Golden is the authoritative correctness lock:
 // the full 32-row table on the ramp fixture, every value hand-derived above.
 func TestBuildPhaseStats_FullFixture_Golden(t *testing.T) {
+	require.Equal(t, "中點±50ms", metricInterval, "ADR-0022 relabel 必須落實")
 	result := makePhaseStatsFixture()
 	a := NewCCIAnalyzer()
 
@@ -266,7 +270,7 @@ func TestBuildPhaseStats_OutOfRangePhaseTimeTreatedAbsent(t *testing.T) {
 	// Rows independent of C remain valid — proves only C was blanked, not the table.
 	sd := findRow(t, rows, "S-D", metricInterval)
 	require.False(t, math.IsNaN(sd.Values[0]), "S-D needs only S,D (both in range)")
-	assert.InDelta(t, 20.0, sd.Values[0], 1e-9, "(10+30)/2")
+	assert.InDelta(t, 20.0, sd.Values[0], 1e-9, "S-D midpoint window = WindowMean(mid=20,±5)=20")
 	sBand := findRow(t, rows, "S", metricBand50ms)
 	assert.True(t, sBand.HasTime)
 	assert.InDelta(t, 10.0, sBand.Values[0], 1e-9)
@@ -388,6 +392,63 @@ func TestBuildPhaseStats_SF8_EndToEnd(t *testing.T) {
 				"landing %s pair %d must be finite, got %v", m, k, v)
 		}
 	}
+}
+
+// TestBuildPhaseStats_Interval_MidpointWindowDiscriminates 證明 ADR-0022 值路徑:interval
+// 列現為兩端點時間中點的 ±band50Half 視窗,非整段 [iFrom,iTo]。標準 ramp fixture 證不出
+// (相鄰區間半寬==band50Half→整段==視窗),故此 fixture 把端點拉遠(半寬 30≫5)、用非線性資料,
+// plateau 落在整段內但視窗外。列須等於視窗 kernel 且異於舊整段 kernel——皆由同一 series 即時算,無魔數。
+func TestBuildPhaseStats_Interval_MidpointWindowDiscriminates(t *testing.T) {
+	const n = 101
+	const (
+		fromIdx = 20
+		toIdx   = 80
+	)
+	times := make([]float64, n)
+	seriesA := make([]float64, n)
+	seriesB := make([]float64, n)
+	for i := 0; i < n; i++ {
+		times[i] = float64(i) * 0.01
+	}
+	for i := 25; i <= 35; i++ {
+		seriesA[i] = 100 // 整段[20,80]內、視窗[45,55]外
+	}
+	for i := 48; i <= 52; i++ {
+		seriesA[i] = 10 // 視窗內→新值已知非零
+	}
+	for i := range seriesA {
+		seriesB[i] = 2 * seriesA[i]
+	}
+
+	result := &CCIAnalysisResult{
+		Subject:     "FixtureDiscriminate",
+		PairResults: []CCIResult{{PairName: "A", Values: seriesA}, {PairName: "B", Values: seriesB}},
+		TimeValues:  times,
+		PhaseTimes: map[string]float64{
+			string(models.PhaseS):  times[fromIdx],
+			string(models.PhaseC):  times[35],
+			string(models.PhaseD):  times[toIdx],
+			string(models.PhaseT0): times[85],
+			string(models.PhaseT):  times[90],
+			string(models.PhaseO):  times[95],
+			string(models.PhaseL):  times[100],
+		},
+	}
+
+	rows := NewCCIAnalyzer().buildPhaseStats(result)
+	sd := findRow(t, rows, "S-D", metricInterval)
+
+	mid := synchronizer.FindNearestTimeIndex(times, (times[fromIdx]+times[toIdx])/2)
+	require.Equal(t, 50, mid, "中點(idx 20,80)須 snap 到 50")
+	wantNew := windowmean.WindowMean(seriesA, mid, band50Half) // 即時 kernel == 列值
+	oldFull := windowmean.MeanRange(seriesA, fromIdx, toIdx)   // 即時 kernel == 舊行為
+
+	assert.InDelta(t, wantNew, sd.Values[0], goldenDelta, "S-D pairA 須等於 WindowMean(mid, band50Half)")
+	assert.InDelta(t, 2*wantNew, sd.Values[1], goldenDelta, "pairB=2×pairA(欄序)")
+	require.Greater(t, math.Abs(oldFull-wantNew), 1.0, "fixture 須使整段≠視窗(old=%v new=%v)", oldFull, wantNew)
+	assert.False(t, math.Abs(sd.Values[0]-oldFull) < goldenDelta, "S-D 不得等於舊 MeanRange=%v", oldFull)
+	assert.True(t, sd.HasTime, "interval 列現帶 HasTime=true")
+	assert.InDelta(t, times[mid], sd.Time, goldenDelta, "interval Time = TimeValues[mid]")
 }
 
 // repoRootForTest walks up from the test's CWD to the module root (go.mod).

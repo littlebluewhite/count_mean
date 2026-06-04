@@ -52,9 +52,9 @@ type CCIAnalysisResult struct {
 // window has no usable value or the phase point is absent.
 type CCIPhaseStatRow struct {
 	Item    string    // interval label ("S-C") or bare phase point ("S")
-	Metric  string    // window description ("區間平均", "±50ms", "±25ms", "前100ms", "落地0~100ms", ...)
-	Time    float64   // EMG time of the phase point; meaningful only when HasTime
-	HasTime bool      // true for point/landing rows of a PRESENT point; false for interval rows and absent points
+	Metric  string    // window description ("中點±50ms", "±50ms", "±25ms", "前100ms", "落地0~100ms", ...)
+	Time    float64   // EMG time of the phase point, or the interval midpoint sample; meaningful only when HasTime
+	HasTime bool      // true for point/landing rows of a PRESENT point; false for absent points and interval rows with an absent endpoint
 	Values  []float64 // len == len(result.PairResults); per-pair window statistic
 }
 

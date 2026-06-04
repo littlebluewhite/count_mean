@@ -10,7 +10,7 @@ import (
 
 // Metric labels for the phase-window statistics table (ADR-0018 Output 2).
 const (
-	metricInterval    = "區間平均"
+	metricInterval    = "中點±50ms"
 	metricBand50ms    = "±50ms"
 	metricBand25ms    = "±25ms"
 	metricPre100ms    = "前100ms"
@@ -34,7 +34,7 @@ const (
 type rowKind int
 
 const (
-	kindInterval rowKind = iota // mean over [from, to] (order-guarded for motion inversion)
+	kindInterval rowKind = iota // ±band50Half window around the two endpoints' time-midpoint (ADR-0022)
 	kindBand50                  // MeanRange(i-5, i+5) around a single point
 	kindBand25                  // weighted25 at a single point
 	kindPre100                  // MeanRange(i-10, i) before a single point
@@ -69,7 +69,7 @@ type phaseStatRowSpec struct {
 //
 //nolint:gochecknoglobals // immutable row schema, read-only at runtime
 var phaseStatRowSpecs = []phaseStatRowSpec{
-	// INTERVAL rows (區間平均). S-D and D-T intentionally skip the intervening point.
+	// INTERVAL rows (中點±50ms). S-D and D-T intentionally skip the intervening point.
 	{item: "S-C", metric: metricInterval, kind: kindInterval, from: models.PhaseS, to: models.PhaseC},
 	{item: "S-D", metric: metricInterval, kind: kindInterval, from: models.PhaseS, to: models.PhaseD},
 	{item: "C-D", metric: metricInterval, kind: kindInterval, from: models.PhaseC, to: models.PhaseD},
@@ -155,23 +155,23 @@ func (a *CCIAnalyzer) buildPhaseStats(result *CCIAnalysisResult) []CCIPhaseStatR
 
 	nPairs := len(result.PairResults)
 
-	// phaseIndex resolves a present phase point to its index in TimeValues; the second
-	// result reports presence (in PhaseTimes AND within the extracted range — shared with
-	// dropOutOfRangePhases via phaseTimeWithinExtractedRange, so Output 2 and the chart
-	// markers agree on which phases are usable). Defense-in-depth: AnalyzeCCI already
-	// drops out-of-range phases from PhaseTimes, but buildPhaseStats stays robust when
-	// called directly with an unfiltered result (e.g. in unit tests).
-	phaseIndex := func(p models.PhasePoint) (int, bool) {
+	// phaseAt resolves a present phase point to its index, EMG time, and presence flag
+	// (in PhaseTimes AND within the extracted range — shared with dropOutOfRangePhases
+	// via phaseTimeWithinExtractedRange, so Output 2 and the chart markers agree on
+	// which phases are usable). Defense-in-depth: AnalyzeCCI already drops out-of-range
+	// phases from PhaseTimes, but buildPhaseStats stays robust when called directly with
+	// an unfiltered result (e.g. in unit tests).
+	phaseAt := func(p models.PhasePoint) (int, float64, bool) {
 		t, ok := result.PhaseTimes[string(p)]
 		if !ok || !phaseTimeWithinExtractedRange(t, result.TimeValues) {
-			return 0, false
+			return 0, 0, false
 		}
-		return synchronizer.FindNearestTimeIndex(result.TimeValues, t), true
+		return synchronizer.FindNearestTimeIndex(result.TimeValues, t), t, true
 	}
 
 	rows := make([]CCIPhaseStatRow, 0, len(phaseStatRowSpecs))
 	for _, spec := range phaseStatRowSpecs {
-		rows = append(rows, a.computeRow(result, spec, nPairs, phaseIndex))
+		rows = append(rows, a.computeRow(result, spec, nPairs, phaseAt))
 	}
 
 	return rows
@@ -183,30 +183,29 @@ func (a *CCIAnalyzer) computeRow(
 	result *CCIAnalysisResult,
 	spec phaseStatRowSpec,
 	nPairs int,
-	phaseIndex func(models.PhasePoint) (int, bool),
+	phaseAt func(models.PhasePoint) (int, float64, bool),
 ) CCIPhaseStatRow {
 	row := CCIPhaseStatRow{Item: spec.item, Metric: spec.metric}
 
 	if spec.kind == kindInterval {
-		iFrom, okFrom := phaseIndex(spec.from)
-		iTo, okTo := phaseIndex(spec.to)
+		_, tFrom, okFrom := phaseAt(spec.from)
+		_, tTo, okTo := phaseAt(spec.to)
 		if !okFrom || !okTo {
 			row.Values = nanValues(nPairs)
 			return row
 		}
-		// min/max guards motion-index inversion (D and O are motion-derived).
-		lo, hi := iFrom, iTo
-		if lo > hi {
-			lo, hi = hi, lo
-		}
+		// 視窗以兩端點時間中點為中心(ADR-0022)。中點可交換,D/O motion 反序無需 order guard。
+		mid := synchronizer.FindNearestTimeIndex(result.TimeValues, (tFrom+tTo)/2)
+		row.HasTime = true
+		row.Time = result.TimeValues[mid]
 		row.Values = perPair(result.PairResults, func(s []float64) float64 {
-			return windowmean.MeanRange(s, lo, hi)
+			return windowmean.WindowMean(s, mid, band50Half)
 		})
 		return row
 	}
 
 	// Single-point and landing rows share point presence + HasTime/Time handling.
-	i, ok := phaseIndex(spec.point)
+	i, _, ok := phaseAt(spec.point)
 	if !ok {
 		row.Values = nanValues(nPairs)
 		return row
