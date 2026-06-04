@@ -453,35 +453,41 @@ func TestBuildPhaseStats_Interval_MidpointWindowDiscriminates(t *testing.T) {
 
 // TestBuildPhaseStats_Interval_UsesTimeMidpointNotIndexMidpoint locks ADR-0022 §Decision
 // item 2: the interval window centers on the two endpoints' TIME-midpoint
-// (FindNearestTimeIndex of (t_from+t_to)/2), NOT the naive integer index-midpoint
-// (iFrom+iTo)/2 — chosen for cross-feature consistency with muscle_ratio. On a uniform
-// 100Hz grid the two agree EXCEPT when the endpoint index-sum is odd; here S-D spans
-// idx 30..53 (sum 83, odd), where the time-midpoint snaps to 42 but (30+53)/2 truncates
-// to 41. Both midpoints are computed live and a NotEqual guard asserts the fixture truly
-// creates the divergence, so this can never silently degrade into a no-op.
+// (FindNearestTimeIndex of (t_from+t_to)/2), NOT any index-based midpoint — chosen for
+// cross-feature consistency with muscle_ratio. To lock this ROBUSTLY (independent of the
+// float tie-break that makes time- and index-midpoints nearly coincide on a uniform grid),
+// the fixture uses a deliberately NON-UNIFORM time grid: indices 0..15 are dense (Δt=1),
+// 16..30 sparse (Δt=5). S-D spans idx 8..24, whose time-average (8+60)/2=34 snaps to index
+// 19 — three samples from the index-midpoint (8+24)/2=16 — so no index-based formula
+// (truncating OR rounding) can land on it. The Greater guard asserts the fixture truly
+// diverges; the row must then center on the time-based index.
 func TestBuildPhaseStats_Interval_UsesTimeMidpointNotIndexMidpoint(t *testing.T) {
-	const n = 101
+	const n = 31
 	const (
-		fromIdx = 30 // S
-		toIdx   = 53 // D — sum 83 is ODD → time-midpoint and index-midpoint diverge by 1 sample
+		fromIdx = 8  // S
+		toIdx   = 24 // D
 	)
 	times := make([]float64, n)
 	seriesA := make([]float64, n)
 	seriesB := make([]float64, n)
 	for i := 0; i < n; i++ {
-		times[i] = float64(i) * 0.01
+		if i <= 15 {
+			times[i] = float64(i) // dense: Δt = 1
+		} else {
+			times[i] = 15.0 + float64(i-15)*5.0 // sparse: Δt = 5 (20, 25, ..., 90)
+		}
 		seriesA[i] = float64(i)
 		seriesB[i] = 2 * float64(i)
 	}
 
 	timeMid := synchronizer.FindNearestTimeIndex(times, (times[fromIdx]+times[toIdx])/2)
-	indexMid := (fromIdx + toIdx) / 2 // Go integer division truncates → the naive index-midpoint
-	require.NotEqual(t, indexMid, timeMid,
-		"fixture invariant: odd index-sum must make time-midpoint (%d) differ from index-midpoint (%d)",
+	indexMid := (fromIdx + toIdx) / 2 // Go integer division; any index-based midpoint stays near here
+	require.Greater(t, math.Abs(float64(timeMid-indexMid)), 1.0,
+		"fixture invariant: non-uniform grid must make time-midpoint (%d) differ from index-midpoint (%d) by >1 sample, so no index formula can match",
 		timeMid, indexMid)
 
 	result := &CCIAnalysisResult{
-		Subject:     "FixtureTimeMidpoint",
+		Subject:     "FixtureTimeMidpointNonUniform",
 		PairResults: []CCIResult{{PairName: "A", Values: seriesA}, {PairName: "B", Values: seriesB}},
 		TimeValues:  times,
 		PhaseTimes: map[string]float64{
@@ -498,10 +504,8 @@ func TestBuildPhaseStats_Interval_UsesTimeMidpointNotIndexMidpoint(t *testing.T)
 		"interval Time must be the TIME-midpoint sample times[%d], not the index-midpoint", timeMid)
 	assert.False(t, math.Abs(sd.Time-times[indexMid]) <= goldenDelta,
 		"interval Time must NOT be the index-midpoint sample times[%d]", indexMid)
-	// Window value follows the same center: WindowMean at the time-midpoint (42 on the ramp),
-	// distinct from WindowMean at the index-midpoint (41).
 	assert.InDelta(t, windowmean.WindowMean(seriesA, timeMid, band50Half), sd.Values[0], goldenDelta,
-		"pairA value centered on the time-midpoint")
+		"pairA value centered on the time-midpoint, not the index-midpoint")
 	assert.InDelta(t, 2*windowmean.WindowMean(seriesA, timeMid, band50Half), sd.Values[1], goldenDelta,
 		"pairB = 2×pairA (column order)")
 }
