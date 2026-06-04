@@ -1,8 +1,0 @@
-﻿,R.RA: EMG 1 (from SF2_Back_Tuck_Somersault_Rep_4.8) ->Filter->RMS [],R.ES: EMG 2 (from SF2_Back_Tuck_Somersault_Rep_4.8) ->Filter->RMS [],R.IL: EMG 3 (from SF2_Back_Tuck_Somersault_Rep_4.8) ->Filter->RMS [],R.GMax: EMG 4 (from SF2_Back_Tuck_Somersault_Rep_4.8) ->Filter->RMS [],R.RF: EMG 5 (from SF2_Back_Tuck_Somersault_Rep_4.8) ->Filter->RMS [],R.BF: EMG 6 (from SF2_Back_Tuck_Somersault_Rep_4.8) ->Filter->RMS [],R.TA&IO: EMG 7 (from SF2_Back_Tuck_Somersault_Rep_4.8) ->Filter->RMS [],R.MF: EMG 8 (from SF2_Back_Tuck_Somersault_Rep_4.8) ->Filter->RMS []
-開始分期點,P2,P2,P2,P2,P2,P2,P2,P2
-開始時間,10.334000,10.334000,10.334000,10.334000,10.334000,10.334000,10.334000,10.334000
-結束分期點,S,S,S,S,S,S,S,S
-結束時間,10.526000,10.526000,10.526000,10.526000,10.526000,10.526000,10.526000,10.526000
-時間差值,0.192000,0.192000,0.192000,0.192000,0.192000,0.192000,0.192000,0.192000
-平均值,0.051228,0.072371,0.329225,0.131373,0.118950,0.144545,0.156307,0.049621
-最大值,0.105053,0.247525,0.728035,0.333965,0.287490,0.371637,0.336895,0.141277

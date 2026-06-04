@@ -21,3 +21,6 @@
 *.sarif
 coverage.out
 coverage/
+/input/
+/output/
+/operate/
