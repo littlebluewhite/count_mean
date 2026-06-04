@@ -451,6 +451,61 @@ func TestBuildPhaseStats_Interval_MidpointWindowDiscriminates(t *testing.T) {
 	assert.InDelta(t, times[mid], sd.Time, goldenDelta, "interval Time = TimeValues[mid]")
 }
 
+// TestBuildPhaseStats_Interval_UsesTimeMidpointNotIndexMidpoint locks ADR-0022 §Decision
+// item 2: the interval window centers on the two endpoints' TIME-midpoint
+// (FindNearestTimeIndex of (t_from+t_to)/2), NOT the naive integer index-midpoint
+// (iFrom+iTo)/2 — chosen for cross-feature consistency with muscle_ratio. On a uniform
+// 100Hz grid the two agree EXCEPT when the endpoint index-sum is odd; here S-D spans
+// idx 30..53 (sum 83, odd), where the time-midpoint snaps to 42 but (30+53)/2 truncates
+// to 41. Both midpoints are computed live and a NotEqual guard asserts the fixture truly
+// creates the divergence, so this can never silently degrade into a no-op.
+func TestBuildPhaseStats_Interval_UsesTimeMidpointNotIndexMidpoint(t *testing.T) {
+	const n = 101
+	const (
+		fromIdx = 30 // S
+		toIdx   = 53 // D — sum 83 is ODD → time-midpoint and index-midpoint diverge by 1 sample
+	)
+	times := make([]float64, n)
+	seriesA := make([]float64, n)
+	seriesB := make([]float64, n)
+	for i := 0; i < n; i++ {
+		times[i] = float64(i) * 0.01
+		seriesA[i] = float64(i)
+		seriesB[i] = 2 * float64(i)
+	}
+
+	timeMid := synchronizer.FindNearestTimeIndex(times, (times[fromIdx]+times[toIdx])/2)
+	indexMid := (fromIdx + toIdx) / 2 // Go integer division truncates → the naive index-midpoint
+	require.NotEqual(t, indexMid, timeMid,
+		"fixture invariant: odd index-sum must make time-midpoint (%d) differ from index-midpoint (%d)",
+		timeMid, indexMid)
+
+	result := &CCIAnalysisResult{
+		Subject:     "FixtureTimeMidpoint",
+		PairResults: []CCIResult{{PairName: "A", Values: seriesA}, {PairName: "B", Values: seriesB}},
+		TimeValues:  times,
+		PhaseTimes: map[string]float64{
+			string(models.PhaseS): times[fromIdx],
+			string(models.PhaseD): times[toIdx],
+		},
+	}
+
+	rows := NewCCIAnalyzer().buildPhaseStats(result)
+	sd := findRow(t, rows, "S-D", metricInterval)
+
+	require.True(t, sd.HasTime, "present interval row carries HasTime=true")
+	assert.InDelta(t, times[timeMid], sd.Time, goldenDelta,
+		"interval Time must be the TIME-midpoint sample times[%d], not the index-midpoint", timeMid)
+	assert.False(t, math.Abs(sd.Time-times[indexMid]) <= goldenDelta,
+		"interval Time must NOT be the index-midpoint sample times[%d]", indexMid)
+	// Window value follows the same center: WindowMean at the time-midpoint (42 on the ramp),
+	// distinct from WindowMean at the index-midpoint (41).
+	assert.InDelta(t, windowmean.WindowMean(seriesA, timeMid, band50Half), sd.Values[0], goldenDelta,
+		"pairA value centered on the time-midpoint")
+	assert.InDelta(t, 2*windowmean.WindowMean(seriesA, timeMid, band50Half), sd.Values[1], goldenDelta,
+		"pairB = 2×pairA (column order)")
+}
+
 // repoRootForTest walks up from the test's CWD to the module root (go.mod).
 func repoRootForTest(t *testing.T) string {
 	t.Helper()

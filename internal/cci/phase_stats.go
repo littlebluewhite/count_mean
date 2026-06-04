@@ -150,6 +150,7 @@ func (a *CCIAnalyzer) dropOutOfRangePhases(result *CCIAnalysisResult) {
 // columns equals len(result.PairResults) (NOT forced to 12) so Output 2 stays
 // aligned with Output 1. Rows for absent phase points (or intervals with an absent
 // endpoint) keep their slot with Values = NaN×nPairs and HasTime=false.
+// Present interval rows carry HasTime=true with Time set to the endpoints' midpoint sample (ADR-0022).
 func (a *CCIAnalyzer) buildPhaseStats(result *CCIAnalysisResult) []CCIPhaseStatRow {
 	a.warnIfNon100Hz(result.TimeValues)
 
