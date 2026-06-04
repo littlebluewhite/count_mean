@@ -21,7 +21,7 @@ _Avoid_: stage, interval, segment, period.
 _Avoid_: phase line(舊內部變數名,實際上是 markLine + label 組合)、marker(太泛)、phase indicator.
 
 **Gait cycle (CCI)**
-CCI 分析把單一 [[Subject]] 的共收縮曲線正規化到的百分比時間軸:**0% = S(啟動瞬間)、100% = L(落地瞬間)**,duration = `L − S` 的 EMG 時間。落地後尾段(延伸到 L+150ms)以 **>100%** 表示、啟動前引段(到 S−150ms)以 **<0%** 表示 — 因 `pct` 公式無 clamp,延伸範圍自然產生 cycle 外百分比。P0/P1/P2 是啟動**前**的準備點,落在此 cycle 之外,不參與 CCI 的百分比軸與 [[Phase marker]] 渲染。S/L 為必填錨點(缺任一 CCI fail-fast)。CCI 的分期視窗統計(`_CCI_Rudolph_phases.csv`,各分期點 ±50/±25ms、前100ms、L 落地後穩定、與分期區間整段平均)即定義在此時間軸上。
+CCI 分析把單一 [[Subject]] 的共收縮曲線正規化到的百分比時間軸:**0% = S(啟動瞬間)、100% = L(落地瞬間)**,duration = `L − S` 的 EMG 時間。落地後尾段(延伸到 L+150ms)以 **>100%** 表示、啟動前引段(到 S−150ms)以 **<0%** 表示 — 因 `pct` 公式無 clamp,延伸範圍自然產生 cycle 外百分比。P0/P1/P2 是啟動**前**的準備點,落在此 cycle 之外,不參與 CCI 的百分比軸與 [[Phase marker]] 渲染。S/L 為必填錨點(缺任一 CCI fail-fast)。CCI 的分期視窗統計(`_CCI_Rudolph_phases.csv`,各分期點 ±50/±25ms、前100ms、L 落地後穩定、與分期區間中點±50ms)即定義在此時間軸上。
 _Avoid_: gait %(口語)、normalized time、jump cycle(code 用 gait cycle)、把 P0 當 0%(舊行為,[[ADR-0018]] 重錨為 S).
 
 **Manifest**

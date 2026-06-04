@@ -1,6 +1,6 @@
 # CCI 重構:gait cycle 重錨 S→L + 落地延伸(>100%)+ 分期視窗統計第二輸出
 
-**Status**: implemented (2026-06-03) — accepted design 已落地;見下方 Implementation notes
+**Status**: implemented (2026-06-03) — accepted design 已落地;見下方 Implementation notes。**§3 需求 1(區間=整段平均)於 2026-06-05 經 [[ADR-0022]] amended 為「中點 ±50ms 視窗」(design-only,impl pending);下文 §3 需求 1 保留為當時決策的歷史紀錄。**
 
 ## Decision
 
@@ -82,3 +82,4 @@
 - [[ADR-0010]] — kernel 跨 feature 上提先例(LTTB);`MeanRange` 比照。
 - [[ADR-0012]] — CCI(single-subject / compute-only)vs muscle_ratio(batch / compute+write)形狀分歧;本改動維持 CCI 形狀。
 - [[ADR-0014]] — `WindowMean` 來源 + 視窗平均抗雜訊理由 + 預告 kernel 上提;本 ADR 兌現上提並把同款語意套到 CCI。
+- [[ADR-0022]] — **amends §3 需求 1**:8 個區間列由整段平均改為兩端點中點的 ±50ms 視窗(design-only,impl pending)。
