@@ -1,6 +1,6 @@
 # CCI 分期區間統計改為中點 ±50ms 視窗(amends ADR-0018 §3 需求 1)
 
-**Status**: accepted — **design-only,impl pending**(2026-06-05)。amends [[ADR-0018]] §3 需求 1(原「區間整段平均」)。
+**Status**: accepted — **implemented**(2026-06-05;feat `c490a38` + tests `53540d1`/`adbf9c1`)。amends [[ADR-0018]] §3 需求 1(原「區間整段平均」)。
 
 ## Decision
 
