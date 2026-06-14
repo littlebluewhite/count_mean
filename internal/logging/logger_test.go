@@ -1059,14 +1059,15 @@ func parseCallerEntry(t *testing.T, buf *bytes.Buffer) LogEntry {
 // TestCallerDepth_DirectMethod 經驗性證明直接方法呼叫(l.Info)後
 // LogEntry.File / Line 精準指向呼叫端所在行。
 //
-// 取「期望行號」的策略:把 runtime.Caller(0) 與 l.Info 放在同一物理行,
-// 讓兩者共用相同行號。修正前 callerSkip=4 對直接方法路徑 off-by-one;
-// 修正後 skip=3 應精準命中。
+// 取「期望行號」的策略:runtime.Caller(0) 緊接下一行的 l.Info(相鄰行;gofmt
+// 不允許同行分號語句),故 entry.Line 應為 wantLine+1。修正前 callerSkip=4 對
+// 直接方法路徑 off-by-one;修正後 skip=3 應精準命中。
 func TestCallerDepth_DirectMethod(t *testing.T) {
 	var buf bytes.Buffer
 	l := NewLogger(LevelDebug, &buf, true) // JSON 格式方便 unmarshal
 
-	_, _, wantLine, _ := runtime.Caller(0); l.Info("probe-direct") //nolint:revive // 同一行取行號
+	_, _, wantLine, _ := runtime.Caller(0)
+	l.Info("probe-direct") // 必須緊接上一行 runtime.Caller(0)
 
 	entry := parseCallerEntry(t, &buf)
 
@@ -1075,9 +1076,9 @@ func TestCallerDepth_DirectMethod(t *testing.T) {
 		t.Errorf("File 應為 logger_test.go,got %q", entry.File)
 	}
 
-	// Line 必須等於 l.Info 所在行
-	if entry.Line != wantLine {
-		t.Errorf("Line 應為 %d (呼叫行),got %d", wantLine, entry.Line)
+	// Line 必須等於 l.Info 所在行(緊接 runtime.Caller(0) 下一行 → wantLine+1)
+	if entry.Line != wantLine+1 {
+		t.Errorf("Line 應為 %d (呼叫行),got %d", wantLine+1, entry.Line)
 	}
 }
 
@@ -1108,7 +1109,8 @@ func TestCallerDepth_PackageWrapper(t *testing.T) {
 		defaultLoggerInit.Store(origInit)
 	})
 
-	_, _, wantLine, _ := runtime.Caller(0); Info("probe-wrapper") //nolint:revive // 同一行取行號
+	_, _, wantLine, _ := runtime.Caller(0)
+	Info("probe-wrapper") // 必須緊接上一行 runtime.Caller(0)
 
 	entry := parseCallerEntry(t, &buf)
 
@@ -1117,9 +1119,9 @@ func TestCallerDepth_PackageWrapper(t *testing.T) {
 		t.Errorf("File 應為 logger_test.go,got %q", entry.File)
 	}
 
-	// Line 必須等於 logging.Info 所在行
-	if entry.Line != wantLine {
-		t.Errorf("Line 應為 %d (呼叫行),got %d", wantLine, entry.Line)
+	// Line 必須等於 logging.Info 所在行(緊接 runtime.Caller(0) 下一行 → wantLine+1)
+	if entry.Line != wantLine+1 {
+		t.Errorf("Line 應為 %d (呼叫行),got %d", wantLine+1, entry.Line)
 	}
 }
 
@@ -1137,7 +1139,8 @@ func TestCallerDepth_FatalMethod(t *testing.T) {
 	exitFunc = func(code int) { exitCalled = true }
 	t.Cleanup(func() { exitFunc = origExit })
 
-	_, _, wantLine, _ := runtime.Caller(0); l.Fatal("probe-fatal", nil) //nolint:revive // 同一行取行號
+	_, _, wantLine, _ := runtime.Caller(0)
+	l.Fatal("probe-fatal", nil) // 必須緊接上一行 runtime.Caller(0)
 
 	entry := parseCallerEntry(t, &buf)
 
@@ -1146,9 +1149,9 @@ func TestCallerDepth_FatalMethod(t *testing.T) {
 		t.Errorf("File 應為 logger_test.go,got %q", entry.File)
 	}
 
-	// Line 必須等於 l.Fatal 所在行
-	if entry.Line != wantLine {
-		t.Errorf("Line 應為 %d (呼叫行),got %d", wantLine, entry.Line)
+	// Line 必須等於 l.Fatal 所在行(緊接 runtime.Caller(0) 下一行 → wantLine+1)
+	if entry.Line != wantLine+1 {
+		t.Errorf("Line 應為 %d (呼叫行),got %d", wantLine+1, entry.Line)
 	}
 
 	// exitFunc 必須已被觸發

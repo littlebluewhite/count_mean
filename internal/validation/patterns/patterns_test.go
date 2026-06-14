@@ -60,7 +60,7 @@ func TestIsReservedName(t *testing.T) {
 		want bool
 	}{
 		{"CON", true},
-		{"con", true},  // case-insensitive
+		{"con", true}, // case-insensitive
 		{"COM1", true},
 		{"com1", true}, // case-insensitive
 		{"hello", false},

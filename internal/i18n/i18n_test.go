@@ -1060,11 +1060,11 @@ func TestCountTranslationVerbs_PercentPercent(t *testing.T) {
 		input string
 		want  int
 	}{
-		{"%%", 0},            // %% 是 escaped percent,非 verb
-		{"%%d", 0},           // %% + 字面 d,非 verb
-		{"%d%%", 1},          // 1 個真實 verb + escaped percent
+		{"%%", 0},              // %% 是 escaped percent,非 verb
+		{"%%d", 0},             // %% + 字面 d,非 verb
+		{"%d%%", 1},            // 1 個真實 verb + escaped percent
 		{"%.1f%% complete", 1}, // 1 個真實 verb + escaped percent + 字面字元
-		{"%d %s", 2},         // sanity: 2 個真實 verb
+		{"%d %s", 2},           // sanity: 2 個真實 verb
 	}
 
 	for _, tc := range cases {

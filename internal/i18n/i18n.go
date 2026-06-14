@@ -619,7 +619,7 @@ func (i *I18n) LoadTranslations(translationsDir string) error {
 		masterDict := builtinDicts[LocaleZhTW]
 		for k, v := range translations {
 			// 先剝 %%(escaped percent),否則字面 "%%w" 會被誤判成 %w verb。
-		if translationPercentWRegexp.MatchString(strings.ReplaceAll(v, "%%", "")) {
+			if translationPercentWRegexp.MatchString(strings.ReplaceAll(v, "%%", "")) {
 				return fmt.Errorf("%w: file=%s key=%q value=%q",
 					ErrTranslationFormatVerbUnsupported, filename, k, v)
 			}
