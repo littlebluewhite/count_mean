@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	calcerrors "count_mean/internal/errors"
 	"count_mean/internal/models"
 )
 
@@ -706,5 +707,61 @@ func TestEMGParser_Integration(t *testing.T) {
 			assert.Greater(t, maxes[channel], 0.0, "Max should be positive for channel %s", channel)
 			assert.GreaterOrEqual(t, maxes[channel], means[channel], "Max should be >= mean for channel %s", channel)
 		}
+	})
+}
+
+// TestValidateEMGData_NonFiniteChannelValues 驗證 validateEMGChannelValues 的
+// fail-fast 行為:NaN 或 Inf 的通道取樣必須回傳對應 sentinel,不可 silently 寫進輸出。
+//
+// 覆蓋範圍:
+//   - NaN 通道 → errors.Is(err, calcerrors.ErrNaNInChannel)
+//   - +Inf 通道 → errors.Is(err, calcerrors.ErrInfInChannel)
+//   - -Inf 通道 → errors.Is(err, calcerrors.ErrInfInChannel)
+//   - 全有限值   → nil(確認正常路徑不受影響)
+func TestValidateEMGData_NonFiniteChannelValues(t *testing.T) {
+	// validBase 建構一筆合法的 PhaseSyncEMGData,caller 可注入問題值。
+	validBase := func(channelValues map[string][]float64) *models.PhaseSyncEMGData {
+		return &models.PhaseSyncEMGData{
+			Time:     []float64{0.0, 0.001, 0.002},
+			Headers:  []string{"Ch1"},
+			Channels: channelValues,
+		}
+	}
+
+	t.Run("NaN 通道 → ErrNaNInChannel", func(t *testing.T) {
+		data := validBase(map[string][]float64{
+			"Ch1": {1.0, math.NaN(), 3.0},
+		})
+		err := ValidateEMGData(data)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, calcerrors.ErrNaNInChannel),
+			"期望 ErrNaNInChannel sentinel,實際: %v", err)
+	})
+
+	t.Run("+Inf 通道 → ErrInfInChannel", func(t *testing.T) {
+		data := validBase(map[string][]float64{
+			"Ch1": {1.0, math.Inf(1), 3.0},
+		})
+		err := ValidateEMGData(data)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, calcerrors.ErrInfInChannel),
+			"期望 ErrInfInChannel sentinel,實際: %v", err)
+	})
+
+	t.Run("-Inf 通道 → ErrInfInChannel", func(t *testing.T) {
+		data := validBase(map[string][]float64{
+			"Ch1": {1.0, math.Inf(-1), 3.0},
+		})
+		err := ValidateEMGData(data)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, calcerrors.ErrInfInChannel),
+			"期望 ErrInfInChannel sentinel,實際: %v", err)
+	})
+
+	t.Run("全有限值 → nil", func(t *testing.T) {
+		data := validBase(map[string][]float64{
+			"Ch1": {1.0, 2.0, 3.0},
+		})
+		require.NoError(t, ValidateEMGData(data))
 	})
 }

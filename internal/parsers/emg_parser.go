@@ -3,8 +3,10 @@ package parsers
 import (
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
+	calcerrors "count_mean/internal/errors"
 	"count_mean/internal/models"
 	"count_mean/util"
 )
@@ -206,6 +208,11 @@ func GetEMGDataInTimeRange(
 
 // CalculateEMGStatistics 計算統計數據.
 //
+// **前置條件**:caller 必須先過 ValidateEMGData。本函式用 util.ArrayMean/ArrayMax,
+// 對 NaN/Inf 不安全(會 silently poison 整個通道、把字面 NaN 寫進輸出)。非有限值的
+// fail-fast 校驗在 ValidateEMGData;生產唯一 caller(calculator.CalculateStatistics)
+// 已先驗。直接呼叫者務必自行先過 ValidateEMGData。
+//
 //nolint:nonamedreturns // named returns improve readability for multiple return values
 func CalculateEMGStatistics(data *models.PhaseSyncEMGData) (means, maxes map[string]float64) {
 	means = make(map[string]float64)
@@ -235,10 +242,41 @@ func ValidateEMGData(data *models.PhaseSyncEMGData) error {
 		return fmt.Errorf("EMG 數據為空: %w", ErrNilData)
 	}
 
-	return ValidateTimeSeries(data.Time, data.Channels, TimeSeriesLabels{
+	if err := ValidateTimeSeries(data.Time, data.Channels, TimeSeriesLabels{
 		DataName:     "EMG",
 		SeriesName:   "時間序列",
 		SeriesPos:    "索引",
 		ChannelLabel: "通道",
-	})
+	}); err != nil {
+		return err
+	}
+
+	return validateEMGChannelValues(data.Channels)
+}
+
+// validateEMGChannelValues 掃描 EMG 通道值,對任何 NaN/Inf fail-fast。
+//
+// 為什麼在此 fail-fast 而非沿用「通道 NaN→輸出空白」:phase_sync 統計路徑
+// (CalculateStatistics → CalculateEMGStatistics)用 util.ArrayMean/ArrayMax,
+// 對 NaN 不安全 — NaN 會 poison 整個通道的 mean/max,把字面 NaN 寫進 Output2
+// (range_normalizer.go 已文檔化此 util 限制,不可改 util 語義)。此 validator
+// 僅供 stats 路徑(唯一生產 caller = calculator.CalculateStatistics);muscle_ratio
+// 等刻意容忍 NaN 的路徑不經此 gate,不受影響。
+//
+// 鏡像 calculator.validateChannelValues 的單遍掃描;reuse 同一組 sentinel
+// 讓上層 errors.Is 跨 maxmean 與 stats 路徑一致。
+func validateEMGChannelValues(channels map[string][]float64) error {
+	for name, samples := range channels {
+		for i, v := range samples {
+			if math.IsNaN(v) {
+				return fmt.Errorf("通道 %q 第 %d 個取樣含 NaN: %w", name, i+1, calcerrors.ErrNaNInChannel)
+			}
+
+			if math.IsInf(v, 0) {
+				return fmt.Errorf("通道 %q 第 %d 個取樣含 Inf: %w", name, i+1, calcerrors.ErrInfInChannel)
+			}
+		}
+	}
+
+	return nil
 }
