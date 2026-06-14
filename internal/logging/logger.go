@@ -373,10 +373,18 @@ func (l *Logger) WithError(err error) *Logger {
 	return l.WithContext("error", err.Error())
 }
 
-// log writes a log entry.
-func (l *Logger) log(level LogLevel, message string, err error, context map[string]any) {
+// logImpl 是所有 log level 的共用實作。skip 由各入口依呼叫深度傳入
+// (直接方法與包級 wrapper 繞過方法後都是 3),用於 addCallerInfo 精準定位呼叫端。
+// context 為 variadic,在此統一取 context[0](方法與 wrapper 各自把自己的可變參數
+// 透傳進來,省去逐處重複的 ctx 提取)。
+func (l *Logger) logImpl(skip int, level LogLevel, message string, err error, context ...map[string]any) {
 	if level < l.level {
 		return
+	}
+
+	var ctx map[string]any
+	if len(context) > 0 {
+		ctx = context[0]
 	}
 
 	entry := LogEntry{
@@ -387,14 +395,14 @@ func (l *Logger) log(level LogLevel, message string, err error, context map[stri
 		Context:   make(map[string]any),
 	}
 
-	addCallerInfo(&entry)
+	addCallerInfo(&entry, skip)
 	l.addErrorInfo(&entry, err)
 
 	for k, v := range l.contextData {
 		entry.Context[k] = l.sanitizeContextValue(v)
 	}
 
-	for k, v := range context {
+	for k, v := range ctx {
 		entry.Context[k] = l.sanitizeContextValue(v)
 	}
 
@@ -406,10 +414,9 @@ func (l *Logger) log(level LogLevel, message string, err error, context map[stri
 }
 
 // addCallerInfo adds caller information to the log entry.
-func addCallerInfo(entry *LogEntry) {
-	const callerSkip = 4
-
-	if pc, file, line, ok := runtime.Caller(callerSkip); ok {
+// skip 是傳給 runtime.Caller 的呼叫深度(由 logImpl 依呼叫路徑決定)。
+func addCallerInfo(entry *LogEntry, skip int) {
+	if pc, file, line, ok := runtime.Caller(skip); ok {
 		entry.File = filepath.Base(file)
 		entry.Line = line
 
@@ -578,42 +585,22 @@ func (l *Logger) writeText(entry *LogEntry) {
 
 // Debug logs a debug message.
 func (l *Logger) Debug(message string, context ...map[string]any) {
-	var ctx map[string]any
-	if len(context) > 0 {
-		ctx = context[0]
-	}
-
-	l.log(LevelDebug, message, nil, ctx)
+	l.logImpl(3, LevelDebug, message, nil, context...)
 }
 
 // Info logs an info message.
 func (l *Logger) Info(message string, context ...map[string]any) {
-	var ctx map[string]any
-	if len(context) > 0 {
-		ctx = context[0]
-	}
-
-	l.log(LevelInfo, message, nil, ctx)
+	l.logImpl(3, LevelInfo, message, nil, context...)
 }
 
 // Warn logs a warning message.
 func (l *Logger) Warn(message string, context ...map[string]any) {
-	var ctx map[string]any
-	if len(context) > 0 {
-		ctx = context[0]
-	}
-
-	l.log(LevelWarn, message, nil, ctx)
+	l.logImpl(3, LevelWarn, message, nil, context...)
 }
 
 // Error logs an error message.
 func (l *Logger) Error(message string, err error, context ...map[string]any) {
-	var ctx map[string]any
-	if len(context) > 0 {
-		ctx = context[0]
-	}
-
-	l.log(LevelError, message, err, ctx)
+	l.logImpl(3, LevelError, message, err, context...)
 }
 
 // exitFunc is the function used to exit the process when Fatal is called.
@@ -651,7 +638,7 @@ type flusher interface {
 //
 // 解法:exitFunc 之前對 l.output 嘗試 Flush + Sync。寫入順序:
 //
-//  1. l.log(LevelFatal, ...) — fmt.Fprintf 到 output(io.Writer)
+//  1. l.logImpl(3, LevelFatal, ...) — fmt.Fprintf 到 output(io.Writer)
 //  2. flusher.Flush() — drain *bufio.Writer / composite buffered writer
 //  3. syncer.Sync() — 對 *os.File 觸發 fsync,page cache → disk
 //  4. exitFunc(1) — 不可逆退出
@@ -660,15 +647,18 @@ type flusher interface {
 // 對它們 sync 也沒實際意義(stdout / stderr 由 OS 在 process exit 自己 flush)。
 // Sync/Flush 任何失敗都 ignore — Fatal 必須抵達 exit,不能因 IO 失敗 hang。
 func (l *Logger) Fatal(message string, err error, context ...map[string]any) {
-	var ctx map[string]any
-	if len(context) > 0 {
-		ctx = context[0]
-	}
+	l.logImpl(3, LevelFatal, message, err, context...)
+	l.flushAndExit()
+}
 
-	l.log(LevelFatal, message, err, ctx)
-
-	// exit 前先 drain 可能存在的 buffered writer + sync to disk。
-	// 順序:flusher 在前(buffered → underlying)、syncer 在後(underlying → fsync)。
+// flushAndExit 在 Fatal 之後執行:drain buffered writer + sync to disk,再 exitFunc 退出。
+// 抽出共用,讓 (*Logger).Fatal 與包級 Fatal 都能在 logImpl(skip=3) 之後走相同退出路徑。
+//
+// os.Exit 不執行 deferred、不 close fd、page cache 不 sync — file-backed logger 的最後
+// 一筆 Fatal log 可能停在 page cache 就被截斷。順序:flusher 在前(buffered→underlying)、
+// syncer 在後(underlying→fsync)。MultiWriter / stdout 等不實作 syncer/flusher 為 no-op
+// fallback。Sync/Flush 任何失敗都 ignore — Fatal 必須抵達 exit,不能因 IO 失敗 hang。
+func (l *Logger) flushAndExit() {
 	if f, ok := l.output.(flusher); ok {
 		_ = f.Flush() //nolint:errcheck // best-effort drain; Fatal must reach exitFunc
 	}
@@ -839,25 +829,27 @@ func GetLogger(module ...string) *Logger {
 
 // Debug logs a debug message using the default logger.
 func Debug(message string, context ...map[string]any) {
-	GetLogger().Debug(message, context...)
+	GetLogger().logImpl(3, LevelDebug, message, nil, context...)
 }
 
 // Info logs an info message using the default logger.
 func Info(message string, context ...map[string]any) {
-	GetLogger().Info(message, context...)
+	GetLogger().logImpl(3, LevelInfo, message, nil, context...)
 }
 
 // Warn logs a warning message using the default logger.
 func Warn(message string, context ...map[string]any) {
-	GetLogger().Warn(message, context...)
+	GetLogger().logImpl(3, LevelWarn, message, nil, context...)
 }
 
 // Error logs an error message using the default logger.
 func Error(message string, err error, context ...map[string]any) {
-	GetLogger().Error(message, err, context...)
+	GetLogger().logImpl(3, LevelError, message, err, context...)
 }
 
 // Fatal logs a fatal message using the default logger and exits.
 func Fatal(message string, err error, context ...map[string]any) {
-	GetLogger().Fatal(message, err, context...)
+	l := GetLogger()
+	l.logImpl(3, LevelFatal, message, err, context...)
+	l.flushAndExit()
 }

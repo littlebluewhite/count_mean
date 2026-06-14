@@ -1035,3 +1035,124 @@ func TestWriteJSON_FallbackOnNaNCustomMarshaler(t *testing.T) {
 		t.Errorf("sentinel reason 必須為非空 string,got %v", sentinel["reason"])
 	}
 }
+
+// parseCallerEntry 解析 JSON 格式 logger 輸出的第一行,回傳 LogEntry。
+// 輔助函式,供下方 caller-depth 測試共用。
+func parseCallerEntry(t *testing.T, buf *bytes.Buffer) LogEntry {
+	t.Helper()
+
+	output := buf.String()
+	if output == "" {
+		t.Fatal("buffer 為空,期望有 JSON 輸出")
+	}
+
+	line, _, _ := strings.Cut(strings.TrimSpace(output), "\n")
+
+	var entry LogEntry
+	if err := json.Unmarshal([]byte(line), &entry); err != nil {
+		t.Fatalf("JSON 解析失敗: %v\noutput=%q", err, line)
+	}
+
+	return entry
+}
+
+// TestCallerDepth_DirectMethod 經驗性證明直接方法呼叫(l.Info)後
+// LogEntry.File / Line 精準指向呼叫端所在行。
+//
+// 取「期望行號」的策略:把 runtime.Caller(0) 與 l.Info 放在同一物理行,
+// 讓兩者共用相同行號。修正前 callerSkip=4 對直接方法路徑 off-by-one;
+// 修正後 skip=3 應精準命中。
+func TestCallerDepth_DirectMethod(t *testing.T) {
+	var buf bytes.Buffer
+	l := NewLogger(LevelDebug, &buf, true) // JSON 格式方便 unmarshal
+
+	_, _, wantLine, _ := runtime.Caller(0); l.Info("probe-direct") //nolint:revive // 同一行取行號
+
+	entry := parseCallerEntry(t, &buf)
+
+	// File 必須指向本測試檔案(非 logger.go)
+	if entry.File != "logger_test.go" {
+		t.Errorf("File 應為 logger_test.go,got %q", entry.File)
+	}
+
+	// Line 必須等於 l.Info 所在行
+	if entry.Line != wantLine {
+		t.Errorf("Line 應為 %d (呼叫行),got %d", wantLine, entry.Line)
+	}
+}
+
+// TestCallerDepth_PackageWrapper 經驗性證明包級 wrapper(logging.Info)呼叫後
+// LogEntry.File / Line 精準指向呼叫端所在行。
+//
+// 包級 wrapper 改為直接呼叫 logImpl(skip=3),繞過方法那一帧,
+// 所以 skip 數學與直接方法路徑相同,均為 3。
+//
+// 裝 default logger:直接寫 defaultLogger(包內 test,同 package)並以
+// t.Cleanup 還原,確保不污染其他 test。
+func TestCallerDepth_PackageWrapper(t *testing.T) {
+	var buf bytes.Buffer
+	testLogger := NewLogger(LevelDebug, &buf, true)
+
+	// 備份並替換全域 defaultLogger
+	defaultLoggerMu.Lock()
+	origLogger := defaultLogger
+	origInit := defaultLoggerInit.Load()
+	defaultLogger = testLogger
+	defaultLoggerInit.Store(true)
+	defaultLoggerMu.Unlock()
+
+	t.Cleanup(func() {
+		defaultLoggerMu.Lock()
+		defaultLogger = origLogger
+		defaultLoggerMu.Unlock()
+		defaultLoggerInit.Store(origInit)
+	})
+
+	_, _, wantLine, _ := runtime.Caller(0); Info("probe-wrapper") //nolint:revive // 同一行取行號
+
+	entry := parseCallerEntry(t, &buf)
+
+	// File 必須指向本測試檔案
+	if entry.File != "logger_test.go" {
+		t.Errorf("File 應為 logger_test.go,got %q", entry.File)
+	}
+
+	// Line 必須等於 logging.Info 所在行
+	if entry.Line != wantLine {
+		t.Errorf("Line 應為 %d (呼叫行),got %d", wantLine, entry.Line)
+	}
+}
+
+// TestCallerDepth_FatalMethod 經驗性證明 Fatal 方法呼叫後
+// LogEntry.File / Line 精準指向呼叫端所在行,且 exitFunc 被觸發。
+//
+// 使用 exitFunc 注入點覆寫,避免 os.Exit 終止測試 runner。
+func TestCallerDepth_FatalMethod(t *testing.T) {
+	var buf bytes.Buffer
+	l := NewLogger(LevelDebug, &buf, true)
+
+	// 備份並覆寫 exitFunc,捕獲退出呼叫
+	origExit := exitFunc
+	exitCalled := false
+	exitFunc = func(code int) { exitCalled = true }
+	t.Cleanup(func() { exitFunc = origExit })
+
+	_, _, wantLine, _ := runtime.Caller(0); l.Fatal("probe-fatal", nil) //nolint:revive // 同一行取行號
+
+	entry := parseCallerEntry(t, &buf)
+
+	// File 必須指向本測試檔案
+	if entry.File != "logger_test.go" {
+		t.Errorf("File 應為 logger_test.go,got %q", entry.File)
+	}
+
+	// Line 必須等於 l.Fatal 所在行
+	if entry.Line != wantLine {
+		t.Errorf("Line 應為 %d (呼叫行),got %d", wantLine, entry.Line)
+	}
+
+	// exitFunc 必須已被觸發
+	if !exitCalled {
+		t.Error("Fatal 應觸發 exitFunc,但未觸發")
+	}
+}
