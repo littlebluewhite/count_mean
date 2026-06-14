@@ -430,3 +430,45 @@ func TestPaths_RedactsNonAllowlistedAndProtectsRelative(t *testing.T) {
 		}
 	})
 }
+
+// TestPaths_RedactsPathAfterEscapedNewline 釘住 codex R1 [P2] 回歸:
+// logger.sanitizeMessage 先把 raw \n/\r escape 成字面 `\n`/`\r` 再呼叫 Paths,
+// 導致多行 error 第二行的絕對路徑前綴變成字面 `\n`(非空白邊界)而漏脫敏。
+// 前導邊界須涵蓋跳脫換行(`\\[nr]`)。下方輸入用 Go raw string,`\n`/`\r` 即字面兩字元。
+func TestPaths_RedactsPathAfterEscapedNewline(t *testing.T) {
+	cases := []struct {
+		name         string
+		input        string
+		mustNotLeak  []string
+		mustPreserve []string
+	}{
+		{
+			name:         "escaped_lf_then_posix_path",
+			input:        `open failed\n/Users/alice/patient/raw.csv: permission denied`,
+			mustNotLeak:  []string{"/Users/alice", "patient"},
+			mustPreserve: []string{"<redacted-path>", "raw.csv", "permission denied", `\n`},
+		},
+		{
+			name:         "escaped_cr_then_posix_path_chinese",
+			input:        `line1\r/var/private/患者_X/data.csv`,
+			mustNotLeak:  []string{"/var/private", "患者_X"},
+			mustPreserve: []string{"<redacted-path>", "data.csv", `\r`},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Paths(tc.input)
+			for _, leak := range tc.mustNotLeak {
+				if strings.Contains(got, leak) {
+					t.Errorf("redact 失敗,leaky %q 仍在 output:\n%s", leak, got)
+				}
+			}
+			for _, want := range tc.mustPreserve {
+				if !strings.Contains(got, want) {
+					t.Errorf("redact 過度,必要 %q 不在 output:\n%s", want, got)
+				}
+			}
+		})
+	}
+}

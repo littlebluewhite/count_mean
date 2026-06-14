@@ -867,6 +867,27 @@ func TestSanitizeMessage_StripsNewlines(t *testing.T) {
 	}
 }
 
+// TestSanitizeMessage_RedactsPathAfterNewline 釘住 codex R1 [P2] 回歸:多行 message
+// 第二行以絕對路徑開頭時,sanitizeMessage 先把 raw \n escape 成字面 `\n` 再 redact —
+// 路徑前綴變成字面 `\n`,前導邊界須涵蓋跳脫換行才不洩漏 PHI。
+func TestSanitizeMessage_RedactsPathAfterNewline(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(LevelDebug, &buf, false)
+
+	// 真實換行(Go 雙引號 \n)→ sanitizeMessage escape 成字面 `\n` → redact 須仍命中。
+	logger.Info("open failed\n/Users/alice/patient_2026/raw.csv")
+
+	out := buf.String()
+	for _, leak := range []string{"/Users/alice", "patient_2026"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("多行 message 第二行絕對路徑洩漏 %q:\n%s", leak, out)
+		}
+	}
+	if !strings.Contains(out, "<redacted-path>") {
+		t.Errorf("應含 redact 標誌:\n%s", out)
+	}
+}
+
 // TestInitLogger_Reinit_ClosesOldHandle 守護
 //
 // **Scenario**: caller 連續呼叫兩次 InitLogger (eg GUI 內 settings 改 logDir

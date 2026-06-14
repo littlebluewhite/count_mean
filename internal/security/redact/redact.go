@@ -44,9 +44,11 @@ import (
 //
 //nolint:gochecknoglobals // immutable regex shared across redact callers
 var pathRedactPattern = regexp.MustCompile(
-	// group 1:前導邊界(行首或 空白/引號/(/=),回吐以確保只匹配絕對路徑
-	// (相對路徑的 `/` 前接詞字符或 `.`,不在邊界集合 → 天然豁免;RE2 無 lookbehind)
-	`(^|[\s"'(=])` +
+	// group 1:前導邊界(行首 / 空白 / 引號 / ( / = / 跳脫換行 \n \r),回吐以確保只
+	// 匹配絕對路徑(相對路徑的 `/` 前接詞字符或 `.`,不在邊界集合 → 天然豁免;RE2 無
+	// lookbehind)。`\\[nr]` 涵蓋 logger.sanitizeMessage 先把 raw \n/\r escape 成字面
+	// `\n`/`\r` 後、絕對路徑緊接其後的情形(否則多行 error 第二行的路徑會漏脫敏)。
+	`(^|[\s"'(=]|\\[nr])` +
 		`(?:` +
 		// POSIX 絕對路徑目錄段;元素排除 \s/:"'(避免吃掉相鄰 token、閉引號、
 		// recover.go:42 的行號),basename 不被消費而保留
