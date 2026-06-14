@@ -93,13 +93,29 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 		return nil, err
 	}
 
+	return a.computeCCI(ctx, emgData, manifest)
+}
+
+// computeCCI is the pure, file-free CCI assembly: it runs over already-loaded EMG
+// data and a validated manifest, with no filesystem access. AnalyzeCCI is the thin
+// I/O adapter that loads inputs and delegates here (ADR-0024). Dependencies
+// (timeSynchronizer/logger) come from the receiver; subject comes from m.Subject.
+// Extracted so the regression-prone assembly (gait re-anchor / ±150ms extract /
+// drop-out-of-range / phase stats — ADR-0018/0022) is testable without real files.
+func (a *CCIAnalyzer) computeCCI(
+	ctx context.Context, emgData *models.PhaseSyncEMGData, m *models.PhaseManifest,
+) (*CCIAnalysisResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	channelMap, err := BuildChannelMap(emgData.Headers)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIBuildChannelMapFailed), err)
 	}
 
 	gaitStart, gaitEnd, phasePercents, phaseTimes, err := a.calculateGaitCycle(
-		manifest, emgData)
+		m, emgData)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +141,7 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 	}
 
 	result, err := a.computeAllPairs(
-		ctx, manifest.Subject, rangeResult.Data, channelMap, phasePercents, phaseTimes)
+		ctx, m.Subject, rangeResult.Data, channelMap, phasePercents, phaseTimes)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +157,7 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 	// ADR-0018 Output 2:固定 32-row 分期視窗統計,欄數對齊 result.PairResults。
 	result.PhaseStats = a.buildPhaseStats(result)
 
-	a.logger.Info("CCI 分析完成", map[string]any{"subject": manifest.Subject})
+	a.logger.Info("CCI 分析完成", map[string]any{"subject": m.Subject})
 
 	return result, nil
 }
