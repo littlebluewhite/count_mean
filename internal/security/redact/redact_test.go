@@ -473,6 +473,33 @@ func TestPaths_RedactsPathAfterEscapedNewline(t *testing.T) {
 	}
 }
 
+// TestPaths_RedactsFileURLNotHTTP 釘住 codex R3 [P2] 回歸:`file:///Users/...` 的
+// 本地路徑前接 `/`(被 denylist 排除),須顯式涵蓋 `file://`;同時守護 `http://` 遠端
+// URL 不被 redact(否則等於重啟用 http:// 匹配)。
+func TestPaths_RedactsFileURLNotHTTP(t *testing.T) {
+	t.Run("file_url_redacted", func(t *testing.T) {
+		got := Paths("open file:///Users/alice/patient/raw.csv failed")
+		for _, leak := range []string{"/Users/alice", "patient"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("file:// 本地路徑洩漏 %q:\n%s", leak, got)
+			}
+		}
+		for _, want := range []string{"<redacted-path>", "raw.csv", "file://"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("必要 %q 不在 output:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("http_url_not_redacted", func(t *testing.T) {
+		// http:// 指向遠端、非本地 PHI;不可被 redact(否則等於重啟用 http:// 匹配)。
+		in := "fetch http://example.com/Users/docs/page failed"
+		if got := Paths(in); got != in {
+			t.Errorf("http:// 遠端 URL 不應被 redact:\n got=%q\nwant=%q", got, in)
+		}
+	})
+}
+
 // TestPaths_RedactsAfterArbitrarySeparator 釘住 denylist 邊界(codex R1/R2 揭示
 // allowlist 系統性不完整後的根因修法):路徑前接**任何非詞/點/斜線字符**即視為絕對
 // 路徑。最高價值案例 = 中文 error message 無空白直接接路徑(zh-TW 工具常見洩漏面)。

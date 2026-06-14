@@ -54,7 +54,11 @@ var pathRedactPattern = regexp.MustCompile(
 	// `recover.go:42` 的 `:42`(`:` 後接數字非 `/`)不誤觸發、`http://`(`//` 後非 segment
 	// 起始)不匹配。`\\[nr]` 另補:logger.sanitizeMessage 把 raw \n/\r escape 成字面
 	// `\n`/`\r` 後路徑前綴變成詞字符 `n`/`r`(被 denylist 排除),須顯式涵蓋。
-	`(^|[^\w./]|\\[nr])` +
+	//
+	// `file://` 另補:`file:///Users/...` 的本地路徑前接 `/`(被 denylist 排除),須顯式
+	// 涵蓋此 scheme(指向本地檔=PHI)。不會重啟 `http://`:scheme 字面不同、`//host` 雙
+	// 斜線使 segment 起始失敗。
+	`(^|[^\w./]|\\[nr]|file://)` +
 		`(?:` +
 		// POSIX 絕對路徑目錄段;元素排除 \s/:"'(避免吃掉相鄰 token、閉引號、
 		// recover.go:42 的行號),basename 不被消費而保留
