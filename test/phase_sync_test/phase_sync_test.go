@@ -2,7 +2,6 @@ package phase_sync_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -119,82 +118,5 @@ func TestPhaseSyncAnalysis_NSF2(t *testing.T) {
 		t.Logf("無法讀取輸出檔案: %v", err)
 	} else {
 		t.Logf("輸出內容:\n%s", string(content))
-	}
-}
-
-func TestTimeSynchronization_Verification(t *testing.T) {
-	// 測試時間同步計算的正確性
-	// 使用 NSF2 的數據進行驗證
-	emgMotionOffset := 600
-	motionFreq := 250.0
-
-	// 測試 Force Plate 時間轉 EMG 時間
-	// T = 13.025 秒 (Force Plate)
-	forceTime := 13.025
-	expectedEMGTime := forceTime - float64(emgMotionOffset-1)/motionFreq
-
-	t.Logf("Force Plate 時間: %.6f", forceTime)
-	t.Logf("EMGMotionOffset: %d", emgMotionOffset)
-	t.Logf("Motion 頻率: %.0f Hz", motionFreq)
-	t.Logf("計算的 EMG 時間: %.6f", expectedEMGTime)
-
-	// 測試 Motion index 轉 EMG 時間
-	// O = 3363 (Motion index)
-	motionIndex := 3363
-	expectedEMGTimeFromMotion := float64(motionIndex-emgMotionOffset) / motionFreq
-
-	t.Logf("Motion index: %d", motionIndex)
-	t.Logf("計算的 EMG 時間 (from Motion): %.6f", expectedEMGTimeFromMotion)
-
-	// 驗證時間順序
-	if expectedEMGTime >= expectedEMGTimeFromMotion {
-		t.Errorf("時間順序錯誤: T (%.6f) 應該小於 O (%.6f)",
-			expectedEMGTime, expectedEMGTimeFromMotion)
-	}
-
-	t.Logf("時間差 (O - T): %.6f 秒", expectedEMGTimeFromMotion-expectedEMGTime)
-}
-
-func TestAllPhases_P0_to_L(_ *testing.T) {
-	// 測試所有分期點的時間計算
-	emgMotionOffset := 600
-	motionFreq := 250.0
-
-	// NSF2 的分期點數據
-	phases := map[string]struct {
-		value         float64
-		isMotionIndex bool
-	}{
-		"P0": {10.667, false},
-		"P1": {12.029, false},
-		"P2": {12.237, false},
-		"S":  {12.384, false},
-		"C":  {12.651, false},
-		"D":  {3173, true},
-		"T0": {12.992, false},
-		"T":  {13.025, false},
-		"O":  {3363, true},
-	}
-
-	_, _ = fmt.Println("=== 各分期點的 EMG 時間 ===")
-	_, _ = fmt.Printf("%-5s %-15s %-15s %-15s\n", "分期", "原始值", "類型", "EMG時間")
-	_, _ = fmt.Println("----------------------------------------")
-
-	for _, phaseName := range []string{"P0", "P1", "P2", "S", "C", "D", "T0", "T", "O"} {
-		phase := phases[phaseName]
-
-		var emgTime float64
-
-		var typeStr string
-
-		if phase.isMotionIndex {
-			emgTime = (phase.value - float64(emgMotionOffset)) / motionFreq
-			typeStr = "Motion Index"
-		} else {
-			emgTime = phase.value - float64(emgMotionOffset-1)/motionFreq
-			typeStr = "Force Time"
-		}
-
-		_, _ = fmt.Printf("%-5s %-15.3f %-15s %-15.6f\n", phaseName, phase.value, typeStr, emgTime)
 	}
 }

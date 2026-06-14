@@ -13,6 +13,7 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/phase_sync"
 	"count_mean/internal/security/fsperm"
+	"count_mean/internal/synchronizer"
 )
 
 const (
@@ -363,12 +364,15 @@ func verifyStatistics(t *testing.T, stats *models.EMGStatistics) {
 	}
 }
 
-// TestTimeCalculationVerification verifies the time synchronization formulas.
+// TestTimeCalculationVerification 驗證生產 synchronizer 對 NSF2 實際數值的時間轉換。
+// 使用 synchronizer.NewTimeSynchronizer() 呼叫生產函數，而非本地公式，
+// 確保 ForceTimeToEMGTime / MotionIndexToEMGTime 在 NSF2 已知值上的正確性。
 func TestTimeCalculationVerification(t *testing.T) {
 	emgMotionOffset := 600
-	motionFreq := 250.0
 
-	// Test cases
+	ts := synchronizer.NewTimeSynchronizer()
+
+	// NSF2 已知分期點數值與預期 EMG 時間（offset=600, freq=250Hz）
 	testCases := []struct {
 		name          string
 		phase         string
@@ -386,9 +390,9 @@ func TestTimeCalculationVerification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var calculatedTime float64
 			if tc.isMotionIndex {
-				calculatedTime = (tc.value - float64(emgMotionOffset)) / motionFreq
+				calculatedTime = ts.MotionIndexToEMGTime(int(tc.value), emgMotionOffset)
 			} else {
-				calculatedTime = tc.value - float64(emgMotionOffset-1)/motionFreq
+				calculatedTime = ts.ForceTimeToEMGTime(tc.value, emgMotionOffset)
 			}
 
 			tolerance := 0.001
@@ -399,48 +403,6 @@ func TestTimeCalculationVerification(t *testing.T) {
 				t.Logf("Time calculation for %s: %.6f (expected: %.3f)", tc.phase, calculatedTime, tc.expectedTime)
 			}
 		})
-	}
-}
-
-// TestAllPhasesEMGTime prints EMG times for all phases.
-func TestAllPhasesEMGTime(t *testing.T) {
-	emgMotionOffset := 600
-	motionFreq := 250.0
-
-	phases := []struct {
-		name          string
-		value         float64
-		isMotionIndex bool
-	}{
-		{"P0", 10.667, false},
-		{"P1", 12.029, false},
-		{"P2", 12.237, false},
-		{"S", 12.384, false},
-		{"C", 12.651, false},
-		{"D", 3173, true},
-		{"T0", 12.992, false},
-		{"T", 13.025, false},
-		{"O", 3363, true},
-	}
-
-	t.Log("=== Phase Point EMG Times ===")
-	t.Logf("%-5s %-15s %-15s %-15s", "Phase", "Original Value", "Type", "EMG Time")
-	t.Log("----------------------------------------")
-
-	for _, phase := range phases {
-		var emgTime float64
-
-		var typeStr string
-
-		if phase.isMotionIndex {
-			emgTime = (phase.value - float64(emgMotionOffset)) / motionFreq
-			typeStr = "Motion Index"
-		} else {
-			emgTime = phase.value - float64(emgMotionOffset-1)/motionFreq
-			typeStr = "Force Time"
-		}
-
-		t.Logf("%-5s %-15.3f %-15s %-15.6f", phase.name, phase.value, typeStr, emgTime)
 	}
 }
 
