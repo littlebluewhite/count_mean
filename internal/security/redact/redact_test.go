@@ -511,11 +511,18 @@ func TestPaths_RedactsAfterArbitrarySeparator(t *testing.T) {
 		mustPreserve []string
 	}{
 		{
-			// 中文緊接路徑(無空白)— allowlist 漏、denylist 抓
-			name:         "chinese_then_path",
-			input:        "找不到/Users/alice/患者/raw.csv",
-			mustNotLeak:  []string{"/Users/alice", "/Users/alice/患者"},
-			mustPreserve: []string{"<redacted-path>", "raw.csv", "找不到"},
+			// 中文 error + 冒號(zh-TW `:%v` 慣例)接絕對路徑 → 仍脫敏(`:` 邊界)
+			name:         "chinese_colon_then_abs_path",
+			input:        "找不到檔案:/Users/alice/患者/raw.csv",
+			mustNotLeak:  []string{"/Users/alice", "患者"},
+			mustPreserve: []string{"<redacted-path>", "raw.csv", "找不到檔案"},
+		},
+		{
+			// 中文相對路徑(中文段=Unicode 詞字符)→ 不被誤當絕對路徑(codex R4 [P3])
+			name:         "chinese_relative_path_preserved",
+			input:        "讀取 資料/輸入/raw.csv",
+			mustNotLeak:  []string{"<redacted-path>"},
+			mustPreserve: []string{"資料/輸入/raw.csv"},
 		},
 		{
 			name:         "bracket_then_path",

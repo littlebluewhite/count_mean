@@ -44,21 +44,22 @@ import (
 //
 //nolint:gochecknoglobals // immutable regex shared across redact callers
 var pathRedactPattern = regexp.MustCompile(
-	// group 1:前導邊界(回吐),確保只匹配絕對路徑而非相對路徑。RE2 無 lookbehind,
-	// 故用「前一字符是分隔符」的 denylist:`[^\w./]` = 任何**非**(詞字符 \w / `.` / `/`)
-	// 的字符。這比逐一列舉空白/引號/冒號的 allowlist 穩健 — 一次涵蓋空白、引號、`:`、
-	// `(`、`=`、`,`、`[` 等所有分隔符,**以及中文 error message 直接接路徑**(zh-TW 工具
-	// 常見,如「找不到/Users/患者/raw.csv」無空白)。
+	// group 1:前導邊界(回吐),確保只匹配絕對路徑而非相對路徑。RE2 無 lookbehind,故用
+	// 「前一字符是分隔符」的 denylist:`[^\p{L}\p{N}_./]` = 任何**非**(Unicode 字母 \p{L} /
+	// 數字 \p{N} / `_` / `.` / `/`)的字符。比 allowlist 穩健 — 一次涵蓋空白、引號、`:`、
+	// `(`、`=`、`,`、`[` 等所有分隔符。用 Unicode-aware \p{L}\p{N}(非 ASCII-only \w)讓中文
+	// 相對路徑(`資料/輸入/raw.csv`)的中文段視為詞字符而**不被誤當絕對路徑**;真實 PHI 路徑
+	// 前恒有 ASCII 分隔符(本 repo 約定 `:%v`、Go error `open /path`),仍正常脫敏。
 	//
-	// 相對路徑天然豁免:`./x`/`word/x` 的 `/` 前接 `.` 或詞字符,被 denylist 排除。
-	// `recover.go:42` 的 `:42`(`:` 後接數字非 `/`)不誤觸發、`http://`(`//` 後非 segment
-	// 起始)不匹配。`\\[nr]` 另補:logger.sanitizeMessage 把 raw \n/\r escape 成字面
-	// `\n`/`\r` 後路徑前綴變成詞字符 `n`/`r`(被 denylist 排除),須顯式涵蓋。
+	// 相對路徑天然豁免:`./x`/`word/x`/`資料/x` 的 `/` 前接 `.` 或(ASCII/Unicode)詞字符,
+	// 被 denylist 排除。`recover.go:42` 的 `:42`(`:` 後接數字非 `/`)不誤觸發、`http://`
+	// (`//` 後非 segment 起始)不匹配。`\\[nr]` 另補:logger.sanitizeMessage 把 raw \n/\r
+	// escape 成字面 `\n`/`\r` 後路徑前綴變成詞字符 `n`/`r`(被 denylist 排除),須顯式涵蓋。
 	//
 	// `file://` 另補:`file:///Users/...` 的本地路徑前接 `/`(被 denylist 排除),須顯式
 	// 涵蓋此 scheme(指向本地檔=PHI)。不會重啟 `http://`:scheme 字面不同、`//host` 雙
 	// 斜線使 segment 起始失敗。
-	`(^|[^\w./]|\\[nr]|file://)` +
+	`(^|[^\p{L}\p{N}_./]|\\[nr]|file://)` +
 		`(?:` +
 		// POSIX 絕對路徑目錄段;元素排除 \s/:"'(避免吃掉相鄰 token、閉引號、
 		// recover.go:42 的行號),basename 不被消費而保留
