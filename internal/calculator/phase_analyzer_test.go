@@ -1,10 +1,12 @@
 package calculator
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	calcerrors "count_mean/internal/errors"
 	"count_mean/internal/models"
 )
 
@@ -368,4 +370,83 @@ func TestPhaseAnalyzer_parseRawData(t *testing.T) {
 		require.Contains(t, err.Error(), "解析數據失敗在第 2 行第 2 列")
 		require.Nil(t, result)
 	})
+}
+
+// TestPhaseAnalyzer_Analyze_RaggedDataset 釘住 Finding [2]:
+// validateAnalyzeInput 對 ragged dataset(各列通道數不一致)必須 fail-fast 回
+// ErrChannelMismatch。舊行為:collectPhaseData 按位置讀 Channels,中段列通道數少
+// 時補 phantom 0,通道數多時靜默截斷 → silent 資料錯位/污染。
+func TestPhaseAnalyzer_Analyze_RaggedDataset(t *testing.T) {
+	phaseLabels := []string{"階段一"}
+	analyzer := NewPhaseAnalyzer(10, phaseLabels)
+
+	cases := []struct {
+		name             string
+		data             []models.EMGData
+		wantRowIndex     int
+		wantRowChannels  int
+		wantExpectedChan int
+	}{
+		{
+			name: "row1 通道數少於 row0",
+			data: []models.EMGData{
+				{Time: 0.5, Channels: []float64{1.0, 2.0}}, // row0: 2 通道
+				{Time: 1.5, Channels: []float64{3.0}},      // row1: 1 通道 → 不一致
+			},
+			wantRowIndex:     2,
+			wantRowChannels:  1,
+			wantExpectedChan: 2,
+		},
+		{
+			name: "row1 通道數多於 row0",
+			data: []models.EMGData{
+				{Time: 0.5, Channels: []float64{1.0}},           // row0: 1 通道
+				{Time: 1.5, Channels: []float64{2.0, 3.0, 4.0}}, // row1: 3 通道 → 不一致
+			},
+			wantRowIndex:     2,
+			wantRowChannels:  3,
+			wantExpectedChan: 1,
+		},
+		{
+			name: "row0 有 1 通道、row1 有 0 通道",
+			data: []models.EMGData{
+				{Time: 0.5, Channels: []float64{1.0}}, // row0: 1 通道
+				{Time: 1.5, Channels: []float64{}},    // row1: 0 通道
+			},
+			wantRowIndex:     2,
+			wantRowChannels:  0,
+			wantExpectedChan: 1,
+		},
+	}
+
+	phases := []models.TimeRange{
+		{Start: 0.0, End: 2.0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dataset := &models.EMGDataset{
+				Headers: []string{"Time", "Ch1"},
+				Data:    tc.data,
+			}
+
+			result, err := analyzer.Analyze(dataset, phases)
+			require.Error(t, err, "ragged dataset 必須 fail-fast")
+			require.Nil(t, result, "ragged dataset 不得回傳 result")
+			require.True(t, errors.Is(err, calcerrors.ErrChannelMismatch),
+				"error 必須包裝 ErrChannelMismatch;實際 err=%v", err)
+
+			// 驗證 context 欄位(取出 *CalculatorError 後查 Context map)。
+			var calcErr *calcerrors.CalculatorError
+			require.True(t, errors.As(err, &calcErr),
+				"error 必須是 *CalculatorError;實際 err=%v", err)
+			ctx := calcErr.Context
+			require.Equal(t, tc.wantRowIndex, ctx["row_index"],
+				"row_index 欄位不符;ctx=%v", ctx)
+			require.Equal(t, tc.wantRowChannels, ctx["row_channels"],
+				"row_channels 欄位不符;ctx=%v", ctx)
+			require.Equal(t, tc.wantExpectedChan, ctx["expected_channels"],
+				"expected_channels 欄位不符;ctx=%v", ctx)
+		})
+	}
 }

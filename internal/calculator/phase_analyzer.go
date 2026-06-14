@@ -68,6 +68,35 @@ func (p *PhaseAnalyzer) validateAnalyzeInput(dataset *models.EMGDataset, phases 
 		return err
 	}
 
+	// ragged dataset 掃描:按位置讀 Channels 若某列通道數不一致,
+	// collectPhaseData / computeMaxTimeIndex 會 silent 補 0 或錯位 →
+	// 對齊 maxmean.go:257-280 的 ErrChannelMismatch 模型,fail-fast 回錯誤。
+	// IsEmpty() 已確保 len(dataset.Data) > 0,Data[0] 安全。
+	expectedChannels := len(dataset.Data[0].Channels)
+	for rowIdx, row := range dataset.Data {
+		if len(row.Channels) != expectedChannels {
+			err := calcerrors.NewCalculatorErrorWithContext(
+				calcerrors.ErrChannelMismatch,
+				fmt.Sprintf(
+					"第 %d 列通道數 %d 與首列通道數 %d 不一致",
+					rowIdx+1, len(row.Channels), expectedChannels,
+				),
+				map[string]any{
+					"row_index":         rowIdx + 1,
+					"row_channels":      len(row.Channels),
+					"expected_channels": expectedChannels,
+				},
+			)
+			p.logger.Error("資料列通道數不一致", err, map[string]any{
+				"row_index":         rowIdx + 1,
+				"row_channels":      len(row.Channels),
+				"expected_channels": expectedChannels,
+			})
+
+			return err
+		}
+	}
+
 	return nil
 }
 
