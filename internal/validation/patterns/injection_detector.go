@@ -26,8 +26,8 @@ func NewInjectionDetectorWithRegistry(registry *PatternRegistry) *InjectionDetec
 
 // DetectFormula checks for CSV formula injection patterns.
 func (d *InjectionDetectorImpl) DetectFormula(content string) (bool, string) {
-	// Check formula starters
-	starters := d.registry.Get(FormulaInjection)
+	// Check formula starters — getRef:只讀遍歷,不 mutate,省去防禦性拷貝。
+	starters := d.registry.getRef(FormulaInjection)
 	for _, starter := range starters {
 		if strings.HasPrefix(content, starter) {
 			return true, starter
@@ -40,7 +40,8 @@ func (d *InjectionDetectorImpl) DetectFormula(content string) (bool, string) {
 	// 呼叫語法上,並掃描所有出現位置 → 早期良性子串不會 shadow 後面真正的呼叫。
 	contentLower := strings.ToLower(content)
 
-	functions := d.registry.Get(DangerousFunctions)
+	// getRef:只讀遍歷,不 mutate,省去防禦性拷貝。
+	functions := d.registry.getRef(DangerousFunctions)
 	for _, fn := range functions {
 		if isFunctionCall(contentLower, strings.ToLower(fn)) {
 			return true, fn
@@ -78,7 +79,8 @@ func isFunctionCall(content, fn string) bool {
 // DetectSQL checks for SQL injection patterns.
 func (d *InjectionDetectorImpl) DetectSQL(content string) (bool, string) {
 	contentLower := strings.ToLower(content)
-	patterns := d.registry.Get(SQLInjection)
+	// getRef:只讀遍歷,不 mutate,省去防禦性拷貝。
+	patterns := d.registry.getRef(SQLInjection)
 
 	for _, pattern := range patterns {
 		if strings.Contains(contentLower, strings.ToLower(pattern)) {
@@ -92,7 +94,8 @@ func (d *InjectionDetectorImpl) DetectSQL(content string) (bool, string) {
 // DetectScript checks for script injection patterns (XSS).
 func (d *InjectionDetectorImpl) DetectScript(content string) (bool, string) {
 	contentLower := strings.ToLower(content)
-	patterns := d.registry.Get(ScriptInjection)
+	// getRef:只讀遍歷,不 mutate,省去防禦性拷貝。
+	patterns := d.registry.getRef(ScriptInjection)
 
 	for _, pattern := range patterns {
 		if strings.Contains(contentLower, strings.ToLower(pattern)) {
@@ -118,16 +121,18 @@ func (d *InjectionDetectorImpl) DetectScript(content string) (bool, string) {
 //  2. 再跑長 token substring list（`curl `、`whoami`、`netcat `、`/etc/` 等），
 //     這些子串本身已足夠 specific，不會在合法 EMG cell 上誤命中。
 func (d *InjectionDetectorImpl) DetectCommand(content string) (bool, string) {
-	// (1) word-boundary 短 token — 用 regex \btoken\b 避免子字串誤判。
-	for _, re := range CommandInjectionWordTokens() {
+	// (1) word-boundary 短 token — 直接遍歷包級 var,只讀、勿 mutate;省去
+	// CommandInjectionWordTokens() 每次呼叫的防禦性拷貝。
+	for _, re := range commandInjectionWordTokens {
 		if loc := re.FindStringIndex(content); loc != nil {
 			return true, content[loc[0]:loc[1]]
 		}
 	}
 
 	// (2) substring patterns — 長度 / specificity 足夠，case-insensitive substring 即可。
+	// getRef:只讀遍歷,不 mutate,省去防禦性拷貝。
 	contentLower := strings.ToLower(content)
-	patterns := d.registry.Get(CommandInjection)
+	patterns := d.registry.getRef(CommandInjection)
 
 	for _, pattern := range patterns {
 		if strings.Contains(contentLower, strings.ToLower(pattern)) {
@@ -162,7 +167,8 @@ func (d *InjectionDetectorImpl) DetectAll(content string) (bool, string, string)
 // DetectMaliciousNumeric checks for malicious patterns in numeric strings.
 func (d *InjectionDetectorImpl) DetectMaliciousNumeric(value string) (bool, string) {
 	valueLower := strings.ToLower(value)
-	patterns := d.registry.Get(NumericMalicious)
+	// getRef:只讀遍歷,不 mutate,省去防禦性拷貝。
+	patterns := d.registry.getRef(NumericMalicious)
 
 	for _, pattern := range patterns {
 		if strings.Contains(valueLower, strings.ToLower(pattern)) {
@@ -176,7 +182,8 @@ func (d *InjectionDetectorImpl) DetectMaliciousNumeric(value string) (bool, stri
 // DetectSuspiciousExtension checks for suspicious file extensions.
 func (d *InjectionDetectorImpl) DetectSuspiciousExtension(content string) (bool, string) {
 	contentLower := strings.ToLower(content)
-	extensions := d.registry.Get(SuspiciousExtensions)
+	// getRef:只讀遍歷,不 mutate,省去防禦性拷貝。
+	extensions := d.registry.getRef(SuspiciousExtensions)
 
 	for _, ext := range extensions {
 		if strings.Contains(contentLower, ext) {
@@ -190,7 +197,8 @@ func (d *InjectionDetectorImpl) DetectSuspiciousExtension(content string) (bool,
 // DetectDangerousChars checks for dangerous characters in filenames.
 func (d *InjectionDetectorImpl) DetectDangerousChars(content string) (bool, string) {
 	contentLower := strings.ToLower(content)
-	chars := d.registry.Get(DangerousChars)
+	// getRef:只讀遍歷,不 mutate,省去防禦性拷貝。
+	chars := d.registry.getRef(DangerousChars)
 
 	for _, char := range chars {
 		if strings.Contains(contentLower, strings.ToLower(char)) {

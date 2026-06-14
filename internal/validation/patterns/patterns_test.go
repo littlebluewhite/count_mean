@@ -1,8 +1,40 @@
 package patterns
 
 import (
+	"reflect"
 	"testing"
 )
+
+// TestPatternRegistry_GetRef_ContentParityWithGet 釘住 getRef 回傳與 Get 內容相同、
+// 但不是同一 backing array(Get 回拷貝、getRef 回 ref)。
+// 額外確認:mutate Get 的回傳不影響 registry 內部狀態(公共拷貝語意仍在)。
+func TestPatternRegistry_GetRef_ContentParityWithGet(t *testing.T) {
+	r := DefaultRegistry()
+
+	for _, cat := range []PatternCategory{
+		FormulaInjection, DangerousFunctions, ScriptInjection,
+		SQLInjection, CommandInjection, DangerousChars,
+		SuspiciousExtensions, ReservedNames, NumericMalicious,
+	} {
+		ref := r.getRef(cat)
+		cp := r.Get(cat)
+
+		// 內容必須相同。
+		if !reflect.DeepEqual(ref, cp) {
+			t.Errorf("category %q: getRef content != Get content", cat)
+		}
+
+		// 修改 Get 回傳不影響 registry 內部。
+		if len(cp) > 0 {
+			original := cp[0]
+			cp[0] = "MUTATED"
+			afterMutate := r.Get(cat)
+			if afterMutate[0] != original {
+				t.Errorf("category %q: mutating Get() return altered registry — 拷貝語意損壞", cat)
+			}
+		}
+	}
+}
 
 // TestInjectionDetector_IsReservedName_HonorsCustomRegistry 釘住 codex P2:
 // detector method 必須 honor 注入的 registry(與其餘 Detect* 方法一致),

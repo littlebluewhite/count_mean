@@ -156,6 +156,16 @@ func (r *PatternRegistry) Get(category PatternCategory) []string {
 	return nil
 }
 
+// getRef 回傳 category 對應的內部 pattern slice,**不拷貝**(熱路徑只讀用)。
+// 呼叫端只可遍歷、**絕不可 mutate** 回傳的 slice — registry 在 initializePatterns
+// 之後不可變,共享 backing array 對並發只讀安全。公共 Get 仍回拷貝供外部 caller。
+func (r *PatternRegistry) getRef(category PatternCategory) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.patterns[category]
+}
+
 // initializePatterns populates all pattern categories.
 func (r *PatternRegistry) initializePatterns() {
 	r.patterns[NumericMalicious] = []string{
