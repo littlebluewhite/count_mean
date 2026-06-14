@@ -570,13 +570,16 @@ func validateEMGTimeRange(
 	phaseTimeRange *models.PhaseTimeRange,
 	emgMotionOffset int,
 ) error {
-	emgMinTime := 0.0
-	emgMaxTime := 0.0
-
-	if len(emgData.Time) > 0 {
-		emgMinTime = emgData.Time[0]
-		emgMaxTime = emgData.Time[len(emgData.Time)-1]
+	// nil 或空 Time slice 無法做範圍比對,且空 EMG 資料是上游 contract 缺陷
+	// (對齊 emg_parser.go:177 GetEMGDataInTimeRange 的 nil/empty guard)。
+	// 空 Time 時原本 emgMinTime=emgMaxTime=0.0,任何 StartTime<0 都通過,
+	// 反而默許了錯位結果 — fail-fast 比 silent miscompute 安全。
+	if emgData == nil || len(emgData.Time) == 0 {
+		return fmt.Errorf("EMG 數據為空: %w", parsers.ErrNilData)
 	}
+
+	emgMinTime := emgData.Time[0]
+	emgMaxTime := emgData.Time[len(emgData.Time)-1]
 
 	if phaseTimeRange.StartTime < emgMinTime {
 		return fmt.Errorf(

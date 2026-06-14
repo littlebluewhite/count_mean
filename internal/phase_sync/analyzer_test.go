@@ -2,6 +2,7 @@ package phase_sync //nolint:revive // underscore in package name matches directo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/models"
+	"count_mean/internal/parsers"
 	"count_mean/internal/security/fsperm"
 )
 
@@ -393,5 +395,61 @@ func BenchmarkPhaseSyncAnalyzer_LoadManifestSubjects(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// TestValidateEMGTimeRange_EmptyTimeFailFast 釘住 Finding [10]:
+// validateEMGTimeRange 對 nil EMGData 或空 Time slice 必須 fail-fast 回
+// parsers.ErrNilData。舊行為:空 Time 時 emgMinTime=emgMaxTime=0.0 靜默通過
+// → 0.0 範圍比對讓任何 StartTime<0 都誤判合法;nil 指標直接 panic。
+//
+// 呼叫路徑已確認:ResolvePhaseRange(:464) → validateEMGTimeRange,
+// 且 LoadedPhaseSyncContext 的 EMGData 欄位可由 callers 直接注入 nil。
+func TestValidateEMGTimeRange_EmptyTimeFailFast(t *testing.T) {
+	// 建立最小可通過 ResolvePhaseRange 前置檢查的 manifest。
+	// P0=1.0, P1=2.0 → 正時間,通過 rejectNegativeForceTime 與 ValidatePhaseOrder。
+	baseManifest := &models.PhaseManifest{
+		Subject:         "T",
+		MotionFile:      "m.csv",
+		ForceFile:       "f.csv",
+		EMGFile:         "e.csv",
+		EMGMotionOffset: 0,
+		PhasePoints: models.PhasePoints{
+			P0: models.MakeOpt(1.0),
+			P1: models.MakeOpt(2.0),
+		},
+	}
+
+	cases := []struct {
+		name    string
+		emgData *models.PhaseSyncEMGData
+	}{
+		{
+			name:    "nil EMGData 不 panic、回 ErrNilData",
+			emgData: nil,
+		},
+		{
+			name:    "空 Time slice 回 ErrNilData",
+			emgData: &models.PhaseSyncEMGData{Time: []float64{}},
+		},
+		{
+			name:    "nil Time slice 回 ErrNilData",
+			emgData: &models.PhaseSyncEMGData{Time: nil},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			analyzer := NewPhaseSyncAnalyzer()
+			loaded := &LoadedPhaseSyncContext{
+				Manifest: baseManifest,
+				EMGData:  tc.emgData,
+			}
+
+			_, err := analyzer.ResolvePhaseRange(loaded, models.PhaseP0, models.PhaseP1)
+			require.Error(t, err, "空/nil EMG 必須 fail-fast")
+			require.True(t, errors.Is(err, parsers.ErrNilData),
+				"error 必須包裝 parsers.ErrNilData;實際 err=%v", err)
+		})
 	}
 }
