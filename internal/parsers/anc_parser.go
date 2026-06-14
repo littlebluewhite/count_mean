@@ -199,7 +199,7 @@ func parseANCDataLine(fields, channelNames []string, forceData *models.ForceData
 		return false
 	}
 
-	timeValue, ok := ParseFloatCell(fields[0])
+	timeValue, ok := ParseTimeCell(fields[0])
 	if !ok {
 		return false
 	}
@@ -478,7 +478,7 @@ func parseDataRow(row, channelNames []string, forceData *models.ForceData) bool 
 		return false
 	}
 
-	timeValue, ok := ParseFloatCell(row[0])
+	timeValue, ok := ParseTimeCell(row[0])
 	if !ok {
 		return false
 	}

@@ -56,6 +56,26 @@ func ParseFloatCell(s string) (float64, bool) {
 	return val, true
 }
 
+// ParseTimeCell 解析時間欄位 — 在 ParseFloatCell 基礎上額外拒絕 NaN/Inf。
+//
+// 時間軸的 NaN/Inf 會 silently poison 下游：sliding-window 對齊與 monotonicity 的
+// `<` 比較對 NaN 永遠 false，會 bypass 範圍檢查，最終 phase_sync 除以 NaN 造成
+// NaN-poisoning。故時間欄位一律 fail-fast 回 ok=false（對齊 phase_manifest_parser.go
+// parseFloat 對時間點的 NaN/Inf 拒絕）。
+//
+// 注意：**通道值列仍用 ParseFloatCell** — EMG sensor 對 missing-data 輸出字面 "NaN"，
+// 下游刻意把該 cell 輸出為空白（見 ParseFloatCell doc）。只有時間欄位走本函式。
+func ParseTimeCell(s string) (float64, bool) {
+	val, ok := ParseFloatCell(s)
+	if !ok {
+		return 0, false
+	}
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		return 0, false
+	}
+	return val, true
+}
+
 // ParseFloatCellWithMissing parses a CSV cell with explicit "missing" semantics —
 // the round-trip-safe counterpart to `FormatFloatCell`.
 //
@@ -141,7 +161,7 @@ func ParseTimeAndChannels(record []string, channelStartIdx int) (float64, []floa
 		return 0, nil, false
 	}
 
-	timeVal, ok := ParseFloatCell(record[0])
+	timeVal, ok := ParseTimeCell(record[0])
 	if !ok {
 		return 0, nil, false
 	}

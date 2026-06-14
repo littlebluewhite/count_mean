@@ -2,6 +2,7 @@ package parsers
 
 import (
 	"errors"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -593,6 +594,56 @@ func TestEMGParser_parseHeaders(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestParseEMGDataRow_TimeCellRouting 驗證路由正確性：
+//   - 時間列為 "NaN" → 整行跳過（parseEMGDataRow 回 false）
+//   - 時間列合法、通道列為 "NaN" → 整行接受（回 true），且對應通道值為 NaN
+//
+// 「通道 NaN → 接受」是有意設計：EMG sensor missing-data 輸出字面 "NaN"，
+// 下游 muscle_ratio / phase_sync 把該 cell 輸出為空白。
+func TestParseEMGDataRow_TimeCellRouting(t *testing.T) {
+	t.Parallel()
+
+	headers := []string{"Time", "Ch1", "Ch2"}
+
+	t.Run("時間列_NaN_整行跳過", func(t *testing.T) {
+		t.Parallel()
+
+		emgData := initEMGData(headers, 0)
+		record := []string{"NaN", "1.0", "2.0"}
+		accepted := parseEMGDataRow(record, headers, emgData)
+
+		if accepted {
+			t.Error("parseEMGDataRow: 時間列為 NaN 時應回 false（整行跳過），但回了 true")
+		}
+		if len(emgData.Time) != 0 {
+			t.Errorf("時間列為 NaN 時不應 append 任何時間點，got len=%d", len(emgData.Time))
+		}
+	})
+
+	t.Run("通道列_NaN_整行接受且通道值為NaN", func(t *testing.T) {
+		t.Parallel()
+
+		emgData := initEMGData(headers, 0)
+		record := []string{"0.001", "NaN", "2.0"}
+		accepted := parseEMGDataRow(record, headers, emgData)
+
+		if !accepted {
+			t.Error("parseEMGDataRow: 時間列合法、通道列含 NaN 時應回 true，但回了 false")
+		}
+		if len(emgData.Time) != 1 || emgData.Time[0] != 0.001 {
+			t.Errorf("時間點應為 0.001，got %v", emgData.Time)
+		}
+		ch1 := emgData.Channels["Ch1"]
+		if len(ch1) != 1 || !math.IsNaN(ch1[0]) {
+			t.Errorf("Ch1 通道值應為 NaN（sensor missing-data），got %v", ch1)
+		}
+		ch2 := emgData.Channels["Ch2"]
+		if len(ch2) != 1 || ch2[0] != 2.0 {
+			t.Errorf("Ch2 通道值應為 2.0，got %v", ch2)
+		}
+	})
 }
 
 func TestEMGParser_Integration(t *testing.T) {

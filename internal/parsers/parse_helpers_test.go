@@ -57,6 +57,75 @@ func TestParseFloatCell(t *testing.T) {
 	}
 }
 
+// TestParseTimeCell 驗證時間欄位解析器拒絕 NaN/Inf，接受合法數值。
+// 並確認回歸守：ParseFloatCell 仍接受 NaN/Inf（通道值語意不變）。
+func TestParseTimeCell(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		in     string
+		wantV  float64
+		wantOk bool
+	}{
+		// 時間欄位必須拒絕 NaN/Inf
+		{"nan_rejected", "NaN", 0, false},
+		{"plus_inf_rejected", "+Inf", 0, false},
+		{"minus_inf_rejected", "-Inf", 0, false},
+		{"bare_inf_rejected", "Inf", 0, false},
+		// 合法數值照常接受
+		{"plain_float", "1.5", 1.5, true},
+		{"whitespace_trimmed", " 0.001 ", 0.001, true},
+		{"zero", "0", 0, true},
+		{"negative", "-3.14", -3.14, true},
+		{"scientific", "1e-3", 1e-3, true},
+		// 無效字串照常拒絕
+		{"empty", "", 0, false},
+		{"garbage", "abc", 0, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotV, gotOk := ParseTimeCell(tc.in)
+			if gotOk != tc.wantOk {
+				t.Errorf("ParseTimeCell(%q) ok = %v, want %v", tc.in, gotOk, tc.wantOk)
+			}
+			if gotOk && gotV != tc.wantV {
+				t.Errorf("ParseTimeCell(%q) = %v, want %v", tc.in, gotV, tc.wantV)
+			}
+		})
+	}
+}
+
+// TestParseFloatCell_StillAcceptsNaN 回歸守：ParseFloatCell 必須仍接受 NaN/Inf，
+// 因為通道值列刻意依賴此行為（EMG missing-data 輸出字面 "NaN"）。
+func TestParseFloatCell_StillAcceptsNaN(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NaN_accepted", func(t *testing.T) {
+		t.Parallel()
+		v, ok := ParseFloatCell("NaN")
+		if !ok {
+			t.Error("ParseFloatCell(\"NaN\") ok = false, want true（通道值語意不得破壞）")
+		}
+		if !math.IsNaN(v) {
+			t.Errorf("ParseFloatCell(\"NaN\") = %v, want NaN", v)
+		}
+	})
+
+	t.Run("plus_Inf_accepted", func(t *testing.T) {
+		t.Parallel()
+		v, ok := ParseFloatCell("+Inf")
+		if !ok {
+			t.Error("ParseFloatCell(\"+Inf\") ok = false, want true")
+		}
+		if !math.IsInf(v, 1) {
+			t.Errorf("ParseFloatCell(\"+Inf\") = %v, want +Inf", v)
+		}
+	})
+}
+
 func TestParseTimeAndChannels(t *testing.T) {
 	t.Parallel()
 

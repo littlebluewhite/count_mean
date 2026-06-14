@@ -62,7 +62,7 @@ func parseEMGDataRow(record, headers []string, emgData *models.PhaseSyncEMGData)
 		return false
 	}
 
-	timeValue, ok := ParseFloatCell(record[0])
+	timeValue, ok := ParseTimeCell(record[0])
 	if !ok {
 		return false
 	}
