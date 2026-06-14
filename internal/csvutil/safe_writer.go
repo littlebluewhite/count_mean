@@ -267,6 +267,10 @@ func WriteCSVAtomic(path string, opts SafeWriteOptions) (err error) {
 		}
 	} else if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("rename tmp → final 失敗: %w", err)
+	} else {
+		// Legacy 路徑 rename 成功後補 fsync parent dir — handle.Commit() 路徑
+		// 已在 fsperm.AtomicWriteHandle.Commit 內部覆蓋,不重複。
+		_ = fsperm.SyncParentDir(path) //nolint:errcheck // best-effort dir durability
 	}
 
 	committed = true

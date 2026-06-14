@@ -260,6 +260,8 @@ func (c *AppConfig) SaveConfigAtomic(filename string) error {
 	if renameErr := os.Rename(tmp, filename); renameErr != nil {
 		return fmt.Errorf("rename tmp → config 失敗: %w", renameErr)
 	}
+	// rename 成功後補 fsync parent dir,讓 metadata 變更 crash-durable。
+	_ = fsperm.SyncParentDir(filename) //nolint:errcheck // best-effort dir durability
 
 	committed = true
 	return nil

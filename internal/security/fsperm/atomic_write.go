@@ -184,6 +184,7 @@ func (h *AtomicWriteHandle) Commit() error {
 		if err := os.Rename(h.tmpPath, h.targetPath); err != nil {
 			return fmt.Errorf("fsperm.AtomicWriteHandle.Commit: rename tmp → target: %w", err)
 		}
+		_ = SyncParentDir(h.targetPath) //nolint:errcheck // best-effort dir durability
 		h.done = true
 		return nil
 	}
@@ -193,6 +194,7 @@ func (h *AtomicWriteHandle) Commit() error {
 		return fmt.Errorf("fsperm.AtomicWriteHandle.Commit: renameat(%s → %s): %w",
 			h.tmpRel, h.targetRel, err)
 	}
+	_ = fsyncDir(h.dirfd) //nolint:errcheck // best-effort dir durability; rename 已成功
 	h.closeDirfd()
 	h.done = true
 	return nil
@@ -223,6 +225,28 @@ func (h *AtomicWriteHandle) Abort() error {
 	if err != nil {
 		return fmt.Errorf("fsperm.AtomicWriteHandle.Abort: unlinkat tmp %s: %w", h.tmpRel, err)
 	}
+	return nil
+}
+
+// SyncParentDir 開啟 path 的父目錄、fsync、close,讓先前的 rename/unlink crash-durable。
+// best-effort:open/sync 失敗回 error 供 caller log,絕不讓(已成功的)寫入失敗。
+//
+// 內部委派 fsyncDir — 於 windows/other_unix 為 no-op,故在那些平台退化為 open+close
+// (目錄 fsync 不可移植;rename 本身仍是 atomic)。比直接 d.Sync() 好:後者在 Windows
+// 對目錄 handle 會 spurious 報錯。
+func SyncParentDir(path string) error {
+	dir := filepath.Dir(path)
+	//nolint:gosec // G304: dir is filepath.Dir of caller-validated path
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("fsperm.SyncParentDir: open parent dir %s: %w", dir, err)
+	}
+	defer func() { _ = d.Close() }() //nolint:errcheck // best-effort
+
+	if syncErr := fsyncDir(int(d.Fd())); syncErr != nil {
+		return fmt.Errorf("fsperm.SyncParentDir: sync parent dir %s: %w", dir, syncErr)
+	}
+
 	return nil
 }
 

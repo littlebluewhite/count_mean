@@ -36,6 +36,12 @@ func openAtomicWrite(_ /* baseDir */, _ /* relParent */, _ /* tmpBase */, _ /* t
 	}, nil
 }
 
+// fsyncDir 在此平台為 no-op:dirfd 路徑只在 linux/darwin 實質存在(此平台 dirfd 恆為
+// fdNone、Commit 永遠走 fallback),且目錄 fsync 在此平台不可移植。回 nil。
+func fsyncDir(_ int) error {
+	return nil
+}
+
 // renameatDir / unlinkatDir / closeFD 在 Windows 上不可達 — openAtomicWrite 永遠
 // 回 dirfd==fdNone,Commit / Abort 因此只走 os.Rename / os.Remove 分支,從不進
 // dirfd 分支。它們存在僅為滿足跨平台 Commit / Abort 的符號需求;若被呼叫代表

@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/security/fsperm"
 )
 
 // TestRotateLocked_DurableAcrossSimulatedCrash 釘住 fix:
@@ -25,7 +27,7 @@ import (
 //  3. fsync 失敗 (non-fatal) 不會 fail 整個 rotation
 //
 // 真正的 fsync 是否被呼叫,需要走 strace / 跨平台 syscall trace,單元測試
-// 內只能透過 wrapping fs mock 來驗。當前實作將 syncParentDir / w.file.Sync()
+// 內只能透過 wrapping fs mock 來驗。當前實作將 fsperm.SyncParentDir / w.file.Sync()
 // 標記為 best-effort(失敗 log + continue),所以「fsync 被呼叫」的契約由
 // code review + log 訊息守護;此 test 守 behavioral end-to-end。
 func TestRotateLocked_DurableAcrossSimulatedCrash(t *testing.T) {
@@ -69,24 +71,24 @@ func TestRotateLocked_DurableAcrossSimulatedCrash(t *testing.T) {
 // 觸發 rotation 反覆失敗的死循環。
 //
 // 此 test 模擬「parent dir fsync 失敗」場景 — 在 Linux/macOS 我們無法輕易
-// 注入 fsync 失敗,所以只做 happy path 驗 syncParentDir 對正常 dir 不會 panic,
+// 注入 fsync 失敗,所以只做 happy path 驗 fsperm.SyncParentDir 對正常 dir 不會 panic,
 // 並驗 rotation 在「parent dir 是 read-only」場景仍能 graceful 完成
 // (rotation 本身 fail 但走 reopenFallback 仍維持 writer.file != nil 可寫狀態)。
 //
-// 簡化驗:syncParentDir(/tmp) 不會 panic,且 happy path rotation 工作 — fsync
+// 簡化驗:fsperm.SyncParentDir(/tmp) 不會 panic,且 happy path rotation 工作 — fsync
 // 失敗 sub-case 由 code review / integration test 走 strace 驗。
 func TestRotateLocked_FsyncFailureNonFatal(t *testing.T) {
-	// 對 /tmp 或 t.TempDir() 的 syncParentDir 應該成功
+	// 對 /tmp 或 t.TempDir() 的 fsperm.SyncParentDir 應該成功
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "test.txt")
 	require.NoError(t, os.WriteFile(testFile, []byte("x"), 0o600))
 
 	assert.NotPanics(t, func() {
-		err := syncParentDir(testFile)
+		err := fsperm.SyncParentDir(testFile)
 		// 成功或失敗都不該 panic;一般 case 應該成功。
 		// fsync directory 在 macOS / Linux 都 OK,Windows OS-dependent。
 		if err != nil {
-			t.Logf("syncParentDir non-fatal err on this platform: %v", err)
+			t.Logf("fsperm.SyncParentDir non-fatal err on this platform: %v", err)
 		}
 	})
 }

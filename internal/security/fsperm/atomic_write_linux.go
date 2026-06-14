@@ -142,6 +142,11 @@ func openAtomicWriteFallback(tmpPath, targetPath string) (*AtomicWriteHandle, er
 	}, nil
 }
 
+// fsyncDir 對已開啟的 dirfd 觸發 fsync,讓先前的 renameat metadata 變更 crash-durable。
+func fsyncDir(fd int) error {
+	return unix.Fsync(fd)
+}
+
 // renameatDir 以 dirfd 為來源與目的錨點原子改名 tmpRel → targetRel。只在 dirfd
 // 路徑 (非 fallback) 被呼叫。
 func renameatDir(dirfd int, tmpRel, targetRel string) error {

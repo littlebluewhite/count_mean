@@ -105,6 +105,11 @@ func openatTmp(dirfd int, tmpRel string, extraFlags int) (int, error) {
 	return unix.Openat(dirfd, tmpRel, TmpCreateFlags|extraFlags|unix.O_CLOEXEC, uint32(FilePerm))
 }
 
+// fsyncDir 對已開啟的 dirfd 觸發 fsync,讓先前的 renameat metadata 變更 crash-durable。
+func fsyncDir(fd int) error {
+	return unix.Fsync(fd)
+}
+
 // renameatDir 以 dirfd 為來源與目的錨點原子改名 tmpRel → targetRel。只在 dirfd
 // 路徑被呼叫 (darwin 無 ENOSYS fallback,恆走 dirfd)。
 func renameatDir(dirfd int, tmpRel, targetRel string) error {

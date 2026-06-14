@@ -324,7 +324,7 @@ func (w *SizeRotatingWriter) rotateLocked() error {
 	//
 	// fsync parent dir 失敗 non-fatal — 後續 rotation 仍會跑,但此次 rotation
 	// 的 durability 弱化。stderr log 留 audit trail。
-	if syncErr := syncParentDir(w.basePath); syncErr != nil {
+	if syncErr := fsperm.SyncParentDir(w.basePath); syncErr != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "log rotation: fsync parent dir 失敗(non-fatal): %v\n", syncErr)
 	}
 
@@ -337,28 +337,6 @@ func (w *SizeRotatingWriter) rotateLocked() error {
 	}
 	w.file = file
 	w.currentBytes = 0
-	return nil
-}
-
-// syncParentDir 開啟 path 的 parent dir、fsync、close。POSIX 要求對 directory
-// fsync 才能保證 rename / unlink 等 metadata 變更 crash-durable。對齊
-// rotateLocked 的 atomic-rename hardening。
-//
-// Windows: os.File.Sync 對 directory handle 行為 OS-dependent;這裡 best-effort
-// 呼叫即可,失敗回 error 由 caller log 而非 propagate (rotation 不該因 fsync
-// 失敗 fail-loud,fallback 仍能繼續寫)。
-func syncParentDir(path string) error {
-	dir := filepath.Dir(path)
-	//nolint:gosec // G304: dir is filepath.Dir of caller-validated path
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open parent dir %s: %w", dir, err)
-	}
-	defer func() { _ = d.Close() }() //nolint:errcheck // best-effort
-
-	if syncErr := d.Sync(); syncErr != nil {
-		return fmt.Errorf("sync parent dir %s: %w", dir, syncErr)
-	}
 	return nil
 }
 
