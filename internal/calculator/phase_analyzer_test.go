@@ -316,22 +316,42 @@ func TestPhaseAnalyzer_parseRawData(t *testing.T) {
 	analyzer := NewPhaseAnalyzer(6, phaseLabels)
 
 	t.Run("ScalingFactorApplication", func(t *testing.T) {
+		// Time=1.5E-3,Ch1=2.5E-4
+		// sf=6:Time 縮放後 = 1500.0,Ch1 縮放後 = 250.0
+		// phaseStrings 同樣經 sf 縮放:
+		//   1.0E-3 → 1000.0、2.0E-3 → 2000.0(其餘 3 點供 MinTimePointsForPhases=5 用)
+		// 1 個 phase label → phases[0] = {Start:1000.0, End:2000.0}
+		// 1500.0 在 (1000.0, 2000.0) 內 → MaxValues[0] 必須存在且為 250.0
 		records := [][]string{
 			{"Time", "Ch1"},
 			{"1.5E-3", "2.5E-4"},
 		}
-		phaseStrings := []string{"0.0", "1.0E-3", "2.0E-3", "3.0E-3", "4.0E-3"} // 5個時間點
+		// MinTimePointsForPhases = 5;1 個 phase label 只用前 2 點定義 phases[0]
+		phaseStrings := []string{"1.0E-3", "2.0E-3", "3.0E-3", "4.0E-3", "5.0E-3"}
 		result, err := analyzer.AnalyzeFromRawData(records, phaseStrings)
 		require.NoError(t, err)
 		require.NotNil(t, result)
-		// The test should verify that scaling factor is applied correctly to the phase analysis
-		// Since the time 1.5E-3 with scaling factor 6 becomes 1500.0, and falls within phase 1 (1.0E-3 to 2.0E-3)
-		// which becomes 1000.0 to 2000.0, the data should be in the second phase (index 1)
-		require.Len(t, result.PhaseResults, 1) // 1 phase label = 1 phase
-		// Verify that the phase contains the data (scaled value 250.0 for the channel)
-		if val, exists := result.PhaseResults[0].MaxValues[0]; exists {
-			require.Equal(t, 250.0, val) // 2.5E-4 * 10^6
-		}
+		require.Len(t, result.PhaseResults, 1) // 1 個 phase label = 1 個 phase
+
+		// [8] 去守衛:強制斷言 MaxValues[0] 存在且值正確,去掉舊的 if-exists 守衛。
+		// 若 guard 仍在、data 沒落入 phase,斷言會被跳過 → 假綠。
+		val, exists := result.PhaseResults[0].MaxValues[0]
+		require.True(t, exists, "scaled data 應落入 phase,MaxValues[0] 必須存在")
+		require.Equal(t, 250.0, val) // 2.5E-4 × 10^6 (scalingFactor=6)
+
+		// 負對照:sf=3 對照組驗證縮放因子確實生效(不同 sf → 不同通道值)。
+		// sf=3:2.5E-4 × 10^3 = 0.25,與 sf=6 的 250.0 不相等。
+		// phaseStrings 縮放後 phase 範圍 = (1.0, 2.0);
+		// data.Time = 1.5E-3 × 10^3 = 1.5 落在 (1.0, 2.0) 內 → exists3 = true。
+		require.NotEqual(t, 2.5e-4, val, "原始未縮放值不應與縮放後相等")
+		analyzer3 := NewPhaseAnalyzer(3, phaseLabels)
+		result3, err3 := analyzer3.AnalyzeFromRawData(records, phaseStrings)
+		require.NoError(t, err3)
+		require.NotNil(t, result3)
+		val3, exists3 := result3.PhaseResults[0].MaxValues[0]
+		require.True(t, exists3, "sf=3 的 scaled data 同樣應落入 phase")
+		require.InDelta(t, 0.25, val3, 1e-9, "sf=3:2.5E-4 × 10^3 = 0.25")
+		require.NotEqual(t, val, val3, "sf 不同 → 通道值不同,縮放確實生效")
 	})
 
 	t.Run("SkipInvalidRows", func(t *testing.T) {
