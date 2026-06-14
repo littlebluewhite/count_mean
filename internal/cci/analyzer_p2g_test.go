@@ -3,7 +3,6 @@ package cci
 import (
 	"bytes"
 	"math"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -227,33 +226,50 @@ func TestCalculateGaitCycle_ReanchorsPercentToSL(t *testing.T) {
 	assert.InDelta(t, 100.0, percents[string(models.PhaseL)], 1e-9, "L 必須錨定為 100 (gaitEnd)")
 }
 
-// TestPhasePercentClampWarn_BypassPath 守護 (b) 的 audit-aware 行為:
+// TestPhasePercentClampWarn_MotionIndexOOB 守護 (b) 的 audit-aware 行為:
 //
-// calculateGaitCycle 的 emgTimes-driven gait cycle 推導 invariant 保證
-// raw_pct ∈ [0, 100],clamp 在實際 production 不會觸發。但 P2-G (b) 修法
-// 把 dead-code clamp 改為 audit-aware (>1e-6 觸發 Warn),確保未來重構若改
-// 用「caller 直接傳 gaitStart/End」的 bypass 路徑時,異常立刻被 audit log 捕獲。
+// [16] 修法:舊測試手動呼叫 logger.Warn 再斷言同一字串 — 套套邏輯,只驗
+// logger 寫入你給的串,未驅動生產 calculateGaitCycle。
+// 此測試改為直接調用 a.calculateGaitCycle,構造 D(motion-index) 映射到
+// gait cycle 之外以觸發生產 clamp warn。
 //
-// 此 test 用 emgTimes 內部 hot loop 的等價邏輯驗證 Warn message 在 OOB
-// 場景下會被印出 — 透過 logger 直接觸發等價 Warn,確保 message format 穩定。
-func TestPhasePercentClampWarn_BypassPath(t *testing.T) {
+// 構造邏輯:
+//
+//	S=0.1(force-time) → emgTimeS=0.104,L=0.9 → emgTimeL=0.904 (EMGMotionOffset=0,+0.004 偏移)
+//	D=227(motion-index) → MotionIndexToEMGTime(227,0) = 227/250 = 0.908 > emgTimeL=0.904
+//	raw_pctD = (0.908-0.104)/(0.904-0.104)*100 = 100.5 > 100+1e-6 → clamp warn 觸發
+func TestPhasePercentClampWarn_MotionIndexOOB(t *testing.T) {
 	var buf bytes.Buffer
 	logger := logging.NewLogger(logging.LevelDebug, &buf, false)
+	a := NewCCIAnalyzer()
+	a.logger = logger
 
-	// 模擬 P2-G (b) 修法觸發的 audit warn message 格式
-	logger.Warn("phase percent 被 clamp 至 [0,100] 範圍 (phase 落在 gait cycle 外,請檢查 manifest 或 sync offset)", map[string]any{
-		"phase":       "P_test",
-		"raw_pct":     150.0,
-		"clamped_pct": 100.0,
-	})
+	// EMG 時間軸 0..1.0s (1001 筆,間距 1ms)
+	emgData := &models.PhaseSyncEMGData{
+		Time: makeBoundsTimeSeq(0.0, 0.001, 1001),
+	}
 
+	// S/C/T/L 使用 force-time(OptFloat);D 使用 motion-index(int)。
+	// D=227 → emgTimeD=0.908 > emgTimeL=0.904 → raw_pctD=100.5 > 100+1e-6
+	manifest := newBoundsTestManifest()
+	manifest.PhasePoints.S = models.MakeOpt(0.1)
+	manifest.PhasePoints.C = models.MakeOpt(0.3)
+	manifest.PhasePoints.T = models.MakeOpt(0.7)
+	manifest.PhasePoints.L = models.MakeOpt(0.9)
+	manifest.PhasePoints.D = 227 // motion-index:227/250=0.908 > gaitEnd=0.904
+
+	_, _, percents, _, err := a.calculateGaitCycle(manifest, emgData)
+	require.NoError(t, err, "clamp warn 不應導致 error,僅 audit log")
+
+	// [16-A] 斷言生產 warn 已觸發 — 用共享常量而非硬編碼字串,避免兩處漂移
 	out := buf.String()
 	assert.Contains(t, out, "WARN", "clamp 應走 WARN level")
-	assert.Contains(t, out, "phase percent 被 clamp",
-		"warn 訊息 prefix 應穩定 (downstream alerting / grep 仰賴此 prefix)")
-	assert.Contains(t, out, "manifest", "warn 訊息應引導使用者排查 manifest")
+	assert.Contains(t, out, phasePercentClampWarnMsg,
+		"生產 calculateGaitCycle 應印出共享常量 warn 訊息")
 
-	// 驗證 message 不含 `]` (Slack/grep 不友善),只用 ` ` 或 - 作分隔
-	assert.False(t, strings.Contains(out, "[]"),
-		"warn 訊息不應含空 bracket")
+	// D 的 pct 應被 clamp 至 100(越上界)
+	dKey := string(models.PhaseD)
+	dPct, hasDPct := percents[dKey]
+	require.True(t, hasDPct, "D 應出現在 percents map")
+	assert.InDelta(t, 100.0, dPct, 1e-9, "D pct 越上界應 clamp 至 100")
 }

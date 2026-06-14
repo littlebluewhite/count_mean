@@ -21,6 +21,10 @@ import (
 // ErrInvalidGaitCycle 表示步態週期區間 start/end 不合法（duration <= 0）。
 var ErrInvalidGaitCycle = errors.New("無效的步態週期區間")
 
+// phasePercentClampWarnMsg 是 phase percent 越界 clamp 的 audit warn 訊息。
+// 提為常量供生產 calculateGaitCycle 與測試共用,避免兩處硬編碼漂移。
+const phasePercentClampWarnMsg = "phase percent 被 clamp 至 [0,100] 範圍 (phase 落在 gait cycle 外,請檢查 manifest 或 sync offset)"
+
 // ErrPairLengthMismatch 表示 PairResults[i].Values 長度與 TimeValues 不對齊。
 // CCI spec 要求所有 pair 樣本與 time 軸 1:1 對應；下游圖表 / 統計 / 降採樣
 // 都仰賴此 invariant。違反時應 fail-fast，避免 silent X-axis drift。
@@ -339,7 +343,7 @@ func (a *CCIAnalyzer) calculateGaitCycle(
 	for name, t := range emgTimes {
 		pct := (t - gaitStart) / duration * 100
 		if a.logger != nil && (pct < -clampWarnEpsilon || pct > 100+clampWarnEpsilon) {
-			a.logger.Warn("phase percent 被 clamp 至 [0,100] 範圍 (phase 落在 gait cycle 外,請檢查 manifest 或 sync offset)", map[string]any{
+			a.logger.Warn(phasePercentClampWarnMsg, map[string]any{
 				"phase":              name,
 				"phase_emg_time":     t,
 				"gait_start":         gaitStart,
