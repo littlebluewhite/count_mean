@@ -68,7 +68,9 @@ var (
 //
 //	%[<flags>][<width>][.<precision>][<verb>]
 //
-// %% escapes are not verbs and are excluded by leading group `[^%]`.
+// %% escapes are not verbs; countTranslationVerbs strips them via
+// strings.ReplaceAll before applying this regex (the regex itself has no
+// [^%] guard — see countTranslationVerbs for details).
 //
 // We allow common verbs: d, f, s, v, t, b, c, e, g, x, X, q, T, U, p
 // — reject %w (wrap-error, not Sprintf-safe) via dedicated regex below.
@@ -77,7 +79,9 @@ var (
 var translationVerbRegexp = regexp.MustCompile(`%[+\-# 0]*\d*(?:\.\d+)*[dfsbcvtgxXeEqUTp]`)
 
 // translationPercentWRegexp matches the %w verb (fmt.Errorf-only, panic-prone
-// when fed to Sprintf). Used as a positive reject.
+// when fed to Sprintf). Used as a positive reject. Callers must strip %% first
+// (escaped percent),否則字面 "%%w" 會被誤判成 %w verb 而 reject — 與
+// countTranslationVerbs 的 %% 處理對稱,見 LoadTranslations。
 //
 //nolint:gochecknoglobals // compile-once regex
 var translationPercentWRegexp = regexp.MustCompile(`%[+\-# 0]*\d*(?:\.\d+)*w`)
@@ -614,7 +618,8 @@ func (i *I18n) LoadTranslations(translationsDir string) error {
 		// master locale = zh-TW builtin(catalog 主版本)。
 		masterDict := builtinDicts[LocaleZhTW]
 		for k, v := range translations {
-			if translationPercentWRegexp.MatchString(v) {
+			// 先剝 %%(escaped percent),否則字面 "%%w" 會被誤判成 %w verb。
+		if translationPercentWRegexp.MatchString(strings.ReplaceAll(v, "%%", "")) {
 				return fmt.Errorf("%w: file=%s key=%q value=%q",
 					ErrTranslationFormatVerbUnsupported, filename, k, v)
 			}
@@ -697,7 +702,14 @@ func validateTranslationKeys(builtin, user map[string]string) error {
 // countTranslationVerbs returns the number of fmt verbs in a translation
 // string. Used to verify user-supplied translations have the same arg count
 // as the master locale entry.
+//
+// %% 是 escaped percent(非 verb)。先移除,否則 regex 會把 %% 後的字元誤判:
+// 例如 "%%d" 的 "%d" 會被誤算成一個 verb、"%.1f%% complete" 的 "% c"
+// (空格 flag + c verb)會被誤算成第二個 verb。
+// translationVerbRegexp 本身不含 [^%] 守衛,由此函式在計數前剝離 %% 負責排除。
 func countTranslationVerbs(s string) int {
+	s = strings.ReplaceAll(s, "%%", "")
+
 	return len(translationVerbRegexp.FindAllString(s, -1))
 }
 

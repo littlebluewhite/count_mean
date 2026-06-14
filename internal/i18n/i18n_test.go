@@ -1009,6 +1009,25 @@ func TestLoadTranslations_RejectsPercentWVerb(t *testing.T) {
 	}
 }
 
+// TestLoadTranslations_AcceptsEscapedPercentW 釘住:字面 %%w(escaped percent + 字面 w)
+// 不該被當成 %w wrap-error verb reject。與 countTranslationVerbs 的 %% 剝離對稱 —
+// %w 守門也須先剝 %% 再比對,否則合法的 "%%w" 文字會被誤拒。
+func TestLoadTranslations_AcceptsEscapedPercentW(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	js := `{"app.title": "EMG Tool %%w"}`
+	path := filepath.Join(tmpDir, "zh-TW.json")
+	if err := os.WriteFile(path, []byte(js), fsperm.FilePerm); err != nil {
+		t.Fatalf("write json with escaped percent-w: %v", err)
+	}
+
+	inst := NewI18n()
+	err := inst.LoadTranslations(tmpDir)
+	if errors.Is(err, ErrTranslationFormatVerbUnsupported) {
+		t.Errorf("字面 %%%%w 不該被當成 %%w verb reject,got %v", err)
+	}
+}
+
 // TestLoadTranslations_RejectsVerbCountMismatch 釘住 user JSON 中
 // 每個 key 的 fmt verb count 必須與 master locale(zh-TW builtin)一致。
 // 否則 caller args (來自 source code) 與 format string (來自 user file) drift,
@@ -1031,5 +1050,29 @@ func TestLoadTranslations_RejectsVerbCountMismatch(t *testing.T) {
 	}
 	if !errors.Is(err, ErrTranslationVerbCountMismatch) {
 		t.Errorf("expected ErrTranslationVerbCountMismatch, got %v", err)
+	}
+}
+
+// TestCountTranslationVerbs_PercentPercent 釘住 %% 計數修正:
+// countTranslationVerbs 必須先剝離 %%,否則 regex 會把 %% 後的字元誤判為 verb。
+func TestCountTranslationVerbs_PercentPercent(t *testing.T) {
+	cases := []struct {
+		input string
+		want  int
+	}{
+		{"%%", 0},            // %% 是 escaped percent,非 verb
+		{"%%d", 0},           // %% + 字面 d,非 verb
+		{"%d%%", 1},          // 1 個真實 verb + escaped percent
+		{"%.1f%% complete", 1}, // 1 個真實 verb + escaped percent + 字面字元
+		{"%d %s", 2},         // sanity: 2 個真實 verb
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got := countTranslationVerbs(tc.input)
+			if got != tc.want {
+				t.Errorf("countTranslationVerbs(%q) = %d, want %d", tc.input, got, tc.want)
+			}
+		})
 	}
 }
