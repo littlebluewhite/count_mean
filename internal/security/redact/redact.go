@@ -32,29 +32,30 @@ import (
 	"strings"
 )
 
-// pathRedactPattern 匹配常見的絕對路徑格式 — 同時涵蓋:
+// pathRedactPattern 匹配任意絕對路徑格式。
 //
-//   - macOS / Linux 系統 root:`/Users/foo/...`, `/home/foo/...`, `/var/folders/...`
-//     `/private/...`, `/System/...`, `/Library/...`, `/tmp/...`, `/opt/...`
-//   - macOS 外接 / 雲端 mount:`/Volumes/...`(pCloud Drive、Time Machine、外接 SSD)
-//   - Linux 外接 / NAS mount:`/mnt/...`, `/media/...`, `/srv/...`, `/data/...`, `/root/...`
-//   - Windows drive-letter:`C:\Users\foo\...` 與 `C:/Users/foo/...`
-//   - UNC:`\\server\share\...`(企業 NAS / 共享磁碟)
-//
-// 與 gui/recover.go 原版完全一致(已擴充過),只是搬家。
+// POSIX 分支採「任意絕對路徑 + 前導邊界錨定」設計:
+//   - 前導邊界(group 1,回吐):行首 ^ 或 空白/引號/(/ = 之一。
+//     Go RE2 無 lookbehind,用捕獲組 + "${1}<redacted-path>/" 回吐邊界字符。
+//     相對路徑(internal/x.go、./x.go)的 `/` 前接詞字符或 `.`,不在邊界集合 → 天然豁免。
+//   - POSIX 絕對路徑:後接 1+ 個「元素/」;元素內可含單空白分隔子詞(涵蓋 pCloud Drive)。
+//   - 元素字符排除 \s/:"' — 避免吃掉相鄰 token、閉引號或 recover.go:42 的行號。
+//   - Windows drive-letter 與 UNC 亦包含在 group 1 邊界保護內。
 //
 //nolint:gochecknoglobals // immutable regex shared across redact callers
 var pathRedactPattern = regexp.MustCompile(
-	// POSIX 絕對路徑 — 已知 system / mount root prefix,後接 0+ 路徑元素(每個元素可含
-	// 單一空白分隔的字 → 涵蓋 macOS `/Volumes/pCloud Drive/`);trailing `/` 為元素邊界,
-	// 最後一段 basename(及其後散文)保留。`(?:seg/)*` 的 `*` 允許 0 段 → 涵蓋 root-level
-	// 檔(`/tmp/x.csv` 的 `/tmp/`)。元素內仍排除 `\s/:"'`,避免吃掉相鄰路徑、quoted
-	// 字串或跨越 `recover.go:42` 的行號。
-	`/(?:Users|home|var|tmp|opt|private|System|Library|Volumes|mnt|media|srv|data|root)/(?:[^\s/:"']+(?: [^\s/:"']+)*/)*` +
-		// Windows drive-letter 路徑(`C:\...` 或 `C:/...`)— case-insensitive
-		`|(?i:[A-Z]:[\\/](?:[^\s:"'\\/]+[\\/])+)` +
-		// UNC 路徑(`\\server\share\...`)— 至少要 host + share + trailing separator
-		`|\\\\[^\s\\]+(?:\\[^\s\\]+)+\\`,
+	// group 1:前導邊界(行首或 空白/引號/(/=),回吐以確保只匹配絕對路徑
+	// (相對路徑的 `/` 前接詞字符或 `.`,不在邊界集合 → 天然豁免;RE2 無 lookbehind)
+	`(^|[\s"'(=])` +
+		`(?:` +
+		// POSIX 絕對路徑目錄段;元素排除 \s/:"'(避免吃掉相鄰 token、閉引號、
+		// recover.go:42 的行號),basename 不被消費而保留
+		`/(?:[^\s/:"']+(?: [^\s/:"']+)*/)+` +
+		// Windows drive-letter(`C:\...` 或 `C:/...`)— case-insensitive
+		`|[A-Za-z]:[\\/](?:[^\s:"'\\/]+[\\/])+` +
+		// UNC(`\\server\share\...`)
+		`|\\\\[^\s\\]+(?:\\[^\s\\]+)+\\` +
+		`)`,
 )
 
 // lineFallbackPathPrefix 是 line-loop fallback 的 trigger — 任何 trim 後以 absolute
@@ -80,7 +81,7 @@ var lineFallbackPathPrefix = regexp.MustCompile(`^(?:/|\\\\|[A-Za-z]:[\\/])`)
 //
 // 與 gui/recover.go 原版的 redactPathsInStack 行為等價(搬家)。
 func Paths(s string) string {
-	redacted := pathRedactPattern.ReplaceAllString(s, "<redacted-path>/")
+	redacted := pathRedactPattern.ReplaceAllString(s, "${1}<redacted-path>/")
 
 	// 處理少數沒被 regex 抓到但仍含 path-like 字串的邊角(例:custom $GOPATH,
 	// 不在標準 system root 下)。保守再過一輪:任何 trim 後以 absolute path

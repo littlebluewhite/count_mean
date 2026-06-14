@@ -24,6 +24,7 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/muscle_ratio"
 	"count_mean/internal/phase_sync"
+	"count_mean/internal/security/redact"
 	"count_mean/internal/synchronizer"
 	"count_mean/internal/validation"
 )
@@ -1258,7 +1259,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 
 			return &PhaseSyncResult{
 				Success: false,
-				Message: fmt.Sprintf("導出失敗: %v", runErr),
+				Message: fmt.Sprintf("導出失敗: %s", redact.RedactForMessage(runErr)),
 			}, nil
 		}
 
@@ -1267,7 +1268,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 
 		return &PhaseSyncResult{
 			Success: false,
-			Message: fmt.Sprintf("分析失敗: %v", runErr),
+			Message: fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(runErr)),
 		}, nil
 	}
 

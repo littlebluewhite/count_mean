@@ -303,3 +303,130 @@ func TestRedactForMessage_PreservesNonPathParts(t *testing.T) {
 		}
 	}
 }
+
+// TestPaths_RedactsNonAllowlistedAndProtectsRelative 覆蓋「任意絕對路徑」修法的新用例
+// (codex R2 要求):非白名單根(NAS、datapool、Applications)、中文路徑、閉引號保留、
+// stack 行號 :42 完整保留、相對路徑不被改寫。
+func TestPaths_RedactsNonAllowlistedAndProtectsRelative(t *testing.T) {
+	cases := []struct {
+		name         string
+		input        string
+		mustNotLeak  []string
+		mustPreserve []string
+	}{
+		{
+			// NAS 非白名單根 + 中文 + 行中嵌入
+			name:  "nas_non_allowlist_root_chinese_midstring",
+			input: "open /Network/Servers/clinic-nas/patients/患者_X/raw.csv: permission denied",
+			mustNotLeak: []string{
+				"/Network/Servers",
+				"患者_X",
+			},
+			mustPreserve: []string{
+				"<redacted-path>",
+				"raw.csv",
+				"permission denied",
+				"open ",
+			},
+		},
+		{
+			// /datapool 非白名單根
+			name:  "datapool_non_allowlist_root",
+			input: "read /datapool/study2026/subjectA/trial.csv failed",
+			mustNotLeak: []string{
+				"/datapool/study2026",
+				"subjectA",
+			},
+			mustPreserve: []string{
+				"<redacted-path>",
+				"trial.csv",
+				"failed",
+			},
+		},
+		{
+			// /Applications 非白名單根
+			name:  "applications_non_allowlist_root",
+			input: "open /Applications/data/patient/case.csv: not found",
+			mustNotLeak: []string{
+				"/Applications/data",
+			},
+			mustPreserve: []string{
+				"<redacted-path>",
+				"case.csv",
+				"not found",
+			},
+		},
+		{
+			// 中文 + 閉引號保留(引號在邊界 group1 被捕獲後回吐)
+			name:  "chinese_closed_quote_preserved",
+			input: `open "/Network/clinic/患者_Y/raw.csv": 找不到檔案`,
+			mustNotLeak: []string{
+				"/Network/clinic",
+				"患者_Y",
+			},
+			mustPreserve: []string{
+				"<redacted-path>",
+				"raw.csv",
+				"找不到檔案",
+			},
+		},
+		{
+			// stack 行號 :42 完整保留
+			name:  "stack_line_number_colon_preserved",
+			input: "goroutine:\n\t/Users/x/proj/gui/recover.go:42 +0x1a\n",
+			mustNotLeak: []string{
+				"/Users/x/proj",
+			},
+			mustPreserve: []string{
+				"<redacted-path>",
+				"recover.go:42",
+				"+0x1a",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Paths(tc.input)
+			for _, leak := range tc.mustNotLeak {
+				if strings.Contains(got, leak) {
+					t.Errorf("redact 失敗,leaky fragment %q 仍在 output:\n%s", leak, got)
+				}
+			}
+			for _, want := range tc.mustPreserve {
+				if !strings.Contains(got, want) {
+					t.Errorf("redact 過度,必要 fragment %q 不在 output:\n%s", want, got)
+				}
+			}
+		})
+	}
+
+	// 相對路徑不被改寫 — 用獨立斷言鎖定
+	t.Run("relative_path_unchanged", func(t *testing.T) {
+		relAbs := "internal/x.go:12"
+		if got := Paths(relAbs); got != relAbs {
+			t.Errorf("相對路徑應保持不變: got %q, want %q", got, relAbs)
+		}
+
+		dotRel := "see ./internal/x.go here"
+		gotDot := Paths(dotRel)
+		if strings.Contains(gotDot, "<redacted-path>") {
+			t.Errorf("相對路徑 %q 不應被 redact,got: %q", dotRel, gotDot)
+		}
+		if !strings.Contains(gotDot, "./internal/x.go") {
+			t.Errorf("相對路徑 %q 應完整保留 ./internal/x.go,got: %q", dotRel, gotDot)
+		}
+	})
+
+	// 閉引號數量驗證 — chinese_closed_quote_preserved 案例引號必須成對保留
+	t.Run("closed_quote_count", func(t *testing.T) {
+		input := `open "/Network/clinic/患者_Y/raw.csv": 找不到檔案`
+		got := Paths(input)
+		if count := strings.Count(got, `"`); count != 2 {
+			t.Errorf("閉引號應保留 2 個,got %d in: %s", count, got)
+		}
+		if !strings.Contains(got, `raw.csv"`) {
+			t.Errorf("basename 後的閉引號應緊跟 raw.csv,got: %s", got)
+		}
+	})
+}
