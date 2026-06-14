@@ -165,6 +165,47 @@ func checkANCTotalAllocation(perChannelCapacity, numChannels int) error {
 	return nil
 }
 
+// parseANCChannelNames 從 header row(第 0 欄已跳過)中提取通道名稱。
+//
+// 策略(Option B):
+//  1. 收集全部 TrimSpace 後的名字(含空)。
+//  2. 裁尾部空名 — 尾部空 header cell 常見(試算表補白欄),無害,繼續容忍。
+//  3. 裁尾後若任一中段名字為空 → fail-fast;中段空名讓資料列 row[i+1] 位置讀錯位
+//     (silent 資料損壞)。
+//  4. 裁尾後若空 → 回「沒有找到有效通道名稱」錯誤。
+//
+// fileCtx 用於錯誤訊息中的檔案來源描述(例如 "ANC xlsx" / "Excel")。
+// filePath 用於附在錯誤訊息後以便定位。
+//
+//nolint:err113 // dynamic errors with Chinese messages for user-facing output
+func parseANCChannelNames(cells []string, fileCtx, filePath string) ([]string, error) {
+	channelNames := make([]string, 0, len(cells))
+	for _, cell := range cells {
+		channelNames = append(channelNames, strings.TrimSpace(cell))
+	}
+
+	// 裁尾部空名(尾部空 header cell 無害)。
+	for len(channelNames) > 0 && channelNames[len(channelNames)-1] == "" {
+		channelNames = channelNames[:len(channelNames)-1]
+	}
+
+	// 中段空名會讓資料列 row[i+1] 位置讀錯位(silent 資料損壞)→ fail-fast。
+	for i, n := range channelNames {
+		if n == "" {
+			return nil, fmt.Errorf(
+				"%s 通道名稱第 %d 欄為空(中段空名會造成資料欄位錯位): %s",
+				fileCtx, i+1, filePath,
+			)
+		}
+	}
+
+	if len(channelNames) == 0 {
+		return nil, fmt.Errorf("%s 檔案沒有找到有效的通道名稱: %s", fileCtx, filePath)
+	}
+
+	return channelNames, nil
+}
+
 // parseANCDataLine parses a single data line and appends to forceData.
 //
 // # Field count contract
@@ -365,18 +406,11 @@ func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*model
 		return nil, fmt.Errorf("ANC xlsx 通道名稱行格式錯誤: %s", filePath)
 	}
 
-	// 第一欄應該是 "Name"，後續是通道名稱
-	channelNames := make([]string, 0, len(nameRow)-1)
-
-	for i := 1; i < len(nameRow); i++ {
-		name := strings.TrimSpace(nameRow[i])
-		if name != "" {
-			channelNames = append(channelNames, name)
-		}
-	}
-
-	if len(channelNames) == 0 {
-		return nil, fmt.Errorf("ANC xlsx 檔案沒有找到有效的通道名稱: %s", filePath)
+	// 第一欄應該是 "Name"，後續是通道名稱。
+	// parseANCChannelNames 裁尾部空名、中段空名 fail-fast(錯位保護)。
+	channelNames, err := parseANCChannelNames(nameRow[1:], "ANC xlsx", filePath)
+	if err != nil {
+		return nil, err
 	}
 
 	// 初始化數據結構
@@ -423,18 +457,11 @@ func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.F
 		return nil, fmt.Errorf("Excel 標題行欄位不足: %s", filePath)
 	}
 
-	// 第一欄應該是 Time，後續欄位是通道名稱
-	channelNames := make([]string, 0, len(headerRow)-1)
-
-	for i := 1; i < len(headerRow); i++ {
-		name := strings.TrimSpace(headerRow[i])
-		if name != "" {
-			channelNames = append(channelNames, name)
-		}
-	}
-
-	if len(channelNames) == 0 {
-		return nil, fmt.Errorf("Excel 檔案沒有找到有效的通道名稱: %s", filePath)
+	// 第一欄應該是 Time，後續欄位是通道名稱。
+	// parseANCChannelNames 裁尾部空名、中段空名 fail-fast(錯位保護)。
+	channelNames, err := parseANCChannelNames(headerRow[1:], "Excel", filePath)
+	if err != nil {
+		return nil, err
 	}
 
 	// 初始化數據結構

@@ -1349,3 +1349,81 @@ func buildANCFormatXLSXBuffer(t *testing.T) []byte {
 
 	return buf.Bytes()
 }
+
+// TestParseANCChannelNames 釘住 Finding [9]:
+// parseANCChannelNames 中段空名必須 fail-fast;尾部空名必須靜默裁掉;全有效名必須正確回傳。
+// 同時涵蓋 parseANCFormatXLSX 與 parseSimpleXLSX 共用的裁/驗邏輯。
+func TestParseANCChannelNames(t *testing.T) {
+	t.Run("全有效名回傳正確 slice", func(t *testing.T) {
+		names, err := parseANCChannelNames([]string{"Fx", "Fy", "Fz"}, "ANC xlsx", "test.xlsx")
+		require.NoError(t, err)
+		require.Equal(t, []string{"Fx", "Fy", "Fz"}, names)
+	})
+
+	t.Run("尾部空名裁掉、解析成功", func(t *testing.T) {
+		// 尾部空 header cell 常見(試算表補白欄),應容忍。
+		names, err := parseANCChannelNames([]string{"Fx", "Fy", "", ""}, "ANC xlsx", "test.xlsx")
+		require.NoError(t, err)
+		require.Equal(t, []string{"Fx", "Fy"}, names)
+	})
+
+	t.Run("中段空名 fail-fast 含錯位語義", func(t *testing.T) {
+		// "Fx", "", "Fz":第 2 欄為空 → 中段空名 → fail-fast。
+		// 若靜默 compact,"Fz" 會讀到 "Fx" 原本的 row[i+1] 位置 → 資料損壞。
+		_, err := parseANCChannelNames([]string{"Fx", "", "Fz"}, "ANC xlsx", "test.xlsx")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "錯位", "error 必須包含「錯位」語義")
+		require.Contains(t, err.Error(), "2", "error 必須指出第 2 欄")
+	})
+
+	t.Run("全空(裁尾後空)回傳「沒有找到有效通道名稱」", func(t *testing.T) {
+		_, err := parseANCChannelNames([]string{"", ""}, "Excel", "test.xlsx")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "沒有找到有效的通道名稱")
+	})
+
+	t.Run("空輸入 slice 回傳「沒有找到有效通道名稱」", func(t *testing.T) {
+		_, err := parseANCChannelNames([]string{}, "ANC xlsx", "test.xlsx")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "沒有找到有效的通道名稱")
+	})
+
+	t.Run("中段空名在 Excel 語境回傳 Excel 前綴訊息", func(t *testing.T) {
+		_, err := parseANCChannelNames([]string{"Time", "", "Ch2"}, "Excel", "data.xlsx")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Excel")
+	})
+}
+
+// TestANCParser_XLSX_MidEmptyChannelName_FailFast 端對端釘住 Finding [9]:
+// simple-xlsx 中段空名 → Parse 回 error;尾部空名 → 解析成功且通道數正確。
+func TestANCParser_XLSX_MidEmptyChannelName_FailFast(t *testing.T) {
+	t.Run("simple xlsx 中段空名 fail-fast", func(t *testing.T) {
+		// 標題行: Time | Ch1 | (空) | Ch3 → 中段空名在 index 2
+		buf := buildSimpleXLSXBuffer(t,
+			[]string{"Time", "Ch1", "", "Ch3"},
+			[][]string{{"0.000", "1.0", "2.0", "3.0"}},
+		)
+		parser := NewANCParser()
+		_, err := parser.Parse(bytes.NewReader(buf), "mid_empty.xlsx")
+		require.Error(t, err, "中段空名必須 fail-fast")
+		require.Contains(t, err.Error(), "錯位", "error 必須含「錯位」語義")
+	})
+
+	t.Run("simple xlsx 尾部空名解析成功且通道數正確", func(t *testing.T) {
+		// 標題行: Time | Ch1 | Ch2 | (空) → 尾部空名應被裁掉,只保留 Ch1, Ch2
+		buf := buildSimpleXLSXBuffer(t,
+			[]string{"Time", "Ch1", "Ch2", ""},
+			[][]string{
+				{"0.000", "1.0", "2.0", "0.0"},
+				{"0.001", "1.1", "2.1", "0.0"},
+			},
+		)
+		parser := NewANCParser()
+		data, err := parser.Parse(bytes.NewReader(buf), "trailing_empty.xlsx")
+		require.NoError(t, err, "尾部空名必須靜默容忍")
+		require.NotNil(t, data)
+		require.Equal(t, []string{"Ch1", "Ch2"}, data.Headers, "只保留有名稱的通道")
+		require.Len(t, data.Time, 2)
+	})
+}
