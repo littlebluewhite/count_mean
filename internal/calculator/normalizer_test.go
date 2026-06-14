@@ -262,15 +262,39 @@ func TestNormalizer_parseRawData(t *testing.T) {
 			{"Time", "Ch1"},
 			{"1.5E-3", "2.5E-4"},
 		}
-		// 由於 parseRawData 是私有方法，我們使用 NormalizeFromRawData 來驗證縮放因子應用
+		// 參考行:Time=1.0E-3(縮放後不參與 ratio)、Ch1=1.0E-4(作分母)
 		reference := [][]string{
 			{"Time", "Ch1"},
 			{"1.0E-3", "1.0E-4"},
 		}
 		dataset, err := normalizer.NormalizeFromRawData(records, reference)
 		require.NoError(t, err)
-		// 驗證縮放因子的應用通過正常化結果體現
 		require.NotNil(t, dataset)
+
+		// [17] 去假綠:原本只 require.NotNil,等於沒驗縮放。
+		// 縮放在 Time 可見(直接複製 parsed EMG data.Time):
+		//   sf=6 → 1.5E-3 × 10^6 = 1500.0
+		// Normalized channel ratio 與 sf 無關(分子分母都 ×10^sf 抵消):
+		//   Ch1 = 2.5E-4 / 1.0E-4 = 2.5(無論 sf 為何)
+		require.Len(t, dataset.Data, 1)
+		require.InDelta(t, 1500.0, dataset.Data[0].Time, 1e-6,
+			"sf=6:Time=1.5E-3×10^6=1500.0;若縮放未生效此斷言會紅")
+		require.InDelta(t, 2.5, dataset.Data[0].Channels[0], 1e-9,
+			"normalized channel=2.5E-4/1.0E-4=2.5;ratio 與 sf 無關")
+
+		// sf=0 對照:Time=原始未縮放值、Channel ratio 仍相同,
+		// 確認縮放只在 Time 體現而非 ratio。
+		normalizer0 := NewNormalizer(0)
+		dataset0, err0 := normalizer0.NormalizeFromRawData(records, reference)
+		require.NoError(t, err0)
+		require.NotNil(t, dataset0)
+		require.Len(t, dataset0.Data, 1)
+		require.InDelta(t, 0.0015, dataset0.Data[0].Time, 1e-9,
+			"sf=0:Time=1.5E-3 未縮放;與 sf=6 的 1500.0 不同")
+		require.InDelta(t, 2.5, dataset0.Data[0].Channels[0], 1e-9,
+			"normalized channel ratio 與 sf 無關,仍為 2.5")
+		require.NotEqual(t, dataset0.Data[0].Time, dataset.Data[0].Time,
+			"不同 sf → Time 不同,縮放確實生效")
 	})
 
 	t.Run("EmptyRecords", func(t *testing.T) {
