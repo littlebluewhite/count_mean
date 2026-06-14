@@ -473,6 +473,54 @@ func TestPaths_RedactsPathAfterEscapedNewline(t *testing.T) {
 	}
 }
 
+// TestPaths_RedactsAfterArbitrarySeparator 釘住 denylist 邊界(codex R1/R2 揭示
+// allowlist 系統性不完整後的根因修法):路徑前接**任何非詞/點/斜線字符**即視為絕對
+// 路徑。最高價值案例 = 中文 error message 無空白直接接路徑(zh-TW 工具常見洩漏面)。
+func TestPaths_RedactsAfterArbitrarySeparator(t *testing.T) {
+	cases := []struct {
+		name         string
+		input        string
+		mustNotLeak  []string
+		mustPreserve []string
+	}{
+		{
+			// 中文緊接路徑(無空白)— allowlist 漏、denylist 抓
+			name:         "chinese_then_path",
+			input:        "找不到/Users/alice/患者/raw.csv",
+			mustNotLeak:  []string{"/Users/alice", "/Users/alice/患者"},
+			mustPreserve: []string{"<redacted-path>", "raw.csv", "找不到"},
+		},
+		{
+			name:         "bracket_then_path",
+			input:        "paths=[/Users/a/secret.csv]",
+			mustNotLeak:  []string{"/Users/a"},
+			mustPreserve: []string{"<redacted-path>", "secret.csv"},
+		},
+		{
+			name:         "comma_then_path",
+			input:        "a,/Users/b/x.csv done",
+			mustNotLeak:  []string{"/Users/b"},
+			mustPreserve: []string{"<redacted-path>", "x.csv", "done"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Paths(tc.input)
+			for _, leak := range tc.mustNotLeak {
+				if strings.Contains(got, leak) {
+					t.Errorf("redact 失敗,leaky %q 仍在 output:\n%s", leak, got)
+				}
+			}
+			for _, want := range tc.mustPreserve {
+				if !strings.Contains(got, want) {
+					t.Errorf("redact 過度,必要 %q 不在 output:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 // TestPaths_RedactsColonLabeledPath 釘住 codex R2 [P2] 回歸:無空白的冒號標籤
 // (`file:/Users/...`、`path:C:\...`)路徑前接 `:`,前導邊界須涵蓋 `:` 才不洩漏。
 // 同時守護 `recover.go:42` 的 `:42`(後接數字非 `/`)不被 `:` 邊界誤觸發。
