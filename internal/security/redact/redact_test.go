@@ -472,3 +472,51 @@ func TestPaths_RedactsPathAfterEscapedNewline(t *testing.T) {
 		})
 	}
 }
+
+// TestPaths_RedactsColonLabeledPath 釘住 codex R2 [P2] 回歸:無空白的冒號標籤
+// (`file:/Users/...`、`path:C:\...`)路徑前接 `:`,前導邊界須涵蓋 `:` 才不洩漏。
+// 同時守護 `recover.go:42` 的 `:42`(後接數字非 `/`)不被 `:` 邊界誤觸發。
+func TestPaths_RedactsColonLabeledPath(t *testing.T) {
+	cases := []struct {
+		name         string
+		input        string
+		mustNotLeak  []string
+		mustPreserve []string
+	}{
+		{
+			name:         "colon_label_posix",
+			input:        "file:/Users/alice/patient/raw.csv: permission denied",
+			mustNotLeak:  []string{"/Users/alice", "patient"},
+			mustPreserve: []string{"<redacted-path>", "raw.csv", "permission denied", "file:"},
+		},
+		{
+			name:         "colon_label_windows",
+			input:        `path:C:\Users\alice\patient\raw.csv`,
+			mustNotLeak:  []string{`C:\Users`, `\alice`},
+			mustPreserve: []string{"<redacted-path>", "raw.csv"},
+		},
+		{
+			// 守護:`:` 成為邊界後,recover.go:42 的 :42 仍須完整保留(後接數字非 /)
+			name:         "stack_colon_line_number_not_triggered",
+			input:        "at \t/Users/x/proj/gui/recover.go:42 +0x1a",
+			mustNotLeak:  []string{"/Users/x/proj"},
+			mustPreserve: []string{"<redacted-path>", "recover.go:42", "+0x1a"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Paths(tc.input)
+			for _, leak := range tc.mustNotLeak {
+				if strings.Contains(got, leak) {
+					t.Errorf("redact 失敗,leaky %q 仍在 output:\n%s", leak, got)
+				}
+			}
+			for _, want := range tc.mustPreserve {
+				if !strings.Contains(got, want) {
+					t.Errorf("redact 過度,必要 %q 不在 output:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
