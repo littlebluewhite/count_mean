@@ -491,6 +491,21 @@ func TestPaths_RedactsFileURLNotHTTP(t *testing.T) {
 		}
 	})
 
+	t.Run("file_url_with_host_redacted", func(t *testing.T) {
+		// 帶 host 的 file URL(codex R5 [P2]):path 前接 host 詞字符,須仍脫敏。
+		got := Paths("open file://localhost/Users/alice/patient/raw.csv failed")
+		for _, leak := range []string{"/Users/alice", "patient"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("file://host 本地路徑洩漏 %q:\n%s", leak, got)
+			}
+		}
+		for _, want := range []string{"<redacted-path>", "raw.csv", "localhost"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("必要 %q 不在 output:\n%s", want, got)
+			}
+		}
+	})
+
 	t.Run("http_url_not_redacted", func(t *testing.T) {
 		// http:// 指向遠端、非本地 PHI;不可被 redact(否則等於重啟用 http:// 匹配)。
 		in := "fetch http://example.com/Users/docs/page failed"
