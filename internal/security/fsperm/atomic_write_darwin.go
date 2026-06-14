@@ -107,6 +107,7 @@ func openatTmp(dirfd int, tmpRel string, extraFlags int) (int, error) {
 
 // fsyncDir 對已開啟的 dirfd 觸發 fsync,讓先前的 renameat metadata 變更 crash-durable。
 func fsyncDir(fd int) error {
+	//nolint:wrapcheck // caller (SyncParentDir) 已 wrap 帶 context;Commit dirfd 路徑 best-effort 忽略
 	return unix.Fsync(fd)
 }
 
