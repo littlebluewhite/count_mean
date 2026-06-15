@@ -19,21 +19,6 @@ type InjectionDetector interface {
 	DetectAll(content string) (bool, string, string)
 }
 
-// NumericValidator defines the interface for numeric validation.
-type NumericValidator interface {
-	// ValidateInteger validates integer input with overflow protection.
-	ValidateInteger(value, fieldName string, minValue, maxValue int64) (int64, error)
-
-	// ValidateFloat validates float input with overflow protection.
-	ValidateFloat(value, fieldName string, minValue, maxValue float64) (float64, error)
-
-	// ValidatePositiveInteger validates positive integer with safe bounds.
-	ValidatePositiveInteger(value, fieldName string, maxValue int64) (int64, error)
-
-	// ValidatePositiveFloat validates positive float with safe bounds.
-	ValidatePositiveFloat(value, fieldName string, maxValue float64) (float64, error)
-}
-
 // FilenameValidator defines the read-only interface for filename validation.
 //
 // L16 — 拆分:讀（ValidateFilename）與寫（WithAllowedExtensions）解耦,讓單純需要
@@ -59,48 +44,4 @@ type MutableFilenameValidator interface {
 type CSVValidator interface {
 	// ValidateCSVData validates CSV data structure and detects malicious content.
 	ValidateCSVData(records [][]string, filename string) error
-}
-
-// NumericRange defines validation ranges for different numeric types.
-type NumericRange struct {
-	MinInt64   int64
-	MaxInt64   int64
-	MinFloat64 float64
-	MaxFloat64 float64
-}
-
-// Safe numeric range constants to prevent overflow attacks.
-//
-// Each constant is intentionally narrower than the language-level max
-// (math.MinInt64 / math.MaxInt64 / -math.MaxFloat64 / math.MaxFloat64) to
-// preserve a calculation buffer — callers can do `value ± 1` for integers or
-// `value * 10` for floats without immediately flipping to overflow / Inf. The
-// "safe…" prefix names this property; the actual value being smaller than the
-// literal type max is intentional and documented (TODO_2 #P1-A8-5).
-const (
-	// safeMinInt64 = math.MinInt64 + 1 (-9223372036854775808 + 1). The 1-unit
-	// reserve lets validators subtract small offsets without wrapping.
-	safeMinInt64 = -9223372036854775807
-	// safeMaxInt64 = math.MaxInt64 - 1 (9223372036854775807 - 1). Symmetric
-	// 1-unit reserve for adding small offsets.
-	safeMaxInt64 = 9223372036854775806
-	// safeMinFloat64 is intentionally one decimal order of magnitude greater
-	// than -math.MaxFloat64 (≈-1.7976931348623157e+308). The 10x reserve
-	// gives a safety buffer for downstream arithmetic.
-	safeMinFloat64 = -1.7976931348623157e307
-	// safeMaxFloat64 is intentionally one decimal order of magnitude below
-	// math.MaxFloat64 (≈1.7976931348623157e+308). Same 10x reserve rationale
-	// as safeMinFloat64. Anything outside [-1e307, +1e307] is treated as
-	// suspect input.
-	safeMaxFloat64 = 1.7976931348623157e307
-)
-
-// GetSafeNumericRanges returns predefined safe ranges to prevent overflow attacks.
-func GetSafeNumericRanges() *NumericRange {
-	return &NumericRange{
-		MinInt64:   safeMinInt64,
-		MaxInt64:   safeMaxInt64,
-		MinFloat64: safeMinFloat64,
-		MaxFloat64: safeMaxFloat64,
-	}
 }

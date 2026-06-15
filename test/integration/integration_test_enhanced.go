@@ -117,14 +117,6 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 
 		err = validator.ValidateFilename("invalid\x00.csv")
 		assert.Error(t, err)
-
-		// Test window size validation
-		windowSize, err := validator.ValidateWindowSize("10")
-		assert.NoError(t, err)
-		assert.Equal(t, 10, windowSize)
-
-		_, err = validator.ValidateWindowSize("-5")
-		assert.Error(t, err)
 	})
 
 	t.Run("ErrorHandlingIntegration", func(t *testing.T) {
