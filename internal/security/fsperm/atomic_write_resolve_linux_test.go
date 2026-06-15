@@ -8,7 +8,7 @@
 // leaf-descent openat2 boundary deterministically.
 //
 // Why the public OpenAtomicWriteValidated cannot exercise this: it runs
-// evalSymlinksWithFallback(parent) FIRST, so the relParent it hands the platform
+// EvalSymlinksWithFallback(parent, 0) FIRST, so the relParent it hands the platform
 // layer is already symlink-free by the time openat2 runs. To assert that
 // RESOLVE_NO_SYMLINKS rejects a parent-component symlink that DOES survive to the
 // openat2 syscall — the TOCTOU swap the flag exists to close — we hand
@@ -30,7 +30,7 @@ import (
 
 // TestOpenAtomicWrite_RejectsSurvivingInBaseParentSymlink_Linux 釘住 ADR-0017
 // Decision 6 的 atomic-write 安全契約:openLeafAnchor 的 leaf 下行 openat2 必須帶
-// RESOLVE_NO_SYMLINKS。模擬 parent-swap TOCTOU — 一個「在 evalSymlinksWithFallback
+// RESOLVE_NO_SYMLINKS。模擬 parent-swap TOCTOU — 一個「在 EvalSymlinksWithFallback
 // 之後才被換進來、survive 到 openat2 那一步」的 in-base parent-component symlink —
 // openat2 必須以 ELOOP 拒絕,openLeafAnchor 再 wrap 成 ErrPathEscapesBase。
 //
@@ -139,7 +139,7 @@ func TestOpenAtomicWrite_LeafSymlinkRejectedByOExcl_Linux_Secondary(t *testing.T
 }
 
 // TestOpenAtomicWrite_AcceptsPreResolvedInBase_Linux 正向對照:證明 RESOLVE_NO_SYMLINKS
-// 只擋 survive 到 openat2 的 symlink,不誤殺已被 evalSymlinksWithFallback 展開的合法
+// 只擋 survive 到 openat2 的 symlink,不誤殺已被 EvalSymlinksWithFallback 展開的合法
 // in-base 路徑 (公開 API 真正餵進 openAtomicWrite 的就是這種 basename)。若此測試紅,
 // 代表 flag 連合法路徑都擋,改動破壞既有契約。完整跑 open → write → commit。
 func TestOpenAtomicWrite_AcceptsPreResolvedInBase_Linux(t *testing.T) {

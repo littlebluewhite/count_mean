@@ -82,7 +82,7 @@ func (h *AtomicWriteHandle) File() *os.File { return h.file }
 // Flow (cross-platform, mirrors OpenWriteValidated):
 //  1. len(basePaths)==0 → ErrBasePathsEmpty.
 //  2. Require filepath.Dir(targetPath) == filepath.Dir(tmpPath) — else error.
-//  3. evalSymlinksWithFallback(parent) — resolve the parent's symlinks.
+//  3. EvalSymlinksWithFallback(parent, 0) — resolve the parent's symlinks.
 //  4. matchAnyBase(resolvedParent, basePaths) — confirm parent is under a base;
 //     miss → ErrPathEscapesBase.
 //  5. relParent = Rel(hitBase, resolvedParent) ("." when the parent IS the base);
@@ -126,7 +126,7 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 			redact.Paths(tmpDir), redact.Paths(targetDir))
 	}
 
-	resolvedParent, err := evalSymlinksWithFallback(targetDir)
+	resolvedParent, err := EvalSymlinksWithFallback(targetDir, 0)
 	if err != nil {
 		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: 無法解析父目錄 %s: %w",
 			redact.Paths(targetDir), err)

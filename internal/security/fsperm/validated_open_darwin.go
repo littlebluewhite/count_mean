@@ -14,7 +14,7 @@ import (
 // 更全面,close parent-component symlink 攻擊面。
 //
 // resolvedPath 已經 EvalSymlinks 過,理論上沒有 symlink,但加 O_NOFOLLOW_ANY 仍
-// 必要 — 防 evalSymlinksWithFallback 與 openat 之間 TOCTOU 縫隙 (攻擊者 swap
+// 必要 — 防 EvalSymlinksWithFallback 與 openat 之間 TOCTOU 縫隙 (攻擊者 swap
 // component 為 symlink 後,kernel 在 syscall 階段重新檢查,O_NOFOLLOW_ANY 觸發
 // ELOOP)。
 //

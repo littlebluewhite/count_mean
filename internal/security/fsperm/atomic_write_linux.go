@@ -28,7 +28,7 @@ import (
 //     (codex r3 P2)。
 //
 // RESOLVE_NO_SYMLINKS 的安全論證與 openValidated 一致:resolvedParent 是
-// evalSymlinksWithFallback 的產物,合法 in-base symlink 早已展開;此 flag 擋的是
+// EvalSymlinksWithFallback 的產物,合法 in-base symlink 早已展開;此 flag 擋的是
 // EvalSymlinks→openat2 之間 swap 進來、survive 到 syscall 的 symlink (TOCTOU),
 // 與 Darwin O_NOFOLLOW_ANY 對齊。RESOLVE_BENEATH 兜底,任何 walk 出 dirfd 的企圖回 EXDEV。
 //

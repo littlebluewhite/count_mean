@@ -14,7 +14,7 @@ import (
 
 // resolvedTempDir 回傳 t.TempDir() 經 filepath.EvalSymlinks 解析後的絕對路徑。
 // macOS 上 t.TempDir() 回 /var/folders/... 是 /private/var/folders/... 的 symlink;
-// OpenAtomicWriteValidated 內部對父目錄呼 evalSymlinksWithFallback,故 basePaths
+// OpenAtomicWriteValidated 內部對父目錄呼 EvalSymlinksWithFallback,故 basePaths
 // 必須已是 resolved 形式,否則 matchAnyBase 比較兩個不同路徑 → ErrPathEscapesBase。
 func resolvedTempDir(t *testing.T) string {
 	t.Helper()

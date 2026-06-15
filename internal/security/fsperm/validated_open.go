@@ -82,7 +82,7 @@ func OpenWriteValidated(path string, basePaths []string) (*os.File, error) {
 		return nil, ErrBasePathsEmpty
 	}
 
-	resolvedPath, err := evalSymlinksWithFallback(path)
+	resolvedPath, err := EvalSymlinksWithFallback(path, 0)
 	if err != nil {
 		// 路徑值過 redact 再進 caller-facing 訊息,避免 PHI 絕對路徑洩漏進 webview。
 		return nil, fmt.Errorf("fsperm.OpenWriteValidated: 無法解析路徑 %s: %w", redact.Paths(path), err)
@@ -138,7 +138,7 @@ func OpenReadValidated(path string, basePaths []string) (*os.File, error) {
 		return nil, ErrBasePathsEmpty
 	}
 
-	resolvedPath, err := evalSymlinksWithFallback(path)
+	resolvedPath, err := EvalSymlinksWithFallback(path, 0)
 	if err != nil {
 		// 路徑值過 redact 再進 caller-facing 訊息,避免 PHI 絕對路徑洩漏進 webview。
 		return nil, fmt.Errorf("fsperm.OpenReadValidated: 無法解析路徑 %s: %w", redact.Paths(path), err)
@@ -155,31 +155,6 @@ func OpenReadValidated(path string, basePaths []string) (*os.File, error) {
 		return nil, fmt.Errorf("fsperm.OpenReadValidated: OpenFile failed: %w", err)
 	}
 	return f, nil
-}
-
-// evalSymlinksWithFallback 與 security/pathvalidator.go 的 resolveSymlinksWithFallback
-// 同語義 — 但本 wrapper 為避免 fsperm 反向 import security，自帶實作 (短，依靠
-// stdlib)。若 absPath 不存在則退到 parent；parent 也不行則抵達 root 仍 fail。
-//
-// 不 export — 將來若有第二條 caller 需要相同 fallback 再考慮提到 perm.go。
-//
-//nolint:err113 // dynamic errors for caller-facing output
-func evalSymlinksWithFallback(absPath string) (string, error) {
-	if absPath == "" {
-		return "", errors.New("empty path")
-	}
-	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
-		return resolved, nil
-	}
-	parent := filepath.Dir(absPath)
-	if parent == absPath {
-		return "", fmt.Errorf("路徑根目錄無法解析: %s", absPath)
-	}
-	resolvedParent, err := evalSymlinksWithFallback(parent)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(resolvedParent, filepath.Base(absPath)), nil
 }
 
 // matchAnyBase 對 resolvedPath 比對每個 base：先 EvalSymlinks(base)

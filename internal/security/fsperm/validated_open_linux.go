@@ -73,7 +73,7 @@ func emitOpenat2FallbackWarning() {
 //   - 任何 path component 為 symlink 都被 reject (含 magic links /proc/$$/...)
 //
 // 這比 caller-side EvalSymlinks + os.OpenFile 兩段式 atomic 得多 — 即便攻擊者
-// 在 evalSymlinksWithFallback 與 openat 之間 swap symlink,kernel 在 syscall
+// 在 EvalSymlinksWithFallback 與 openat 之間 swap symlink,kernel 在 syscall
 // 階段重新檢查,RESOLVE_BENEATH 違反會回 EXDEV、無 magic link 違反回 ELOOP。
 //
 // fallback:openat2 是 Linux 5.6+ syscall,舊 kernel 回 ENOSYS。我們在 ENOSYS
@@ -110,7 +110,7 @@ func openValidated(resolvedPath, hitBase string) (*os.File, error) {
 		// RESOLVE_BENEATH:不允許 walk 出 dirfd 範圍。
 		// RESOLVE_NO_MAGICLINKS:擋 /proc/$$/fd 等 magic link 攻擊。
 		// RESOLVE_NO_SYMLINKS:任一 path component 為 symlink 即 reject (ELOOP)。
-		// 之所以安全 — resolvedPath 是 caller-side evalSymlinksWithFallback 的產物,
+		// 之所以安全 — resolvedPath 是 caller-side EvalSymlinksWithFallback 的產物,
 		// hitBase 內部合法 symlink 早已被解析掉 (例如 OutputDir 內使用者建的 symlink
 		// 指向同 base 下另一 dir,EvalSymlinks 已展開成 real path),故此 flag 不會誤殺
 		// 合法 in-base symlink。它擋的是 EvalSymlinks 與 openat2 之間 TOCTOU 窗口被 swap

@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"count_mean/internal/security/fsperm"
 )
 
 // Path validation error definitions.
@@ -180,7 +182,7 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 //	ValidateExternalPath("/tmp/foo/passwd")   // lexical 不中 /etc/,但
 //	                                          // os.Open 跟著 symlink 開到 /etc/passwd
 //
-// 因此 absPath 透過 resolveSymlinksWithFallback 解析到 nearest existing parent,
+// 因此 absPath 透過 fsperm.EvalSymlinksWithFallback 解析到 nearest existing parent,
 // resolved 路徑也跑一次 performBasicSecurityChecks。lexical check 保留為雙重
 // 防護(symlink 不解析但字串本身已含 /etc/ 的直接攻擊)。
 //
@@ -213,9 +215,9 @@ func (pv *PathValidator) ValidateExternalPath(path string) error {
 	}
 
 	// Layer 2：resolve symlink 後再檢一次。原因見上方註解。
-	resolvedPath, resolveErr := resolveSymlinksWithFallback(absPath)
+	resolvedPath, resolveErr := fsperm.EvalSymlinksWithFallback(absPath, 0)
 	if resolveErr != nil {
-		// resolveSymlinksWithFallback 只在「整條 path 連 / 都不存在」這類異常時 fail。
+		// fsperm.EvalSymlinksWithFallback 只在「整條 path 連 / 都不存在」這類異常時 fail。
 		// 對「path 不存在但 parent 存在」會走 fallback。此處保守 reject，避免 silently
 		// skip layer 2 留下 false negative。
 		return fmt.Errorf("無法解析路徑符號連結 '%s': %w", absPath, resolveErr)
@@ -224,49 +226,6 @@ func (pv *PathValidator) ValidateExternalPath(path string) error {
 	// Resolved 路徑可能與 absPath 相同（無 symlink）— 重複跑一次也 cheap，且
 	// 程式邏輯簡潔（不需特判 absPath == resolvedPath）。
 	return performBasicSecurityChecks(resolvedPath)
-}
-
-// resolveSymlinksWithFallback 解析 absPath 上所有 symlink，回傳完全解析後的
-// 絕對路徑。如果 absPath 本身不存在（典型 case：caller 傳 OutputDir +
-// dummy child，dummy child 尚未建立），會逐層往 parent 走找到 nearest existing
-// parent，對其 EvalSymlinks 解析後，再 append 未存在的 child suffix。
-//
-// 為何需要 fallback：filepath.EvalSymlinks 對不存在的路徑直接回 ENOENT，
-// 但 config.Validate / cci.ExportToCSV / muscle_ratio.Analyze 都會建構「未來
-// 寫入路徑的 prefix + dummy marker」來做 sensitive-prefix 驗證，這些 path
-// 都是 not-yet-exists。沒 fallback 會把整批 config validation 打掛。
-//
-// 演算法：
-//  1. 嘗試 EvalSymlinks(absPath)。若成功直接回。
-//  2. 否則切出 dir = filepath.Dir(absPath)，base = filepath.Base(absPath)。
-//  3. 對 dir 遞迴呼自己（直到能解析或抵達 root）。
-//  4. 回傳 filepath.Join(resolvedDir, base)。
-//
-// 邊界：抵達 root（filepath.Dir(p) == p）仍無法解析時回 error — 表示連 /
-// 都不可解析，這在正常系統不會發生（除非檔系統爛掉），保守 fail-closed。
-//
-//nolint:err113 // dynamic errors for user-facing output
-func resolveSymlinksWithFallback(absPath string) (string, error) {
-	if absPath == "" {
-		return "", nil
-	}
-
-	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
-		return resolved, nil
-	}
-
-	parent := filepath.Dir(absPath)
-	// Dir 已抵達 root（"/" on Unix, "C:\" on Windows）仍解析不了 — 異常狀況。
-	if parent == absPath {
-		return "", fmt.Errorf("路徑根目錄無法解析: %s", absPath)
-	}
-
-	resolvedParent, err := resolveSymlinksWithFallback(parent)
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Join(resolvedParent, filepath.Base(absPath)), nil
 }
 
 // validatePathFormat performs the URL-decode + traversal + absolute-resolution

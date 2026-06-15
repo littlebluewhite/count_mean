@@ -338,8 +338,8 @@ func TestResolveLenientPath_RejectsZeroWidthCharacterTraversal(t *testing.T) {
 // 在純 split-on-separator 的 HasTraversalElement 下會被當成「字面 ` ..` 目錄名」、
 // 「字面 `.. ` 目錄名」未被識別為 traversal。雖然 filesystem 多半不存在這種目錄
 // 而會在 OpenFile 階段失敗，但本檔的契約是「在 resolution 前先擋 traversal」，
-// 否則 boundary check 之外的任何 fallback path（例如 evalSymlinksLenient 走 parent
-// fallback）可能仍給出可疑路徑。Defense in depth：normalized 與 cleaned 雙檢查。
+// 否則 boundary check 之外的任何 fallback path（例如 fsperm.EvalSymlinksWithFallback
+// 走 parent fallback）可能仍給出可疑路徑。Defense in depth：normalized 與 cleaned 雙檢查。
 //
 // 此 test 同時 cover whitespace-padded `..` 與 mixed-separator `..` 變形。
 func TestResolveLenientPath_TraversalDefenseInDepth(t *testing.T) {
@@ -402,18 +402,18 @@ func TestResolveLenientPath_RejectsAbsoluteRelOutput(t *testing.T) {
 }
 
 // TestResolveLenientPath_AcceptsDeepNonExistentChild 釘住 regression:
-// 舊版 evalSymlinksLenient 只做單層 fallback — 若 joined path 的 parent 也不存在,
+// 舊版 lenient resolver 只做單層 fallback — 若 joined path 的 parent 也不存在,
 // 整段 path resolution fail。但 manifest-driven 流程常見 `OutputDir/subject/trial/emg.csv`
 // 這類「subject 與 trial 資料夾都尚未建立」的情境,舊版會誤拒。
 //
-// 修法:遞迴 fallback (對齊 pathvalidator.resolveSymlinksWithFallback),沿 parent
+// 修法:遞迴 fallback (對齊 fsperm.EvalSymlinksWithFallback),沿 parent
 // 一路往上找 nearest existing dir,resolve 後接回原 suffix。加 depth limit (8 層)
 // 避免極端構造的 path 觸發過度 recursion。
 func TestResolveLenientPath_AcceptsDeepNonExistentChild(t *testing.T) {
 	base := t.TempDir()
 
 	// 構造 5 層全部不存在的 nested path: base/a/b/c/d/file.csv
-	// 舊版 evalSymlinksLenient (僅單層 fallback):
+	// 舊版 lenient resolver (僅單層 fallback):
 	//   EvalSymlinks(base/a/b/c/d/file.csv) → ENOENT
 	//   EvalSymlinks(base/a/b/c/d)         → ENOENT
 	//   → return error "parent dir 無法解析"

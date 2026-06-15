@@ -7,7 +7,7 @@
 // a surviving symlink at the openat2 boundary deterministically.
 //
 // Why the public API cannot exercise this: OpenWriteValidated runs
-// evalSymlinksWithFallback(path) FIRST, which fully resolves every symlink
+// EvalSymlinksWithFallback(path, 0) FIRST, which fully resolves every symlink
 // component. By the time openat2 runs, a legal in-base symlink has already been
 // expanded to its real target, so openat2 never sees a symlink. To assert that
 // RESOLVE_NO_SYMLINKS rejects a symlink that DOES survive to the syscall — the
@@ -59,7 +59,7 @@ func requireOpenat2(t *testing.T) {
 
 // TestOpenValidated_RejectsSurvivingInBaseSymlink_Linux 釘住 ADR-0017 Decision 7:
 // openat2 的 Resolve 必須含 RESOLVE_NO_SYMLINKS。模擬 TOCTOU swap — 一個「在
-// evalSymlinksWithFallback 之後才被換進來、survive 到 openat2 那一步」的 in-base
+// EvalSymlinksWithFallback 之後才被換進來、survive 到 openat2 那一步」的 in-base
 // symlink — openat2 必須以 ELOOP 拒絕,openValidated / openReadValidated 再 wrap
 // 成 ErrPathEscapesBase。
 //
@@ -157,7 +157,7 @@ func TestOpenValidated_RejectsSurvivingInBaseSymlink_Linux(t *testing.T) {
 
 // TestOpenValidated_AcceptsPreResolvedInBasePath_Linux 是上一個測試的正向對照:
 // 證明 RESOLVE_NO_SYMLINKS 只擋「survive 到 openat2 的 symlink」,不誤殺已被
-// evalSymlinksWithFallback 展開成 real path 的合法 in-base 路徑 (公開 API 真正
+// EvalSymlinksWithFallback 展開成 real path 的合法 in-base 路徑 (公開 API 真正
 // 餵進 openValidated 的就是這種已解析路徑)。若此測試紅,代表新 flag 連合法路徑
 // 都擋,改動就破壞了既有契約。
 func TestOpenValidated_AcceptsPreResolvedInBasePath_Linux(t *testing.T) {

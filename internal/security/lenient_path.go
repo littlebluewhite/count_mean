@@ -134,7 +134,7 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 	// O_NOFOLLOW 只擋「最終 component 是 symlink」（man 2 open: "only affects the interpretation
 	// of the last component"），對「parent 是 symlink 指外部」無防護 — 例如 baseFolder/link/emg.csv
 	// 其中 link → /etc 會在 lexical Rel 通過後仍實際讀 /etc/emg.csv。
-	resolvedJoined, err := evalSymlinksLenient(joined)
+	resolvedJoined, err := fsperm.EvalSymlinksWithFallback(joined, evalSymlinksLenientMaxDepth)
 	if err != nil {
 		return "", fmt.Errorf("無法解析路徑 %s: %w", filename, err)
 	}
@@ -271,65 +271,8 @@ func hasTraversalElementTrimmed(path string) bool {
 	return false
 }
 
-// evalSymlinksLenientMaxDepth 限制 evalSymlinksLenient 沿 parent 往上遞迴的層數。
-//
-// 遞迴 fallback 必須有 fail-closed bound 避免病態構造的 path (極深 nesting)
-// 觸發 unbounded recursion / stack growth。8 層遠超出 manifest-driven 流程典型深度
-// (常見 1-3 層 OutputDir/subject/trial),legitimate use case 不會撞到上限。
+// evalSymlinksLenientMaxDepth 是 lenient path 傳給 fsperm.EvalSymlinksWithFallback
+// 的 maxDepth 參數 (ADR-0028)。parent-walk 超過 8 層即 fail-closed error — 8 遠超
+// manifest-driven 流程典型深度 (常見 1-3 層 OutputDir/subject/trial),legitimate
+// use case 不會撞到上限。對抗性 manifest 路徑的 defense-in-depth。
 const evalSymlinksLenientMaxDepth = 8
-
-// evalSymlinksLenient 是 filepath.EvalSymlinks 的 lenient 遞迴版本:
-//
-// 若 path 本身不存在 (典型 case:output file 尚未建立),沿 parent 一路往上遞迴
-// 找到 nearest existing dir,EvalSymlinks(dir) 後再接回原本 non-existent 的 child
-// suffix。對齊 pathvalidator.go 的 resolveSymlinksWithFallback pattern,避免
-// 跨檔行為不一致。
-//
-// # 為何需要遞迴 (非單層)
-//
-// 舊版只做單層 fallback,manifest-driven 流程常見「OutputDir/subject/trial/emg.csv」
-// 這種 subject 與 trial 資料夾都尚未建立的情境,舊版會因 parent (subject) 也不存在
-// 而 fail。新版逐層往上找到 OutputDir (存在) 才解析,符合「先建路徑、後寫檔」流程。
-//
-// # 為何需要 depth limit
-//
-// `filepath.Dir` 沿著 path 必然抵達 root (parent == path) 而終止,理論上 unbounded
-// recursion 不會發生。但保守加 8 層上限作為 defense-in-depth — 病態構造的長 path
-// (e.g. 攻擊者構造 1000 層 non-existent nesting) 即便 < maxPathLength=4096 也可
-// 觸發深度遞迴。fail-closed 後上層收到 error 比 hang 死好處理。
-//
-//nolint:err113 // dynamic errors for user-facing output
-func evalSymlinksLenient(path string) (string, error) {
-	return evalSymlinksLenientDepth(path, evalSymlinksLenientMaxDepth)
-}
-
-// evalSymlinksLenientDepth 是 evalSymlinksLenient 的 inner helper,顯式帶 depth
-// counter 避免 unbounded recursion。
-//
-//nolint:err113 // dynamic errors for user-facing output
-func evalSymlinksLenientDepth(path string, depth int) (string, error) {
-	if path == "" {
-		return "", nil
-	}
-	if depth <= 0 {
-		return "", fmt.Errorf("evalSymlinksLenient: 路徑遞迴層數超過上限 (%d): %s",
-			evalSymlinksLenientMaxDepth, path)
-	}
-
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		return resolved, nil
-	}
-
-	parent := filepath.Dir(path)
-	// 抵達 root (Unix "/" / Windows "C:\\") 仍無法解析 — 異常狀況 (連根都不通)。
-	if parent == path {
-		return "", fmt.Errorf("路徑根目錄無法解析: %s", path)
-	}
-
-	resolvedParent, err := evalSymlinksLenientDepth(parent, depth-1)
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Join(resolvedParent, filepath.Base(path)), nil
-}

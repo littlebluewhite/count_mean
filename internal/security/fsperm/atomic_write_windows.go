@@ -15,7 +15,7 @@ import (
 // 安全性:parent-swap TOCTOU 的 kernel-level 防護在 Windows 不可得 (需
 // CreateFile + FILE_FLAG_OPEN_REPARSE_POINT,ADR-0017 Decision 8 明確 defer)。
 // defense-in-depth 由 caller-side EvalSymlinks (OpenAtomicWriteValidated 內已對
-// 父目錄做 evalSymlinksWithFallback + matchAnyBase) 提供;殘餘 NTFS junction /
+// 父目錄做 EvalSymlinksWithFallback + matchAnyBase) 提供;殘餘 NTFS junction /
 // reparse-point 風險與 flags_windows.go package doc 所述相同。
 //
 // 此處不嘗試 CreateFile reparse-point 處理 — Windows symlink-atomic 列為 follow-up
