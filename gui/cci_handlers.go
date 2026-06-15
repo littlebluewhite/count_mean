@@ -130,24 +130,10 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 
 	report := cci.GenerateReport(analysisResult)
 
-	// Output 2(ADR-0018):分期視窗統計 CSV。PhaseStats → payload 純欄位搬移;
-	// PairLabels 沿用 Output-1 的 pairNames(同序),保 Output 1 & 2 欄位對齊。
+	// Output 2(ADR-0018, ADR-0025):分期視窗統計 CSV。直接傳 analysisResult,
+	// pair 欄位 header 與資料列皆於 io 內部從 result 推導(與 Output-1 對稱)。
 	// CCI 為 fail-fast(ADR-0010):導出失敗即回 failedCCIResult(對齊上方圖表錯誤)。
-	phaseRows := make([]io.CCIPhaseStatRowPayload, len(analysisResult.PhaseStats))
-	for i, r := range analysisResult.PhaseStats {
-		phaseRows[i] = io.CCIPhaseStatRowPayload{
-			Item:    r.Item,
-			Metric:  r.Metric,
-			Time:    r.Time,
-			HasTime: r.HasTime,
-			Values:  r.Values,
-		}
-	}
-	phasesPath, phasesErr := s.csvHandler.WriteCCIPhasesResult(a.context(), io.WriteRequest{}, io.CCIOutputPhasesPayload{
-		Subject:    analysisResult.Subject,
-		PairLabels: pairNames,
-		Rows:       phaseRows,
-	})
+	phasesPath, phasesErr := s.csvHandler.WriteCCIPhasesResult(a.context(), io.WriteRequest{}, analysisResult)
 	if phasesErr != nil {
 		return failedCCIResult(fmt.Sprintf("分期統計導出失敗: %s", redact.RedactForMessage(phasesErr))), nil
 	}

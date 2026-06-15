@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"count_mean/internal/cci"
 	"count_mean/internal/csvutil"
 )
 
@@ -23,10 +24,10 @@ func TestWriteCCIPhasesResult_ContentRoundTrip(t *testing.T) {
 
 	handler, tempDir := newFormatAwareTestHandler(t)
 
-	payload := CCIOutputPhasesPayload{
-		Subject:    "NSF1",
-		PairLabels: []string{"RA/ES", "IL/GMax"},
-		Rows: []CCIPhaseStatRowPayload{
+	payload := &cci.CCIAnalysisResult{
+		Subject:     "NSF1",
+		PairResults: []cci.CCIResult{{PairName: "RA/ES"}, {PairName: "IL/GMax"}},
+		PhaseStats: []cci.CCIPhaseStatRow{
 			// interval row — no time
 			{Item: "IC→LR", Metric: "mean", HasTime: false, Values: []float64{0.123456, 0.654321}},
 			// point row — has time
@@ -73,10 +74,10 @@ func TestWriteCCIPhasesResult_BOMPresent(t *testing.T) {
 
 	handler, _ := newFormatAwareTestHandler(t)
 
-	payload := CCIOutputPhasesPayload{
-		Subject:    "subj",
-		PairLabels: []string{"P1"},
-		Rows: []CCIPhaseStatRowPayload{
+	payload := &cci.CCIAnalysisResult{
+		Subject:     "subj",
+		PairResults: []cci.CCIResult{{PairName: "P1"}},
+		PhaseStats: []cci.CCIPhaseStatRow{
 			{Item: "IC", Metric: "mean", HasTime: false, Values: []float64{1.0}},
 		},
 	}
@@ -96,10 +97,10 @@ func TestWriteCCIPhasesResult_NoTmpResidue(t *testing.T) {
 
 	handler, tempDir := newFormatAwareTestHandler(t)
 
-	payload := CCIOutputPhasesPayload{
-		Subject:    "subj",
-		PairLabels: []string{"P1"},
-		Rows: []CCIPhaseStatRowPayload{
+	payload := &cci.CCIAnalysisResult{
+		Subject:     "subj",
+		PairResults: []cci.CCIResult{{PairName: "P1"}},
+		PhaseStats: []cci.CCIPhaseStatRow{
 			{Item: "IC", Metric: "mean", HasTime: false, Values: []float64{1.0}},
 		},
 	}
@@ -121,10 +122,10 @@ func TestWriteCCIPhasesResult_EmptyRows(t *testing.T) {
 
 	handler, _ := newFormatAwareTestHandler(t)
 
-	payload := CCIOutputPhasesPayload{
-		Subject:    "subj",
-		PairLabels: []string{"P1"},
-		Rows:       nil,
+	payload := &cci.CCIAnalysisResult{
+		Subject:     "subj",
+		PairResults: []cci.CCIResult{{PairName: "P1"}},
+		PhaseStats:  nil,
 	}
 
 	_, err := handler.WriteCCIPhasesResult(context.Background(), WriteRequest{}, payload)
@@ -147,13 +148,13 @@ func TestWriteCCIPhasesResult_PathTraversalRejected(t *testing.T) {
 		{"deep_traversal", "../../etc"},
 	}
 
-	row := CCIPhaseStatRowPayload{
+	row := cci.CCIPhaseStatRow{
 		Item: "IC", Metric: "mean", HasTime: false, Values: []float64{1.0},
 	}
-	payload := CCIOutputPhasesPayload{
-		Subject:    "subj",
-		PairLabels: []string{"P1"},
-		Rows:       []CCIPhaseStatRowPayload{row},
+	payload := &cci.CCIAnalysisResult{
+		Subject:     "subj",
+		PairResults: []cci.CCIResult{{PairName: "P1"}},
+		PhaseStats:  []cci.CCIPhaseStatRow{row},
 	}
 
 	for _, tc := range traversalCases {
@@ -169,4 +170,17 @@ func TestWriteCCIPhasesResult_PathTraversalRejected(t *testing.T) {
 				"error should mention 輸出路徑 for subDir=%q", tc.subDir)
 		})
 	}
+}
+
+// TestWriteCCIPhasesResult_NilResult 驗證 result == nil → errEmptyCCIPhasesPayload
+// (A2 pointer 簽名新增的分支,ADR-0025)。
+func TestWriteCCIPhasesResult_NilResult(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newFormatAwareTestHandler(t)
+
+	_, err := handler.WriteCCIPhasesResult(context.Background(), WriteRequest{}, nil)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errEmptyCCIPhasesPayload),
+		"expected errEmptyCCIPhasesPayload for nil result, got: %v", err)
 }
