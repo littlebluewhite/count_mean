@@ -136,7 +136,7 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 	if !ok {
 		// resolvedParent 與 basePaths 皆絕對路徑 → 過 redact 防 PHI 洩漏。
 		return nil, fmt.Errorf("%w: 父目錄 %s 不在 %s 之下",
-			ErrPathEscapesBase, redact.Paths(resolvedParent), redact.Paths(fmt.Sprintf("%v", basePaths)))
+			ErrPathEscapesBase, redact.Paths(resolvedParent), redactBasePaths(basePaths))
 	}
 
 	// Anchor on the target's *validated leaf parent*, reached by descending from the

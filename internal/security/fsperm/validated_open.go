@@ -91,7 +91,7 @@ func OpenWriteValidated(path string, basePaths []string) (*os.File, error) {
 	hitBase, ok := matchAnyBase(resolvedPath, basePaths)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s 不在 %s 之下",
-			ErrPathEscapesBase, redact.Paths(resolvedPath), redact.Paths(fmt.Sprintf("%v", basePaths)))
+			ErrPathEscapesBase, redact.Paths(resolvedPath), redactBasePaths(basePaths))
 	}
 
 	f, err := openValidated(resolvedPath, hitBase)
@@ -99,6 +99,24 @@ func OpenWriteValidated(path string, basePaths []string) (*os.File, error) {
 		return nil, fmt.Errorf("fsperm.OpenWriteValidated: OpenFile failed: %w", err)
 	}
 	return f, nil
+}
+
+// redactBasePaths 將 base path 清單逐一過 redact 後組成 caller-facing 顯示字串。
+//
+// 不可直接 redact.Paths(fmt.Sprintf("%v", basePaths))(codex R2 [P2]):
+//   - "%v" 整個 slice 產生 "[/Patient123]",開頭的 "[" 讓 redact 的 line-start
+//     fallback 失效、又無 trailing slash 供正則消費 → root-level base 完全漏脫敏。
+//   - redact.Paths 預設「保留 basename」(給檔案路徑 debug 用),但 base path 是
+//     目錄,其末段正是敏感的 patient 目錄名。
+//
+// 故對每個 base 先 append "/" 強制正則連末段一併脫成 "<redacted-path>/"。
+func redactBasePaths(basePaths []string) string {
+	redacted := make([]string, len(basePaths))
+	for i, p := range basePaths {
+		redacted[i] = redact.Paths(p + "/")
+	}
+
+	return fmt.Sprintf("%v", redacted)
 }
 
 // OpenReadValidated 為 OpenWriteValidated 的 read-side 對稱 helper:讀檔前
@@ -129,7 +147,7 @@ func OpenReadValidated(path string, basePaths []string) (*os.File, error) {
 	hitBase, ok := matchAnyBase(resolvedPath, basePaths)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s 不在 %s 之下",
-			ErrPathEscapesBase, redact.Paths(resolvedPath), redact.Paths(fmt.Sprintf("%v", basePaths)))
+			ErrPathEscapesBase, redact.Paths(resolvedPath), redactBasePaths(basePaths))
 	}
 
 	f, err := openReadValidated(resolvedPath, hitBase)

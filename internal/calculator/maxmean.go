@@ -417,6 +417,11 @@ func (c *MaxMeanCalculator) resolveDataRange(
 	// normalizeTime 只把 NaN 正規化為 0 (保留舊行為);±Inf 在 float64 比較下語意
 	// 天然正確,無須轉 int64-微秒,故移除過去多餘的 ×1e6 與 int64 round (該乘法
 	// 把溢位門檻拉到 ~922 秒,使 scalingFactor=10 下 >922 秒的 row 被靜默 clamp)。
+	//
+	// 邊界為「精確 float64 比較」,刻意不保留舊 ×1e6 的次微秒取整容差 (codex R2 dismiss):
+	// 那容差是 int64-微秒機制的附帶產物、非刻意 spec,而 ×1e6 正是溢位 bug 根源。
+	// 資料時間戳 (CSV→Str2Number→×Pow10) 與使用者邊界 (×Pow10) 共用縮放路徑,相等
+	// 字串值產生 bit-identical float 必被納入;僅「真正相異的次微秒值」被排除 (本應排除)。
 	scaledStartRange := normalizeTime(opts.StartRange * math.Pow10(c.scalingFactor))
 	scaledEndRange := normalizeTime(opts.EndRange * math.Pow10(c.scalingFactor))
 
