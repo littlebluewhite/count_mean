@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -969,6 +971,173 @@ func TestInitLogger_Reinit_ClosesOldHandle(t *testing.T) {
 	// **驗證 2**: 同個 dir 連續兩次 init 必須成功 — 證明 registry 被正確 unregister
 	if err := InitLogger(LevelInfo, dirA, false); err != nil {
 		t.Errorf("third init (back to dirA) should succeed if reinit closed handle, got %v", err)
+	}
+}
+
+// resetDefaultLoggerState 還原 default logger 全域狀態,避免污染其他 test。
+// re-init 系列 test 共用。
+func resetDefaultLoggerState(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = ShutdownLogger()
+		defaultLoggerMu.Lock()
+		defaultLogger = nil
+		defaultFileLogger = nil
+		defaultLoggerMu.Unlock()
+		defaultLoggerInit.Store(false)
+		defaultLoggerOnce = sync.Once{}
+	})
+}
+
+// TestInitLogger_Reinit_FailureKeepsOldLoggerUsable 守護 P2-9 的核心不變式:
+// re-init 失敗時一律不動舊 state,舊 logger 必須保持可用。
+//
+// **Scenario**: 舊 logger 已在 dirA 開檔;接著用一個會開檔失敗的 logDir 再 init
+// (這裡用「parent 是一個 regular file」讓 os.MkdirAll 失敗)。 過去 InitLogger
+// 先 Close 舊 writer 再開新檔 — 一旦新檔開失敗,舊 writer 已被關掉、registry 也
+// 解註冊,舊 logger 永久壞掉 (Write 回 ErrWriterClosed)。 修補後改「先建新成功才
+// 動舊」,失敗時舊 writer 仍 open、registry 仍持有,defaultLogger 仍寫得進舊檔。
+//
+// **驗證**:
+//  1. 失敗的 InitLogger 必須回 error
+//  2. 舊 writer 仍可寫 (不是 ErrWriterClosed)
+//  3. GetLogger().Info(...) 寫的內容確實落到 dirA/app.log
+func TestInitLogger_Reinit_FailureKeepsOldLoggerUsable(t *testing.T) {
+	resetDefaultLoggerState(t)
+
+	dirA := t.TempDir()
+	if err := InitLogger(LevelInfo, dirA, false); err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+
+	// 抓舊 writer reference,稍後驗證它沒被 close。
+	defaultLoggerMu.RLock()
+	oldFileLogger := defaultFileLogger
+	defaultLoggerMu.RUnlock()
+	oldWriter, ok := oldFileLogger.output.(*SizeRotatingWriter)
+	if !ok {
+		t.Fatalf("old fileLogger.output is not *SizeRotatingWriter, got %T", oldFileLogger.output)
+	}
+
+	// 構造一個註定 MkdirAll 失敗的 logDir:先建一個 regular file,再把它當 parent。
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("create blocker file: %v", err)
+	}
+	badDir := filepath.Join(blocker, "logs") // blocker 是檔案,當作目錄的 parent 會失敗
+
+	// **驗證 1**: 失敗的 re-init 必須回 error。
+	if err := InitLogger(LevelInfo, badDir, false); err == nil {
+		t.Fatal("re-init with un-creatable logDir should fail, got nil")
+	}
+
+	// **驗證 2**: 舊 writer 不該被 close — 直接寫一筆必須成功 (非 ErrWriterClosed)。
+	if _, err := oldWriter.Write([]byte("probe-after-failed-reinit\n")); err != nil {
+		t.Errorf("old writer should still be usable after failed re-init, got %v", err)
+	}
+
+	// **驗證 3**: default logger 仍指向舊檔 — Info 寫的內容應落到 dirA/app.log。
+	GetLogger().Info("still-works-after-failed-reinit")
+	if err := ShutdownLogger(); err != nil { // flush + close 讓內容落盤可讀
+		t.Fatalf("shutdown: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dirA, "app.log"))
+	if err != nil {
+		t.Fatalf("read dirA/app.log: %v", err)
+	}
+	if !strings.Contains(string(data), "still-works-after-failed-reinit") {
+		t.Errorf("old logger 寫入沒落到 dirA/app.log:\n%s", string(data))
+	}
+}
+
+// TestInitLogger_Reinit_SameDir_ReusesWriter 守護 P2-9 的同 logDir 分流:
+// 對同一個 logDir/app.log 再 init,不能撞 ErrLogPathAlreadyOpen (registry 在開檔前
+// 就擋同 path 第二個 writer)。 修補後改為 reuse 既有 writer、只 republish 包裝層,
+// 因此第二次 init 必須成功,且底層 writer 物件不變 (沒重開檔)。
+func TestInitLogger_Reinit_SameDir_ReusesWriter(t *testing.T) {
+	resetDefaultLoggerState(t)
+
+	dir := t.TempDir()
+	if err := InitLogger(LevelInfo, dir, false); err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+
+	defaultLoggerMu.RLock()
+	firstWriter, ok := defaultFileLogger.output.(*SizeRotatingWriter)
+	defaultLoggerMu.RUnlock()
+	if !ok {
+		t.Fatalf("first fileLogger.output is not *SizeRotatingWriter")
+	}
+
+	// 同 dir 第二次 init — 改 level/format,必須成功 (reuse 分流,不撞 already-open)。
+	if err := InitLogger(LevelDebug, dir, true); err != nil {
+		t.Fatalf("same-dir re-init should succeed via writer reuse, got %v", err)
+	}
+
+	// 底層 writer 必須是同一個物件 — 證明沒重開檔。
+	defaultLoggerMu.RLock()
+	secondWriter, ok := defaultFileLogger.output.(*SizeRotatingWriter)
+	defaultLoggerMu.RUnlock()
+	if !ok {
+		t.Fatalf("second fileLogger.output is not *SizeRotatingWriter")
+	}
+	if firstWriter != secondWriter {
+		t.Errorf("same-dir re-init should reuse the same *SizeRotatingWriter, got new writer")
+	}
+
+	// republish 的 level 必須生效 — debug 訊息現在應該寫得出去。
+	GetLogger().Debug("debug-after-reinit")
+	if err := ShutdownLogger(); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "app.log"))
+	if err != nil {
+		t.Fatalf("read app.log: %v", err)
+	}
+	if !strings.Contains(string(data), "debug-after-reinit") {
+		t.Errorf("re-init 後新 level (debug) 沒生效:\n%s", string(data))
+	}
+}
+
+// TestInitLogger_Reinit_DifferentDir_Success 守護不同 logDir 的 re-init 成功路徑:
+// 先建新檔成功、publish、再 close 舊的。 第二個 dir 必須真的被寫入,且舊 writer
+// 被 close (Write 回 ErrWriterClosed)。
+func TestInitLogger_Reinit_DifferentDir_Success(t *testing.T) {
+	resetDefaultLoggerState(t)
+
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+
+	if err := InitLogger(LevelInfo, dirA, false); err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+	defaultLoggerMu.RLock()
+	oldWriter, ok := defaultFileLogger.output.(*SizeRotatingWriter)
+	defaultLoggerMu.RUnlock()
+	if !ok {
+		t.Fatalf("first fileLogger.output is not *SizeRotatingWriter")
+	}
+
+	if err := InitLogger(LevelInfo, dirB, false); err != nil {
+		t.Fatalf("different-dir re-init should succeed, got %v", err)
+	}
+
+	// 舊 writer 應已被 close。
+	if _, werr := oldWriter.Write([]byte("x")); !stderrors.Is(werr, ErrWriterClosed) {
+		t.Errorf("old writer should be closed after different-dir re-init, got %v", werr)
+	}
+
+	// 新內容應落到 dirB。
+	GetLogger().Info("written-to-dirB")
+	if err := ShutdownLogger(); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dirB, "app.log"))
+	if err != nil {
+		t.Fatalf("read dirB/app.log: %v", err)
+	}
+	if !strings.Contains(string(data), "written-to-dirB") {
+		t.Errorf("different-dir re-init 後內容沒落到 dirB:\n%s", string(data))
 	}
 }
 

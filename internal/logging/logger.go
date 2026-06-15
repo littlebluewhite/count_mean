@@ -696,37 +696,55 @@ var (
 	defaultFileLogger *Logger
 )
 
+// logFilename 是 InitLogger 固定使用的 log 檔名;抽成常數讓 re-init 的
+// same-path 判定 (resolveLogAbsPath) 與 NewFileLogger 用同一個來源。
+const logFilename = "app.log"
+
+// resolveLogAbsPath 把 logDir 解析成 InitLogger 實際開檔的 absolute path
+// (logDir/app.log),與 NewSizeRotatingWriter 的 registry key 同源。 re-init
+// 時用它判斷新舊 logger 是否指向「同一個 log 檔」決定走 reuse 或 reopen 分流。
+func resolveLogAbsPath(logDir string) (string, error) {
+	abs, err := filepath.Abs(filepath.Join(logDir, logFilename))
+	if err != nil {
+		return "", fmt.Errorf("無法解析 log file 絕對路徑: %w", err)
+	}
+	return abs, nil
+}
+
 // InitLogger initializes the default logger.
 //
 // race 修補 — initialized atomic.Bool 在 mutex 解鎖後才 set,確保並發
 // GetLogger 看到 initialized=true 時 defaultLogger 已就緒。
 //
-// 支援 re-init — 若 defaultFileLogger 已存在,先 Close 釋放舊 *os.File
-// handle 與 registry 佔位,再覆寫新的。 過去重複呼叫 InitLogger 會 leak fd 與
-// registry entry,使用者在 GUI 內切換 logDir / 開發者重啟 logger 會逐步耗光 fd。
-// Close 必須在拿到新 fileLogger 之後、覆寫 defaultFileLogger 之前執行,避免 close
-// 失敗讓整個 init 失敗 (新 fileLogger 已 open,就算舊的 close 失敗也該 publish
-// 新 state,只是 stderr log 一下)。
+// re-init 分流 (失敗時一律不動舊 state,舊 logger 保持可用):
+//
+//   - **同一 logDir/app.log**: registry 在開檔前就會擋同 path 的第二個 writer
+//     (ErrLogPathAlreadyOpen,只有 Close 解註冊),所以「先建新再關舊」對同 dir
+//     行不通。 改為 reuse 既有 *SizeRotatingWriter,只把 level/format/stdout 包裝層
+//     republish — 不重開檔、不 close 舊 writer。
+//   - **不同 logDir**: 先 NewFileLogger 開新檔成功、publish 新 state,再 Close 舊的
+//     釋放 fd + registry。 新檔開失敗則 return error,defaultLogger / defaultFileLogger
+//     維持原樣,舊 logger 仍可寫。
 func InitLogger(level LogLevel, logDir string, jsonFormat bool) error {
-	// 先抓舊 fileLogger reference (在 mutex 下取一份 snapshot,讓 Close 在 mutex 外
-	// 跑,避免 file IO 拖長 critical section)。 用 RLock 即可,publish 階段才升 Lock。
+	// 先抓舊 fileLogger reference (在 mutex 下取一份 snapshot)。 用 RLock 即可,
+	// publish 階段才升 Lock。
 	defaultLoggerMu.RLock()
 	oldFileLogger := defaultFileLogger
 	defaultLoggerMu.RUnlock()
 
-	// 若舊 logger 與新 logger 指向相同 logDir,先 close 舊的 (釋放 registry 佔位),
-	// 否則 NewFileLogger → NewSizeRotatingWriter 會撞到 ErrLogPathAlreadyOpen。
-	// 若 logDir 不同,close 舊的純粹是 fd 釋放 — 順序不影響成功率,但統一在 new
-	// 之前 close 更直觀 (新舊 logger 不重疊持有 fd)。
+	// 同 path 判定:新 logDir/app.log 與舊 writer 的 absPath 相同 → reuse 分流。
 	if oldFileLogger != nil {
-		if err := oldFileLogger.Close(); err != nil {
-			// 不 fail init — 舊 fd 可能因為磁碟層問題沒 close 乾淨,但新 logger 仍應
-			// 啟動。 stderr log 後繼續。
-			_, _ = fmt.Fprintf(os.Stderr, "InitLogger: close old file logger failed (non-fatal): %v\n", err)
+		newAbsPath, err := resolveLogAbsPath(logDir)
+		if err != nil {
+			return err
+		}
+		if oldWriter, ok := oldFileLogger.output.(*SizeRotatingWriter); ok && oldWriter.absPath == newAbsPath {
+			return reinitSameLogPath(level, oldWriter, jsonFormat)
 		}
 	}
 
-	fileLogger, err := NewFileLogger(level, logDir, "app.log", jsonFormat)
+	// 不同 logDir (或首次 init):先建新成功才 publish,失敗則完全不動舊 state。
+	fileLogger, err := NewFileLogger(level, logDir, logFilename, jsonFormat)
 	if err != nil {
 		return err
 	}
@@ -743,6 +761,32 @@ func InitLogger(level LogLevel, logDir string, jsonFormat bool) error {
 	defaultLoggerInit.Store(true)
 
 	// 對 sync.Once 額外 mark "已執行",避免後續 lazy fallback 路徑再次嘗試初始化。
+	defaultLoggerOnce.Do(func() {})
+
+	// 新 state 已 publish,才釋放舊 fd + registry 佔位。 close 失敗只 stderr log,
+	// 不 fail init — 新 logger 已就緒可用。
+	if oldFileLogger != nil {
+		if err := oldFileLogger.Close(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "InitLogger: close old file logger failed (non-fatal): %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+// reinitSameLogPath 處理「re-init 指向同一個 log 檔」的分流:不重開檔(registry
+// 會擋同 path 第二個 writer)、不 close 舊 writer,只重用既有 *SizeRotatingWriter
+// 並 republish level/format/stdout 包裝層。 defaultFileLogger 換成包同一 writer
+// 的新 Logger,讓後續 ShutdownLogger 仍 close 這唯一的 writer。
+func reinitSameLogPath(level LogLevel, writer *SizeRotatingWriter, jsonFormat bool) error {
+	multiWriter := io.MultiWriter(writer, os.Stdout)
+
+	defaultLoggerMu.Lock()
+	defaultLogger = NewLogger(level, multiWriter, jsonFormat)
+	defaultFileLogger = NewLogger(level, writer, jsonFormat)
+	defaultLoggerMu.Unlock()
+
+	defaultLoggerInit.Store(true)
 	defaultLoggerOnce.Do(func() {})
 
 	return nil

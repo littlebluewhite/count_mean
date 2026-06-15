@@ -147,18 +147,6 @@ func runCLIPlaceholder(stderr io.Writer) int {
 func runGUI() error {
 	configPath := resolveDefaultConfigPath()
 	cfg, loadRes := loadStartupConfig(configPath)
-	switch loadRes.Status {
-	case configLoadLoaded:
-		// happy path:不額外 log,避免噪音
-	case configLoadDefault:
-		// 檔案不存在 — info 級別,讓使用者知道為何走 default
-		logging.Info(loadRes.Reason)
-	case configLoadFallback:
-		// 檔案存在但壞掉 — warn 級別 + 原始 error,使用者可看到「為什麼」走 default
-		logging.Warn(loadRes.Reason, map[string]any{
-			"error": loadRes.Err.Error(),
-		})
-	}
 
 	// 解析日誌級別
 	var logLevel logging.LogLevel
@@ -180,6 +168,21 @@ func runGUI() error {
 	jsonFormat := cfg.LogFormat == "json"
 	if err := logging.InitLogger(logLevel, cfg.LogDirectory, jsonFormat); err != nil {
 		logging.Error("無法初始化日誌系統", err)
+	} else {
+		// InitLogger 成功後才記 config fallback 原因,讓它以使用者設定的 level/format
+		// 寫進正式 sink (而非 InitLogger 前的 lazy stderr fallback)。
+		switch loadRes.Status {
+		case configLoadLoaded:
+			// happy path:不額外 log,避免噪音
+		case configLoadDefault:
+			// 檔案不存在 — info 級別,讓使用者知道為何走 default
+			logging.Info(loadRes.Reason)
+		case configLoadFallback:
+			// 檔案存在但壞掉 — warn 級別 + 原始 error,使用者可看到「為什麼」走 default
+			logging.Warn(loadRes.Reason, map[string]any{
+				"error": loadRes.Err.Error(),
+			})
+		}
 	}
 	// 在 runGUI 結束 (Wails 主迴圈關閉) 後釋放 logger file handle。
 	// 即使 InitLogger 失敗 (走 stderr fallback) ShutdownLogger 也 no-op safe。
