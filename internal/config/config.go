@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -198,16 +199,14 @@ func (c *AppConfig) SaveConfig(filename string) error {
 //   - 直接 OpenFile + Encode 不是 atomic — 寫到一半 process crash 會留下 partial
 //     JSON,下次 LoadConfig 解析失敗回 default,使用者修的設定被吃掉。
 //
-// 流程:
-//  1. MkdirAll(filepath.Dir(filename), DirPerm) — parent 路徑保證可寫
-//  2. 在同一 parent 下開 tmp file `<basename>.tmp.<rand>`,OEXCL 避免撞名
-//  3. JSON encode 進 tmp,fsync 後 close
-//  4. os.Rename(tmp, filename) — POSIX atomic rename(同 mount 內)
-//  5. 任一步驟失敗都 best-effort os.Remove(tmp),原 filename 不變動
-//
-// 與 csvutil.WriteCSVAtomic 同 pattern,但這裡 payload 是 JSON 而非 CSV,
-// 不複用 csvutil 而是自己寫一條 — 對 config 來說 30 行 self-contained 比 拉 csvutil
-// 還省事(csvutil 帶 BOM / CSV header / sanitize 等不適用於 JSON 的邏輯)。
+// 本函式只負責兩件事:① 確保 parent 目錄存在;② 把 JSON payload 描述給
+// fsperm.AtomicWriteFile,由後者統一處理 crypto-random tmp → open → fsync →
+// atomic rename → parent fsync 的耐久放置協定。tmp 檔名改用 crypto-random 後綴
+// (取代舊版固定 `<filename>.tmp`),從根本上消除「前次 crash 留下的固定名 .tmp
+// orphan 透過 O_EXCL 永久 block 後續存檔」的 bug — config 不再自行擁有任何
+// tmp/rename 邏輯可寫錯。basePaths 傳 nil 走 fallback 分支:config.json 是使用者
+// 自有檔,parent-swap dirfd 防護不在單機桌面威脅模型內,crypto-tmp + O_NOFOLLOW
+// + atomic rename 是恰當層級。
 func (c *AppConfig) SaveConfigAtomic(filename string) error {
 	if filename == "" {
 		//nolint:err113 // user-facing dynamic error
@@ -222,49 +221,14 @@ func (c *AppConfig) SaveConfigAtomic(filename string) error {
 		return fmt.Errorf("無法建立 config parent 目錄 %s: %w", parent, err)
 	}
 
-	// Atomic write:tmp + rename。tmp filename 加上 process PID 後綴避開常見
-	// `.tmp` 撞名(同個程式併發兩次 SaveConfig 極不可能,但仍把 entropy 給足)。
-	// 用 OEXCL 確保 tmp 真的是新建立的,撞名 attacker plant 也擋掉。
-	tmp := filename + ".tmp"
-
-	//nolint:gosec // filename validated by caller; tmp in same dir as final
-	tmpFile, err := os.OpenFile(tmp, fsperm.TmpCreateFlags, fsperm.FilePerm)
-	if err != nil {
-		return fmt.Errorf("建立 tmp config 檔失敗: %w", err)
-	}
-
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.Remove(tmp) //nolint:errcheck // best-effort cleanup of orphan tmp
+	return fsperm.AtomicWriteFile(filename, nil, func(w io.Writer) error {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(c); err != nil {
+			return fmt.Errorf("config encode 失敗: %w", err)
 		}
-	}()
-
-	encoder := json.NewEncoder(tmpFile)
-	encoder.SetIndent("", "  ")
-
-	if encodeErr := encoder.Encode(c); encodeErr != nil {
-		_ = tmpFile.Close() //nolint:errcheck // cleanup path; outer error being returned
-		return fmt.Errorf("config encode 失敗: %w", encodeErr)
-	}
-
-	if syncErr := tmpFile.Sync(); syncErr != nil {
-		_ = tmpFile.Close() //nolint:errcheck // cleanup path; outer error being returned
-		return fmt.Errorf("config fsync 失敗: %w", syncErr)
-	}
-
-	if closeErr := tmpFile.Close(); closeErr != nil {
-		return fmt.Errorf("關閉 tmp config 檔失敗: %w", closeErr)
-	}
-
-	if renameErr := os.Rename(tmp, filename); renameErr != nil {
-		return fmt.Errorf("rename tmp → config 失敗: %w", renameErr)
-	}
-	// rename 成功後補 fsync parent dir,讓 metadata 變更 crash-durable。
-	_ = fsperm.SyncParentDir(filename) //nolint:errcheck // best-effort dir durability
-
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 // Validate 驗證配置.

@@ -18,7 +18,7 @@ import (
 // post-create swap could redirect through (codex r3 P2) — closing the atomic-write
 // parent-swap TOCTOU race (ADR-0017 Decision 6, #34 fold-in).
 //
-// Lifecycle (caller's contract — mirrors WriteCSVAtomic's flow):
+// Lifecycle (caller's contract — mirrors AtomicWriteFile's flow):
 //
 //	h, err := OpenAtomicWriteValidated(target, tmp, basePaths)
 //	// ... defer { if !committed { h.Abort() } } ...
@@ -75,7 +75,7 @@ func (h *AtomicWriteHandle) File() *os.File { return h.file }
 // targetPath and tmpPath MUST share a parent directory (makeTmpPath guarantees
 // this — it keeps the same dir and only mutates the basename). The primitive
 // accepts the already-computed tmpPath and never recomputes it; the random
-// crypto suffix + NAME_MAX truncation stay in csvutil.makeTmpPath.
+// crypto suffix + NAME_MAX truncation live in this package's makeTmpPath (atomic_write_file.go).
 //
 // Flow (cross-platform, mirrors OpenWriteValidated):
 //  1. len(basePaths)==0 → ErrBasePathsEmpty.

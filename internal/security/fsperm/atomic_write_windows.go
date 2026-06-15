@@ -10,7 +10,7 @@ import (
 // openAtomicWrite 在 Windows 上沒有 dirfd / openat2 / renameat 等價物,直接以
 // os.OpenFile(tmpFull, TmpCreateFlags, FilePerm) 建 .tmp,dirfd 設 fdNone 讓
 // Commit / Abort 走 os.Rename(tmpFull, targetFull) / os.Remove(tmpFull) — 與今日
-// csvutil.WriteCSVAtomic 在 Windows 上的行為完全一致。
+// fsperm.AtomicWriteFile(及其 csvutil / config adapter)在 Windows 上的行為完全一致。
 //
 // 安全性:parent-swap TOCTOU 的 kernel-level 防護在 Windows 不可得 (需
 // CreateFile + FILE_FLAG_OPEN_REPARSE_POINT,ADR-0017 Decision 8 明確 defer)。

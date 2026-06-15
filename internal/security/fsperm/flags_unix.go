@@ -53,7 +53,7 @@ const ReadFlags = os.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 // 不含 O_TRUNC 因為 O_EXCL 本身保證檔案是新建的。O_NOFOLLOW 與 WriteFlags 對稱
 // 拒絕 symlink-based TOCTOU。
 //
-// 後 tmp filename 在 caller (csvutil.WriteCSVAtomic) 已加 random suffix —
+// 後 tmp filename 在 caller (fsperm.AtomicWriteFile) 已加 random suffix —
 // O_EXCL 主要 fallback 為 entropy 撞名極小機率;legacy `path + ".tmp"` 殘留不再
 // block 新寫入。
 const TmpCreateFlags = os.O_WRONLY | os.O_CREATE | os.O_EXCL | syscall.O_NOFOLLOW

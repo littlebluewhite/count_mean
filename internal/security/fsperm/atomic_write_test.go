@@ -12,7 +12,7 @@ import (
 )
 
 // tmpFor 產出與 target 同目錄、basename 後綴固定的 tmp 路徑 — 模擬
-// csvutil.makeTmpPath 的「同 dir、改 basename」契約 (本測試不需要 crypto 隨機,
+// fsperm.makeTmpPath 的「同 dir、改 basename」契約 (本測試不需要 crypto 隨機,
 // 固定後綴即可,primitive 不重算 tmp)。
 func tmpFor(target string) string {
 	return target + ".tmp.deadbeefcafef00d"
