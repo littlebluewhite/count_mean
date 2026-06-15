@@ -112,3 +112,46 @@ func TestCCIAnalyzer_ConcurrentCallsNoRace(t *testing.T) {
 		wg.Wait()
 	}
 }
+
+// TestCCIAnalyzer_RejectsInvalidPhaseManifest 釘住 loadAndValidate 新增的分期不變量驗證
+// （對齊 phase_sync.validateManifestData）。manifest 帶 P0(0.5) > P1(0.02) 違反 force-time
+// 單調序;但 P0/P1/P2 是 pre-gait 事件,calculateGaitCycle 會 continue 跳過、dropOutOfRangePhases
+// 也會移除,故下游 gait 計算「看不到」這個違規 → 沒有驗證門時整段會被放行跑完。
+// 加門後必須 fail-fast 回 error,且錯誤訊息來自 ValidatePhaseManifest（force-time 順序）。
+// 這個 discriminator 確保鎖的是「驗證門」而非任何下游 gait/anchor 守門。
+func TestCCIAnalyzer_RejectsInvalidPhaseManifest(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	emgFile := "invalid_phase.csv"
+
+	// 最小 8-channel R.* EMG (200 samples × 0.001s = 0~0.199s)，S/L anchors 落在範圍內，
+	// 確保若沒有驗證門,下游 gait 計算會成功 → 凸顯「是驗證門擋下,不是下游」。
+	var emgBuf strings.Builder
+	emgBuf.WriteString(`X [],R.RA: EMG 1,R.ES: EMG 2,R.IL: EMG 3,R.GMax: EMG 4,` +
+		`R.RF: EMG 5,R.BF: EMG 6,R.TA&IO: EMG 7,R.MF: EMG 8` + "\n")
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&emgBuf, "%.4f,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0\n", float64(i)*0.001)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, emgFile), []byte(emgBuf.String()), 0o600))
+
+	// P0=0.5 晚於 P1=0.02 → 違反 force-time 單調序。S=0.04 / L=0.09 anchors 仍合法。
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	manifestContent := "Subject,motion file,Force Plate file,EMG file," +
+		"EMG第一筆時間對應Motion的時間index值,P0,P1,P2,S,C,D,T0,T,O,L\n" +
+		fmt.Sprintf("SF8,m.csv,f.anc,%s,1,0.5,0.02,0.03,0.04,0.05,20,0.07,0.08,30,0.09\n", emgFile)
+	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o600))
+
+	a := NewCCIAnalyzer()
+	_, err := a.AnalyzeCCI(context.Background(), &CCIParams{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		SubjectIndex: 0,
+	})
+
+	require.Error(t, err, "畸形 manifest（P0 晚於 P1）應在 loadAndValidate 被 fail-fast 擋下")
+	// 字面鎖住錯誤來自 ValidatePhaseManifest 的 force-time 順序檢查,而非下游 gait 守門。
+	assert.Contains(t, err.Error(), "不能早於",
+		"錯誤應來自 ValidatePhaseManifest 的 force-time 順序檢查,err=%v", err)
+}

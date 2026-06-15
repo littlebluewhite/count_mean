@@ -180,7 +180,16 @@ func (a *CCIAnalyzer) loadAndValidate(params *CCIParams) (*models.PhaseManifest,
 			i18n.T(i18n.KeyErrorCCIInvalidSubjectIndex, params.SubjectIndex, len(manifests)))
 	}
 
-	return &manifests[params.SubjectIndex], nil
+	// 對齊 phase_sync.validateManifestData：選定 subject 後驗證分期不變量（時間順序 /
+	// motion-index 單調 / NaN-Inf / 必填欄位）。CCI 是 fail-fast 管線,畸形 manifest 應在
+	// 入口擋下,而非讓非法分期點流進下游 gait 計算與圖表。muscle_ratio 維持 partial-success
+	// (ADR-0014),故僅 CCI 補此門。
+	m := &manifests[params.SubjectIndex]
+	if err := parsers.ValidatePhaseManifest(m); err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIParseManifestFailed), err)
+	}
+
+	return m, nil
 }
 
 // loadEMGData opens the EMG file through the hardened read door and parses it.
@@ -515,6 +524,13 @@ func (a *CCIAnalyzer) computeAllPairs(
 	// 只有 ctx 取消 / 不可預期錯誤會走到這裡。
 	if err := g.Wait(); err != nil {
 		return nil, fmt.Errorf("compute CCI pairs: %w", err)
+	}
+
+	// g.Wait() 只在「有 worker 回 error」時 surface ctx.Err()；若 caller 在所有 worker
+	// 都已成功（含 nil-slot skip）之後才 cancel,errgroup 不會代為回報。此處顯式重檢 ctx,
+	// 避免「cancel 之後仍組裝並回傳結果」違反 ctx 契約。
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("CCI computation cancelled: %w", err)
 	}
 
 	pairResults := make([]CCIResult, 0, len(slots))
