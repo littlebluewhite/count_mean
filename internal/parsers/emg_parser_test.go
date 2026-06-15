@@ -745,6 +745,31 @@ func TestEMGParser_DuplicateChannelName(t *testing.T) {
 	assert.NotContains(t, err.Error(), "長度不一致")
 }
 
+func TestEMGParser_EmptyTimeHeader_Rejected(t *testing.T) {
+	parser := NewEMGParser()
+
+	// 第一欄(時間欄)header 為空(",Ch1")。佔位範式保留 "" 使 len(headers)==2,
+	// 不可因此用「無名時間欄」靜默接受;必須 reject(codex R3 P2 回歸守衛)。
+	emgContent := ",Ch1\n" +
+		"0.000,1\n" +
+		"0.001,4"
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "emptytime_*.csv")
+	require.NoError(t, err)
+
+	_, err = tmpFile.WriteString(emgContent)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	f, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer f.Close()
+
+	_, _, err = parser.Parse(f, tmpFile.Name())
+	require.Error(t, err, "空時間欄名稱必須 reject,不可用無名時間欄解析")
+	assert.Contains(t, err.Error(), "時間欄")
+}
+
 func TestEMGParser_Integration(t *testing.T) {
 	// 集成測試：創建完整的 EMG 文件並測試完整流程
 	t.Run("complete EMG file parsing and validation", func(t *testing.T) {

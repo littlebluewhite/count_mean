@@ -284,8 +284,9 @@ func initSensitivePatterns() []*regexp.Regexp {
 var controlCharEscaper = newControlCharEscaper()
 
 // newControlCharEscaper builds the replacer covering 0x00–0x1F and 0x7F. CR / LF
-// / TAB use readable Go escapes; the rest use "\xNN". 全部可逆 — escape 後可從字面
-// 還原原始 byte。
+// / TAB use readable Go escapes; the rest use "\xNN". 目的是把 raw 控制 byte 中性化成
+// 可讀字面以阻斷 log-injection / terminal-escape 注入;非 bijective codec——訊息本身
+// 已含的字面 "\xNN"/"\n" 文字不會被二次轉義,與真正的控制 byte 在輸出上不可區分。
 func newControlCharEscaper() *strings.Replacer {
 	conventional := map[byte]string{
 		'\t': `\t`,
@@ -310,7 +311,7 @@ func newControlCharEscaper() *strings.Replacer {
 
 // sanitizeMessage removes sensitive information and log-injection vectors from
 // log messages. 在 sensitive-pattern masking 之前先把所有 raw C0 控制字元
-// (0x00–0x1F) 與 0x7F escape 成可逆字面形式(CR/LF/TAB 用 \\r/\\n/\\t,其餘用
+// (0x00–0x1F) 與 0x7F escape 成可讀字面形式(CR/LF/TAB 用 \\r/\\n/\\t,其餘用
 // \\xNN),確保 writeText 不會被 user-controlled 字串(filename / error msg /
 // dynamic context)注入偽 log line 或夾帶 terminal escape sequence。writeJSON
 // 路徑 stdlib encoding/json 雖已會 escape,但同樣走這條 sanitize path,維持 JSON

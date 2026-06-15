@@ -39,6 +39,13 @@ func (p *EMGParser) validateEMGRecords(records [][]string) ([]string, error) {
 		return nil, fmt.Errorf("EMG 檔案標題不足：至少需要時間列和一個數據列")
 	}
 
+	// 第一欄是時間欄,名稱不可為空。parseHeaders 對「中段 spacer 欄」以 "" 佔位
+	// 保留索引對齊,但空的時間欄名(如 ",Ch1")是格式錯誤:過去 compact 範式會把
+	// 它收掉而連帶被上面 len<2 擋下,佔位範式須在此顯式 reject(codex R3 P2)。
+	if headers[0] == "" {
+		return nil, fmt.Errorf("EMG 檔案標題錯誤：時間欄(第一欄)名稱不可為空")
+	}
+
 	return headers, nil
 }
 
