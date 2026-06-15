@@ -77,11 +77,19 @@ func buildOutputFilename(baseName, suffix string) string {
 }
 
 // convertMaxMeanResultsToArray converts MaxMeanResult slice to [][]float64 format.
-func convertMaxMeanResultsToArray(results []models.MaxMeanResult) [][]float64 {
+//
+// MaxMean/StartTime/EndTime 是計算域的縮放後值,輸出前以 scalingFactor 反縮放,
+// 與 CSV 輸出路徑 (csvConverter.scaleValue) 的單位對齊 — 否則此陣列與寫出的 CSV
+// 單位分歧 (放大 10^SF 倍)。
+func convertMaxMeanResultsToArray(results []models.MaxMeanResult, scalingFactor int) [][]float64 {
 	resultData := make([][]float64, 0, len(results))
 
 	for _, result := range results {
-		row := []float64{result.MaxMean, result.StartTime, result.EndTime}
+		row := []float64{
+			io.ReverseScale(result.MaxMean, scalingFactor),
+			io.ReverseScale(result.StartTime, scalingFactor),
+			io.ReverseScale(result.EndTime, scalingFactor),
+		}
 		resultData = append(resultData, row)
 	}
 

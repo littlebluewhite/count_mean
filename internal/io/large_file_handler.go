@@ -359,6 +359,11 @@ func (h *LargeFileHandler) processStreamingFile(
 	startTime := time.Now()
 
 	// 獲取文件信息
+	//
+	// 效能成本注意:streaming = 2× 整檔 I/O。GetFileInfo 內部 scanFileStructure 會
+	// 預掃整檔以填 LineCount(progress 百分比 + StreamingResult.TotalLines 需要它),
+	// 接著下方 streaming 主體又把整檔讀一次。TotalLines 有測試斷言、且此路徑僅
+	// benchmark/test 可達,屬純效能議題,此處不動契約僅標記成本。
 	fileInfo, err := h.GetFileInfo(filename)
 	if err != nil {
 		return nil, err
@@ -940,6 +945,12 @@ func (h *LargeFileHandler) processSlidingWindowRecord(
 }
 
 // buildSlidingWindowResults 構建滑動視窗結果.
+//
+// 單位注意:此處的 StartTime/EndTime/MaxMean 是「縮放域」值 — parseDataRow 在輸入端
+// 已用 Str2Number 乘 10^ScalingFactor,但此 builder 未做輸出端反縮放,因此與 CSV 輸出
+// 路徑 (csvConverter.scaleValue 會除 10^SF) 的單位不對齊。此結果目前僅 benchmark/test
+// 可達 (streaming 路徑不寫 CSV),不對齊不影響生產輸出;若未來要把 streaming 結果寫出
+// 或回傳前端,必須在此補上 io.ReverseScale(value, state.scalingFactor)。
 //
 // channelMaxMeans[i] 在 initSumsAndMaxIfNeeded 初始化為 -Inf（支援全負值資料集），
 // 若 channel 從未產生完整 window（recordsSeen < windowSize 或所有 row 都是 NaN/Inf

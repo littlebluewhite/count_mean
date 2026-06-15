@@ -441,7 +441,7 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	return &MaxMeanResult{
 		OutputPath: outputPath,
 		Headers:    records[0],
-		Results:    convertMaxMeanResultsToArray(results),
+		Results:    convertMaxMeanResultsToArray(results, s.config.ScalingFactor),
 		Success:    true,
 		Message:    fmt.Sprintf("最大平均值計算成功完成，結果已保存到: %s", outputPath),
 	}, nil

@@ -2,6 +2,7 @@ package io
 
 import (
 	"fmt"
+	"math"
 
 	"count_mean/internal/csvutil"
 	"count_mean/internal/models"
@@ -157,6 +158,13 @@ func (c *csvConverter) formatPrecision(value float64) string {
 // scaleValue scales a value by the scaling multiplier.
 func (c *csvConverter) scaleValue(value float64) float64 {
 	return value / c.scalingMultiplier
+}
+
+// ReverseScale 把計算域的縮放後值還原成輸出域單位 (value / 10^scalingFactor)。
+// 與 csvConverter.scaleValue 的反縮放契約等價,但 export 給 GUI 陣列輸出路徑共用,
+// 避免 GUI 與 CSV 兩條輸出路徑單位分歧 (scaleValue 是私有方法 GUI 拿不到)。
+func ReverseScale(value float64, scalingFactor int) float64 {
+	return value / math.Pow10(scalingFactor)
 }
 
 // buildRow creates a new row with the given label and capacity.

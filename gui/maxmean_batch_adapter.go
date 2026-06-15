@@ -34,7 +34,7 @@ func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error
 	return &MaxMeanResult{
 		OutputPath: filepath.Join(s.config.OutputDir, outputDirName),
 		Headers:    res.Headers,
-		Results:    convertMaxMeanResultsToArray(res.Results),
+		Results:    convertMaxMeanResultsToArray(res.Results, s.config.ScalingFactor),
 		Success:    res.SuccessCount > 0,
 		Message:    fmt.Sprintf("批次處理完成：成功 %d 個檔案，失敗 %d 個檔案", res.SuccessCount, res.FailCount),
 	}, nil
