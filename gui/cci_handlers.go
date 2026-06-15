@@ -50,6 +50,12 @@ type CCIDownloadParams struct {
 //	（不可預期錯誤）。如此前端可以單一路徑檢查 `result.success`/`result.message`，
 //	不必同時 try/catch + 檢 result.success（之前的雙通道設計）。
 func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
+	// HandlerRun 的 recover 只罩住 Validate/Execute/WriteCSV closure；GenerateCCIInteractiveChart
+	// /GenerateReport/WriteCCIPhasesResult 在 Run 之後執行,落在那層 recover 外。此處 defer
+	// 補上 handler-level 安全網,任一 post-Run panic 都轉成 (nil, ErrInternalPanic) 而非擊潰
+	// 整個 Wails desktop process(對齊 DownloadCCIChart 的 dual-channel 模式)。
+	defer recoverHandlerPanic("AnalyzeCCI", a.logger, &err)
+
 	a.logger.Info("CCI 分析參數", map[string]any{"params": params})
 
 	s := a.state.Load()
@@ -109,8 +115,9 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 		// expected err（Validate / Execute / WriteCSV 任一回的 err）走
 		// single-channel envelope:failedCCIResult(message) + nil err。
 		// Execute / WriteCSV closure 內已自行加 prefix + redact，Validate
-		// 失敗則回原 sentinel（對齊既有 unified-channel 測試契約）。
-		return failedCCIResult(runErr.Error()), nil
+		// 失敗的 sentinel 不含路徑(過 redact 不變),但仍統一過 redact 防未來帶
+		// 路徑的 Validate error 洩漏 PHI(對齊 muscle_ratio / normalized_phase_sync)。
+		return failedCCIResult(redact.RedactForMessage(runErr)), nil
 	}
 
 	// Generate interactive chart HTML — Run 外:Execute 維持單一語意，render

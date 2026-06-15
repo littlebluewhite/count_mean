@@ -299,19 +299,24 @@ func countWithDefer(methods []appMethodInfo) int {
 // i18n 與 synchronizer dispatch shim,本輪已補 defer recoverHandlerPanic*,從清單
 // 移除。剩下兩個 lifecycle hook 不在 Wails RPC bindings,不需要 defer。
 //
-// PRD #7 (wave-6) 後新增 5 個 entry:5 個 analysis handler 改走 [[HandlerRun]] /
+// PRD #7 (wave-6) 後新增 entry:analysis handler 改走 [[HandlerRun]] /
 // [[AnalysisHandler[P, R]]].Run 拿 panic safety,body 內不再直接 `defer
-// recoverHandlerPanic` — 樣板把 panic recovery 從 5 處 boilerplate 收斂到 1 處
+// recoverHandlerPanic` — 樣板把 panic recovery 從多處 boilerplate 收斂到 1 處
 // (HandlerRun)。AST test 守的 invariant 換軌:從「method body 第一行 defer」
 // 變成「method 透過樣板取得 panic safety」。樣板自身的 panic safety 契約由
 // gui/handler_run_test.go 與 gui/analysis_handler_test.go 守住。
+//
+// 例外:AnalyzeCCI 因 Run 之後另有 chart/report/phases-write 三段(落在樣板
+// recover 外),仍保留 body 第一行顯式 `defer recoverHandlerPanic`,故不在此 map。
 func knownGapEntries() map[string]string {
 	return map[string]string{
 		"Startup":                    "Wails lifecycle hook (OnStartup),非 RPC binding",
 		"Shutdown":                   "Wails lifecycle hook (OnShutdown),非 RPC binding",
 		"AnalyzePhases":              "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
 		"AnalyzePhaseSync":           "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
-		"AnalyzeCCI":                 "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
+		// AnalyzeCCI 不再列 known-gap:它在 Run 之後另有 GenerateCCIInteractiveChart /
+		// GenerateReport / WriteCCIPhasesResult,落在樣板 recover 外,故 body 第一行
+		// 顯式 `defer recoverHandlerPanic`(鏡像 DownloadCCIChart),AST 直接掃得到。
 		"AnalyzeMuscleRatio":         "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
 		"AnalyzeNormalizedPhaseSync": "panic safety via HandlerRun (Tier 1, PRD #7 / wave-6)",
 		// Chart Composer family (Slice C, PRD #15) — 2 個 handler 走 HandlerRun
