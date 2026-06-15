@@ -51,26 +51,35 @@ func TestGetDecimalPrecision(t *testing.T) {
 			expected: 0,
 		},
 		{
-			// 含指數的數字:只數 mantissa 的小數位,指數段不計入。
-			// 否則 "1.5e-3" 會被算成 4(把 "e-3" 也當小數)。
-			name:     "exponent lowercase e",
+			// 科學記號:有效定點小數位 = mantissa 小數位 − 指數值(下限 0)。
+			// "1.5e-3" = 0.0015 → 1−(−3) = 4。
+			name:     "exponent negative adds decimals",
 			input:    "1.5e-3",
-			expected: 1,
+			expected: 4,
 		},
 		{
-			name:     "exponent uppercase E",
+			// "2.250E10" = 2.25e10(整數)→ max(0, 3−10) = 0。
+			name:     "exponent positive no decimals",
 			input:    "2.250E10",
-			expected: 3,
-		},
-		{
-			name:     "exponent no decimal in mantissa",
-			input:    "5e-7",
 			expected: 0,
 		},
 		{
+			// "5e-7" = 0.0000005 → 0−(−7) = 7(mantissa 無小數)。
+			name:     "exponent negative no mantissa decimals",
+			input:    "5e-7",
+			expected: 7,
+		},
+		{
+			// "1.23e+4" = 12300(整數)→ max(0, 2−4) = 0。
 			name:     "exponent positive sign",
 			input:    "1.23e+4",
-			expected: 2,
+			expected: 0,
+		},
+		{
+			// "1e-3" = 0.001 → 0−(−3) = 3(整數 mantissa + 負指數)。
+			name:     "exponent negative integer mantissa",
+			input:    "1e-3",
+			expected: 3,
 		},
 	}
 
