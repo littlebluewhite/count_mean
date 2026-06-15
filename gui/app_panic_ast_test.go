@@ -310,10 +310,10 @@ func countWithDefer(methods []appMethodInfo) int {
 // recover 外),仍保留 body 第一行顯式 `defer recoverHandlerPanic`,故不在此 map。
 func knownGapEntries() map[string]string {
 	return map[string]string{
-		"Startup":                    "Wails lifecycle hook (OnStartup),非 RPC binding",
-		"Shutdown":                   "Wails lifecycle hook (OnShutdown),非 RPC binding",
-		"AnalyzePhases":              "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
-		"AnalyzePhaseSync":           "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
+		"Startup":          "Wails lifecycle hook (OnStartup),非 RPC binding",
+		"Shutdown":         "Wails lifecycle hook (OnShutdown),非 RPC binding",
+		"AnalyzePhases":    "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
+		"AnalyzePhaseSync": "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
 		// AnalyzeCCI 不再列 known-gap:它在 Run 之後另有 GenerateCCIInteractiveChart /
 		// GenerateReport / WriteCCIPhasesResult,落在樣板 recover 外,故 body 第一行
 		// 顯式 `defer recoverHandlerPanic`(鏡像 DownloadCCIChart),AST 直接掃得到。

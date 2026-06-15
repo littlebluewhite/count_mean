@@ -102,7 +102,7 @@ func TestCCIHandler_ErrorMessage_NoAbsolutePath(t *testing.T) {
 // 注入手法（對齊 chart_composer_handlers_test.go::TestChartComposerHandlers_PanicRecovery
 // 的 canonical 做法）:把 a.logger 設為 nil。AnalyzeCCI 進入後第一條 `a.logger.Info`
 // (在 handler.Run 之前) 立即 nil-deref panic — 此 panic 發生在 HandlerRun 被呼叫
-//「之前」,HandlerRun 內的 recover 根本還沒註冊,故只有 AnalyzeCCI 自己的
+// 「之前」,HandlerRun 內的 recover 根本還沒註冊,故只有 AnalyzeCCI 自己的
 // handler-level defer 能攔。這正是 P2-4 要補的 Run-外覆蓋缺口。
 //
 // red-green:移除 AnalyzeCCI body 第一行的 defer 後,此 panic 會逃出 AnalyzeCCI
