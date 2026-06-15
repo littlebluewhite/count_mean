@@ -16,9 +16,6 @@ import (
 // MaxWorkerCount is the maximum number of worker goroutines for parallel calculation.
 const MaxWorkerCount = 16
 
-// MicrosecondsPerSecond is the number of microseconds in one second.
-const MicrosecondsPerSecond = 1_000_000
-
 // CalculationOptions 計算選項.
 //
 // HasEndRange 是顯式 sentinel，取代過去「EndRange == 0 = no end」的
@@ -355,45 +352,28 @@ func infSign(v float64) string {
 	return ""
 }
 
-// saturateMicroseconds 將 scaledTime (已 Pow10 處理過的秒值) 乘上 MicrosecondsPerSecond
-// 並 clamp 到 int64 範圍。
+// normalizeTime 把 scaled-time 域 (已 Pow10 處理過的時間值) 的非有限值正規化,
+// 讓 resolveDataRange 可以直接在 float64 scaled 域比較,不必再乘 1e6 轉 int64。
 //
-// 過去用 `int64(math.Round(scaled * MicrosecondsPerSecond))` 直接 cast,
-// 當 scaled > math.MaxInt64 / MicrosecondsPerSecond (約 9.22e12) 時 cast 行為
-// 在 Go 標準是 implementation-defined — 多數平台會 wrap-around 成負值,
-// 導致 startRangeUs / endRangeUs 比對全錯且不會回任何 error。
+// 過去用 saturateMicroseconds 先乘 MicrosecondsPerSecond 再 round 成 int64,
+// 額外的 ×1e6 把 int64 溢位門檻從 scaled 域的 ~9.22e18 拉低到 ~9.22e12;在預設
+// scalingFactor=10 下,任何 >~922 秒的 time 一乘 1e6 就全部 clamp 成 MaxInt64,
+// 使同一 range 內 >922 秒的 row 互相無法區分,startIdx / endIdx 邊界靜默算錯。
+// 改在 scaled 域直接 float64 比較後,這層 ×1e6 與 int64 round 完全移除,既無
+// 溢位也無次單位取整誤差。
 //
-// 雖然 EMG 時間域上限 (秒級) + 合理 scalingFactor (典型 0~10) 組合下永遠
-// reachable 不到溢位閾值 (這也是 FP1 的論據),但加 saturation 是 0 成本的
-// 防禦:overflow 改為 clamp 到 ±MaxInt64,行為可預期且不影響合法 input。
-//
-// 邊界 case:
-//   - NaN scaled 走 math.Round 仍為 NaN → cast 為 0 (Go spec),回 0。
-//     NaN scalingFactor / StartRange 應該在更上游被攔下,這裡 0 是保守選擇。
-//   - +Inf → 回 math.MaxInt64
-//   - -Inf → 回 math.MinInt64
-func saturateMicroseconds(scaled float64) int64 {
-	scaledUs := scaled * MicrosecondsPerSecond
-
-	if math.IsNaN(scaledUs) {
+// 非有限值語意 (保留 saturateMicroseconds 舊行為的等效結果):
+//   - NaN → 0。NaN scalingFactor / range / Time 應在更上游攔下,這裡 0 是保守選擇,
+//     等同舊版 NaN→0。
+//   - +Inf / -Inf → 原值穿透。float64 直比下 +Inf 必 >= 任何 finite 下界、必不
+//     <= 任何 finite 上界 (等同舊 MaxInt64);-Inf 對稱 (等同舊 MinInt64),
+//     無須再 clamp 成 int64 sentinel。
+func normalizeTime(scaled float64) float64 {
+	if math.IsNaN(scaled) {
 		return 0
 	}
 
-	// 用 float64 直接比 MaxInt64 會因 precision 漂移 (1<<63 不可被 float64 精確表達)
-	// 過早觸發 saturation;改用 math.MaxInt64 的 float64 representation
-	// (= 9223372036854775808.0,實際是 1<<63) 與 math.MinInt64 對稱比較。
-	const maxFloat = float64(math.MaxInt64) // 9.223372036854776e+18
-	const minFloat = float64(math.MinInt64) // -9.223372036854776e+18
-
-	if scaledUs >= maxFloat {
-		return math.MaxInt64
-	}
-
-	if scaledUs <= minFloat {
-		return math.MinInt64
-	}
-
-	return int64(math.Round(scaledUs))
+	return scaled
 }
 
 // logCalculationStart 記錄計算開始日誌.
@@ -432,24 +412,22 @@ func (c *MaxMeanCalculator) resolveDataRange(
 		return 0, len(dataset.Data) - 1, nil
 	}
 
-	// 轉換時間範圍為縮放後的值
-	scaledStartRange := opts.StartRange * math.Pow10(c.scalingFactor)
-	scaledEndRange := opts.EndRange * math.Pow10(c.scalingFactor)
-
-	// 用 saturateMicroseconds 把 scaled-time → int64-微秒的乘法 clamp 進
-	// [MinInt64, MaxInt64],避免極端 scalingFactor / StartRange 組合下 int64
-	// overflow 產生 wrap-around 比較。實務 EMG 時間域 (秒級) 不會 hit,但加 sat
-	// 保險,fail-fast 的成本是 0 而 wrap-around 的 silent miscompute 才致命。
-	startRangeUs := saturateMicroseconds(scaledStartRange)
-	endRangeUs := saturateMicroseconds(scaledEndRange)
+	// 轉換時間範圍為縮放後的值。dataset.Time 經 Str2Number 已乘 10^scalingFactor,
+	// 與下面 scaledStartRange / scaledEndRange 同屬 scaled 域,直接 float64 比較即可。
+	// normalizeTime 只把 NaN 正規化為 0 (保留舊行為);±Inf 在 float64 比較下語意
+	// 天然正確,無須轉 int64-微秒,故移除過去多餘的 ×1e6 與 int64 round (該乘法
+	// 把溢位門檻拉到 ~922 秒,使 scalingFactor=10 下 >922 秒的 row 被靜默 clamp)。
+	scaledStartRange := normalizeTime(opts.StartRange * math.Pow10(c.scalingFactor))
+	scaledEndRange := normalizeTime(opts.EndRange * math.Pow10(c.scalingFactor))
 
 	startIdx = -1
 	endIdx = -1
 
 	// HasStartRange == false 視為「從資料起點」,startIdx 直接設為 0。
-	// 過去仰賴 `StartRange != 0` 隱式判斷,StartRange=0 被誤判為「未指定起點」,
-	// 但對 time-axis 從負值開始的資料 (校準資料),StartRange=0 應該是合法下界。
-	startBypass := !opts.HasStartRange && opts.StartRange == 0
+	// HasStartRange 是唯一 source of truth — 即使 caller 殘留非零 StartRange,
+	// 只要未宣告 HasStartRange 就 bypass 下界 (對齊 struct doc;舊 `&& StartRange==0`
+	// 子句會讓未宣告的 StartRange 漏進過濾,是 latent bug)。
+	startBypass := !opts.HasStartRange
 	if startBypass {
 		startIdx = 0
 	}
@@ -462,12 +440,11 @@ func (c *MaxMeanCalculator) resolveDataRange(
 
 		if !startBypass {
 			for i, data := range dataset.Data {
-				// Time path 與 startRange / endRange path 同走 saturateMicroseconds,
-				// 對稱 clamp。data.Time = ±Inf / NaN / 過大值的裸 int64 cast 在 Go spec 中
-				// 是 implementation-defined,雖然 Go 1.21+ runtime 行為趨於 saturate,
-				// 改走 helper 鎖死契約並讓行為跨平台/跨版本一致。
-				dataTimeUs := saturateMicroseconds(data.Time)
-				if dataTimeUs >= startRangeUs {
+				// Time path 與 startRange / endRange path 同走 normalizeTime,
+				// 在 scaled 域 float64 直比。data.Time = NaN 正規化為 0,±Inf 穿透
+				// (+Inf 必 >= finite 下界、-Inf 必不 >=),行為跨平台一致。
+				dataTime := normalizeTime(data.Time)
+				if dataTime >= scaledStartRange {
 					startIdx = i
 					break
 				}
@@ -475,13 +452,13 @@ func (c *MaxMeanCalculator) resolveDataRange(
 		}
 	} else {
 		for i, data := range dataset.Data {
-			// 同 470 區塊,Time path 走 saturate symmetric。
-			dataTimeUs := saturateMicroseconds(data.Time)
-			if !startBypass && startIdx == -1 && dataTimeUs >= startRangeUs {
+			// 同上區塊,Time path 走 normalizeTime symmetric。
+			dataTime := normalizeTime(data.Time)
+			if !startBypass && startIdx == -1 && dataTime >= scaledStartRange {
 				startIdx = i
 			}
 
-			if dataTimeUs <= endRangeUs {
+			if dataTime <= scaledEndRange {
 				endIdx = i
 			}
 		}

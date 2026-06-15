@@ -192,30 +192,24 @@ func TestMaxMean_NaNInf_Invariants(t *testing.T) {
 	})
 }
 
-// TestMaxMean_TimeRangeOverflow_Saturated 釘住 scaledStartRange *
-// MicrosecondsPerSecond 在極端 input 下會 int64 overflow,過去用裸 int64 cast,
-// 多數平台會 wrap-around 成負值,startRangeUs / endRangeUs 比對全錯且不會回任何
-// error — silent miscompute。
-//
-// 修法後 saturateMicroseconds 對 ±Inf / 超出 int64 範圍的乘積 clamp 到
-// ±math.MaxInt64,行為可預期。配合下游 resolveDataRange 對 startIdx == -1 /
-// endIdx == -1 / 區間不足 windowSize 的 ErrInvalidTimeRange,saturated 路徑
-// 自然 fail-fast。
+// TestMaxMean_TimeRangeOverflow_Saturated 釘住 scaled 域時間範圍在極端 input
+// (±Inf) 下的行為。改用 scaled 域 float64 直比後,±Inf range 不再需要 int64
+// clamp:+Inf 下界使任何 finite row 都不命中 → ErrInvalidTimeRange;+Inf 上界
+// 使所有 finite row 都通過。配合下游 resolveDataRange 對 startIdx == -1 /
+// endIdx == -1 / 區間不足 windowSize 的 ErrInvalidTimeRange,自然 fail-fast。
 //
 // 三條保護:
-//   - SaturatedStartIsRejected:極大 StartRange 使 startRangeUs == MaxInt64,
-//     任何資料 row 的 dataTimeUs <= MaxInt64,startIdx 永遠對應「>= MaxInt64」的
-//     row 卻沒有 — startIdx = -1 → ErrInvalidTimeRange。
-//   - SaturatedEndIsAccepted:極大 EndRange 使 endRangeUs == MaxInt64,
-//     所有 row.Time <= MaxInt64 都通過,endIdx == 最後一個 row。startRange 在
+//   - SaturatedStartIsRejected:StartRange=+Inf → scaledStartRange=+Inf,
+//     任何 finite row.Time < +Inf,startIdx = -1 → ErrInvalidTimeRange。
+//   - SaturatedEndIsAccepted:EndRange=+Inf → scaledEndRange=+Inf,
+//     所有 finite row.Time <= +Inf 都通過,endIdx == 最後一個 row。startRange 在
 //     合法範圍內仍應算出正確 MaxMean。
-//   - SaturationFunctionContract:直接呼 saturateMicroseconds 驗 ±Inf / NaN /
-//     超大值的 clamp 行為。
+//   - NormalizeTimeContract:直接呼 normalizeTime 驗 ±Inf 穿透 / NaN→0 /
+//     大 finite 值穿透 (不再 ×1e6 溢位) 的契約。
 func TestMaxMean_TimeRangeOverflow_Saturated(t *testing.T) {
 	t.Run("SaturatedStartIsRejected", func(t *testing.T) {
-		// scalingFactor = 0,StartRange = +Inf → scaled = +Inf,
-		// saturateMicroseconds 回 MaxInt64,所有 row.Time finite 都 < MaxInt64 →
-		// 找不到合法 startIdx → ErrInvalidTimeRange。
+		// scalingFactor = 0,StartRange = +Inf → scaledStartRange = +Inf,
+		// 所有 row.Time finite 都 < +Inf → 找不到合法 startIdx → ErrInvalidTimeRange。
 		calc := NewMaxMeanCalculator(0)
 		dataset := &models.EMGDataset{
 			Headers: []string{"Time", "Ch1"},
@@ -257,27 +251,28 @@ func TestMaxMean_TimeRangeOverflow_Saturated(t *testing.T) {
 		assert.InDelta(t, 8.0, results[0].MaxMean, 1e-9)
 	})
 
-	t.Run("SaturationFunctionContract", func(t *testing.T) {
-		// 直接驗 saturateMicroseconds 對極端 input 的 contract,
-		// 不依賴下游 resolveDataRange 的副作用。
+	t.Run("NormalizeTimeContract", func(t *testing.T) {
+		// 直接驗 normalizeTime 對極端 input 的 contract,不依賴下游 resolveDataRange
+		// 的副作用。改用 scaled 域 float64 直比後,只有 NaN 需正規化 (→0),±Inf 與
+		// 大 finite 值原封穿透 (float64 比較天然正確,不再 ×1e6 轉 int64 sentinel)。
 		cases := []struct {
 			name string
 			in   float64
-			want int64
+			want float64
 		}{
-			{"PlusInf saturates to MaxInt64", math.Inf(1), math.MaxInt64},
-			{"MinusInf saturates to MinInt64", math.Inf(-1), math.MinInt64},
-			{"NaN clamps to 0", math.NaN(), 0},
-			{"Above MaxInt64/1e6 saturates", 1e18, math.MaxInt64},
-			{"Below MinInt64/1e6 saturates", -1e18, math.MinInt64},
-			{"Normal value passes through", 1.5, int64(1.5 * MicrosecondsPerSecond)},
+			{"PlusInf passes through", math.Inf(1), math.Inf(1)},
+			{"MinusInf passes through", math.Inf(-1), math.Inf(-1)},
+			{"NaN normalizes to 0", math.NaN(), 0},
+			{"Large finite passes through (no 1e6 overflow)", 1e18, 1e18},
+			{"Negative large finite passes through", -1e18, -1e18},
+			{"Normal value passes through", 1.5, 1.5},
 			{"Zero passes through", 0, 0},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				got := saturateMicroseconds(tc.in)
+				got := normalizeTime(tc.in)
 				assert.Equal(t, tc.want, got,
-					"saturateMicroseconds(%v) = %d, want %d", tc.in, got, tc.want)
+					"normalizeTime(%v) = %v, want %v", tc.in, got, tc.want)
 			})
 		}
 	})
@@ -383,34 +378,28 @@ func TestSlidingWindow_RaggedRow_FailsFast(t *testing.T) {
 	})
 }
 
-// TestSaturateMicroseconds_TimePath 守護 resolveDataRange 對 data.Time 的
-// 微秒換算必須與 startRange / endRange 走同一個 saturateMicroseconds path。
+// TestNormalizeTime_TimePath 守護 resolveDataRange 對 data.Time 的比較必須與
+// startRange / endRange 走同一個 normalizeTime path,在 scaled 域 float64 直比。
 //
-// 過去 maxmean.go:475 與 :484 用 `int64(math.Round(data.Time * MicrosecondsPerSecond))`
-// 裸 cast;data.Time = +Inf / -Inf / 1e18 等極端值會 wrap-around 成不可預期的 int64,
-// 與 startRangeUs / endRangeUs (已 saturate) 比對全錯,startIdx / endIdx 搜尋結果
-// 隨機 — silent miscompute。修正後兩條 path 都改走 saturateMicroseconds clamp。
+// data.Time = +Inf 時,float64 比較天然滿足「>= 合法 finite 下界」,不再需要
+// ×1e6 轉 int64 (該乘法把溢位門檻拉到 ~922 秒,且 +Inf 裸 cast 為 int64 行為
+// implementation-defined)。NaN 經 normalizeTime → 0。
 //
 // 兩條互補:
-//   - Branch1 (HasEndRange=false, maxmean.go 470 區塊):row.Time 含 +Inf 時,
-//     saturate 後 dataTimeUs == MaxInt64,>= startRangeUs (合法 finite) → 命中為
-//     有效 startIdx。windowSize=2 + finite startRange (=0) → 應算出整段 max,
-//     +Inf row 影響 startIdx 但不污染 sliding window 結果 (channel 值仍 finite)。
-//   - Branch2 (HasEndRange=true, maxmean.go 482 區塊):類似策略,endRange=+Inf
-//     saturate 後 endRangeUs == MaxInt64,所有 row 都 <= → endIdx = 最後 row。
-//     row.Time 含 +Inf 在 Time path 也應 saturate 後 <= MaxInt64,符合預期。
-//
-// Time path 的真實 fail 模式是「裸 cast +Inf 為 int64 各平台行為 implementation-
-// defined」— wrap 後可能為負值,startIdx 搜尋路徑全錯。saturate 後行為可預期。
-func TestSaturateMicroseconds_TimePath(t *testing.T) {
-	t.Run("Branch1_HasEndRangeFalse_PlusInfTimeRow_IsClampedToMaxInt64", func(t *testing.T) {
-		// HasEndRange=false 走 maxmean.go 第 470 區塊 (僅 startRange filter)。
+//   - Branch1 (HasEndRange=false):row.Time 含 +Inf 時,+Inf >= scaledStartRange
+//     (合法 finite) → 命中為有效 startIdx。windowSize=3 + finite startRange (=0)
+//     → 應算出整段 max,+Inf row 影響 startIdx 但不污染 sliding window 結果
+//     (channel 值仍 finite)。
+//   - Branch2 (HasEndRange=true):類似策略,endRange=+Inf → scaledEndRange=+Inf,
+//     所有 row 都 <= → endIdx = 最後 row。row.Time 含 +Inf 也 <= +Inf,符合預期。
+func TestNormalizeTime_TimePath(t *testing.T) {
+	t.Run("Branch1_HasEndRangeFalse_PlusInfTimeRow_IsHandled", func(t *testing.T) {
+		// HasEndRange=false 走 maxmean.go 僅 startRange filter 區塊。
 		// 構造:dataset 含 5 個 finite row + 末尾 1 個 +Inf time row;
-		// startRange=0 saturate 後 = 0,所有 finite row.Time >=0 命中 startIdx=0。
-		// +Inf row 經 saturate 為 MaxInt64,符合「>= 0」契約,不會走入未定義 cast。
+		// startRange=0 → scaledStartRange=0,所有 finite row.Time >=0 命中 startIdx=0。
+		// +Inf row 經 normalizeTime 穿透,+Inf >= 0 為 true,不會走入未定義 cast。
 		//
-		// channel 值全 finite,sliding window 結果不受 +Inf row 影響 (channel 0 行為定義),
-		// 但 startIdx 搜尋若 +Inf cast wrap 成負值,行為錯亂。
+		// channel 值全 finite,sliding window 結果不受 +Inf row 影響 (channel 0 行為定義)。
 		calc := NewMaxMeanCalculator(0)
 		dataset := &models.EMGDataset{
 			Headers: []string{"Time", "Ch1"},
@@ -433,17 +422,17 @@ func TestSaturateMicroseconds_TimePath(t *testing.T) {
 			HasStartRange: true,
 			// HasEndRange=false → 走 maxmean.go:470 區塊
 		})
-		require.NoError(t, err, "Time path saturate 後 +Inf row 不應 crash 或誤入錯誤 branch")
+		require.NoError(t, err, "Time path +Inf row 經 normalizeTime 不應 crash 或誤入錯誤 branch")
 		require.Len(t, results, 1)
 		// startIdx=0 (finite row Time=0 >= startRange=0),endIdx=5 (最後 row +Inf)。
 		// idx 0..5 共 6 row,sliding window=3,最後窗 3+4+5 = 12/3 = 4.0
 		assert.InDelta(t, 4.0, results[0].MaxMean, 1e-9,
-			"Time path 對 +Inf 必須 saturate 到 MaxInt64,不可裸 cast wrap;結果應為 4 (idx 3..5)")
+			"Time path 對 +Inf 走 float64 直比 (+Inf >= 0),結果應為 4 (idx 3..5)")
 	})
 
-	t.Run("Branch2_HasEndRangeTrue_PlusInfTimeRow_IsClampedToMaxInt64", func(t *testing.T) {
-		// HasEndRange=true 走 maxmean.go 第 482 else 區塊 (start + end filter)。
-		// 構造同上,但 endRange=+Inf saturate 為 MaxInt64,所有 row <= → endIdx=5。
+	t.Run("Branch2_HasEndRangeTrue_PlusInfTimeRow_IsHandled", func(t *testing.T) {
+		// HasEndRange=true 走 maxmean.go start + end filter 區塊。
+		// 構造同上,但 endRange=+Inf → scaledEndRange=+Inf,所有 row <= +Inf → endIdx=5。
 		calc := NewMaxMeanCalculator(0)
 		dataset := &models.EMGDataset{
 			Headers: []string{"Time", "Ch1"},
@@ -466,20 +455,20 @@ func TestSaturateMicroseconds_TimePath(t *testing.T) {
 			HasStartRange: true,
 			HasEndRange:   true,
 		})
-		require.NoError(t, err, "Branch2 對 Time +Inf 與 endRange +Inf 必須 saturate symmetric")
+		require.NoError(t, err, "Branch2 對 Time +Inf 與 endRange +Inf 必須 float64 直比對稱")
 		require.Len(t, results, 1)
 		assert.InDelta(t, 4.0, results[0].MaxMean, 1e-9,
-			"Branch2 (HasEndRange=true) 結果同 Branch1,Time path saturate 對稱")
+			"Branch2 (HasEndRange=true) 結果同 Branch1,Time path float64 直比對稱")
 	})
 
-	t.Run("DirectSaturationContract_TimePath_Inf", func(t *testing.T) {
-		// 對齊 SaturationFunctionContract,釘住 Time path caller 用同一 helper
-		// (而非直接 cast) 的單元保證。重複驗 saturateMicroseconds 為 Time path 的
-		// 共用契約 — 加 explicit Test 句點避免未來 refactor 不小心改回裸 cast。
-		assert.Equal(t, int64(math.MaxInt64), saturateMicroseconds(math.Inf(1)),
-			"Time path +Inf row 用 saturate 後 == MaxInt64")
-		assert.Equal(t, int64(math.MinInt64), saturateMicroseconds(math.Inf(-1)),
-			"Time path -Inf row 用 saturate 後 == MinInt64")
+	t.Run("DirectNormalizeContract_TimePath_Inf", func(t *testing.T) {
+		// 對齊 NormalizeTimeContract,釘住 Time path caller 用同一 helper 的單元
+		// 保證 — 加 explicit Test 句點避免未來 refactor 不小心改回裸 cast / ×1e6。
+		// ±Inf 經 normalizeTime 穿透 (NaN 才正規化),靠 float64 比較天然定序。
+		assert.Equal(t, math.Inf(1), normalizeTime(math.Inf(1)),
+			"Time path +Inf row 經 normalizeTime 穿透為 +Inf")
+		assert.Equal(t, math.Inf(-1), normalizeTime(math.Inf(-1)),
+			"Time path -Inf row 經 normalizeTime 穿透為 -Inf")
 	})
 }
 
@@ -562,5 +551,253 @@ func TestMaxMean_IsRanged_RespectsZeroExplicitFlag(t *testing.T) {
 		require.Len(t, results, 1)
 		assert.InDelta(t, 100.0, results[0].MaxMean, 1e-9,
 			"HasStartRange=false + StartRange!=0 不可再走 ranged 分支 (legacy OR 子句移除)")
+	})
+}
+
+// TestMaxMean_ScaledTimeOverflow_WindowMiscompute 釘住 P2-1:過去 resolveDataRange
+// 把 scaled-time 再乘 MicrosecondsPerSecond (×1e6) 才轉 int64 比較,額外的 ×1e6
+// 把 int64 溢位門檻從 scaled 域的 ~9.22e18 拉低到 ~9.22e12;在預設 scalingFactor=10
+// 下,任何 > ~922 秒的 row.Time × 1e6 全部 clamp 成 MaxInt64,使同一 range 內
+// > 922 秒的不同 row 互相無法區分 → startIdx / endIdx 邊界靜默算錯 (非 panic,
+// 是錯誤窗格)。改在 scaled 域直接 float64 比較後,溢位與 clamp 一併消失。
+//
+// 既有 overflow 測試都用 NewMaxMeanCalculator(0),SF=0 下 ×1e6 永遠觸不到 bug;
+// 本 test 必須用 SF=10 + 兩個 > 922 秒的 row 落在同一 range 才能重現。
+//
+// 構造 (SF=10,Str2Number 已把秒乘 1e10 故此處直接放 scaled 值):
+//   - 6 個 row,秒 = 1000..1005 (全 > 922.34s),scaled = 1e13 .. 1.005e13。
+//     舊 ×1e6 後 (1e13 × 1e6 = 1e19 > MaxInt64) 全 clamp 成 MaxInt64,無法區分。
+//   - channels = [1,1,1,100,100,100];range = [1000s, 1002s],windowSize=3。
+//   - 正確:in-range = idx 0..2 (三個 1),唯一窗 = (1+1+1)/3 = 1.0。
+//   - 舊 bug:endRangeUs 也 clamp MaxInt64 → `dataTimeUs <= endRangeUs` 對所有
+//     row 恆 true → endIdx = 5,in-range 變 idx 0..5,max 窗 = (100+100+100)/3 = 100.0。
+//
+// 故修正前 MaxMean=100 (錯窗),修正後 MaxMean=1 (正確窗)。
+func TestMaxMean_ScaledTimeOverflow_WindowMiscompute(t *testing.T) {
+	const sf = 10
+	const scale = 1e10 // 10^sf,Str2Number 對 row[0] 的乘數
+	calc := NewMaxMeanCalculator(sf)
+
+	dataset := &models.EMGDataset{
+		Headers: []string{"Time", "Ch1"},
+		Data:    make([]models.EMGData, 6),
+	}
+	chans := []float64{1, 1, 1, 100, 100, 100}
+	for i := range dataset.Data {
+		dataset.Data[i] = models.EMGData{
+			Time:     (1000.0 + float64(i)) * scale, // 1000s..1005s,均 > 922.34s
+			Channels: []float64{chans[i]},
+		}
+	}
+
+	// CalculateWithRange 收的是「秒」,內部自乘 10^sf,與 dataset.Time 同域。
+	results, err := calc.CalculateWithRange(context.Background(), dataset, 3, 1000.0, 1002.0)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 1.0, results[0].MaxMean, 1e-9,
+		"SF=10 下 >922s 的 range 必須 float64 直比鎖住 idx 0..2 (MaxMean=1);"+
+			"舊 ×1e6 溢位會誤納 idx 3..5 算成 100 (錯窗)")
+
+	// 對稱補強:把高值放在 range 前緣外,證明 startIdx 同樣不被溢位 clamp 污染。
+	dataset2 := &models.EMGDataset{
+		Headers: []string{"Time", "Ch1"},
+		Data:    make([]models.EMGData, 6),
+	}
+	chans2 := []float64{100, 100, 100, 1, 1, 1}
+	for i := range dataset2.Data {
+		dataset2.Data[i] = models.EMGData{
+			Time:     (1000.0 + float64(i)) * scale,
+			Channels: []float64{chans2[i]},
+		}
+	}
+	// range = [1003s, 1005s] → 正確 startIdx=3,in-range idx 3..5,唯一窗 = 1.0。
+	// 舊 bug:startRangeUs clamp MaxInt64,start 迴圈第一個 dataTimeUs(MaxInt64)
+	// >= startRangeUs(MaxInt64) 即 i=0 命中 → startIdx=0,誤納前緣高值 → 100。
+	results2, err := calc.CalculateWithRange(context.Background(), dataset2, 3, 1003.0, 1005.0)
+	require.NoError(t, err)
+	require.Len(t, results2, 1)
+	assert.InDelta(t, 1.0, results2[0].MaxMean, 1e-9,
+		"SF=10 下 startIdx 必須 float64 直比鎖在 idx 3 (MaxMean=1);"+
+			"舊 ×1e6 溢位會把 startIdx clamp 到 0 誤納前緣 100 (錯窗)")
+}
+
+// TestMaxMean_FractionalScaledTimeBoundary 驗證移除 int64 取整後,scaled-time
+// 比較不會因取整誤納/漏納次單位邊界。過去 saturateMicroseconds 走
+// int64(math.Round(scaled × 1e6)),在 ×1e6 粒度 round;float64 直比則精確到
+// scaled 值本身。
+//
+// 構造 (SF=0 讓 Time = 秒原值,聚焦次單位邊界):row.Time = 0.0, 0.5, 1.0, 1.5, 2.0。
+// endRange = 1.4999 (略小於 1.5)。windowSize=2。
+//   - 精確比較:idx 3 (Time=1.5) 不應 <= 1.4999 → endIdx=2 (Time=1.0)。
+//     in-range idx 0..2,channels = [10,10,1,...] → 窗 (10+10)/2 = 10。
+//   - 若有 round-to-1e6 誤差把 1.5 與 1.4999 視為相等 (× 1e6 = 1_500_000 vs
+//     1_499_900,其實仍可分辨;此 case 主要鎖「精確 float64 邊界判定」回歸)。
+func TestMaxMean_FractionalScaledTimeBoundary(t *testing.T) {
+	calc := NewMaxMeanCalculator(0)
+	dataset := &models.EMGDataset{
+		Headers: []string{"Time", "Ch1"},
+		Data:    make([]models.EMGData, 5),
+	}
+	times := []float64{0.0, 0.5, 1.0, 1.5, 2.0}
+	chans := []float64{10, 10, 1, 100, 100}
+	for i := range dataset.Data {
+		dataset.Data[i] = models.EMGData{Time: times[i], Channels: []float64{chans[i]}}
+	}
+
+	// endRange 略小於 1.5 → idx 3 在界外,endIdx=2;in-range idx 0..2 唯一窗 = 10。
+	results, err := calc.CalculateWithRange(context.Background(), dataset, 2, 0.0, 1.4999)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 10.0, results[0].MaxMean, 1e-9,
+		"endRange=1.4999 必須精確排除 Time=1.5 的 idx 3,只算 idx 0..2 → MaxMean=10")
+
+	// endRange 恰等於 1.5 → idx 3 在界內 (<=),endIdx=3;in-range idx 0..3,
+	// max 窗 = (1+100)/2 = 50.5 (idx 2..3),驗證邊界值「等於上界」被納入。
+	results2, err := calc.CalculateWithRange(context.Background(), dataset, 2, 0.0, 1.5)
+	require.NoError(t, err)
+	require.Len(t, results2, 1)
+	assert.InDelta(t, 50.5, results2[0].MaxMean, 1e-9,
+		"endRange=1.5 恰等於 Time=1.5 必須納入 idx 3 (<=),max 窗 (1+100)/2=50.5")
+}
+
+// TestMaxMean_DirectDataset_NonFiniteTime 驗證 direct-dataset caller
+// (CalculateWithRange) 繞過上游 Str2Number 的非有限攔截時 (validateChannelValues
+// 只掃 channel 不掃 Time),非有限 row.Time 走 float64 比較不 panic 且語意正確:
+// NaN→0、+Inf→極大、−Inf→極小 (normalizeTime 契約)。
+func TestMaxMean_DirectDataset_NonFiniteTime(t *testing.T) {
+	t.Run("NaNTime_TreatedAsZero", func(t *testing.T) {
+		// row.Time = NaN 的 row 經 normalizeTime → 0;startRange=0 → 該 row >= 0
+		// 命中。構造 finite tail 確保有合法窗,僅驗 NaN row 不 panic、不亂跳 branch。
+		calc := NewMaxMeanCalculator(0)
+		dataset := &models.EMGDataset{
+			Headers: []string{"Time", "Ch1"},
+			Data: []models.EMGData{
+				{Time: math.NaN(), Channels: []float64{5}}, // → 視為 0
+				{Time: 0.1, Channels: []float64{5}},
+				{Time: 0.2, Channels: []float64{5}},
+			},
+		}
+		results, err := calc.CalculateWithRange(context.Background(), dataset, 3, 0.0, 0.2)
+		require.NoError(t, err, "NaN time row 經 normalizeTime→0 不應 panic")
+		require.Len(t, results, 1)
+		// NaN→0 命中 startIdx=0,endIdx=2,唯一窗 (5+5+5)/3 = 5。
+		assert.InDelta(t, 5.0, results[0].MaxMean, 1e-9,
+			"NaN time 視為 0,idx 0 為合法下界,MaxMean=5")
+	})
+
+	t.Run("PlusInfTime_TreatedAsVeryLarge", func(t *testing.T) {
+		// +Inf row 在 float64 比較下必 > 任何 finite 上界,不會被 endRange 納入。
+		calc := NewMaxMeanCalculator(0)
+		dataset := &models.EMGDataset{
+			Headers: []string{"Time", "Ch1"},
+			Data: []models.EMGData{
+				{Time: 0.0, Channels: []float64{10}},
+				{Time: 0.1, Channels: []float64{10}},
+				{Time: 0.2, Channels: []float64{10}},
+				{Time: math.Inf(1), Channels: []float64{100}}, // 界外 (> endRange)
+			},
+		}
+		results, err := calc.CalculateWithRange(context.Background(), dataset, 3, 0.0, 0.2)
+		require.NoError(t, err, "+Inf time row 不應 panic")
+		require.Len(t, results, 1)
+		// +Inf > 0.2 → 不納入,endIdx=2,唯一窗 (10+10+10)/3 = 10 (不含 +Inf 的 100)。
+		assert.InDelta(t, 10.0, results[0].MaxMean, 1e-9,
+			"+Inf time 視為極大,> endRange=0.2 不納入,MaxMean=10")
+	})
+
+	t.Run("MinusInfTime_TreatedAsVerySmall", func(t *testing.T) {
+		// −Inf row 在 float64 比較下必 < 任何 finite 下界,不會被 startRange 納入。
+		calc := NewMaxMeanCalculator(0)
+		dataset := &models.EMGDataset{
+			Headers: []string{"Time", "Ch1"},
+			Data: []models.EMGData{
+				{Time: math.Inf(-1), Channels: []float64{100}}, // 界外 (< startRange)
+				{Time: 1.0, Channels: []float64{10}},
+				{Time: 1.1, Channels: []float64{10}},
+				{Time: 1.2, Channels: []float64{10}},
+			},
+		}
+		results, err := calc.CalculateWithRange(context.Background(), dataset, 3, 1.0, 1.2)
+		require.NoError(t, err, "−Inf time row 不應 panic")
+		require.Len(t, results, 1)
+		// −Inf < 1.0 → 不納入 startIdx;startIdx=1,endIdx=3,唯一窗 (10+10+10)/3=10。
+		assert.InDelta(t, 10.0, results[0].MaxMean, 1e-9,
+			"−Inf time 視為極小,< startRange=1.0 不納入,MaxMean=10")
+	})
+}
+
+// TestMaxMean_StartBypass_Permutations 釘住 startBypass := !opts.HasStartRange
+// (P2 startBypass latent bug)。舊 `!opts.HasStartRange && opts.StartRange == 0`
+// 會在 HasStartRange=false 但殘留非零 StartRange 時讓該下界漏進過濾;HasStartRange
+// 必須是唯一 source of truth (對齊 struct doc)。
+//
+// 唯一行為分歧發生於 isRanged=true 才走得到 startBypass 行,即
+// HasStartRange=false && HasEndRange=true。構造 dataset:idx 0..2 高值 (Time<下界),
+// idx 3.. 低值 → 看 start 是否被殘留 StartRange bypass。
+func TestMaxMean_StartBypass_Permutations(t *testing.T) {
+	newDataset := func() *models.EMGDataset {
+		ds := &models.EMGDataset{
+			Headers: []string{"Time", "Ch1"},
+			Data:    make([]models.EMGData, 6),
+		}
+		for i := range ds.Data {
+			ds.Data[i].Time = float64(i) * 0.1 // 0.0, 0.1, ... 0.5
+			if i < 3 {
+				ds.Data[i].Channels = []float64{100.0}
+			} else {
+				ds.Data[i].Channels = []float64{1.0}
+			}
+		}
+		return ds
+	}
+	calc := NewMaxMeanCalculator(0)
+
+	t.Run("HasStartRangeFalse_StrayStartRange_BypassesLowerBound", func(t *testing.T) {
+		// HasStartRange=false 但 StartRange=0.3 (殘留);HasEndRange=true → isRanged。
+		// 正解:startBypass=true → startIdx=0,前緣高值 idx 0..2 入窗 → MaxMean=100。
+		// 舊 bug (`&& StartRange==0`):StartRange=0.3≠0 → startBypass=false →
+		// 以 0.3 為下界,startIdx=3,只剩低值 → MaxMean=1 (錯)。
+		ds := newDataset()
+		results, err := calc.calculateWithOptions(context.Background(), ds, 3, CalculationOptions{
+			StartRange:    0.3,
+			EndRange:      0.5,
+			HasStartRange: false,
+			HasEndRange:   true,
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.InDelta(t, 100.0, results[0].MaxMean, 1e-9,
+			"HasStartRange=false 必須 bypass 殘留 StartRange=0.3,從 idx 0 起算 → MaxMean=100")
+	})
+
+	t.Run("HasStartRangeTrue_StartRangeHonored", func(t *testing.T) {
+		// HasStartRange=true + StartRange=0.3 → 顯式下界,startIdx=3,只看低值 → 1。
+		ds := newDataset()
+		results, err := calc.calculateWithOptions(context.Background(), ds, 3, CalculationOptions{
+			StartRange:    0.3,
+			EndRange:      0.5,
+			HasStartRange: true,
+			HasEndRange:   true,
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.InDelta(t, 1.0, results[0].MaxMean, 1e-9,
+			"HasStartRange=true 須以 StartRange=0.3 為顯式下界,startIdx=3 → MaxMean=1")
+	})
+
+	t.Run("HasStartRangeFalse_ZeroStartRange_BypassesUnchanged", func(t *testing.T) {
+		// HasStartRange=false + StartRange=0:新舊邏輯一致 (startBypass=true)。
+		// 守住改動沒回歸既有 zero-start bypass 行為。
+		ds := newDataset()
+		results, err := calc.calculateWithOptions(context.Background(), ds, 3, CalculationOptions{
+			StartRange:    0.0,
+			EndRange:      0.5,
+			HasStartRange: false,
+			HasEndRange:   true,
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.InDelta(t, 100.0, results[0].MaxMean, 1e-9,
+			"HasStartRange=false + StartRange=0 仍 bypass,從 idx 0 起算 → MaxMean=100")
 	})
 }
