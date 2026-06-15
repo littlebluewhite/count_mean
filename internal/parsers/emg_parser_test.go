@@ -532,47 +532,52 @@ func TestValidateEMGData(t *testing.T) {
 func TestEMGParser_parseHeaders(t *testing.T) {
 	parser := NewEMGParser()
 
+	// header / dataRow 欄數一律對齊(真實 CSV 每欄都有對應 cell,空欄填空 cell);
+	// expectedHeaders 為 public data.Headers(排除時間欄、不含 "" 佔位欄);
+	// expectedValues 鎖定各通道首列取值,證明 record[j] 對齊到正確的具名通道。
 	tests := []struct {
-		name     string
-		input    []string
-		expected []string
+		name            string
+		headerRow       string
+		dataRow         string
+		expectErr       bool
+		expectedHeaders []string
+		expectedValues  map[string]float64
 	}{
 		{
-			name:     "normal headers",
-			input:    []string{"Time", "Ch1", "Ch2", "Ch3"},
-			expected: []string{"Time", "Ch1", "Ch2", "Ch3"},
+			name:            "normal headers",
+			headerRow:       "Time,Ch1,Ch2,Ch3",
+			dataRow:         "0.000,1,2,3",
+			expectedHeaders: []string{"Ch1", "Ch2", "Ch3"},
+			expectedValues:  map[string]float64{"Ch1": 1, "Ch2": 2, "Ch3": 3},
 		},
 		{
-			name:     "headers with spaces",
-			input:    []string{"  Time  ", "  Ch1  ", "  Ch2  "},
-			expected: []string{"Time", "Ch1", "Ch2"},
+			name:            "headers with spaces",
+			headerRow:       "  Time  ,  Ch1  ,  Ch2  ",
+			dataRow:         "0.000,1,2",
+			expectedHeaders: []string{"Ch1", "Ch2"},
+			expectedValues:  map[string]float64{"Ch1": 1, "Ch2": 2},
 		},
 		{
-			name:     "headers with empty strings",
-			input:    []string{"Time", "", "Ch1", "  ", "Ch2"},
-			expected: []string{"Time", "Ch1", "Ch2"},
+			// 中段空欄:CSV 第 1、3 欄為空(佔位 spacer),Ch1 在第 2 欄、Ch2 在第 4 欄。
+			// public Headers 不含 ""；資料值必須對齊到 record[2]/record[4] 而非位移。
+			name:            "headers with empty strings",
+			headerRow:       "Time,,Ch1,  ,Ch2",
+			dataRow:         "0.000,,2,,4",
+			expectedHeaders: []string{"Ch1", "Ch2"},
+			expectedValues:  map[string]float64{"Ch1": 2, "Ch2": 4},
 		},
 		{
-			name:     "all empty headers",
-			input:    []string{"", "  ", "   "},
-			expected: []string{},
+			name:      "all empty headers",
+			headerRow: ",  ,   ",
+			dataRow:   "0.000,1,2",
+			expectErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// 由於 parseHeaders 是私有方法，我們通過創建一個簡單的 CSV 文件來間接測試
-			csvContent := ""
-
-			for i, header := range tt.input {
-				if i > 0 {
-					csvContent += ","
-				}
-
-				csvContent += header
-			}
-
-			csvContent += "\n0.000,1,2,3"
+			csvContent := tt.headerRow + "\n" + tt.dataRow
 
 			tmpFile, err := os.CreateTemp(t.TempDir(), "test_headers_*.csv")
 			require.NoError(t, err)
@@ -587,12 +592,26 @@ func TestEMGParser_parseHeaders(t *testing.T) {
 
 			data, _, err := parser.Parse(f, tmpFile.Name())
 
-			if len(tt.expected) <= 1 { // 如果只有時間列或沒有列，應該出錯
+			if tt.expectErr {
 				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expected[1:], data.Headers) // 排除時間列
+
+				return
 			}
+
+			require.NoError(t, err)
+			// public Headers 不含 "" 佔位欄
+			assert.Equal(t, tt.expectedHeaders, data.Headers)
+
+			// 資料值對齊到正確通道(中段空欄不可造成位移)
+			for name, want := range tt.expectedValues {
+				ch := data.Channels[name]
+				require.Lenf(t, ch, 1, "通道 %q 應有 1 筆資料", name)
+				assert.Equalf(t, want, ch[0], "通道 %q 首列取值錯位", name)
+			}
+
+			// 佔位空欄不應產生通道
+			_, hasEmpty := data.Channels[""]
+			assert.False(t, hasEmpty, `public Channels 不應含 "" 佔位欄`)
 		})
 	}
 }
@@ -645,6 +664,85 @@ func TestParseEMGDataRow_TimeCellRouting(t *testing.T) {
 			t.Errorf("Ch2 通道值應為 2.0，got %v", ch2)
 		}
 	})
+}
+
+// TestEMGParser_MidColumnEmptyHeaderAlignment 鎖定「header 中段有空欄 + 對應空資料欄」
+// 的對齊不變式(對齊 motion_parser.go「不可 compact」範式):
+//   - 非空通道拿到 record[j] 正確位置的值(不因中段空欄而位移)
+//   - 空欄被跳過、不產生 "" 通道
+//   - Time 欄不受影響、資料行不被誤跳(非空 Time 過 validateEMGDataIntegrity)
+//
+// 修正前 parseHeaders 會 compact 抽掉空欄,使具名通道位移配到 spacer 欄的值 → 靜默錯位。
+func TestEMGParser_MidColumnEmptyHeaderAlignment(t *testing.T) {
+	parser := NewEMGParser()
+
+	// 第 1、4 欄為空 spacer;Ch1=第2欄、Ch2=第3欄、Ch3=第5欄。
+	// 資料每列各欄對齊填值,空欄填空 cell。
+	emgContent := "Time,,Ch1,Ch2,,Ch3\n" +
+		"0.000,,11,12,,13\n" +
+		"0.001,,21,22,,23"
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "midempty_*.csv")
+	require.NoError(t, err)
+
+	_, err = tmpFile.WriteString(emgContent)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	f, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer f.Close()
+
+	data, _, err := parser.Parse(f, tmpFile.Name())
+	require.NoError(t, err)
+
+	// public Headers 不含 "" 佔位欄,且保持 CSV 出現順序
+	assert.Equal(t, []string{"Ch1", "Ch2", "Ch3"}, data.Headers)
+
+	// Time 不受中段空欄影響
+	assert.Equal(t, []float64{0.000, 0.001}, data.Time)
+
+	// 各通道對齊到正確的 record[j] 位置(非位移)
+	assert.Equal(t, []float64{11, 21}, data.Channels["Ch1"])
+	assert.Equal(t, []float64{12, 22}, data.Channels["Ch2"])
+	assert.Equal(t, []float64{13, 23}, data.Channels["Ch3"])
+
+	// 佔位空欄不產生通道
+	_, hasEmpty := data.Channels[""]
+	assert.False(t, hasEmpty, `public Channels 不應含 "" 佔位欄`)
+
+	// 整檔通過完整性校驗(非空 Time、各通道等長)
+	assert.NoError(t, validateEMGDataIntegrity(data))
+}
+
+// TestEMGParser_DuplicateChannelName 驗證重複通道名稱回傳明確訊息,
+// 取代修正前語意不清的「長度不一致」(P2-6;僅 UX、無行為變更)。
+func TestEMGParser_DuplicateChannelName(t *testing.T) {
+	parser := NewEMGParser()
+
+	// Ch1 出現兩次 → 折疊成同一 map key、長度變兩倍。
+	emgContent := "Time,Ch1,Ch2,Ch1\n" +
+		"0.000,1,2,3\n" +
+		"0.001,4,5,6"
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "dupchan_*.csv")
+	require.NoError(t, err)
+
+	_, err = tmpFile.WriteString(emgContent)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	f, err := os.Open(tmpFile.Name())
+	require.NoError(t, err)
+	defer f.Close()
+
+	_, _, err = parser.Parse(f, tmpFile.Name())
+	require.Error(t, err)
+
+	// 明確指出「重複的通道名稱」與重複的名字,而非「長度不一致」
+	assert.Contains(t, err.Error(), "重複的通道名稱")
+	assert.Contains(t, err.Error(), "Ch1")
+	assert.NotContains(t, err.Error(), "長度不一致")
 }
 
 func TestEMGParser_Integration(t *testing.T) {

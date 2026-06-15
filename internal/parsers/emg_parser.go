@@ -42,15 +42,55 @@ func (p *EMGParser) validateEMGRecords(records [][]string) ([]string, error) {
 	return headers, nil
 }
 
+// validateUniqueChannelNames 檢查具名通道(排除時間欄與 "" 佔位欄)是否有重複名稱。
+//
+// 重複名稱會在 Channels map 折疊成同一 key、每行 append 兩次 → 該通道長度變兩倍,
+// 在 validateEMGDataIntegrity 表現為語意不清的「長度不一致」。此處先以位置 headers
+// (仍保有各自獨立的重複項)偵測,回傳明確訊息。不 rename 通道,以免破壞下游
+// BuildChannelMap 按生理名取值。
+//
+//nolint:err113 // dynamic errors with Chinese messages for user-facing output
+func validateUniqueChannelNames(headers []string) error {
+	seen := make(map[string]struct{}, len(headers))
+
+	for _, h := range headers[1:] {
+		if h == "" {
+			continue
+		}
+
+		if _, dup := seen[h]; dup {
+			return fmt.Errorf("EMG 檔案標題含重複的通道名稱：%q", h)
+		}
+
+		seen[h] = struct{}{}
+	}
+
+	return nil
+}
+
 // initEMGData initializes EMGData structure with channel slices.
+//
+// headers[0] 是時間欄一律排除;其餘可能含位置佔位用的 "" 空欄(見 parseHeaders)——
+// 過濾掉,只有具名欄成為 publish 的 Headers/Channels。位置 headers 仍由 parseEMGDataRow
+// 持有以維持 record[j] 對齊(對齊 motion_parser.go initializeMotionData 範式)。
 func initEMGData(headers []string, capacity int) *models.PhaseSyncEMGData {
+	dataHeaders := make([]string, 0, len(headers))
+
+	for _, h := range headers[1:] {
+		if h == "" {
+			continue
+		}
+
+		dataHeaders = append(dataHeaders, h)
+	}
+
 	emgData := &models.PhaseSyncEMGData{
 		Time:     make([]float64, 0, capacity),
 		Channels: make(map[string][]float64),
-		Headers:  headers[1:],
+		Headers:  dataHeaders,
 	}
 
-	for _, header := range emgData.Headers {
+	for _, header := range dataHeaders {
 		emgData.Channels[header] = make([]float64, 0, capacity)
 	}
 
@@ -72,6 +112,11 @@ func parseEMGDataRow(record, headers []string, emgData *models.PhaseSyncEMGData)
 	emgData.Time = append(emgData.Time, timeValue)
 
 	for j := 1; j < len(headers) && j < len(record); j++ {
+		if headers[j] == "" {
+			// 佔位空欄(spacer):位置仍前進以維持 record[j] 對齊,但不收進任何通道。
+			continue
+		}
+
 		value, _ := ParseFloatCell(record[j])
 		emgData.Channels[headers[j]] = append(emgData.Channels[headers[j]], value)
 	}
@@ -128,6 +173,10 @@ func (p *EMGParser) parseEMGRecords(records [][]string) (*models.PhaseSyncEMGDat
 		return nil, 0, err
 	}
 
+	if err := validateUniqueChannelNames(headers); err != nil {
+		return nil, 0, err
+	}
+
 	emgData := initEMGData(headers, len(records)-1)
 
 	for i := 1; i < len(records); i++ {
@@ -147,14 +196,22 @@ func (p *EMGParser) parseEMGRecords(records [][]string) (*models.PhaseSyncEMGDat
 }
 
 // parseHeaders 解析標題行.
+//
+// **位置對齊不可破壞**(對齊 motion_parser.go buildUniqueHeaders 範式):parseEMGDataRow
+// 按 record[j] 位置餵值,headers[j] 必須對應 CSV 第 j 欄。若某欄為空(中間的 spacer 欄),
+// 不可 compact 抽掉 —— 否則後面的具名欄會位移、配到 spacer 欄的值 → 靜默資料錯位。
+// 改以 "" 佔位保留位置,由 initEMGData / parseEMGDataRow 跳過不收進通道。尾端純佔位欄
+// 則裁掉(後面沒有具名欄,不需保留位置;留著會撐大 len(headers) 害 parseEMGDataRow 的
+// len(record) < len(headers) 保護把正常 ragged data row 誤判為欄位不足而整列跳過)。
 func (p *EMGParser) parseHeaders(headerRow []string) []string { //nolint:revive // keep consistent API
 	headers := make([]string, 0, len(headerRow))
 
 	for _, h := range headerRow {
-		trimmed := strings.TrimSpace(h)
-		if trimmed != "" {
-			headers = append(headers, trimmed)
-		}
+		headers = append(headers, strings.TrimSpace(h))
+	}
+
+	for len(headers) > 0 && headers[len(headers)-1] == "" {
+		headers = headers[:len(headers)-1]
 	}
 
 	return headers
