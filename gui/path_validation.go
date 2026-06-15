@@ -3,7 +3,6 @@ package gui
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"count_mean/internal/security"
 )
@@ -65,21 +64,11 @@ func validateExternalPathInputs(labelPathPairs ...string) error {
 			continue
 		}
 
-		// null byte 注入早於 ValidateExternalPath 攔下。
-		// validator 內部的 SanitizePath 會清 \x00 但 ValidateExternalPath 走
-		// 的是 validatePathFormat 路徑,沒做 null byte 檢查 — 若 path 是
-		// "/legit/foo.csv\x00/etc/passwd",lexical Clean 後變 "/legit/foo.csv"
-		// (truncated at null),sensitive prefix 比對失誤,但 caller 後續
-		// OpenFile 在某些 OS/locale 下會在 \x00 截斷 → 開到不同檔案。
-		//
-		// boundary 提早 reject 比 trust 下游 OpenFile 的 null-termination 行為
-		// 安全得多;對使用者也是合理的 input contract(GUI file dialog 不可能
-		// 回帶 null byte 的合法路徑)。
-		if strings.ContainsRune(path, '\x00') {
-			return fmt.Errorf("%s 路徑驗證失敗: %w",
-				label, security.ErrPathTraversal)
-		}
-
+		// null byte 注入由 ValidateExternalPath 內部統一攔下並回 ErrPathContainsNUL
+		// 專屬 sentinel(pathvalidator.go ValidateExternalPath 開頭即 ContainsRune
+		// 檢查)。此處不再重複 reject — 先前 GUI 端自行擋會回 ErrPathTraversal,
+		// 反而遮蔽下游真正的 NUL sentinel,害 caller / audit log 無法區分「NUL 注入」
+		// 與「目錄穿越」。交給下游單一來源回正確 sentinel。
 		if err := validator.ValidateExternalPath(path); err != nil {
 			return fmt.Errorf("%s 路徑驗證失敗: %w", label, err)
 		}

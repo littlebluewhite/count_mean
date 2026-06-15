@@ -99,6 +99,20 @@ func initEMGData(headers []string, capacity int) *models.PhaseSyncEMGData {
 
 // parseEMGDataRow parses a single EMG data row.
 // Returns false if the row should be skipped.
+//
+// **三 parser(EMG / Motion / ANC)空欄策略契約**(Unit D 對齊後文件化,此處不改行為):
+//   - 時間 / index 欄:走 ParseTimeCell(額外拒 NaN/Inf)。失敗即「整列 skip」—
+//     時間軸的空 / NaN 會 poison 下游 sliding-window 與 monotonicity 比較,故 fail-row。
+//   - 通道值欄:走 ParseFloatCell 且**刻意忽略 ok**(`value, _`),空 / 不可解析 cell
+//     fallback 成 0、列仍保留。理由:科學儀器輸出常有 trailing tab / 個別 sensor
+//     dropout,不該因單一通道空值丟整列;字面 "NaN" 則照 strconv 解析為 NaN value,
+//     由下游(muscle_ratio / phase_sync)決定輸出空白 cell(見 ParseFloatCell doc)。
+//
+// 分歧由來:三 parser 早期各自手寫 strconv.ParseFloat,對 trailing 空白 / 空欄
+// 的容忍度不一(ANC 曾因 `strconv.ParseFloat(" 0.001 \t..")` error 整列被 skip)。
+// Unit D 統一收斂到 parse_helpers 的 ParseTimeCell / ParseFloatCell 兩 primitive,
+// 三 parser 此後共用同一空欄語意;需嚴格區分 missing 與字面 NaN 的新 caller 改用
+// ParseFloatCellWithMissing + FormatFloatCell(見 parse_helpers.go)。
 func parseEMGDataRow(record, headers []string, emgData *models.PhaseSyncEMGData) bool {
 	if len(record) < len(headers) {
 		return false

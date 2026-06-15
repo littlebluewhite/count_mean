@@ -140,17 +140,14 @@ func TestSanitizeChartString_HTMLCommentInjection(t *testing.T) {
 
 // TestSanitizeChartString_JSLineTerminators 釘住 U+2028 / U+2029
 // 在 <script> 內的 JSON 字串會被 V8 / Safari 等 engine 視為 statement
-// terminator,可破出字串並執行後續 token。sanitize 必須把 raw codepoint 替換
-// 成 \uXXXX literal 字串。`unicode.IsControl` 不認這兩個 codepoint
+// terminator,可破出字串並執行後續 token。sanitize 必須讓 raw codepoint 不
+// 殘留 — 現行策略在 builder loop 直接剔除 raw 字元(改自舊版 replacer escape:
+// escape 後的反斜線會被 go-echarts JSON marshal 二次轉義成可見亂碼)。
 // (它們是 Zl / Zp category),因此舊版單純剔除 control char 的路徑會漏。
 //
-// 6-byte literal constants：避免 source 直接含 raw U+2028 / U+2029
-// 干擾 grep / diff / IDE 顯示。`ls` / `ps` 是 sanitize 後預期 output 子字串。
+// 安全不變式:output 不得殘留 raw U+2028 / U+2029(bannedRunes);周圍合法字元應
+// 保留(mustContain)。剔除後 "Title"+sep+"evil" → "Titleevil"(分隔符不見)。
 func TestSanitizeChartString_JSLineTerminators(t *testing.T) {
-	// sanitize 後預期 output 應包含的 6-byte ASCII literal 字串 (反斜線 + u + 2 + 0 + 2 + 8/9).
-	// 在 Go source 用 "\\u2028" 雙反斜線寫出來,讓 compile-time 解析後是 literal 6 ASCII bytes.
-	const ls = "\\u2028"
-	const ps = "\\u2029"
 	// rawLS / rawPS 是真實 U+2028 / U+2029 codepoint,用 Go escape "\u2028" 形式
 	// 避免 source 內直接出現 raw codepoint(便於 grep / diff / IDE 視覺化).
 	const rawLS = "\u2028"
@@ -166,19 +163,19 @@ func TestSanitizeChartString_JSLineTerminators(t *testing.T) {
 			name:        "U+2028 line separator",
 			in:          "Title" + rawLS + "evil",
 			bannedRunes: []rune{'\u2028'},
-			mustContain: []string{ls, "Title", "evil"},
+			mustContain: []string{"Title", "evil"},
 		},
 		{
 			name:        "U+2029 paragraph separator",
 			in:          "Title" + rawPS + "evil",
 			bannedRunes: []rune{'\u2029'},
-			mustContain: []string{ps, "Title", "evil"},
+			mustContain: []string{"Title", "evil"},
 		},
 		{
 			name:        "mixed both terminators",
 			in:          "A" + rawLS + "B" + rawPS + "C",
 			bannedRunes: []rune{'\u2028', '\u2029'},
-			mustContain: []string{ls, ps, "A", "B", "C"},
+			mustContain: []string{"A", "B", "C"},
 		},
 	}
 
@@ -233,7 +230,7 @@ func FuzzSanitizeChartString(f *testing.F) {
 		got := SanitizeChartString(in)
 
 		// 1. 長度 cap：1024 byte slice 後再 escape 可能略微膨脹（每個 `</`
-		//    膨脹為 `<\/` 多 1 byte，每個 U+2028 從 3 bytes 變 6 bytes 字串），
+		//    膨脹為 `<\/` 多 1 byte；U+2028 / U+2029 則在 builder loop 被剔除而縮短），
 		//    但仍應遠小於合理上界（4 * 1024 已是極端 case 上界）。
 		const maxExpandedLen = 4 * 1024
 		if len(got) > maxExpandedLen {

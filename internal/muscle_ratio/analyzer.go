@@ -165,8 +165,12 @@ func (a *Analyzer) analyzeSubject(
 
 	result.Subject = m.Subject
 
-	// Subject 為空時擋下，否則 filename.Sanitize("") 會產生 "_muscle_ratio.csv"，
-	// 多筆空 Subject 在 assertUniqueSanitizedSubjects 之後仍可能單筆通過寫到同一檔。
+	// Subject 為空時擋下：filename.Sanitize("") 會 fallback 成 "untitled"，
+	// 經 SubjectOutputName 組出 "untitled_muscle_ratio.csv"。
+	//   - 多筆空 Subject 共用此 "untitled" 前綴 → 全寫同一檔、後者 O_TRUNC 覆寫前者；
+	//     此情境其實已由 assertUniqueSanitizedSubjects(批次層,同 key 即拒)先擋下。
+	//   - 單筆空 Subject 能通過批次唯一性檢查，但 "untitled_muscle_ratio.csv" 是
+	//     非預期且易與真實命名碰撞的檔名。故在此 per-subject 再 fail-fast，要求顯式 Subject。
 	if strings.TrimSpace(m.Subject) == "" {
 		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectEmptyName)
 		return result

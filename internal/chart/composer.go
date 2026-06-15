@@ -1039,7 +1039,7 @@ func addComposerCustomJS(line *charts.Line) {
 						myChart.setOption({series: seriesPatch});
 					} catch (err) {
 						/* silent fail — phase 更新失敗不該擋 user 操作,debug 走 console */
-						try { console.error('composer-update-phase-markers 失敗:', err); } catch (e) {}
+						try { console.error('composer-update-phase-markers 失敗:', err); } catch (e2) {}
 					}
 				}
 			});

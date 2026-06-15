@@ -553,7 +553,7 @@ func addCCICustomJS(line *charts.Line) {
 							myChart.setOption({ series: seriesUpdate, xAxis: [{}, { data: newPctLabels }] });
 						}
 					} catch (err) {
-						try { console.error('cci-update-phase-markers 失敗:', err); } catch (e) {}
+						try { console.error('cci-update-phase-markers 失敗:', err); } catch (e2) {}
 					}
 				}
 			});

@@ -50,6 +50,28 @@ func TestGetDecimalPrecision(t *testing.T) {
 			input:    "",
 			expected: 0,
 		},
+		{
+			// 含指數的數字:只數 mantissa 的小數位,指數段不計入。
+			// 否則 "1.5e-3" 會被算成 4(把 "e-3" 也當小數)。
+			name:     "exponent lowercase e",
+			input:    "1.5e-3",
+			expected: 1,
+		},
+		{
+			name:     "exponent uppercase E",
+			input:    "2.250E10",
+			expected: 3,
+		},
+		{
+			name:     "exponent no decimal in mantissa",
+			input:    "5e-7",
+			expected: 0,
+		},
+		{
+			name:     "exponent positive sign",
+			input:    "1.23e+4",
+			expected: 2,
+		},
 	}
 
 	for _, tt := range tests {

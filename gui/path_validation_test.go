@@ -277,6 +277,10 @@ func TestValidateExternalPathInputs_RejectsNullByteInjection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateExternalPathInputs("分期總檔案", tc.path)
 			require.Error(t, err, "null byte 注入 path 必須被擋下: %q", tc.path)
+			// 必須回 ErrPathContainsNUL 專屬 sentinel,不可被 ErrPathTraversal 遮蔽 —
+			// 讓 caller / audit log 能精確區分「NUL 注入」與「目錄穿越」兩種攻擊。
+			require.ErrorIs(t, err, security.ErrPathContainsNUL,
+				"null byte path 必須回 ErrPathContainsNUL 而非其他 sentinel: %q", tc.path)
 		})
 	}
 }
