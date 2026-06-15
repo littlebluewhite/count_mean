@@ -32,44 +32,31 @@ import (
 	"strings"
 )
 
-// pathRedactPattern 匹配任意絕對路徑格式。
+// pathRedactPattern 匹配字串中**任意 ≥1 目錄段的路徑**(POSIX `/a/b/`、Windows
+// drive-letter、UNC),把目錄部分換成 `<redacted-path>/`、保留 basename。
 //
-// POSIX 分支採「任意絕對路徑 + 前導邊界錨定」設計:
-//   - 前導邊界(group 1,回吐):行首 ^ 或 空白/引號/(/ = 之一。
-//     Go RE2 無 lookbehind,用捕獲組 + "${1}<redacted-path>/" 回吐邊界字符。
-//     相對路徑(internal/x.go、./x.go)的 `/` 前接詞字符或 `.`,不在邊界集合 → 天然豁免。
-//   - POSIX 絕對路徑:後接 1+ 個「元素/」;元素內可含單空白分隔子詞(涵蓋 pCloud Drive)。
-//   - 元素字符排除 \s/:"' — 避免吃掉相鄰 token、閉引號或 recover.go:42 的行號。
-//   - Windows drive-letter 與 UNC 亦包含在 group 1 邊界保護內。
+// # 為什麼不做前導邊界錨定(no-boundary 設計)
+//
+// 早期版本曾加前導邊界(僅當路徑前接分隔符才匹配)以避免過度脫敏相對路徑;但 codex
+// review 連續 5 輪揭示邊界錨定對 PHI 是錯誤偏置 — 它為減少 false-positive(過度脫敏=
+// 可讀性損失)而引入 false-negative(跳脫換行 / 冒號標籤 / file:// URL / 帶 host 的
+// file URL 等「路徑前綴不是分隔符」情形下漏脫敏=PHI 洩漏)。PHI redaction 應反過來:
+// 寧可過度脫敏,絕不洩漏。故移除邊界,直接匹配任意 `/dir/.../` 序列。
+//
+// 取捨(刻意接受):多段相對路徑(`a/b/c.go`→`a<redacted-path>/c.go`)、URL path、
+// `file://host/path` 的 host 都會被一併脫敏(P3、安全方向、僅 log 可讀性損失)。單段相對
+// 參照(`internal/x.go:12` — 無 trailing-slash 目錄段)不受影響。元素排除 \s/:"'(避免
+// 吃掉相鄰 token、閉引號、`recover.go:42` 的行號),basename 不被消費而保留。
 //
 //nolint:gochecknoglobals // immutable regex shared across redact callers
 var pathRedactPattern = regexp.MustCompile(
-	// group 1:前導邊界(回吐),確保只匹配絕對路徑而非相對路徑。RE2 無 lookbehind,故用
-	// 「前一字符是分隔符」的 denylist:`[^\p{L}\p{N}_./]` = 任何**非**(Unicode 字母 \p{L} /
-	// 數字 \p{N} / `_` / `.` / `/`)的字符。比 allowlist 穩健 — 一次涵蓋空白、引號、`:`、
-	// `(`、`=`、`,`、`[` 等所有分隔符。用 Unicode-aware \p{L}\p{N}(非 ASCII-only \w)讓中文
-	// 相對路徑(`資料/輸入/raw.csv`)的中文段視為詞字符而**不被誤當絕對路徑**;真實 PHI 路徑
-	// 前恒有 ASCII 分隔符(本 repo 約定 `:%v`、Go error `open /path`),仍正常脫敏。
-	//
-	// 相對路徑天然豁免:`./x`/`word/x`/`資料/x` 的 `/` 前接 `.` 或(ASCII/Unicode)詞字符,
-	// 被 denylist 排除。`recover.go:42` 的 `:42`(`:` 後接數字非 `/`)不誤觸發、`http://`
-	// (`//` 後非 segment 起始)不匹配。`\\[nr]` 另補:logger.sanitizeMessage 把 raw \n/\r
-	// escape 成字面 `\n`/`\r` 後路徑前綴變成詞字符 `n`/`r`(被 denylist 排除),須顯式涵蓋。
-	//
-	// `file://[^\s/]*` 另補:`file:///Users/...`(hostless)與 `file://localhost/Users/...`
-	// (帶 host)的本地路徑前接 `/` 或 host 詞字符(被 denylist 排除),須顯式涵蓋此 scheme
-	// (指向本地檔=PHI)。`[^\s/]*` 吃掉可選 host(localhost/host:port)到路徑前。不會重啟
-	// `http://`:scheme 字面不同、且 http 的 path 在遠端 host 後(非本地檔)。
-	`(^|[^\p{L}\p{N}_./]|\\[nr]|file://[^\s/]*)` +
-		`(?:` +
-		// POSIX 絕對路徑目錄段;元素排除 \s/:"'(避免吃掉相鄰 token、閉引號、
-		// recover.go:42 的行號),basename 不被消費而保留
-		`/(?:[^\s/:"']+(?: [^\s/:"']+)*/)+` +
-		// Windows drive-letter(`C:\...` 或 `C:/...`)— case-insensitive
-		`|[A-Za-z]:[\\/](?:[^\s:"'\\/]+[\\/])+` +
+	// POSIX:`/` 後 1+ 個「元素/」;元素內可含單空白分隔子詞(涵蓋 /Volumes/pCloud Drive/)。
+	`/(?:[^\s/:"']+(?: [^\s/:"']+)*/)+` +
+		// Windows drive-letter(`C:\...` 或 `C:/...`);`\b` 要求盤符在詞邊界,避免把
+		// `file:/path` 的 `e:/`(`e` 前接詞字符 `l`)誤當盤符而吃掉 label 末字母。
+		`|\b[A-Za-z]:[\\/](?:[^\s:"'\\/]+[\\/])+` +
 		// UNC(`\\server\share\...`)
-		`|\\\\[^\s\\]+(?:\\[^\s\\]+)+\\` +
-		`)`,
+		`|\\\\[^\s\\]+(?:\\[^\s\\]+)+\\`,
 )
 
 // lineFallbackPathPrefix 是 line-loop fallback 的 trigger — 任何 trim 後以 absolute
@@ -95,7 +82,7 @@ var lineFallbackPathPrefix = regexp.MustCompile(`^(?:/|\\\\|[A-Za-z]:[\\/])`)
 //
 // 與 gui/recover.go 原版的 redactPathsInStack 行為等價(搬家)。
 func Paths(s string) string {
-	redacted := pathRedactPattern.ReplaceAllString(s, "${1}<redacted-path>/")
+	redacted := pathRedactPattern.ReplaceAllString(s, "<redacted-path>/")
 
 	// 處理少數沒被 regex 抓到但仍含 path-like 字串的邊角(例:custom $GOPATH,
 	// 不在標準 system root 下)。保守再過一輪:任何 trim 後以 absolute path

@@ -401,20 +401,22 @@ func TestPaths_RedactsNonAllowlistedAndProtectsRelative(t *testing.T) {
 		})
 	}
 
-	// 相對路徑不被改寫 — 用獨立斷言鎖定
-	t.Run("relative_path_unchanged", func(t *testing.T) {
-		relAbs := "internal/x.go:12"
-		if got := Paths(relAbs); got != relAbs {
-			t.Errorf("相對路徑應保持不變: got %q, want %q", got, relAbs)
+	// no-boundary 取捨:單段相對參照(無 trailing-slash 目錄段)仍保留。
+	t.Run("relative_single_seg_preserved", func(t *testing.T) {
+		relRef := "internal/x.go:12" // 單一 `/`、`x.go` 後無 trailing-slash → 不匹配
+		if got := Paths(relRef); got != relRef {
+			t.Errorf("單段相對參照應保持不變: got %q, want %q", got, relRef)
 		}
+	})
 
-		dotRel := "see ./internal/x.go here"
-		gotDot := Paths(dotRel)
-		if strings.Contains(gotDot, "<redacted-path>") {
-			t.Errorf("相對路徑 %q 不應被 redact,got: %q", dotRel, gotDot)
+	// no-boundary 取捨:多段相對路徑被過度脫敏(刻意 — 寧可過度脫敏絕不洩漏 PHI)。
+	t.Run("multi_seg_relative_over_redacted", func(t *testing.T) {
+		got := Paths("see ./internal/x.go here") // `/internal/` 為 trailing-slash 目錄段 → 脫敏
+		if !strings.Contains(got, "<redacted-path>") {
+			t.Errorf("多段相對路徑應被過度脫敏(no-boundary 設計): got %q", got)
 		}
-		if !strings.Contains(gotDot, "./internal/x.go") {
-			t.Errorf("相對路徑 %q 應完整保留 ./internal/x.go,got: %q", dotRel, gotDot)
+		if !strings.Contains(got, "x.go") {
+			t.Errorf("basename 應保留: got %q", got)
 		}
 	})
 
@@ -434,7 +436,7 @@ func TestPaths_RedactsNonAllowlistedAndProtectsRelative(t *testing.T) {
 // TestPaths_RedactsPathAfterEscapedNewline 釘住 codex R1 [P2] 回歸:
 // logger.sanitizeMessage 先把 raw \n/\r escape 成字面 `\n`/`\r` 再呼叫 Paths,
 // 導致多行 error 第二行的絕對路徑前綴變成字面 `\n`(非空白邊界)而漏脫敏。
-// 前導邊界須涵蓋跳脫換行(`\\[nr]`)。下方輸入用 Go raw string,`\n`/`\r` 即字面兩字元。
+// no-boundary 設計下,跳脫換行前綴的路徑仍直接脫敏。下方輸入用 Go raw string,`\n`/`\r` 即字面兩字元。
 func TestPaths_RedactsPathAfterEscapedNewline(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -473,18 +475,19 @@ func TestPaths_RedactsPathAfterEscapedNewline(t *testing.T) {
 	}
 }
 
-// TestPaths_RedactsFileURLNotHTTP 釘住 codex R3 [P2] 回歸:`file:///Users/...` 的
-// 本地路徑前接 `/`(被 denylist 排除),須顯式涵蓋 `file://`;同時守護 `http://` 遠端
-// URL 不被 redact(否則等於重啟用 http:// 匹配)。
-func TestPaths_RedactsFileURLNotHTTP(t *testing.T) {
-	t.Run("file_url_redacted", func(t *testing.T) {
+// TestPaths_RedactsURLPaths 鎖定 no-boundary 行為:file:// 本地路徑被脫敏(含可選
+// host);http:// 的 host+path 也一併過度脫敏(安全方向 — 非本地 PHI 但脫敏無妨)。
+// 核心保證:任何 URL 內嵌的絕對路徑都不洩漏(codex R3/R5 的 file-URL gap 由 no-boundary
+// 根因消除)。
+func TestPaths_RedactsURLPaths(t *testing.T) {
+	t.Run("file_url_hostless_redacted", func(t *testing.T) {
 		got := Paths("open file:///Users/alice/patient/raw.csv failed")
 		for _, leak := range []string{"/Users/alice", "patient"} {
 			if strings.Contains(got, leak) {
 				t.Errorf("file:// 本地路徑洩漏 %q:\n%s", leak, got)
 			}
 		}
-		for _, want := range []string{"<redacted-path>", "raw.csv", "file://"} {
+		for _, want := range []string{"<redacted-path>", "raw.csv"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("必要 %q 不在 output:\n%s", want, got)
 			}
@@ -492,32 +495,32 @@ func TestPaths_RedactsFileURLNotHTTP(t *testing.T) {
 	})
 
 	t.Run("file_url_with_host_redacted", func(t *testing.T) {
-		// 帶 host 的 file URL(codex R5 [P2]):path 前接 host 詞字符,須仍脫敏。
 		got := Paths("open file://localhost/Users/alice/patient/raw.csv failed")
 		for _, leak := range []string{"/Users/alice", "patient"} {
 			if strings.Contains(got, leak) {
 				t.Errorf("file://host 本地路徑洩漏 %q:\n%s", leak, got)
 			}
 		}
-		for _, want := range []string{"<redacted-path>", "raw.csv", "localhost"} {
-			if !strings.Contains(got, want) {
-				t.Errorf("必要 %q 不在 output:\n%s", want, got)
-			}
+		if !strings.Contains(got, "<redacted-path>") || !strings.Contains(got, "raw.csv") {
+			t.Errorf("必要 fragment(<redacted-path>/raw.csv)不在 output:\n%s", got)
 		}
 	})
 
-	t.Run("http_url_not_redacted", func(t *testing.T) {
-		// http:// 指向遠端、非本地 PHI;不可被 redact(否則等於重啟用 http:// 匹配)。
-		in := "fetch http://example.com/Users/docs/page failed"
-		if got := Paths(in); got != in {
-			t.Errorf("http:// 遠端 URL 不應被 redact:\n got=%q\nwant=%q", got, in)
+	t.Run("http_url_path_over_redacted", func(t *testing.T) {
+		// no-boundary 取捨:http URL 的 host+path 一併脫敏(安全方向,非本地 PHI 但無妨)。
+		got := Paths("fetch http://example.com/Users/docs/page failed")
+		if strings.Contains(got, "/Users/docs") {
+			t.Errorf("URL path 應被脫敏: %q", got)
+		}
+		if !strings.Contains(got, "<redacted-path>") {
+			t.Errorf("應含 redact 標誌: %q", got)
 		}
 	})
 }
 
-// TestPaths_RedactsAfterArbitrarySeparator 釘住 denylist 邊界(codex R1/R2 揭示
-// allowlist 系統性不完整後的根因修法):路徑前接**任何非詞/點/斜線字符**即視為絕對
-// 路徑。最高價值案例 = 中文 error message 無空白直接接路徑(zh-TW 工具常見洩漏面)。
+// TestPaths_RedactsAfterArbitrarySeparator 鎖定 no-boundary 行為:路徑無論前接何種字符
+// (冒號標籤、bracket、comma、中文…)都直接脫敏。中文 error message 接絕對路徑是 zh-TW
+// 工具常見洩漏面;中文相對路徑則被一併過度脫敏(no-boundary 取捨,寧可過度脫敏絕不洩漏)。
 func TestPaths_RedactsAfterArbitrarySeparator(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -533,11 +536,11 @@ func TestPaths_RedactsAfterArbitrarySeparator(t *testing.T) {
 			mustPreserve: []string{"<redacted-path>", "raw.csv", "找不到檔案"},
 		},
 		{
-			// 中文相對路徑(中文段=Unicode 詞字符)→ 不被誤當絕對路徑(codex R4 [P3])
-			name:         "chinese_relative_path_preserved",
+			// no-boundary 取捨:中文相對路徑也被過度脫敏(刻意 — 寧可過度脫敏絕不洩漏)
+			name:         "chinese_relative_path_over_redacted",
 			input:        "讀取 資料/輸入/raw.csv",
-			mustNotLeak:  []string{"<redacted-path>"},
-			mustPreserve: []string{"資料/輸入/raw.csv"},
+			mustNotLeak:  []string{"資料/輸入", "輸入"},
+			mustPreserve: []string{"<redacted-path>", "raw.csv"},
 		},
 		{
 			name:         "bracket_then_path",
@@ -570,9 +573,9 @@ func TestPaths_RedactsAfterArbitrarySeparator(t *testing.T) {
 	}
 }
 
-// TestPaths_RedactsColonLabeledPath 釘住 codex R2 [P2] 回歸:無空白的冒號標籤
-// (`file:/Users/...`、`path:C:\...`)路徑前接 `:`,前導邊界須涵蓋 `:` 才不洩漏。
-// 同時守護 `recover.go:42` 的 `:42`(後接數字非 `/`)不被 `:` 邊界誤觸發。
+// TestPaths_RedactsColonLabeledPath 鎖定無空白冒號標籤(`file:/Users/...`、
+// `path:C:\...`)路徑被脫敏(no-boundary 下直接匹配;`\b` 防 `file:/` 的 `e:` 被誤當盤符)。
+// 同時守護 `recover.go:42` 的 `:42`(後接數字非 `/`)不被誤觸發。
 func TestPaths_RedactsColonLabeledPath(t *testing.T) {
 	cases := []struct {
 		name         string
