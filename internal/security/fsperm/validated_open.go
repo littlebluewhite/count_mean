@@ -48,6 +48,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"count_mean/internal/security/redact"
 )
 
 // ErrBasePathsEmpty 為 caller 傳入 empty basePaths 時的 sentinel — 拒絕 silently
@@ -82,12 +84,14 @@ func OpenWriteValidated(path string, basePaths []string) (*os.File, error) {
 
 	resolvedPath, err := evalSymlinksWithFallback(path)
 	if err != nil {
-		return nil, fmt.Errorf("fsperm.OpenWriteValidated: 無法解析路徑 %s: %w", path, err)
+		// 路徑值過 redact 再進 caller-facing 訊息,避免 PHI 絕對路徑洩漏進 webview。
+		return nil, fmt.Errorf("fsperm.OpenWriteValidated: 無法解析路徑 %s: %w", redact.Paths(path), err)
 	}
 
 	hitBase, ok := matchAnyBase(resolvedPath, basePaths)
 	if !ok {
-		return nil, fmt.Errorf("%w: %s 不在 %v 之下", ErrPathEscapesBase, resolvedPath, basePaths)
+		return nil, fmt.Errorf("%w: %s 不在 %s 之下",
+			ErrPathEscapesBase, redact.Paths(resolvedPath), redact.Paths(fmt.Sprintf("%v", basePaths)))
 	}
 
 	f, err := openValidated(resolvedPath, hitBase)
@@ -118,12 +122,14 @@ func OpenReadValidated(path string, basePaths []string) (*os.File, error) {
 
 	resolvedPath, err := evalSymlinksWithFallback(path)
 	if err != nil {
-		return nil, fmt.Errorf("fsperm.OpenReadValidated: 無法解析路徑 %s: %w", path, err)
+		// 路徑值過 redact 再進 caller-facing 訊息,避免 PHI 絕對路徑洩漏進 webview。
+		return nil, fmt.Errorf("fsperm.OpenReadValidated: 無法解析路徑 %s: %w", redact.Paths(path), err)
 	}
 
 	hitBase, ok := matchAnyBase(resolvedPath, basePaths)
 	if !ok {
-		return nil, fmt.Errorf("%w: %s 不在 %v 之下", ErrPathEscapesBase, resolvedPath, basePaths)
+		return nil, fmt.Errorf("%w: %s 不在 %s 之下",
+			ErrPathEscapesBase, redact.Paths(resolvedPath), redact.Paths(fmt.Sprintf("%v", basePaths)))
 	}
 
 	f, err := openReadValidated(resolvedPath, hitBase)

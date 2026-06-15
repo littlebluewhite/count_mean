@@ -162,7 +162,7 @@ func (a *App) LoadChartComposerSubjects(
 		}
 
 		if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
-			return failedChartComposerSubjectsResult(err.Error()), nil
+			return failedChartComposerSubjectsResult(redact.RedactForMessage(err)), nil
 		}
 
 		manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
@@ -194,9 +194,10 @@ func (a *App) LoadChartComposerSubjects(
 		missingDTOs := make([]MissingFileDTO, len(missing))
 		for i, m := range missing {
 			missingDTOs[i] = MissingFileDTO{
-				Subject:    m.Subject,
-				EMGFile:    m.EMGFile,
-				ErrMessage: m.Err.Error(),
+				Subject: m.Subject,
+				EMGFile: m.EMGFile,
+				// OpenDataFile error 含期待路徑 → 過 redact 防 PHI 洩漏(保留 basename)。
+				ErrMessage: redact.RedactForMessage(m.Err),
 			}
 		}
 
@@ -231,7 +232,7 @@ func (a *App) GenerateChartComposer(
 		}
 
 		if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
-			return failedChartComposerResult(err.Error()), nil
+			return failedChartComposerResult(redact.RedactForMessage(err)), nil
 		}
 
 		if params.Subject == "" {

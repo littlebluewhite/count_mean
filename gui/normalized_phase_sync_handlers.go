@@ -89,7 +89,8 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		ctx := a.context()
 
 		if validationErr := validateNormalizedPhaseSyncParams(params); validationErr != nil {
-			return failedNormalizedPhaseSyncResult(validationErr.Error()), nil
+			// redact 對 path-free sentinel 不變,防未來帶路徑的 Validate error 洩漏 PHI。
+			return failedNormalizedPhaseSyncResult(redact.RedactForMessage(validationErr)), nil
 		}
 
 		// 1. 載入 manifest 與 EMG（共用兩組區間的前置步驟）

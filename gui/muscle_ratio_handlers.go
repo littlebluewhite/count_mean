@@ -124,8 +124,9 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 		// envelope:failedMuscleRatioResult(message) + nil err。Execute closure
 		// 已內含 i18n + redact wrap,Validate 失敗則回原 sentinel(對齊既有
 		// TestAnalyzeMuscleRatio_EmptyParamsUnifiedChannel 對 ErrNoManifestFile /
-		// ErrNoDataFolder.Error() 的字面期望)。
-		return failedMuscleRatioResult(runErr.Error()), nil
+		// ErrNoDataFolder.Error() 的字面期望)。redact 對 path-free sentinel 不變,
+		// 防未來帶路徑的 Validate error 洩漏 PHI。
+		return failedMuscleRatioResult(redact.RedactForMessage(runErr)), nil
 	}
 
 	// Result transform — Run 外:Subjects DTO 組裝 + allSuccess 判斷 + i18n status

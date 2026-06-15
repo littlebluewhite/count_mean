@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"count_mean/internal/security/redact"
 )
 
 // AtomicWriteHandle holds an open tmp file anchored under a validated base
@@ -104,11 +106,14 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 	// no-op on an already-absolute path, so absolute callers are unaffected.
 	absTarget, absErr := filepath.Abs(targetPath)
 	if absErr != nil {
-		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: 無法絕對化 target %s: %w", targetPath, absErr)
+		// 路徑值過 redact 再進 caller-facing 訊息,避免 PHI 絕對路徑洩漏進 webview。
+		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: 無法絕對化 target %s: %w",
+			redact.Paths(targetPath), absErr)
 	}
 	absTmp, absErr := filepath.Abs(tmpPath)
 	if absErr != nil {
-		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: 無法絕對化 tmp %s: %w", tmpPath, absErr)
+		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: 無法絕對化 tmp %s: %w",
+			redact.Paths(tmpPath), absErr)
 	}
 	targetPath, tmpPath = absTarget, absTmp
 
@@ -118,17 +123,20 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 		//nolint:err113 // caller-facing API-misuse message; not a sentinel callers match on (mirrors OpenWriteValidated's dynamic path errors)
 		return nil, fmt.Errorf(
 			"fsperm.OpenAtomicWriteValidated: tmp 與 target 必須同目錄 (tmpDir=%s, targetDir=%s)",
-			tmpDir, targetDir)
+			redact.Paths(tmpDir), redact.Paths(targetDir))
 	}
 
 	resolvedParent, err := evalSymlinksWithFallback(targetDir)
 	if err != nil {
-		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: 無法解析父目錄 %s: %w", targetDir, err)
+		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: 無法解析父目錄 %s: %w",
+			redact.Paths(targetDir), err)
 	}
 
 	hitBase, ok := matchAnyBase(resolvedParent, basePaths)
 	if !ok {
-		return nil, fmt.Errorf("%w: 父目錄 %s 不在 %v 之下", ErrPathEscapesBase, resolvedParent, basePaths)
+		// resolvedParent 與 basePaths 皆絕對路徑 → 過 redact 防 PHI 洩漏。
+		return nil, fmt.Errorf("%w: 父目錄 %s 不在 %s 之下",
+			ErrPathEscapesBase, redact.Paths(resolvedParent), redact.Paths(fmt.Sprintf("%v", basePaths)))
 	}
 
 	// Anchor on the target's *validated leaf parent*, reached by descending from the
@@ -143,11 +151,13 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 	// starts with ".." ("." when the parent IS the base).
 	relParent, relErr := filepath.Rel(hitBase, resolvedParent)
 	if relErr != nil {
-		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: rel(%s,%s): %w", hitBase, resolvedParent, relErr)
+		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: rel(%s,%s): %w",
+			redact.Paths(hitBase), redact.Paths(resolvedParent), relErr)
 	}
 	// belt-and-suspenders: the leaf must stay within hitBase.
 	if relParent == ".." || strings.HasPrefix(relParent, ".."+string(filepath.Separator)) {
-		return nil, fmt.Errorf("%w: leaf %s escapes base %s", ErrPathEscapesBase, resolvedParent, hitBase)
+		return nil, fmt.Errorf("%w: leaf %s escapes base %s",
+			ErrPathEscapesBase, redact.Paths(resolvedParent), redact.Paths(hitBase))
 	}
 
 	tmpBase := filepath.Base(tmpPath)

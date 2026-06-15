@@ -573,6 +573,73 @@ func TestPaths_RedactsAfterArbitrarySeparator(t *testing.T) {
 	}
 }
 
+// TestPaths_RedactsDottedDirectorySegment 鎖定「目錄末段帶點(看似副檔名)」不得讓
+// 上游 PHI 目錄漏出 — no-boundary 設計不靠副檔名啟發法判斷目錄/檔案,故反例
+// `/Volumes/clinic/patient.v1`(patient.v1 是目錄)的 PHI 父段 `clinic` 仍被脫敏。
+// 含 `%v` bracket 形式(`[/.../patient.v1]`)與裸 underscore 目錄末段(patient_Smith)。
+// 同時釘住 Go stack frame `recover.go:42 +0x...` 完整保留(`:42` 後接數字非 `/`,
+// 不可當路徑脫敏)。
+func TestPaths_RedactsDottedDirectorySegment(t *testing.T) {
+	cases := []struct {
+		name         string
+		input        string
+		mustNotLeak  []string
+		mustPreserve []string
+	}{
+		{
+			// dotted 目錄末段:patient.v1 像有副檔名實為目錄;父段 clinic 必脫敏
+			name:         "dotted_dir_segment",
+			input:        "/Volumes/clinic/patient.v1",
+			mustNotLeak:  []string{"/Volumes/clinic", "/Volumes/"},
+			mustPreserve: []string{"<redacted-path>", "patient.v1"},
+		},
+		{
+			// %v bracket 形式(fmt.Errorf("...%v", path))— bracket 在邊界外保留
+			name:         "dotted_dir_bracket_v_form",
+			input:        "[/Volumes/clinic/patient.v1]",
+			mustNotLeak:  []string{"/Volumes/clinic"},
+			mustPreserve: []string{"<redacted-path>", "patient.v1", "[", "]"},
+		},
+		{
+			// 裸目錄末段(無副檔名):patient_Smith 為末段保留,父段 clinic 脫敏
+			name:         "bare_dir_trailing_segment",
+			input:        "/Volumes/clinic/patient_Smith",
+			mustNotLeak:  []string{"/Volumes/clinic", "/Volumes/"},
+			mustPreserve: []string{"<redacted-path>", "patient_Smith"},
+		},
+		{
+			// Go stack frame::42 行號 + +0x offset 必完整保留(不可被當路徑吃掉)
+			name:         "go_stack_frame_line_offset_preserved",
+			input:        "recover.go:42 +0x1a2b",
+			mustNotLeak:  []string{"<redacted-path>"}, // 無絕對路徑 → 完全不脫敏
+			mustPreserve: []string{"recover.go:42", "+0x1a2b"},
+		},
+		{
+			// basename 可保留:/x/y/missing.csv → 父段 /x/y/ 脫敏、basename 留
+			name:         "basename_preserved_root_file",
+			input:        "/x/y/missing.csv",
+			mustNotLeak:  []string{"/x/y", "/x/"},
+			mustPreserve: []string{"<redacted-path>", "missing.csv"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Paths(tc.input)
+			for _, leak := range tc.mustNotLeak {
+				if strings.Contains(got, leak) {
+					t.Errorf("redact 失敗,leaky %q 仍在 output:\n%s", leak, got)
+				}
+			}
+			for _, want := range tc.mustPreserve {
+				if !strings.Contains(got, want) {
+					t.Errorf("redact 過度,必要 %q 不在 output:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 // TestPaths_RedactsColonLabeledPath 鎖定無空白冒號標籤(`file:/Users/...`、
 // `path:C:\...`)路徑被脫敏(no-boundary 下直接匹配;`\b` 防 `file:/` 的 `e:` 被誤當盤符)。
 // 同時守護 `recover.go:42` 的 `:42`(後接數字非 `/`)不被誤觸發。
