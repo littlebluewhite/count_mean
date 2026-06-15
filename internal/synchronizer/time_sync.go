@@ -12,10 +12,6 @@ import (
 var (
 	// ErrStartTimeAfterEnd indicates the start time is after the end time.
 	ErrStartTimeAfterEnd = errors.New("start time is after end time")
-	// ErrNegativeOffset indicates a negative EMG motion offset.
-	ErrNegativeOffset = errors.New("EMG motion offset cannot be negative")
-	// ErrOffsetExceedsData indicates the offset exceeds motion data length.
-	ErrOffsetExceedsData = errors.New("EMG motion offset exceeds motion data length")
 )
 
 // TimeSynchronizer 時間同步器.
@@ -60,17 +56,6 @@ func (ts *TimeSynchronizer) MotionIndexToEMGTime(motionIndex, emgMotionOffset in
 	return float64(motionIndex-emgMotionOffset) / ts.motionFreq
 }
 
-// EMGTimeToMotionIndex 將 EMG 時間轉換為對應的 Motion index.
-// Formula: Motion_index = EMG_time * MotionFreq + EMGMotionOffset.
-func (ts *TimeSynchronizer) EMGTimeToMotionIndex(emgTime float64, emgMotionOffset int) int {
-	motionIndex := int(math.Round(emgTime*ts.motionFreq)) + emgMotionOffset
-	if motionIndex < 1 {
-		motionIndex = 1
-	}
-
-	return motionIndex
-}
-
 // ForceTimeToMotionIndex 力板和 Motion 同步開始.
 func (ts *TimeSynchronizer) ForceTimeToMotionIndex(forceTime float64) int {
 	return ts.TimeToMotionIndex(forceTime)
@@ -90,12 +75,6 @@ func (ts *TimeSynchronizer) ForceTimeToEMGTime(forceTime float64, emgMotionOffse
 	// EMG 時間 = Force 時間 - (EMGMotionOffset - 1) / 250
 	emgTimeOffset := float64(emgMotionOffset-1) / ts.motionFreq
 	return forceTime - emgTimeOffset
-}
-
-// EMGTimeToForceTime Force 時間 = EMG 時間 + (EMGMotionOffset - 1) / MotionFreq.
-func (ts *TimeSynchronizer) EMGTimeToForceTime(emgTime float64, emgMotionOffset int) float64 {
-	emgTimeOffset := float64(emgMotionOffset-1) / ts.motionFreq
-	return emgTime + emgTimeOffset
 }
 
 // GetSyncedTimeRange 根據分期點類型和值，計算出三個系統的對應時間.
@@ -204,18 +183,4 @@ func FindNearestTimeIndex(times []float64, targetTime float64) int {
 	}
 
 	return right
-}
-
-// ValidateTimeSync 驗證時間同步參數.
-func ValidateTimeSync(emgMotionOffset, _ /*emgDataLength*/, motionDataLength int) error {
-	if emgMotionOffset < 0 {
-		return fmt.Errorf("EMG Motion Offset 不能為負數 (%d): %w", emgMotionOffset, ErrNegativeOffset)
-	}
-
-	if emgMotionOffset > motionDataLength {
-		return fmt.Errorf("EMG Motion Offset (%d) 超過 Motion 數據長度 (%d): %w",
-			emgMotionOffset, motionDataLength, ErrOffsetExceedsData)
-	}
-
-	return nil
 }

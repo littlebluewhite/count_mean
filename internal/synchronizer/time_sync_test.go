@@ -161,61 +161,6 @@ func TestTimeSynchronizer_MotionIndexToEMGTime(t *testing.T) {
 	}
 }
 
-func TestTimeSynchronizer_EMGTimeToMotionIndex(t *testing.T) {
-	ts := NewTimeSynchronizer()
-
-	tests := []struct {
-		name            string
-		emgTime         float64
-		emgMotionOffset int
-		expected        int
-	}{
-		{
-			name:            "EMG time 0.0, offset 100",
-			emgTime:         0.0,
-			emgMotionOffset: 100,
-			expected:        100, // rounded time times 250 plus offset
-		},
-		{
-			name:            "EMG time 0.2, offset 100",
-			emgTime:         0.2,
-			emgMotionOffset: 100,
-			expected:        150, // rounded time times 250 plus offset
-		},
-		{
-			name:            "EMG time 1.0, offset 100",
-			emgTime:         1.0,
-			emgMotionOffset: 100,
-			expected:        350, // rounded time times 250 plus offset
-		},
-		{
-			name:            "EMG time -0.2, offset 100",
-			emgTime:         -0.2,
-			emgMotionOffset: 100,
-			expected:        50, // rounded time times 250 plus offset
-		},
-		{
-			name:            "EMG time 1.0, offset 0",
-			emgTime:         1.0,
-			emgMotionOffset: 0,
-			expected:        250, // rounded time times 250 plus offset
-		},
-		{
-			name:            "result less than 1",
-			emgTime:         -1.0,
-			emgMotionOffset: 100,
-			expected:        1, // Should return 1 for results less than 1
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := ts.EMGTimeToMotionIndex(tt.emgTime, tt.emgMotionOffset)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestTimeSynchronizer_ForceTimeToMotionIndex(t *testing.T) {
 	ts := NewTimeSynchronizer()
 
@@ -324,43 +269,6 @@ func TestTimeSynchronizer_ForceTimeToEMGTime(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := ts.ForceTimeToEMGTime(tt.forceTime, tt.emgMotionOffset)
-			assert.InDelta(t, tt.expected, result, 0.001)
-		})
-	}
-}
-
-func TestTimeSynchronizer_EMGTimeToForceTime(t *testing.T) {
-	ts := NewTimeSynchronizer()
-
-	tests := []struct {
-		name            string
-		emgTime         float64
-		emgMotionOffset int
-		expected        float64
-	}{
-		{
-			name:            "EMG time 0.0, offset 100",
-			emgTime:         0.0,
-			emgMotionOffset: 100,
-			expected:        0.396, // motion index minus 1 divided by 250
-		},
-		{
-			name:            "EMG time 0.2, offset 100",
-			emgTime:         0.2,
-			emgMotionOffset: 100,
-			expected:        0.596, // motion index minus 1 divided by 250
-		},
-		{
-			name:            "EMG time 1.0, offset 100",
-			emgTime:         1.0,
-			emgMotionOffset: 100,
-			expected:        1.396, // motion index minus 1 divided by 250
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := ts.EMGTimeToForceTime(tt.emgTime, tt.emgMotionOffset)
 			assert.InDelta(t, tt.expected, result, 0.001)
 		})
 	}
@@ -588,105 +496,25 @@ func TestFindNearestTimeIndex(t *testing.T) {
 	}
 }
 
-func TestValidateTimeSync(t *testing.T) {
-	tests := []struct {
-		name             string
-		emgMotionOffset  int
-		emgDataLength    int
-		motionDataLength int
-		expectErr        bool
-		errorMsg         string
-	}{
-		{
-			name:             "valid parameters",
-			emgMotionOffset:  100,
-			emgDataLength:    1000,
-			motionDataLength: 500,
-			expectErr:        false,
-		},
-		{
-			name:             "zero offset",
-			emgMotionOffset:  0,
-			emgDataLength:    1000,
-			motionDataLength: 500,
-			expectErr:        false,
-		},
-		{
-			name:             "negative offset",
-			emgMotionOffset:  -1,
-			emgDataLength:    1000,
-			motionDataLength: 500,
-			expectErr:        true,
-			errorMsg:         "EMG Motion Offset 不能為負數",
-		},
-		{
-			name:             "offset exceeds motion length",
-			emgMotionOffset:  600,
-			emgDataLength:    1000,
-			motionDataLength: 500,
-			expectErr:        true,
-			errorMsg:         "EMG Motion Offset (600) 超過 Motion 數據長度 (500)",
-		},
-		{
-			name:             "offset equals motion length",
-			emgMotionOffset:  500,
-			emgDataLength:    1000,
-			motionDataLength: 500,
-			expectErr:        false,
-		},
-		{
-			name:             "edge case - all zeros",
-			emgMotionOffset:  0,
-			emgDataLength:    0,
-			motionDataLength: 0,
-			expectErr:        false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateTimeSync(
-				tt.emgMotionOffset,
-				tt.emgDataLength,
-				tt.motionDataLength,
-			)
-
-			if tt.expectErr {
-				assert.Error(t, err)
-
-				if tt.errorMsg != "" {
-					assert.Contains(t, err.Error(), tt.errorMsg)
-				}
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
 // Test round-trip conversions.
 func TestTimeSynchronizer_RoundTripConversions(t *testing.T) {
 	ts := NewTimeSynchronizer()
 
 	tests := []struct {
-		name            string
-		initialValue    float64
-		emgMotionOffset int
+		name         string
+		initialValue float64
 	}{
 		{
-			name:            "time 0.0",
-			initialValue:    0.0,
-			emgMotionOffset: 100,
+			name:         "time 0.0",
+			initialValue: 0.0,
 		},
 		{
-			name:            "time 1.0",
-			initialValue:    1.0,
-			emgMotionOffset: 100,
+			name:         "time 1.0",
+			initialValue: 1.0,
 		},
 		{
-			name:            "time 0.5",
-			initialValue:    0.5,
-			emgMotionOffset: 100,
+			name:         "time 0.5",
+			initialValue: 0.5,
 		},
 	}
 
@@ -696,11 +524,6 @@ func TestTimeSynchronizer_RoundTripConversions(t *testing.T) {
 			motionIndex := ts.TimeToMotionIndex(tt.initialValue)
 			backToTime := ts.MotionIndexToTime(motionIndex)
 			assert.InDelta(t, tt.initialValue, backToTime, 0.01) // Allow small rounding error
-
-			// Round-trip: EMGTime -> MotionIndex -> EMGTime
-			motionIndex2 := ts.EMGTimeToMotionIndex(tt.initialValue, tt.emgMotionOffset)
-			backToEMGTime := ts.MotionIndexToEMGTime(motionIndex2, tt.emgMotionOffset)
-			assert.InDelta(t, tt.initialValue, backToEMGTime, 0.01)
 		})
 	}
 }
@@ -793,7 +616,6 @@ func TestTimeSynchronizer_ConcurrentAccess(_ *testing.T) {
 				_ = ts.MotionIndexToTime(250)
 				_ = ts.TimeToMotionIndex(1.0)
 				_ = ts.MotionIndexToEMGTime(250, 100)
-				_ = ts.EMGTimeToMotionIndex(1.0, 100)
 				_, _ = ts.GetSyncedTimeRange(1.0, false, 2.0, false, 100)
 			}
 			done <- true
@@ -848,15 +670,5 @@ func TestTimeSynchronizer_MathematicalRelationships(t *testing.T) {
 
 		// Should be very close due to quantization
 		assert.InDelta(t, originalTime, backToTime, 0.01)
-	})
-
-	// Test EMG-Motion relationship
-	t.Run("EMG-Motion relationship", func(t *testing.T) {
-		emgTime := 1.0
-		offset := 100
-		motionIndex := ts.EMGTimeToMotionIndex(emgTime, offset)
-		backToEMGTime := ts.MotionIndexToEMGTime(motionIndex, offset)
-
-		assert.InDelta(t, emgTime, backToEMGTime, 0.01)
 	})
 }
