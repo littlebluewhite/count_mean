@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"count_mean/internal/errors"
 )
@@ -1347,5 +1348,112 @@ func TestCallerDepth_FatalMethod(t *testing.T) {
 	// exitFunc 必須已被觸發
 	if !exitCalled {
 		t.Error("Fatal 應觸發 exitFunc,但未觸發")
+	}
+}
+
+// TestLogger_ReservedKeysNotOverriddenByContext 守護 P3-6:addErrorInfo 寫入的
+// 保留 key(error_code / recoverable + AppError.Context)不可被 caller 傳入的
+// 同名 context 覆蓋。修補前 addErrorInfo 在 ctx 迴圈「之前」跑,使用者若傳
+// {"error_code": "FORGED"} 會把結構化 error code 蓋掉、破壞下游 log 分析。
+func TestLogger_ReservedKeysNotOverriddenByContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(LevelInfo, &buf, true)
+
+	appErr := errors.NewAppError(errors.ErrCodeFileNotFound, "boom").
+		WithContext("filename", "real.csv")
+
+	// caller 故意傳同名 key 嘗試覆蓋保留欄位。
+	logger.Error("op failed", appErr, map[string]any{
+		"error_code":  "FORGED",
+		"recoverable": "nope",
+		"filename":    "attacker.csv",
+	})
+
+	var entry LogEntry
+	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+		t.Fatalf("JSON 解析失敗: %v\noutput=%q", err, buf.String())
+	}
+
+	if entry.Context["error_code"] != string(errors.ErrCodeFileNotFound) {
+		t.Errorf("error_code 被 ctx 覆蓋:got %v, want %v",
+			entry.Context["error_code"], errors.ErrCodeFileNotFound)
+	}
+	// recoverable 來自 AppError(bool),不該被字串 "nope" 覆蓋。
+	if rec, ok := entry.Context["recoverable"].(bool); !ok || rec != appErr.Recoverable {
+		t.Errorf("recoverable 被 ctx 覆蓋:got %v (%T), want %v (bool)",
+			entry.Context["recoverable"], entry.Context["recoverable"], appErr.Recoverable)
+	}
+	// AppError.Context 的 filename 應勝過 caller ctx 的 attacker.csv。
+	if entry.Context["filename"] != "real.csv" {
+		t.Errorf("AppError.Context filename 被 ctx 覆蓋:got %v, want real.csv",
+			entry.Context["filename"])
+	}
+}
+
+// TestSanitizeMessage_EscapesAllControlChars 守護 P3-8:sanitizeMessage 必須
+// escape 全部 C0 控制字元(0x00–0x1F)與 0x7F,且可逆(escape 後仍可從字面還原)。
+// 修補前只 escape CR/LF,NUL / ESC(terminal escape 注入)/ DEL 等會以 raw byte
+// 落進 text log。
+func TestSanitizeMessage_EscapesAllControlChars(t *testing.T) {
+	logger := NewLogger(LevelInfo, &bytes.Buffer{}, false)
+
+	// 涵蓋:NUL、ESC(0x1B,terminal escape 注入向量)、單位分隔符 0x1F、DEL 0x7F。
+	in := "a\x00b\x1bc\x1fd\x7fe"
+	got := logger.sanitizeMessage(in)
+
+	// 1) 不得殘留任何 raw 控制 byte(0x00–0x1F 或 0x7F)。
+	for i := 0; i < len(got); i++ {
+		if b := got[i]; b < 0x20 || b == 0x7F {
+			t.Fatalf("sanitizeMessage 殘留 raw control byte 0x%02x:%q", b, got)
+		}
+	}
+
+	// 2) 可逆:每個 control byte 都應以對應字面形式出現。
+	for _, want := range []string{`\x00`, `\x1b`, `\x1f`, `\x7f`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("缺少可逆 escape %s:got %q", want, got)
+		}
+	}
+
+	// 3) CR / LF / TAB 維持慣用 Go 形式(既有 contract,不可 regress)。
+	conv := logger.sanitizeMessage("x\ty\nz\r")
+	for _, want := range []string{`\t`, `\n`, `\r`} {
+		if !strings.Contains(conv, want) {
+			t.Errorf("CR/LF/TAB 慣用 escape 遺失 %s:got %q", want, conv)
+		}
+	}
+}
+
+// TestMaskSensitiveData_UTF8Boundary 守護 P3-9:遮罩含多位元組 UTF-8(中文)的
+// 值時必須以 rune 為單位取頭尾,不可從 byte 中段切斷產生亂碼(U+FFFD)。
+func TestMaskSensitiveData_UTF8Boundary(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+	}{
+		// > mediumMaskLength runes,走「頭2尾2」分支(key=value 形式)。
+		{"long zh value", "password=甲乙丙丁戊己庚辛"},
+		// 介於 min 與 medium,走「頭1」分支。
+		{"medium zh value", "token=甲乙丙丁戊"},
+		// 無 '=' 的長中文字串,走 data[:2]+...+data[-2:] 分支。
+		{"long zh nokey", "甲乙丙丁戊己庚辛壬癸"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := maskSensitiveData(c.in)
+
+			// 1) 輸出必須是 valid UTF-8,且不含 replacement char。
+			if !utf8.ValidString(got) {
+				t.Errorf("遮罩輸出不是 valid UTF-8:%q", got)
+			}
+			if strings.ContainsRune(got, utf8.RuneError) {
+				t.Errorf("遮罩輸出含 U+FFFD replacement char(byte 切斷多位元組):%q", got)
+			}
+			// 2) 必須仍有遮罩標記。
+			if !strings.Contains(got, "****") {
+				t.Errorf("遮罩輸出應含 ****:%q", got)
+			}
+		})
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"count_mean/internal/errors"
 	"count_mean/internal/security/fsperm"
@@ -266,25 +267,54 @@ func initSensitivePatterns() []*regexp.Regexp {
 	return compiledPatterns
 }
 
-// newlineEscaper escapes raw CR / LF in user-controlled strings to their literal
-// backslash-escape form. This is the bottom line defense against log-injection
-// attacks: in text format the per-entry separator is a single trailing
-// "\n" written by writeText / writeJSON; if a message / error / context value
-// carries its own "\n" or "\r" an attacker can forge entire fake log lines
-// (e.g. fake [FATAL] / [ERROR] entries). escape — not strip — to preserve the
-// original content for forensics. Order matters: replace "\r" before "\n" so
-// that a literal CRLF becomes "\r\n" (two escape sequences) rather than
-// "\r" followed by something already substituted.
+// controlCharEscaper escapes all raw C0 control characters (0x00–0x1F) plus DEL
+// (0x7F) in user-controlled strings to a reversible backslash-escape form. This
+// is the bottom line defense against log-injection attacks: in text format the
+// per-entry separator is a single trailing "\n" written by writeText; if a
+// message / error / context value carries its own control bytes an attacker can
+// forge entire fake log lines (e.g. fake [FATAL] / [ERROR] entries) or smuggle
+// terminal escape sequences (ESC 0x1B) into a log-viewing terminal. escape —
+// not strip — to preserve the original content for forensics, and reversibly so
+// the raw bytes can be recovered. CR / LF / TAB keep their conventional Go forms
+// ("\r" / "\n" / "\t"); every other control byte becomes "\xNN" (lower-hex).
+// The JSON path (writeJSON) is immune because encoding/json already escapes
+// control bytes, but it shares this sanitize path so text / JSON stay consistent.
 //
 //nolint:gochecknoglobals // immutable replacer reused across logger instances
-var newlineEscaper = strings.NewReplacer("\r", `\r`, "\n", `\n`)
+var controlCharEscaper = newControlCharEscaper()
+
+// newControlCharEscaper builds the replacer covering 0x00–0x1F and 0x7F. CR / LF
+// / TAB use readable Go escapes; the rest use "\xNN". 全部可逆 — escape 後可從字面
+// 還原原始 byte。
+func newControlCharEscaper() *strings.Replacer {
+	conventional := map[byte]string{
+		'\t': `\t`,
+		'\n': `\n`,
+		'\r': `\r`,
+	}
+
+	// oldnew 為 strings.NewReplacer 的 (from, to) 交錯切片。
+	var oldnew []string
+	for c := 0; c <= 0x1F; c++ {
+		b := byte(c)
+		if rep, ok := conventional[b]; ok {
+			oldnew = append(oldnew, string(b), rep)
+			continue
+		}
+		oldnew = append(oldnew, string(b), fmt.Sprintf(`\x%02x`, b))
+	}
+	oldnew = append(oldnew, string(byte(0x7F)), `\x7f`)
+
+	return strings.NewReplacer(oldnew...)
+}
 
 // sanitizeMessage removes sensitive information and log-injection vectors from
-// log messages. 在 sensitive-pattern masking 之前先把 raw \r / \n escape
-// 成字面 \\r / \\n,確保 writeText 不會被 user-controlled 字串(filename / error
-// msg / dynamic context)注入偽 log line。writeJSON 路徑 stdlib encoding/json 雖
-// 已會 escape,但同樣走這條 sanitize path,維持 JSON 與 text 的內容一致並避免
-// 後續 path 變更時 regress。
+// log messages. 在 sensitive-pattern masking 之前先把所有 raw C0 控制字元
+// (0x00–0x1F) 與 0x7F escape 成可逆字面形式(CR/LF/TAB 用 \\r/\\n/\\t,其餘用
+// \\xNN),確保 writeText 不會被 user-controlled 字串(filename / error msg /
+// dynamic context)注入偽 log line 或夾帶 terminal escape sequence。writeJSON
+// 路徑 stdlib encoding/json 雖已會 escape,但同樣走這條 sanitize path,維持 JSON
+// 與 text 的內容一致並避免後續 path 變更時 regress。
 //
 // 額外串接 redact.Paths() — 把 absolute path PII (user home / pCloud
 // mount / Windows drive-letter / UNC) 換成 `<redacted-path>/`。reuse
@@ -293,7 +323,7 @@ var newlineEscaper = strings.NewReplacer("\r", `\r`, "\n", `\n`)
 // 子字串可能被 keyword pattern 誤判 (e.g. "/home/secret-key/" 會被「key=」
 // 規則 mask 切碎)。
 func (l *Logger) sanitizeMessage(message string) string {
-	sanitized := newlineEscaper.Replace(message)
+	sanitized := controlCharEscaper.Replace(message)
 
 	// 先過 path redact — pathRedactPattern 比 keyword pattern 精準
 	// (只切 known system-root prefix + 後續 path 元素),先跑保留更多上下文
@@ -340,8 +370,12 @@ func (l *Logger) sanitizeContextValue(value any) any {
 }
 
 // maskSensitiveData masks sensitive data with asterisks.
+//
+// 長度比較與頭尾切片一律以 rune 為單位(utf8.RuneCountInString + []rune),
+// 原本用 byte len + value[:2] 對含中文等多位元組 UTF-8 的值會從 byte 中段切斷,
+// 產出亂碼 replacement char。改 rune-based 後遮罩仍保留首尾各 1–2 個「字元」。
 func maskSensitiveData(data string) string {
-	if len(data) <= minMaskLength {
+	if utf8.RuneCountInString(data) <= minMaskLength {
 		return "****"
 	}
 
@@ -349,23 +383,25 @@ func maskSensitiveData(data string) string {
 	if len(parts) == 2 {
 		key := parts[0]
 		value := parts[1]
+		valueRunes := []rune(value)
 
-		if len(value) <= minMaskLength {
+		if len(valueRunes) <= minMaskLength {
 			return key + "=****"
 		}
 
-		if len(value) > mediumMaskLength {
-			return key + "=" + value[:2] + "****" + value[len(value)-2:]
+		if len(valueRunes) > mediumMaskLength {
+			return key + "=" + string(valueRunes[:2]) + "****" + string(valueRunes[len(valueRunes)-2:])
 		}
 
-		return key + "=" + value[:1] + "****"
+		return key + "=" + string(valueRunes[:1]) + "****"
 	}
 
-	if len(data) > mediumMaskLength {
-		return data[:2] + "****" + data[len(data)-2:]
+	dataRunes := []rune(data)
+	if len(dataRunes) > mediumMaskLength {
+		return string(dataRunes[:2]) + "****" + string(dataRunes[len(dataRunes)-2:])
 	}
 
-	return data[:1] + "****"
+	return string(dataRunes[:1]) + "****"
 }
 
 // WithError adds error context to the logger.
@@ -396,7 +432,6 @@ func (l *Logger) logImpl(skip int, level LogLevel, message string, err error, co
 	}
 
 	addCallerInfo(&entry, skip)
-	l.addErrorInfo(&entry, err)
 
 	for k, v := range l.contextData {
 		entry.Context[k] = l.sanitizeContextValue(v)
@@ -405,6 +440,11 @@ func (l *Logger) logImpl(skip int, level LogLevel, message string, err error, co
 	for k, v := range ctx {
 		entry.Context[k] = l.sanitizeContextValue(v)
 	}
+
+	// addErrorInfo 必須在 contextData / ctx 迴圈「之後」跑:它寫入的 error_code /
+	// recoverable / AppError.Context 是保留 key,讓 caller 傳入的同名 ctx 不會覆蓋
+	// 結構化 error 資訊(反向覆蓋會讓 error_code 失真,破壞下游 log 分析)。
+	l.addErrorInfo(&entry, err)
 
 	if l.jsonFormat {
 		l.writeJSON(&entry)
@@ -613,6 +653,12 @@ var exitFunc = os.Exit
 // 都實作 Sync() error,Fatal flush 用 interface assertion 偵測即可,不必綁定具體
 // 型別。bytes.Buffer / io.MultiWriter 等 in-memory / composite writer 無 Sync
 // 介面,assertion 失敗即 skip(no-op fallback)— 對它們而言 flush 也沒實際意義。
+//
+// ⚠️ fsync 僅作用於「直接是 *os.File / *SizeRotatingWriter」的 output:io.MultiWriter
+// 本身不實作 Sync,且不會把 Sync 語意轉發給它包裝的 inner writer。因此 InitLogger
+// 建的 default logger(output 是 MultiWriter(fileLogger, os.Stdout))對它呼叫 Fatal 時
+// 這道 sync 是 no-op — 真正需要 flush-to-disk 的程式碼必須對持有底層 *os.File 的
+// logger(例如 defaultFileLogger)呼叫,而非經 MultiWriter 包裝後的 default logger。
 type syncer interface {
 	Sync() error
 }
@@ -658,6 +704,12 @@ func (l *Logger) Fatal(message string, err error, context ...map[string]any) {
 // 一筆 Fatal log 可能停在 page cache 就被截斷。順序:flusher 在前(buffered→underlying)、
 // syncer 在後(underlying→fsync)。MultiWriter / stdout 等不實作 syncer/flusher 為 no-op
 // fallback。Sync/Flush 任何失敗都 ignore — Fatal 必須抵達 exit,不能因 IO 失敗 hang。
+//
+// ⚠️ 已知限制:fsync 僅作用於底層直接是 *os.File / *SizeRotatingWriter 的 output,經
+// io.MultiWriter 包裝後同步語意不會傳遞給 inner *os.File。InitLogger 建的 default logger
+// output 是 MultiWriter,故對它走的 Fatal,這道 syncer 是 no-op(目前生產零 Fatal caller,
+// 風險僅理論上)。若未來需保證 Fatal 落盤,應對持有底層 file 的 logger 呼叫,而非
+// MultiWriter-wrapped default logger。
 func (l *Logger) flushAndExit() {
 	if f, ok := l.output.(flusher); ok {
 		_ = f.Flush() //nolint:errcheck // best-effort drain; Fatal must reach exitFunc

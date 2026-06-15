@@ -167,6 +167,12 @@ func runGUI() error {
 	// 初始化日誌系統
 	jsonFormat := cfg.LogFormat == "json"
 	if err := logging.InitLogger(logLevel, cfg.LogDirectory, jsonFormat); err != nil {
+		// InitLogger 失敗時 default logger 仍停在 lazy stderr fallback — 單靠
+		// logging.Error 容易被淹沒。額外印一條醒目 stderr,帶上 log 目錄與失敗原因,
+		// 讓使用者立刻知道「日誌沒有寫進檔案」以及為什麼(權限 / symlink / 磁碟)。
+		fmt.Fprintf(os.Stderr, "[警告] 無法初始化日誌系統(log 目錄=%q):%v\n"+
+			"日誌將僅輸出到 stderr。/ Logger init failed; logs go to stderr only.\n",
+			cfg.LogDirectory, err) //nolint:errcheck // best-effort prominent warning
 		logging.Error("無法初始化日誌系統", err)
 	} else {
 		// InitLogger 成功後才記 config fallback 原因,讓它以使用者設定的 level/format
