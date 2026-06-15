@@ -21,6 +21,7 @@ import (
 	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
+	"count_mean/internal/maxmean"
 	"count_mean/internal/models"
 	"count_mean/internal/muscle_ratio"
 	"count_mean/internal/phase_sync"
@@ -44,7 +45,7 @@ var (
 	ErrLocaleUnsupported  = errors.New("不支援的 locale")
 	ErrInvalidPhasePoint  = errors.New("無效的分期點代碼")
 	ErrInvalidPhaseRange  = errors.New("分期時間區間不合法（起始須小於結束且為有限值）")
-	ErrNoCSVFilesInFolder = errors.New("資料夾中沒有找到CSV文件")
+	ErrNoCSVFilesInFolder = maxmean.ErrNoCSVFilesInFolder
 )
 
 // appState 把受 config 影響的 5 個 dependency + config 打包成 atomic snapshot。
@@ -416,7 +417,7 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	originalFileName := TrimCSVExtension(filepath.Base(params.InputPath))
 
 	// 解析時間範圍並計算
-	startRange, endRange := ResolveTimeRange(records, params.StartTime, params.EndTime)
+	startRange, endRange := calculator.ResolveTimeRange(records, params.StartTime, params.EndTime)
 
 	results, err := a.calculateWithTimeRange(a.context(), s, records, params.WindowSize, startRange, endRange)
 	if err != nil {
@@ -435,7 +436,7 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	}
 
 	// 準備回傳結果。Success/Message 必須顯式設定 — 前端依 result.success 判定成敗,
-	// 漏設會讓 bool 零值 false 使成功計算被誤判為失敗(對齊批次 executeBatchLoop 與
+	// 漏設會讓 bool 零值 false 使成功計算被誤判為失敗(對齊批次 RunBatch 與
 	// NormalizeData 的 envelope)。
 	return &MaxMeanResult{
 		OutputPath: outputPath,
@@ -444,251 +445,6 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 		Success:    true,
 		Message:    fmt.Sprintf("最大平均值計算成功完成，結果已保存到: %s", outputPath),
 	}, nil
-}
-
-// batchFileDiscoveryResult 存放批次檔案搜尋結果.
-type batchFileDiscoveryResult struct {
-	dirName   string
-	isDirect  bool // true if processing external directory directly
-	fullPaths []string
-}
-
-// discoverBatchFiles 解析輸入路徑並找到所有CSV檔案。
-//
-// `s` 由 caller (calculateMaxMeanBatch) 顯式傳入避免 cross-snapshot 撕裂:helper
-// 內部第二次 a.state.Load() 若卡在 SaveConfig(改 InputDir)中間,會用新 InputDir
-// 解析 inputPath 但用舊 csvHandler 列檔,將輸入導向錯誤目錄。
-func (a *App) discoverBatchFiles(s *appState, inputPath string) (*batchFileDiscoveryResult, error) {
-	if !filepath.IsAbs(inputPath) {
-		return &batchFileDiscoveryResult{dirName: inputPath}, nil
-	}
-
-	relPath, err := filepath.Rel(s.config.InputDir, inputPath)
-	if err != nil || strings.HasPrefix(relPath, "..") {
-		return discoverExternalBatchFiles(inputPath)
-	}
-
-	return &batchFileDiscoveryResult{dirName: relPath}, nil
-}
-
-// discoverExternalBatchFiles 搜尋外部目錄中的CSV檔案.
-func discoverExternalBatchFiles(inputPath string) (*batchFileDiscoveryResult, error) {
-	files, err := filepath.Glob(filepath.Join(inputPath, "*.csv"))
-	if err != nil {
-		return nil, fmt.Errorf("搜尋CSV文件失敗: %w", err)
-	}
-
-	if len(files) == 0 {
-		return nil, ErrNoCSVFilesInFolder
-	}
-
-	return &batchFileDiscoveryResult{
-		dirName:   filepath.Base(inputPath),
-		isDirect:  true,
-		fullPaths: files,
-	}, nil
-}
-
-// batchProcessContext 批次處理上下文.
-type batchProcessContext struct {
-	windowSize    int
-	startTime     float64
-	endTime       float64
-	outputDirName string
-}
-
-// batchProcessResult 批次處理單檔結果.
-type batchProcessResult struct {
-	headers []string
-	results [][]float64
-}
-
-// batchFileEntry represents a file to process in batch mode.
-type batchFileEntry struct {
-	displayName string
-	readFunc    func() ([][]string, error)
-}
-
-// executeBatchLoop processes batch file entries and accumulates results.
-//
-// `s` 必須由 caller (calculateMaxMeanBatch / executeBatchCalculationDirect) 取得
-// 並一路傳到 processSingleBatchFile,確保整個批次內所有檔案使用同一份 snapshot
-// (csvHandler / maxMeanCalc 配對一致),避免中途 SaveConfig 造成撕裂。
-func (a *App) executeBatchLoop(
-	s *appState,
-	entries []batchFileEntry,
-	ctx *batchProcessContext,
-) (*MaxMeanResult, error) {
-	// 回報的 OutputPath 必須與檔案實際寫入位置一致:processSingleBatchFile 以
-	// SubDir: ctx.outputDirName 寫到 OutputDir/<outputDirName>/。先前由 caller 各自
-	// 傳入 outputPath(non-direct 傳 Join(OutputDir, dirName)、direct 傳裸 outputDirName),
-	// 與實際 SubDir(Base(dirName))漂移 — direct 路徑更只回裸名缺 OutputDir 前綴。
-	// 改為在此統一從同一個 ctx.outputDirName 推導,杜絕漂移。
-	outputPath := filepath.Join(s.config.OutputDir, ctx.outputDirName)
-
-	var allHeaders []string
-	// Pre-allocate with estimated capacity (assume ~10 results per file on average)
-	estimatedCapacity := 10
-	allResults := make([][]float64, 0, len(entries)*estimatedCapacity)
-	successCount := 0
-	failCount := 0
-
-	for _, entry := range entries {
-		records, err := entry.readFunc()
-		if err != nil {
-			failCount++
-
-			a.logger.Error("讀取檔案失敗", err, map[string]any{"file": entry.displayName})
-
-			continue
-		}
-
-		result, err := a.processSingleBatchFile(s, records, entry.displayName, ctx)
-		if err != nil {
-			failCount++
-
-			a.logger.Error("處理檔案失敗", err, map[string]any{"file": entry.displayName})
-
-			continue
-		}
-
-		if len(allHeaders) == 0 {
-			allHeaders = result.headers
-		}
-
-		allResults = append(allResults, result.results...)
-		successCount++
-
-		a.logger.Info("檔案處理成功", map[string]any{
-			"file":          entry.displayName,
-			"results_count": len(result.results),
-		})
-	}
-
-	message := fmt.Sprintf("批次處理完成：成功 %d 個檔案，失敗 %d 個檔案", successCount, failCount)
-
-	return &MaxMeanResult{
-		OutputPath: outputPath,
-		Headers:    allHeaders,
-		Results:    allResults,
-		Success:    successCount > 0,
-		Message:    message,
-	}, nil
-}
-
-// processSingleBatchFile 處理批次中的單一檔案.
-// 使用 caller 傳入的 *appState snapshot,csvHandler 與 maxMeanCalc 必為同源(同一次 cfg)。
-func (a *App) processSingleBatchFile(
-	s *appState,
-	records [][]string,
-	fileBaseName string,
-	ctx *batchProcessContext,
-) (*batchProcessResult, error) {
-	startRange, endRange := ResolveTimeRange(records, ctx.startTime, ctx.endTime)
-
-	results, err := a.calculateWithTimeRange(a.context(), s, records, ctx.windowSize, startRange, endRange)
-	if err != nil {
-		return nil, err
-	}
-
-	outputFile := buildOutputFilename(fileBaseName, SuffixMaxMean)
-
-	if _, writeErr := s.csvHandler.WriteMaxMean(
-		io.WriteRequest{Filename: outputFile, SubDir: ctx.outputDirName},
-		records[0], results, startRange, endRange,
-	); writeErr != nil {
-		return nil, fmt.Errorf("寫入CSV輸出失敗: %w", writeErr)
-	}
-
-	return &batchProcessResult{
-		headers: records[0],
-		results: convertMaxMeanResultsToArray(results),
-	}, nil
-}
-
-// calculateMaxMeanBatch 批次處理資料夾中的所有CSV檔案.
-func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error) {
-	s := a.state.Load()
-
-	if err := a.validator.ValidateDirectoryPath(params.InputPath); err != nil {
-		return nil, fmt.Errorf("目錄路徑驗證失敗: %w", err)
-	}
-
-	discovery, err := a.discoverBatchFiles(s, params.InputPath)
-	if err != nil {
-		return nil, err
-	}
-
-	if discovery.isDirect {
-		return a.executeBatchCalculationDirect(
-			s,
-			discovery.fullPaths,
-			discovery.dirName,
-			params.WindowSize,
-			params.StartTime,
-			params.EndTime,
-		)
-	}
-
-	csvFiles, err := s.csvHandler.ListCSVFilesInDirectory(discovery.dirName)
-	if err != nil {
-		return nil, fmt.Errorf("列出CSV文件失敗: %w", err)
-	}
-
-	if len(csvFiles) == 0 {
-		return nil, ErrNoCSVFilesInFolder
-	}
-
-	ctx := &batchProcessContext{
-		windowSize:    params.WindowSize,
-		startTime:     params.StartTime,
-		endTime:       params.EndTime,
-		outputDirName: filepath.Base(discovery.dirName),
-	}
-
-	entries := make([]batchFileEntry, len(csvFiles))
-
-	for i, fileName := range csvFiles {
-		fn := fileName
-		entries[i] = batchFileEntry{
-			displayName: TrimCSVExtension(fn),
-			readFunc: func() ([][]string, error) {
-				return s.csvHandler.ReadCSVFromDirectory(discovery.dirName, fn)
-			},
-		}
-	}
-
-	return a.executeBatchLoop(s, entries, ctx)
-}
-
-// executeBatchCalculationDirect 直接處理外部目錄的批次計算.
-func (a *App) executeBatchCalculationDirect(
-	s *appState,
-	files []string,
-	outputDirName string,
-	windowSize int,
-	startTime, endTime float64,
-) (*MaxMeanResult, error) {
-	ctx := &batchProcessContext{
-		windowSize:    windowSize,
-		startTime:     startTime,
-		endTime:       endTime,
-		outputDirName: outputDirName,
-	}
-
-	entries := make([]batchFileEntry, len(files))
-
-	for i, fullPath := range files {
-		fp := fullPath
-		entries[i] = batchFileEntry{
-			displayName: TrimCSVExtension(filepath.Base(fp)),
-			readFunc: func() ([][]string, error) {
-				return s.csvHandler.ReadCSVExternal(fp)
-			},
-		}
-	}
-
-	return a.executeBatchLoop(s, entries, ctx)
 }
 
 // NormalizeData performs data normalization.

@@ -83,17 +83,14 @@ func TestApp_AllMethodsHaveDefer_ASTGuarantee(t *testing.T) {
 	// exported caller 的 defer 保護,不在這裡強制要 defer。列出來只是讓 test
 	// 對「不報錯」這條路徑顯式 — 未來新增 unexported helper 不需要動 test。
 	unexportedHelpers := map[string]bool{
-		"loadCtx":                       true,
-		"context":                       true,
-		"applyConfig":                   true,
-		"calculateMaxMeanSingle":        true,
-		"discoverBatchFiles":            true,
-		"executeBatchLoop":              true,
-		"processSingleBatchFile":        true,
-		"calculateMaxMeanBatch":         true,
-		"executeBatchCalculationDirect": true,
-		"readCSVWithPathValidation":     true,
-		"calculateWithTimeRange":        true,
+		"loadCtx":                   true,
+		"context":                   true,
+		"applyConfig":               true,
+		"calculateMaxMeanSingle":    true,
+		"calculateMaxMeanBatch":     true,
+		"buildMaxMeanFileSource":    true,
+		"readCSVWithPathValidation": true,
+		"calculateWithTimeRange":    true,
 	}
 
 	var (

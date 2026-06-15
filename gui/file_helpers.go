@@ -8,7 +8,6 @@ import (
 
 	"count_mean/internal/io"
 	"count_mean/internal/models"
-	"count_mean/internal/parsers"
 )
 
 // File type constants for SelectFile dialog.
@@ -65,25 +64,6 @@ func isExternalPath(filePath, baseDir string) bool {
 	relPath, err := filepath.Rel(baseDir, fileDir)
 
 	return err != nil || strings.HasPrefix(relPath, "..")
-}
-
-// ResolveTimeRange determines the actual time range from records.
-func ResolveTimeRange(records [][]string, startTime, endTime float64) (float64, float64) {
-	if startTime != 0 || endTime != 0 {
-		return startTime, endTime
-	}
-
-	var start, end float64
-
-	if len(records) > 1 && len(records[1]) > 0 {
-		start, _ = parsers.ParseFloatCell(records[1][0])
-	}
-
-	if len(records) > 1 && len(records[len(records)-1]) > 0 {
-		end, _ = parsers.ParseFloatCell(records[len(records)-1][0])
-	}
-
-	return start, end
 }
 
 // TrimCSVExtension removes .csv extension from filename (case-insensitive).

@@ -28,7 +28,7 @@ func writeEMGCSVForMaxMean(t *testing.T, path string, rows int) {
 // TestCalculateMaxMean_SingleFile_ReportsSuccessAndMessage 釘住 whole-project
 // review P1:單檔 max-mean 成功時 calculateMaxMeanSingle 先前回傳的 MaxMeanResult
 // 漏設 Success/Message → bool 零值 false。前端依 result.success 判定成敗,使用者
-// 在成功計算後仍看到「失敗」。對照批次 executeBatchLoop / NormalizeData 都有設。
+// 在成功計算後仍看到「失敗」。對照批次 RunBatch / NormalizeData 都有設。
 func TestCalculateMaxMean_SingleFile_ReportsSuccessAndMessage(t *testing.T) {
 	inDir := t.TempDir()
 	cfg := config.DefaultConfig()

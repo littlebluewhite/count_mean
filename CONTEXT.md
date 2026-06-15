@@ -58,9 +58,13 @@ _Avoid_: write options, write spec, csv request.
 membership 判準是 **manifest + dataFolder 驅動**：GUI `AnalyzePhases` 雖在 [[Analysis pipeline family]] 內，但吃單一 raw CSV input file 並委派 `calculator.PhaseAnalyzer`，**不是** domain analyzer — 所以 GUI handler 家族有 4 member、domain analyzer 層只有 3。兩軸上的分歧為何刻意保留（deletion test）見 [[ADR-0012]]。
 _Avoid_: [[Analysis pipeline family]]（GUI caller 層，非 compute 核）、AnalysisHandler[P, R]（GUI 泛型樣板）、calculator family（被委派的 math kernel，[[ADR-0005]]）、把某個 GUI handler 叫 analyzer（analyzer 專指此 internal 層）、analysis engine（engine 一詞 [[ADR-0008]] 已用於已刪的 chart 引擎）.
 
+**Max-mean batch runner**
+以「一個輸入目錄」為入口、對目錄內每一個 raw CSV 檔（各為一筆 [[EMGDataset]]）逐檔跑 [[Max-mean]]、再把各檔結果累積成單一 partial-success 輸出的批次 orchestrator。與 [[Domain analyzer]] **同一層**（GUI handler 之下、calculator kernel 之上）但**不同 category**：unit of work 是**檔案 / [[EMGDataset]]**（目錄探索），而非 [[Subject]]（manifest 驅動）── 因此不符 Domain analyzer 的「manifest + dataFolder 驅動、恰 3 member」判準，也不在 [[Analysis pipeline family]]（該家族明文排除 `CalculateMaxMean`）。兩種輸入目錄形態 ── configured input dir vs external 絕對路徑目錄 ── 是它天生的兩個 file-source 來源。kernel 數學下放給 calculator family 的 `MaxMeanCalculator`（[[ADR-0005]]）。設計與抽出計畫見 [[ADR-0026]]。
+_Avoid_: [[Domain analyzer]]（不同 category ── manifest 驅動）、Max-mean analyzer（analyzer 一詞專指 Domain analyzer 層，本概念刻意不叫 analyzer）、batch processor / 批次處理器（太泛、未對齊 domain）、[[Analysis pipeline family]]（GUI handler 層，且該家族不含 `CalculateMaxMean`）。
+
 **Analysis pipeline family**
 四個形狀相近的 GUI handler 家族：`AnalyzePhases`、`AnalyzePhaseSync`、`AnalyzeCCI`、`AnalyzeMuscleRatio`。共同形狀為「validate → execute（含 manifest/dataset load）→ CSV write via csvHandler」三步管線，輸入為 manifest 或 dataset、輸出為 result + outputPath。
-_Not included_: `CalculateMaxMean`（batch loop + file discovery）、`NormalizeData`（雙 input file）── 形狀不同，不屬此家族。
+_Not included_: `CalculateMaxMean`（batch loop + file discovery）、`NormalizeData`（雙 input file）── 形狀不同，不屬此家族。其中 `CalculateMaxMean` 的 orchestration 規劃抽進 [[Max-mean batch runner]]（同層、不同 category）後退化為 thin adapter，見 [[ADR-0026]]。
 _Backend 委派_: 四 member 中 `AnalyzeCCI` / `AnalyzePhaseSync` / `AnalyzeMuscleRatio` 的 Execute 委派 [[Domain analyzer]] 層（backend compute 核）；`AnalyzePhases` 委派 `calculator.PhaseAnalyzer`（[[ADR-0005]] calculator family）。本家族是 GUI handler 層，與 [[Domain analyzer]] 不同層。
 _Avoid_: GUI handler, analysis function, analyzer.
 
