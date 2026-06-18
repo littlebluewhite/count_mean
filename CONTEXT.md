@@ -51,11 +51,11 @@ _Avoid_: structured write, typed write, formatted output.
 _Avoid_: write options, write spec, csv request.
 
 **Domain analyzer**
-`internal/{cci, muscle_ratio, phase_sync}` 三個以 [[Manifest]] + dataFolder 為入口的領域計算 orchestrator。每個 analyzer 載入 manifest → 解析 [[Subject]] → parse EMG → 計算該分析種類的領域結果，math 細節下放給 calculator kernel（[[ADR-0005]] calculator family）/ synchronizer / parsers。位於 [[Analysis pipeline family]]（GUI handler，唯一 caller）之下、calculator kernel 之上。
+`internal/{cci, muscle_ratio, phase_sync}` 三個以 [[Manifest]] + dataFolder 為入口的領域計算 orchestrator。每個 analyzer 載入 manifest → 解析 [[Subject]] → parse EMG → 計算該分析種類的領域結果，math 細節下放給 calculator kernel（[[ADR-0005]] calculator family）/ synchronizer / parsers。位於 GUI handler 層（唯一 caller；`AnalyzePhaseSync`/`AnalyzeMuscleRatio` 在 [[Analysis pipeline family]] 內，`AnalyzeCCI` 已 Tier-1 化離開該家族但仍為 `cci` 的 GUI caller）之下、calculator kernel 之上。
 三者形狀**刻意分歧**，沿兩條正交軸：
 - **Subject cardinality**：`single-subject`（`cci.AnalyzeCCI` / `phase_sync.AnalyzePhaseSync` 吃 [[Subject]] index、回單一 result struct）｜ `batch`（`muscle_ratio.Analyze` 迴圈整份 manifest、回 `[]SubjectResult` partial-success slice）。
-- **Output ownership**：`compute-only`（cci / phase_sync 只回 compute struct，CSV 由 GUI handler 的 `WriteCSV` closure 寫）｜ `compute+write`（muscle_ratio 在 analyzer 內部寫 CSV 並回填 path，GUI `WriteCSV: nil` — 見 [[ADR-0004]]）。
-membership 判準是 **manifest + dataFolder 驅動**：GUI `AnalyzePhases` 雖在 [[Analysis pipeline family]] 內，但吃單一 raw CSV input file 並委派 `calculator.PhaseAnalyzer`，**不是** domain analyzer — 所以 GUI handler 家族有 4 member、domain analyzer 層只有 3。兩軸上的分歧為何刻意保留（deletion test）見 [[ADR-0012]]。
+- **Output ownership**：`compute-only`（cci / phase_sync 只回 compute struct，CSV 由 GUI handler 寫 — phase_sync 經 Tier-2 `WriteCSV` closure、cci 自 Tier-1 化後在 `HandlerRun` body 內直接呼叫 `csvHandler.WriteCCIResult`/`WriteCCIPhasesResult`）｜ `compute+write`（muscle_ratio 在 analyzer 內部寫 CSV 並回填 path，GUI `WriteCSV: nil` — 見 [[ADR-0004]]）。
+membership 判準是 **manifest + dataFolder 驅動**：GUI `AnalyzePhases` 雖在 [[Analysis pipeline family]] 內，但吃單一 raw CSV input file 並委派 `calculator.PhaseAnalyzer`，**不是** domain analyzer；反向地，`cci` 是 domain analyzer，但其 GUI handler `AnalyzeCCI` 已遷為 Tier-1 `HandlerRun`，**不在** [[Analysis pipeline family]] 內（見 [[ADR-0031]]）── 所以即使兩層現在都是 3 member，集合仍不相同。兩軸上的分歧為何刻意保留（deletion test）見 [[ADR-0012]]。
 _Avoid_: [[Analysis pipeline family]]（GUI caller 層，非 compute 核）、AnalysisHandler[P, R]（GUI 泛型樣板）、calculator family（被委派的 math kernel，[[ADR-0005]]）、把某個 GUI handler 叫 analyzer（analyzer 專指此 internal 層）、analysis engine（engine 一詞 [[ADR-0008]] 已用於已刪的 chart 引擎）.
 
 **Max-mean batch runner**
@@ -63,9 +63,9 @@ _Avoid_: [[Analysis pipeline family]]（GUI caller 層，非 compute 核）、An
 _Avoid_: [[Domain analyzer]]（不同 category ── manifest 驅動）、Max-mean analyzer（analyzer 一詞專指 Domain analyzer 層，本概念刻意不叫 analyzer）、batch processor / 批次處理器（太泛、未對齊 domain）、[[Analysis pipeline family]]（GUI handler 層，且該家族不含 `CalculateMaxMean`）。
 
 **Analysis pipeline family**
-四個形狀相近的 GUI handler 家族：`AnalyzePhases`、`AnalyzePhaseSync`、`AnalyzeCCI`、`AnalyzeMuscleRatio`。共同形狀為「validate → execute（含 manifest/dataset load）→ CSV write via csvHandler」三步管線，輸入為 manifest 或 dataset、輸出為 result + outputPath。
-_Not included_: `CalculateMaxMean`（batch loop + file discovery）、`NormalizeData`（雙 input file）── 形狀不同，不屬此家族。其中 `CalculateMaxMean` 的 orchestration 規劃抽進 [[Max-mean batch runner]]（同層、不同 category）後退化為 thin adapter，見 [[ADR-0026]]。
-_Backend 委派_: 四 member 中 `AnalyzeCCI` / `AnalyzePhaseSync` / `AnalyzeMuscleRatio` 的 Execute 委派 [[Domain analyzer]] 層（backend compute 核）；`AnalyzePhases` 委派 `calculator.PhaseAnalyzer`（[[ADR-0005]] calculator family）。本家族是 GUI handler 層，與 [[Domain analyzer]] 不同層。
+三個形狀相近的 GUI handler 家族：`AnalyzePhases`、`AnalyzePhaseSync`、`AnalyzeMuscleRatio`。共同形狀為「validate → execute（含 manifest/dataset load）→ CSV write via csvHandler」三步管線，輸入為 manifest 或 dataset、輸出為 result + outputPath。
+_Not included_: `CalculateMaxMean`（batch loop + file discovery）、`NormalizeData`（雙 input file）── 形狀不同，不屬此家族。其中 `CalculateMaxMean` 的 orchestration 規劃抽進 [[Max-mean batch runner]]（同層、不同 category）後退化為 thin adapter，見 [[ADR-0026]]。`AnalyzeCCI` 於 2026-06-19 由 Tier-2 `AnalysisHandler` 樣板遷出，改走 Tier-1 `HandlerRun` 直用（六步 body、雙輸出、形狀同 `AnalyzeNormalizedPhaseSync`）── 此後 `AnalyzeCCI` **不屬本家族**；`cci` domain analyzer 仍存在，其 GUI handler 的形狀遷移見 [[ADR-0031]]。
+_Backend 委派_: 三 member 中 `AnalyzePhaseSync` / `AnalyzeMuscleRatio` 的 Execute 委派 [[Domain analyzer]] 層（backend compute 核）；`AnalyzePhases` 委派 `calculator.PhaseAnalyzer`（[[ADR-0005]] calculator family）。本家族是 GUI handler 層，與 [[Domain analyzer]] 不同層。
 _Avoid_: GUI handler, analysis function, analyzer.
 
 **AnalysisHandler[P, R]**
@@ -73,7 +73,7 @@ _Avoid_: GUI handler, analysis function, analyzer.
 _Avoid_: AnalysisRunner, GenericHandler, AnalyzerWrapper.
 
 **Manifest handler prelude**
-manifest+dataFolder 系列 GUI handler 共用入口三步：sentinel empty check（`ErrNoManifestFile` / `ErrNoDataFolder`，manifest 先檢）+ `validateExternalPathInputs` 帶固定 label「分期總檔案」「資料夾」。由 `gui/path_validation.go` 的 `validateManifestHandlerParams(manifestFile, dataFolder string) error` 持有。[[Analysis pipeline family]] 四個成員（`AnalyzePhases` 不在其內 — 接 InputFile 而非 manifest）與 [[Chart Composer]] 三個 RPC handler 共 7 處消費。**strict 行為**：Chart Composer 既有對空 `ManifestPath` 的 silent fall-through（落入 `LoadManifests("")`）在此 prelude 落地後同步收緊為 `ErrNoManifestFile` 提早 reject。
+manifest+dataFolder 系列 GUI handler 共用入口三步：sentinel empty check（`ErrNoManifestFile` / `ErrNoDataFolder`，manifest 先檢）+ `validateExternalPathInputs` 帶固定 label「分期總檔案」「資料夾」。由 `gui/path_validation.go` 的 `validateManifestHandlerParams(manifestFile, dataFolder string) error` 持有。[[Analysis pipeline family]]（現 3 member）的 manifest 驅動成員 `AnalyzePhaseSync`/`AnalyzeMuscleRatio`（`AnalyzePhases` 不在其內 — 接 InputFile 而非 manifest）、已 Tier-1 化離開家族但仍吃此 prelude 的 `AnalyzeCCI` 與 `AnalyzeNormalizedPhaseSync`、與 [[Chart Composer]] 三個 RPC handler 共 7 處消費。**strict 行為**：Chart Composer 既有對空 `ManifestPath` 的 silent fall-through（落入 `LoadManifests("")`）在此 prelude 落地後同步收緊為 `ErrNoManifestFile` 提早 reject。
 _Avoid_: handler entry guard, manifest precheck, path prelude, validate prelude.
 
 **ManifestPanel**
