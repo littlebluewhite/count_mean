@@ -2,8 +2,6 @@ package gui
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -50,117 +48,51 @@ type CCIDownloadParams struct {
 //	（不可預期錯誤）。如此前端可以單一路徑檢查 `result.success`/`result.message`，
 //	不必同時 try/catch + 檢 result.success（之前的雙通道設計）。
 func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
-	// HandlerRun 的 recover 只罩住 Validate/Execute/WriteCSV closure；GenerateCCIInteractiveChart
-	// /GenerateReport/WriteCCIPhasesResult 在 Run 之後執行,落在那層 recover 外。此處 defer
-	// 補上 handler-level 安全網,任一 post-Run panic 都轉成 (nil, ErrInternalPanic) 而非擊潰
-	// 整個 Wails desktop process(對齊 DownloadCCIChart 的 dual-channel 模式)。
-	defer recoverHandlerPanic("AnalyzeCCI", a.logger, &err)
+	// ⚠️ HandlerRun 之前不可有任何 a.logger.* 呼叫(維持 nil-logger panic 測試語意)
+	return HandlerRun(a.logger, "CCI 分析", func() (*CCIResult, error) {
+		a.logger.Info("CCI 分析參數", map[string]any{"params": params})
+		s := a.state.Load()
+		ctx := a.context()
 
-	a.logger.Info("CCI 分析參數", map[string]any{"params": params})
-
-	s := a.state.Load()
-
-	handler := &AnalysisHandler[CCIParams, *cci.CCIAnalysisResult]{
-		Name:   "CCI 分析",
-		Logger: a.logger,
-		CSV:    s.csvHandler,
-		Validate: func(p CCIParams) error {
-			return validateManifestHandlerParams(p.ManifestFile, p.DataFolder)
-		},
-		Execute: func(ctx context.Context, p CCIParams) (*cci.CCIAnalysisResult, error) {
-			analysisParams := &cci.CCIParams{
-				ManifestFile: p.ManifestFile,
-				DataFolder:   p.DataFolder,
-				SubjectIndex: p.SubjectIndex,
-			}
-			// ctx 由樣板注入,沿用原 a.context() 行為:支援 Shutdown / 使用者
-			// 中止取消長 CCI 計算（12 個 pair × N 點的並行 hot loop）。
-			analysisResult, analyzeErr := a.cciAnalyzer.AnalyzeCCI(ctx, analysisParams)
-			if analyzeErr != nil {
-				// error message 內可能含 absolute path(downstream parser 把
-				// PathError 用 %w wrap 傳上來),前端不該看到
-				// /Volumes/patient_xx/... 之類 PII。走 redact.RedactForMessage
-				// 先處理再塞 result.Message。
-				// UIError 包裝:Error() 仍回中文訊息(維持 result.Message 契約),
-				// sentinel 對接 errors.Is(err, ErrCCIAnalysisFailed)。
-				return nil, newUIError(ErrCCIAnalysisFailed,
-					fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(analyzeErr)))
-			}
-			return analysisResult, nil
-		},
-		// WriteCSV: ADR-0004 Boundary 2 — Subject-based write,CSVHandler 內部從
-		// analysisResult.Subject 推導 filename;req.Filename 被忽略。SubDir 用 ""
-		// (寫到 OutputDir 根)。outputDir capture 由 CSVHandler 自身的 h.config.OutputDir
-		// 替代(state.Load 在 Run 外做時 csvHandler 已綁定當時 config)。
-		WriteCSV: func(handler *io.CSVHandler, analysisResult *cci.CCIAnalysisResult) (string, error) {
-			csvPath, exportErr := handler.WriteCCIResult(a.context(), io.WriteRequest{}, analysisResult)
-			if exportErr != nil {
-				// UIError 包裝:Error() 仍回中文訊息(維持 result.Message 契約),
-				// sentinel 對接 errors.Is(err, ErrCCICSVExportFailed)。
-				return "", newUIError(ErrCCICSVExportFailed,
-					fmt.Sprintf("CSV 導出失敗: %s", redact.RedactForMessage(exportErr)))
-			}
-			return csvPath, nil
-		},
-	}
-
-	analysisResult, csvPath, runErr := handler.Run(a.context(), params)
-	if runErr != nil {
-		// panic 路徑:HandlerRun 的 recoverHandlerPanic 已將 panic 包成
-		// ErrInternalPanic chain；err 走 named return 上拋，result=nil（對齊
-		// 原 single-channel 契約對 panic 的處理）。
-		if errors.Is(runErr, ErrInternalPanic) {
-			return nil, runErr
+		// 1 validate
+		if vErr := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); vErr != nil {
+			return failedCCIResult(redact.RedactForMessage(vErr)), nil
 		}
-		// expected err（Validate / Execute / WriteCSV 任一回的 err）走
-		// single-channel envelope:failedCCIResult(message) + nil err。
-		// Execute / WriteCSV closure 內已自行加 prefix + redact，Validate
-		// 失敗的 sentinel 不含路徑(過 redact 不變),但仍統一過 redact 防未來帶
-		// 路徑的 Validate error 洩漏 PHI(對齊 muscle_ratio / normalized_phase_sync)。
-		return failedCCIResult(redact.RedactForMessage(runErr)), nil
-	}
+		// 2 execute（domain analyzer）
+		analysisResult, aErr := a.cciAnalyzer.AnalyzeCCI(ctx, &cci.CCIParams{
+			ManifestFile: params.ManifestFile, DataFolder: params.DataFolder, SubjectIndex: params.SubjectIndex,
+		})
+		if aErr != nil {
+			return failedCCIResult(fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(aErr))), nil
+		}
+		// 3 Output 1
+		csvPath, e1 := s.csvHandler.WriteCCIResult(ctx, io.WriteRequest{}, analysisResult)
+		if e1 != nil {
+			return failedCCIResult(fmt.Sprintf("CSV 導出失敗: %s", redact.RedactForMessage(e1))), nil
+		}
+		// 4 chart
+		var buf bytes.Buffer
+		if cErr := cci.GenerateCCIInteractiveChart(ctx, analysisResult, &buf); cErr != nil {
+			return failedCCIResult(fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(cErr))), nil
+		}
+		// 5 report + transform
+		pairNames := make([]string, len(analysisResult.PairResults))
+		for i, pr := range analysisResult.PairResults { pairNames[i] = pr.PairName }
+		report := cci.GenerateReport(analysisResult)
+		// 6 Output 2
+		phasesPath, e2 := s.csvHandler.WriteCCIPhasesResult(ctx, io.WriteRequest{}, analysisResult)
+		if e2 != nil {
+			return failedCCIResult(fmt.Sprintf("分期統計導出失敗: %s", redact.RedactForMessage(e2))), nil
+		}
 
-	// Generate interactive chart HTML — Run 外:Execute 維持單一語意，render
-	// 不擠進 closure。帶 ctx 讓大 dataset render 也能配合 Wails Shutdown /
-	// 使用者中止取消。
-	var buf bytes.Buffer
-	if chartErr := cci.GenerateCCIInteractiveChart(a.context(), analysisResult, &buf); chartErr != nil {
-		return failedCCIResult(fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(chartErr))), nil
-	}
-
-	// Result transform — Run 外:PairResults → PairNames slice、Report 字串
-	// 各自留在 caller code 維持可讀性。
-	pairNames := make([]string, len(analysisResult.PairResults))
-	for i, pr := range analysisResult.PairResults {
-		pairNames[i] = pr.PairName
-	}
-
-	report := cci.GenerateReport(analysisResult)
-
-	// Output 2(ADR-0018, ADR-0025):分期視窗統計 CSV。直接傳 analysisResult,
-	// pair 欄位 header 與資料列皆於 io 內部從 result 推導(與 Output-1 對稱)。
-	// CCI 為 fail-fast(ADR-0010):導出失敗即回 failedCCIResult(對齊上方圖表錯誤)。
-	phasesPath, phasesErr := s.csvHandler.WriteCCIPhasesResult(a.context(), io.WriteRequest{}, analysisResult)
-	if phasesErr != nil {
-		return failedCCIResult(fmt.Sprintf("分期統計導出失敗: %s", redact.RedactForMessage(phasesErr))), nil
-	}
-
-	result = &CCIResult{
-		OutputCSVPath:    csvPath,
-		OutputPhasesPath: phasesPath,
-		Subject:          analysisResult.Subject,
-		PairNames:        pairNames,
-		ChartHTML:        buf.String(),
-		PhasePercents:    analysisResult.PhasePercents,
-		PhaseTimes:       analysisResult.PhaseTimes,
-		Report:           report,
-		Success:          true,
-		Message:          "分析完成",
-	}
-
-	a.logger.Info("CCI 分析輸出", map[string]any{"csv": csvPath, "phases": phasesPath})
-
-	return result, nil
+		a.logger.Info("CCI 分析輸出", map[string]any{"csv": csvPath, "phases": phasesPath})
+		return &CCIResult{
+			OutputCSVPath: csvPath, OutputPhasesPath: phasesPath, Subject: analysisResult.Subject,
+			PairNames: pairNames, ChartHTML: buf.String(),
+			PhasePercents: analysisResult.PhasePercents, PhaseTimes: analysisResult.PhaseTimes,
+			Report: report, Success: true, Message: "分析完成",
+		}, nil
+	})
 }
 
 // DownloadCCIChart 下載 CCI 圖表為 PNG 檔案.

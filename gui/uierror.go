@@ -32,6 +32,4 @@ func newUIError(sentinel error, message string) error {
 // 命名按 handler+事件,不互通(muscle ratio 跟 cci 是不同 domain)。
 var (
 	ErrMuscleRatioAnalysisFailed = errors.New("muscle ratio analysis failed")
-	ErrCCIAnalysisFailed         = errors.New("CCI analysis failed")
-	ErrCCICSVExportFailed        = errors.New("CCI CSV export failed")
 )

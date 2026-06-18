@@ -306,17 +306,22 @@ func countWithDefer(methods []appMethodInfo) int {
 // 變成「method 透過樣板取得 panic safety」。樣板自身的 panic safety 契約由
 // gui/handler_run_test.go 與 gui/analysis_handler_test.go 守住。
 //
-// 例外:AnalyzeCCI 因 Run 之後另有 chart/report/phases-write 三段(落在樣板
-// recover 外),仍保留 body 第一行顯式 `defer recoverHandlerPanic`,故不在此 map。
+// AnalyzeCCI 現在也在此 map:它已從 Tier-2 AnalysisHandler 降至 Tier-1
+// HandlerRun 直用(鏡像 AnalyzeNormalizedPhaseSync),六步全進一個 HandlerRun
+// body — chart/report/phases-write 三段都在 HandlerRun 的 recover 保護下。
+// body 的第一個 statement 是 `return HandlerRun(...)` 呼叫,非 `defer`,
+// 故 AST 掃不到 defer,需列此 map。
 func knownGapEntries() map[string]string {
 	return map[string]string{
 		"Startup":          "Wails lifecycle hook (OnStartup),非 RPC binding",
 		"Shutdown":         "Wails lifecycle hook (OnShutdown),非 RPC binding",
 		"AnalyzePhases":    "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
 		"AnalyzePhaseSync": "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
-		// AnalyzeCCI 不再列 known-gap:它在 Run 之後另有 GenerateCCIInteractiveChart /
-		// GenerateReport / WriteCCIPhasesResult,落在樣板 recover 外,故 body 第一行
-		// 顯式 `defer recoverHandlerPanic`(鏡像 DownloadCCIChart),AST 直接掃得到。
+		// AnalyzeCCI 現列 known-gap:已從 Tier-2 AnalysisHandler 降至 Tier-1
+		// HandlerRun 直用,六步全在 HandlerRun 單一 recover 保護內(含 chart/report/
+		// phases-write);body 第一個 statement 是 return HandlerRun(...) 非 defer,
+		// AST 掃不到 defer,panic safety 由 HandlerRun 自身保證。
+		"AnalyzeCCI":                 "panic safety via HandlerRun (Tier 1, PRD #7 / wave-6)",
 		"AnalyzeMuscleRatio":         "panic safety via AnalysisHandler[P, R].Run (PRD #7 / wave-6)",
 		"AnalyzeNormalizedPhaseSync": "panic safety via HandlerRun (Tier 1, PRD #7 / wave-6)",
 		// Chart Composer family (Slice C, PRD #15) — 2 個 handler 走 HandlerRun

@@ -92,25 +92,22 @@ func TestCCIHandler_ErrorMessage_NoAbsolutePath(t *testing.T) {
 	}
 }
 
-// TestAnalyzeCCI_PanicOutsideHandlerRun_CaughtAsInternalPanic 釘住 P2-4：
-// AnalyzeCCI 在 handler.Run **之外** 還有多段邏輯——entry log、以及 Run 之後的
-// GenerateCCIInteractiveChart / GenerateReport / WriteCCIPhasesResult / exit log。
-// 這些都落在樣板 HandlerRun 的 recover 之外;唯有 AnalyzeCCI body 第一行的
-// `defer recoverHandlerPanic("AnalyzeCCI", ...)` 能罩住它們。沒有這個 defer,
-// 任一 Run-外 panic 會 propagate 出去擊潰整個 Wails desktop process。
+// TestAnalyzeCCI_PanicInsideHandlerRun_CaughtAsInternalPanic 釘住 panic safety:
+// AnalyzeCCI 現在走 Tier-1 HandlerRun 直用,六步全進一個 HandlerRun body。
+// HandlerRun 自身在 handler_run.go:27 設置 `defer recoverHandlerPanic`,在
+// handler_run.go:29 的 entry log(a.logger.Info)之前——任何 body 內 panic 都被
+// 這個 defer 攔住並轉成 ErrInternalPanic。
 //
-// 注入手法（對齊 chart_composer_handlers_test.go::TestChartComposerHandlers_PanicRecovery
-// 的 canonical 做法）:把 a.logger 設為 nil。AnalyzeCCI 進入後第一條 `a.logger.Info`
-// (在 handler.Run 之前) 立即 nil-deref panic — 此 panic 發生在 HandlerRun 被呼叫
-// 「之前」,HandlerRun 內的 recover 根本還沒註冊,故只有 AnalyzeCCI 自己的
-// handler-level defer 能攔。這正是 P2-4 要補的 Run-外覆蓋缺口。
+// 注入手法:把 a.logger 設為 nil。HandlerRun 在 handler_run.go:29 第一條
+// `a.logger.Info`(entry log)即 nil-deref panic。此 panic 發生在 HandlerRun 已
+// 設置 defer(handler_run.go:27)之後,故被 HandlerRun 自己的 recover 攔住,
+// 轉成 (nil, ErrInternalPanic) 走 named-return 通道上拋。
 //
-// red-green:移除 AnalyzeCCI body 第一行的 defer 後,此 panic 會逃出 AnalyzeCCI
-// (require.NotPanics fail);加 defer 後 panic 被攔成 ErrInternalPanic,走 named-return
-// err 通道回 (nil, err)(對齊 DownloadCCIChart 的 dual-channel 契約)。
-func TestAnalyzeCCI_PanicOutsideHandlerRun_CaughtAsInternalPanic(t *testing.T) {
-	// logger 刻意 nil:body 第一條 a.logger.Info(Run 之前)即 nil-deref panic,
-	// 模擬任一 Run-外階段(entry/exit log、chart、report、phases write)的不可預期 panic。
+// 驗證目的:確認在 nil-logger 下 AnalyzeCCI 不 panic 出來,且 errors.Is(err, ErrInternalPanic)
+// 為 true、result 為 nil(對齊 dual-channel 契約)。
+func TestAnalyzeCCI_PanicInsideHandlerRun_CaughtAsInternalPanic(t *testing.T) {
+	// logger 刻意 nil:HandlerRun entry log(handler_run.go:29)即 nil-deref panic,
+	// 模擬任一 body 內不可預期 panic;HandlerRun 的 defer(handler_run.go:27)在前,攔得住。
 	app := &App{logger: nil, cciAnalyzer: cci.NewCCIAnalyzer()}
 	app.state.Store(&appState{config: &config.AppConfig{OutputDir: t.TempDir()}})
 
@@ -124,11 +121,11 @@ func TestAnalyzeCCI_PanicOutsideHandlerRun_CaughtAsInternalPanic(t *testing.T) {
 			DataFolder:   t.TempDir(),
 			SubjectIndex: 0,
 		})
-	}, "Run-外 panic 必須被 AnalyzeCCI 的 defer recoverHandlerPanic 攔住,不可 propagate")
+	}, "HandlerRun 內 panic 必須被 HandlerRun 自身的 defer recoverHandlerPanic 攔住,不可 propagate")
 
 	// panic 走 err 通道:errors.Is(err, ErrInternalPanic) 為 true、result 為 nil
-	// (對齊 AnalyzeCCI 對 ErrInternalPanic 的 (nil, runErr) 分流)。
-	require.Error(t, err, "Run-外 panic 應轉成 non-nil err")
+	// (HandlerRun 對 panic 回傳 (nil, wrappedErr),named-return 上拋)。
+	require.Error(t, err, "HandlerRun 內 panic 應轉成 non-nil err")
 	assert.True(t, errors.Is(err, ErrInternalPanic),
 		"panic 應被包成 ErrInternalPanic,got %v", err)
 	assert.Nil(t, result, "panic 路徑不該回 result(panic 不降級成 failed-result)")
