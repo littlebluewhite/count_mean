@@ -238,12 +238,12 @@ func findRow(t *testing.T, rows []CCIPhaseStatRow, item, metric string) CCIPhase
 // (codex P2): a PRESENT mid-point whose time falls OUTSIDE the extracted
 // [S-150ms, L+150ms] window (malformed manifest — e.g. C typo'd past L) must be
 // treated as absent (NaN row, HasTime=false), NOT silently clamped by
-// FindNearestTimeIndex to a boundary index and emitted as boundary-window stats at
+// ResolveTimeIndex to a boundary index and emitted as boundary-window stats at
 // the wrong location. S/L always bound the extracted range so they never trip this.
 func TestBuildPhaseStats_OutOfRangePhaseTimeTreatedAbsent(t *testing.T) {
 	fixture := makePhaseStatsFixture()
 	// Push C beyond TimeValues[last]=1.0 (S/D/T0/T/O/L stay in range). Without the
-	// range guard, FindNearestTimeIndex clamps C to index 100 and C's windows would
+	// range guard, ResolveTimeIndex clamps C to index 100 and C's windows would
 	// emit non-NaN boundary values; with the guard, C is treated as absent.
 	fixture.PhaseTimes[string(models.PhaseC)] = 1.5
 
@@ -438,7 +438,7 @@ func TestBuildPhaseStats_Interval_MidpointWindowDiscriminates(t *testing.T) {
 	rows := NewCCIAnalyzer().buildPhaseStats(result)
 	sd := findRow(t, rows, "S-D", metricInterval)
 
-	mid := synchronizer.FindNearestTimeIndex(times, (times[fromIdx]+times[toIdx])/2)
+	mid, _ := synchronizer.ResolveTimeIndex(times, (times[fromIdx]+times[toIdx])/2)
 	require.Equal(t, 50, mid, "中點(idx 20,80)須 snap 到 50")
 	wantNew := windowmean.WindowMean(seriesA, mid, band50Half) // 即時 kernel == 列值
 	oldFull := windowmean.MeanRange(seriesA, fromIdx, toIdx)   // 即時 kernel == 舊行為
@@ -453,7 +453,7 @@ func TestBuildPhaseStats_Interval_MidpointWindowDiscriminates(t *testing.T) {
 
 // TestBuildPhaseStats_Interval_UsesTimeMidpointNotIndexMidpoint locks ADR-0022 §Decision
 // item 2: the interval window centers on the two endpoints' TIME-midpoint
-// (FindNearestTimeIndex of (t_from+t_to)/2), NOT any index-based midpoint — chosen for
+// (ResolveTimeIndex of (t_from+t_to)/2), NOT any index-based midpoint — chosen for
 // cross-feature consistency with muscle_ratio. To lock this ROBUSTLY (independent of the
 // float tie-break that makes time- and index-midpoints nearly coincide on a uniform grid),
 // the fixture uses a deliberately NON-UNIFORM time grid: indices 0..15 are dense (Δt=1),
@@ -480,7 +480,7 @@ func TestBuildPhaseStats_Interval_UsesTimeMidpointNotIndexMidpoint(t *testing.T)
 		seriesB[i] = 2 * float64(i)
 	}
 
-	timeMid := synchronizer.FindNearestTimeIndex(times, (times[fromIdx]+times[toIdx])/2)
+	timeMid, _ := synchronizer.ResolveTimeIndex(times, (times[fromIdx]+times[toIdx])/2)
 	indexMid := (fromIdx + toIdx) / 2 // Go integer division; any index-based midpoint stays near here
 	require.Greater(t, math.Abs(float64(timeMid-indexMid)), 1.0,
 		"fixture invariant: non-uniform grid must make time-midpoint (%d) differ from index-midpoint (%d) by >1 sample, so no index formula can match",

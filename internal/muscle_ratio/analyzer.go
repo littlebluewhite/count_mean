@@ -272,7 +272,7 @@ const phaseWindowHalf = 5
 func buildPhasePoints(points []phasePoint, ratiosAll [][]float64, times []float64) []io.MuscleRatioPhasePoint {
 	out := make([]io.MuscleRatioPhasePoint, len(points))
 	for i, p := range points {
-		idx := synchronizer.FindNearestTimeIndex(times, p.time)
+		idx, _ := synchronizer.ResolveTimeIndex(times, p.time)
 		values := make([]float64, len(ratiosAll))
 		for k := range ratiosAll {
 			values[k] = windowmean.WindowMean(ratiosAll[k], idx, phaseWindowHalf)
@@ -365,12 +365,13 @@ func (a *Analyzer) collectPhasePoints(
 		return nil, i18n.T(i18n.KeyErrorMuscleRatioSubjectInsufficientPhases)
 	}
 
-	// FindNearestTimeIndex 對 out-of-range target 會靜默 clamp 到首/末 sample
-	// (見 synchronizer/time_sync.go:166-174)，這會產生「看似成功但數值錯位」的 Output 2。
-	// 在呼叫前自行做 bounds check。
+	// ResolveTimeIndex 對 out-of-range target 會靜默 clamp 到首/末 sample，產生「看似成功但
+	// 數值錯位」的 Output 2，故建表前用其 inRange 旗標攔截:任一 phase 越界即整批跳過 Output 2
+	// (all-or-nothing 政策)。其 1e-6 容差吸收 force-plate↔EMG 同步的 ULP 飄移；真實 typo
+	// (≥1ms) 仍被擋。emgStart/emgEnd 保留供錯誤訊息。
 	emgStart, emgEnd := emg.Time[0], emg.Time[len(emg.Time)-1]
 	for _, p := range phases {
-		if p.time < emgStart || p.time > emgEnd {
+		if _, inRange := synchronizer.ResolveTimeIndex(emg.Time, p.time); !inRange {
 			return nil, i18n.T(
 				i18n.KeyErrorMuscleRatioSubjectPhaseOutOfEMGRange,
 				p.name, p.time, emgStart, emgEnd,

@@ -136,51 +136,58 @@ type SyncedTimeRange struct {
 	EndEMGTime       float64 // 結束 EMG 時間
 }
 
-// FindNearestTimeIndex 在時間序列中找到最接近目標時間的索引.
-func FindNearestTimeIndex(times []float64, targetTime float64) int {
+// emgTimeEpsilon 吸收 force-plate↔EMG 時間同步後的 ULP 飄移(~1e-7),設為比
+// 1000Hz sample interval(1e-3)細 3 個量級的安全餘量:真實 out-of-range
+// (>= 1ms ≈ 1e-3)仍被判越界,浮點 ULP 飄移(<= 1e-6)被吸收。
+const emgTimeEpsilon = 1e-6
+
+// ResolveTimeIndex 解析 target 到 times 中最接近的 sample 索引,並回報 target 是否
+// 落在 [times[0], times[len-1]](含 ±emgTimeEpsilon 邊界容差)內。times 須升冪排序。
+//
+//	len(times)==0                          → (-1, false)
+//	target 超出範圍+容差(idx clamp 到邊界) → (0 或 len-1, false)
+//	target 在範圍內(或邊界 ±容差)          → (nearest, true)
+//
+// idx 與 inRange 正交:越界時 idx 仍 clamp 到邊界索引(0 / len-1)—— 純粹保留舊
+// FindNearestTimeIndex 的既有行為(零成本),目前無 caller 在 inRange=false 時用它。
+// 所有 caller 一律先看 inRange;idx 只在 inRange=true 時被消費。
+func ResolveTimeIndex(times []float64, target float64) (idx int, inRange bool) {
 	if len(times) == 0 {
-		return -1
+		return -1, false
 	}
 
-	// 如果目標時間小於第一個時間
-	if targetTime <= times[0] {
-		return 0
+	inRange = target >= times[0]-emgTimeEpsilon && target <= times[len(times)-1]+emgTimeEpsilon
+
+	// idx:沿用既有 clamp(越界 snap 到邊界索引)+ 既有二分查找 kernel,邏輯一字不改,
+	// 差別只是每個 return 多帶 inRange。
+	if target <= times[0] {
+		return 0, inRange
+	}
+	if target >= times[len(times)-1] {
+		return len(times) - 1, inRange
 	}
 
-	// 如果目標時間大於最後一個時間
-	if targetTime >= times[len(times)-1] {
-		return len(times) - 1
-	}
-
-	// 二分查找
 	left, right := 0, len(times)-1
 	for left <= right {
 		mid := (left + right) / 2
-
-		if times[mid] == targetTime {
-			return mid
+		if times[mid] == target {
+			return mid, inRange
 		}
-
-		if times[mid] < targetTime {
+		if times[mid] < target {
 			left = mid + 1
 		} else {
 			right = mid - 1
 		}
 	}
 
-	// 找到最接近的值
 	if left >= len(times) {
-		return len(times) - 1
+		return len(times) - 1, inRange
 	}
-
 	if right < 0 {
-		return 0
+		return 0, inRange
 	}
-
-	// 比較 left 和 right 哪個更接近
-	if math.Abs(times[left]-targetTime) < math.Abs(times[right]-targetTime) {
-		return left
+	if math.Abs(times[left]-target) < math.Abs(times[right]-target) {
+		return left, inRange
 	}
-
-	return right
+	return right, inRange
 }

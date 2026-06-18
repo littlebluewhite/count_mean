@@ -110,21 +110,6 @@ var phaseStatRowSpecs = []phaseStatRowSpec{
 	{item: "L", metric: metricLand50to100, kind: kindLand, point: models.PhaseL, landLo: land50Offset, landHi: land100Span},
 }
 
-// phaseTimeWithinExtractedRange reports whether a phase EMG time lies inside the
-// extracted TimeValues window, tolerating the same 1e-6 boundary drift validateEMGBounds
-// accepts (so S/L clamped to the first/last sample stay present). A phase outside the
-// window — a malformed-manifest mid-point typo — is unusable: it would otherwise be
-// clamped by FindNearestTimeIndex to a boundary index and emit stats/markers at the
-// wrong location.
-func phaseTimeWithinExtractedRange(t float64, timeValues []float64) bool {
-	n := len(timeValues)
-	if n == 0 {
-		return false
-	}
-	const boundsEpsilon = 1e-6 // matches validateEMGBounds
-	return t >= timeValues[0]-boundsEpsilon && t <= timeValues[n-1]+boundsEpsilon
-}
-
 // dropOutOfRangePhases removes phases whose EMG time falls outside the extracted window
 // from PhaseTimes + PhasePercents, keeping the chart markers consistent with Output 2:
 // an unusable phase (e.g. a manifest typo placing a mid-point beyond L+150ms) neither
@@ -132,7 +117,7 @@ func phaseTimeWithinExtractedRange(t float64, timeValues []float64) bool {
 // S/L always bound the extracted range, so they are never dropped.
 func (a *CCIAnalyzer) dropOutOfRangePhases(result *CCIAnalysisResult) {
 	for name, t := range result.PhaseTimes {
-		if phaseTimeWithinExtractedRange(t, result.TimeValues) {
+		if _, inRange := synchronizer.ResolveTimeIndex(result.TimeValues, t); inRange {
 			continue
 		}
 		delete(result.PhaseTimes, name)
@@ -157,17 +142,22 @@ func (a *CCIAnalyzer) buildPhaseStats(result *CCIAnalysisResult) []CCIPhaseStatR
 	nPairs := len(result.PairResults)
 
 	// phaseAt resolves a present phase point to its index, EMG time, and presence flag
-	// (in PhaseTimes AND within the extracted range — shared with dropOutOfRangePhases
-	// via phaseTimeWithinExtractedRange, so Output 2 and the chart markers agree on
-	// which phases are usable). Defense-in-depth: AnalyzeCCI already drops out-of-range
-	// phases from PhaseTimes, but buildPhaseStats stays robust when called directly with
-	// an unfiltered result (e.g. in unit tests).
+	// (in PhaseTimes AND within the extracted range — both here and dropOutOfRangePhases
+	// call synchronizer.ResolveTimeIndex, so Output 2 and the chart markers agree on which
+	// phases are usable; its 1e-6 tolerance keeps S/L clamped to the first/last sample
+	// present). Defense-in-depth: AnalyzeCCI already drops out-of-range phases from
+	// PhaseTimes, but buildPhaseStats stays robust when called directly with an unfiltered
+	// result (e.g. in unit tests).
 	phaseAt := func(p models.PhasePoint) (int, float64, bool) {
 		t, ok := result.PhaseTimes[string(p)]
-		if !ok || !phaseTimeWithinExtractedRange(t, result.TimeValues) {
+		if !ok {
 			return 0, 0, false
 		}
-		return synchronizer.FindNearestTimeIndex(result.TimeValues, t), t, true
+		idx, inRange := synchronizer.ResolveTimeIndex(result.TimeValues, t)
+		if !inRange {
+			return 0, 0, false
+		}
+		return idx, t, true
 	}
 
 	rows := make([]CCIPhaseStatRow, 0, len(phaseStatRowSpecs))
@@ -196,7 +186,7 @@ func (a *CCIAnalyzer) computeRow(
 			return row
 		}
 		// 視窗以兩端點時間中點為中心(ADR-0022)。中點可交換,D/O motion 反序無需 order guard。
-		mid := synchronizer.FindNearestTimeIndex(result.TimeValues, (tFrom+tTo)/2)
+		mid, _ := synchronizer.ResolveTimeIndex(result.TimeValues, (tFrom+tTo)/2)
 		row.HasTime = true
 		row.Time = result.TimeValues[mid]
 		row.Values = perPair(result.PairResults, func(s []float64) float64 {

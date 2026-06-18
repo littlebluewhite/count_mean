@@ -1163,6 +1163,48 @@ func TestAnalyze_PhaseTimeAtBoundary(t *testing.T) {
 	assert.NotEmpty(t, sr.OutputPhasePath, "Output 2 應該產出")
 }
 
+// TestAnalyze_PhaseTimeWithinEpsilon 釘住 ADR-0030 的行為變更:phase EMG time 落在 emgEnd
+// 之外但在 1e-6 ULP 容差帶內(force-plate↔EMG 同步飄移),collectPhasePoints 經
+// ResolveTimeIndex 的 inRange 旗標應「接受」,而非舊 strict-0 的「拒收+跳 Output 2」。
+// 對照 TestAnalyze_PhaseTimeAtBoundary(測 == 邊界);此處測 (emgEnd, emgEnd+1e-6) 開區間。
+func TestAnalyze_PhaseTimeWithinEpsilon(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	// 200 samples × 0.001s,EMG helper 寫 %.4f → 末筆 "0.1990" → emgEnd = 0.199。
+	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	// Precondition:把 in-band 浮點假設釘進 test,一破即大聲 fail(不藏在 runtime 算式)。
+	// offset=1 → ForceTimeToEMGTime(L,1)=L。L=0.1990005 落在 (emgEnd, emgEnd+1e-6) 開區間。
+	const emgEnd = 0.199
+	const phaseL = 0.1990005
+	require.Greater(t, phaseL, emgEnd, "L 必須嚴格超出 emgEnd(否則測的是 boundary 非 epsilon)")
+	require.Less(t, phaseL, emgEnd+1e-6, "L 必須在 1e-6 容差帶內(否則會被當真 typo 拒收)")
+
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	// offset=1;L=0.1990005 (force time → EMG time 同值,容差內);其餘 phase 均在範圍內。
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S1", "s1.csv", "1", [10]string{
+			"0.000", "0.05", "0.06", "0.07", "0.08",
+			"20", "0.10", "0.11", "30", "0.1990005",
+		}),
+	})
+
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		OutputDir:    outDir,
+		CSVHandler:   newTestCSVHandler(outDir),
+	})
+	require.NoError(t, err)
+
+	sr := result[0]
+	assert.True(t, sr.Success, "容差內 phase 不該被拒,Error=%s", sr.Error)
+	assert.NotEmpty(t, sr.OutputPhasePath, "Output 2 應產出(舊 strict-0 會跳過→此處空)")
+}
+
 // TestAnalyze_Output2WriteFailure_StickyOutput1Success 釘住 SubjectResult doc 契約：
 // 當 Output 1 已成功寫入但 Output 2 寫入失敗，Success 必須保持 true，Error 解釋為何 Output 2 跳過。
 //
