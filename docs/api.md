@@ -857,62 +857,9 @@ func (v *PathValidator) SanitizePath(path string) string
 safePath := validator.SanitizePath(userInputPath)
 ```
 
-### InputValidator
+### 輸入驗證
 
-`InputValidator` 提供輸入驗證功能。
-
-```go
-type InputValidator struct {
-    maxFileSize        int64
-    allowedExtensions  []string
-}
-```
-
-**NewInputValidator**
-
-```go
-func NewInputValidator() *InputValidator
-```
-
-**ValidateCSVData**
-
-```go
-func (v *InputValidator) ValidateCSVData(records [][]string, filename string) error
-```
-
-驗證 CSV 原始記錄結構與檢查惡意內容（公式注入、binary smuggling 等）。傳入已解析的 `[][]string` 與來源檔名（後者用於錯誤訊息與 audit log）。
-
-**示例：**
-```go
-validator := validation.NewInputValidator()
-
-records, err := csvHandler.ReadCSV(filePath)
-if err != nil { return err }
-
-if err := validator.ValidateCSVData(records, filePath); err != nil {
-    log.Printf("數據驗證失敗：%v", err)
-    return err
-}
-```
-
-**ValidateWindowSize**
-
-```go
-func (v *InputValidator) ValidateWindowSize(windowSizeStr string) (int, error)
-```
-
-驗證來自前端字串形式的視窗大小參數，回傳已解析的 `int` 與錯誤；接受字串是為了讓 Wails RPC 傳遞 raw user input 後在後端統一驗證/解析。
-
-**示例：**
-```go
-// 從前端傳入字串
-windowSize, err := validator.ValidateWindowSize(params.WindowSizeStr)
-if err != nil {
-    return fmt.Errorf("視窗大小無效：%w", err)
-}
-// 使用解析後的 int
-results, err := calculator.Calculate(ctx, dataset, windowSize)
-```
+輸入驗證由子驗證器直接提供：`validation/csv`（`csv.NewValidator()`）負責 CSV 結構與內容驗證，`validation/filename`（`filename.NewValidator()`）負責檔名安全性驗證。
 
 ---
 

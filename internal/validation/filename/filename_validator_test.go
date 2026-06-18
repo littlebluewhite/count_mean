@@ -209,6 +209,29 @@ func TestValidator_RejectsReservedNames(t *testing.T) {
 //   - `.bak.csv` (no name) — 行為自選,目前 first segment 為空 -> reserved 比對不命中
 //     -> 走 extension check -> .csv 通過。實務上 `.bak.csv` 是隱藏檔語意,允許通過 OK,
 //     若日後要 reject 由其他 check 負責(非本 task 範圍)。
+func TestValidator_RejectsTooLongDangerousCharAndBadExtension(t *testing.T) {
+	v := NewValidator()
+
+	cases := []struct {
+		name string
+		in   string
+	}{
+		// 用可印字元而非 NUL bytes:make([]byte,300) 是 300 個 \x00,會在
+		// checkControlChars(null/control 守門)就被拒,根本走不到 len>255 的
+		// 長度分支 → 長度檢查被刪測試仍綠,失去鑑別力。改 300 個 'a' 強制走到長度檢查。
+		{"too long", strings.Repeat("a", 300) + ".csv"},
+		{"dangerous char", "test<.csv"},
+		{"invalid extension", "test.txt"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := v.ValidateFilename(tc.in); err == nil {
+				t.Errorf("expected error for %q, got nil", tc.in)
+			}
+		})
+	}
+}
+
 func TestFilenameValidator_DoubleExt_ReservedRejected(t *testing.T) {
 	v := NewValidator()
 

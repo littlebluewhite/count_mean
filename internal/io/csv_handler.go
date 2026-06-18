@@ -24,7 +24,7 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
-	"count_mean/internal/validation"
+	csvvalidator "count_mean/internal/validation/csv"
 	"count_mean/internal/validation/filename"
 )
 
@@ -40,7 +40,7 @@ const csvReaderBufSize = 64 * 1024
 type CSVHandler struct {
 	config           *config.AppConfig
 	pathValidator    *security.PathValidator
-	validator        *validation.InputValidator
+	csvValidator     *csvvalidator.Validator
 	logger           *logging.Logger
 	largeFileHandler *LargeFileHandler
 	pathBuilder      *FilePathBuilder
@@ -62,7 +62,7 @@ func NewCSVHandler(cfg *config.AppConfig) *CSVHandler {
 	return &CSVHandler{
 		config:           cfg,
 		pathValidator:    pathValidator,
-		validator:        validation.NewInputValidator(),
+		csvValidator:     csvvalidator.NewValidator(),
 		logger:           logging.GetLogger("csv_handler"),
 		largeFileHandler: NewLargeFileHandler(cfg),
 		pathBuilder:      NewFilePathBuilder(cfg, pathValidator),
@@ -284,7 +284,7 @@ func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) er
 		return err
 	}
 
-	if err := h.validator.ValidateCSVData(records, cleanPath); err != nil {
+	if err := h.csvValidator.ValidateCSVData(records, cleanPath); err != nil {
 		h.logger.Error("CSV 資料結構驗證失敗", err, map[string]any{"path": cleanPath})
 
 		return fmt.Errorf("CSV 資料驗證失敗: %w", err)

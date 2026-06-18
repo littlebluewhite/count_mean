@@ -17,7 +17,7 @@ import (
 	"count_mean/internal/logging"
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
-	"count_mean/internal/validation"
+	"count_mean/internal/validation/filename"
 )
 
 // TestIntegrationFullWorkflow tests the complete workflow of the application.
@@ -98,7 +98,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 	})
 
 	t.Run("SecurityAndValidationIntegration", func(t *testing.T) {
-		validator := validation.NewInputValidator()
+		validator := filename.NewValidator()
 		pathValidator := security.NewPathValidator([]string{inputDir, outputDir})
 
 		// Test path validation integration

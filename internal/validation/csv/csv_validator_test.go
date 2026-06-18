@@ -5,6 +5,61 @@ import (
 	"testing"
 )
 
+// TestValidateCSVData_RejectsStructuralProblems 釘住結構性缺陷：空 records、僅有
+// header row、columns 數不一致、以及 header row 本身為空，都必須被拒絕。
+func TestValidateCSVData_RejectsStructuralProblems(t *testing.T) {
+	v := NewValidator()
+
+	cases := []struct {
+		name    string
+		records [][]string
+		// wantMsg 非空時改斷言錯誤訊息含此子串(而非僅 err!=nil)。用於「empty header
+		// row」這種會「同時」觸發欄數不一致的 case:空 header 令 expectedColumns=0,
+		// 後續 3 欄 body row 會在欄數檢查報錯 → 若只斷 err!=nil,header-為空 的拒絕
+		// 分支被移除後仍因欄數錯誤誤綠。釘住 header 專屬訊息才能鑑別正確的拒絕來源。
+		wantMsg string
+	}{
+		{
+			name:    "empty records",
+			records: [][]string{},
+		},
+		{
+			name:    "header only",
+			records: [][]string{{"Time", "Channel1", "Channel2"}},
+		},
+		{
+			name: "inconsistent columns",
+			records: [][]string{
+				{"Time", "Channel1", "Channel2"},
+				{"0.1", "100", "200"},
+				{"0.2", "150"},
+			},
+		},
+		{
+			name: "empty header row",
+			records: [][]string{
+				{},
+				{"0.1", "100", "200"},
+			},
+			wantMsg: "CSV 標題行為空",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := v.ValidateCSVData(tc.records, "test.csv")
+			if err == nil {
+				t.Errorf("ValidateCSVData(%q) 必須回傳 error，實際通過", tc.name)
+				return
+			}
+			if tc.wantMsg != "" && !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("ValidateCSVData(%q) 錯誤訊息應含 %q(鑑別正確的拒絕分支),實際=%v",
+					tc.name, tc.wantMsg, err)
+			}
+		})
+	}
+}
+
 // TestValidateCSVData_RejectsDuplicateHeader 釘住 CSV header 不允許出現重複
 // 的欄位名。下游 EMG / motion parser 依賴「header → column index」單射映射
 // （map[string]int），重複的 header 會 silently 覆寫對應 index，後續資料解讀時

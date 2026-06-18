@@ -32,7 +32,7 @@ const (
 // 即 cross-compare review fresh hunt 抓到的「snapshot 撕裂」邏輯 race。
 func (a *App) readCSVWithPathValidation(s *appState, filePath, baseDir string) ([][]string, error) {
 	filename := filepath.Base(filePath)
-	if err := a.validator.ValidateFilename(filename); err != nil {
+	if err := a.filenameValidator.ValidateFilename(filename); err != nil {
 		return nil, fmt.Errorf("檔案名稱驗證失敗: %w", err)
 	}
 

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"count_mean/internal/errors"
 	"count_mean/internal/io"
 	"count_mean/internal/maxmean"
 	"count_mean/internal/models"
@@ -14,8 +15,9 @@ import (
 func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error) {
 	s := a.state.Load()
 
-	if err := a.validator.ValidateDirectoryPath(params.InputPath); err != nil {
-		return nil, fmt.Errorf("目錄路徑驗證失敗: %w", err)
+	if params.InputPath == "" {
+		return nil, fmt.Errorf("目錄路徑驗證失敗: %w",
+			errors.NewValidationError("directory_path", params.InputPath, "目錄路徑不能為空"))
 	}
 
 	source, outputDirName, err := a.buildMaxMeanFileSource(s, params.InputPath)

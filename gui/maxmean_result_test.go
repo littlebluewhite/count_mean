@@ -86,6 +86,35 @@ func TestCalculateMaxMean_ExternalBatch_OutputPathUnderOutputDir(t *testing.T) {
 	assert.DirExists(t, result.OutputPath)
 }
 
+// TestCalculateMaxMean_EmptyBatchPath_ErrorsExplicitly 釘住 validation facade
+// collapse(刪 validator.go)後保留的「唯一」行為:批次模式空 InputPath 必須顯式
+// 報錯,而非靜默把整個 InputDir root 當批次目錄處理(calculateMaxMeanBatch 的
+// footgun — 空字串 → ListCSVFilesInDirectory("") → InputDir root)。
+//
+// inline empty-guard(gui/maxmean_batch_adapter.go)取代了已刪 facade 的
+// ValidateDirectoryPath;舊 check 的 NUL/length 部分刻意下放給下游
+// per-file security.PathValidator(internal GetSafePath / external
+// ValidateExternalPath),故此處只釘 empty 這個有行為意義的 case。
+//
+// 斷言特定訊息「目錄路徑不能為空」而非僅 err!=nil:guard 被移除時下游 list/read
+// 會回別的錯誤(或 0 檔靜默),特定訊息斷言才能鑑別 guard 存活。
+func TestCalculateMaxMean_EmptyBatchPath_ErrorsExplicitly(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.InputDir = t.TempDir()
+	cfg.OutputDir = t.TempDir()
+	app := NewApp(cfg, "test")
+
+	_, err := app.CalculateMaxMean(MaxMeanParams{
+		InputPath:  "",
+		WindowSize: 5,
+		IsBatch:    true,
+	})
+	require.Error(t, err, "空 InputPath 批次必須顯式報錯,不可靜默處理 InputDir root")
+	assert.ErrorContains(t, err, "目錄路徑不能為空",
+		"必須是 empty-guard 的訊息(byte-parity 保留自舊 ValidateDirectoryPath),"+
+			"而非下游 list/read 的其他錯誤 — 否則 guard 被移除仍會誤綠")
+}
+
 // TestCalculateMaxMean_ArrayValuesReverseScaledLikeCSV 釘住 P3-12:GUI 回傳的
 // Results 陣列先前未做反縮放,值停在「縮放域」(被 10^ScalingFactor 放大),與寫出
 // 的 CSV (csvConverter.scaleValue 已除 10^SF) 單位分歧。此測試對同一次計算同時讀

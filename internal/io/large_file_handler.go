@@ -20,7 +20,7 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
-	"count_mean/internal/validation"
+	csvvalidator "count_mean/internal/validation/csv"
 	"count_mean/util"
 )
 
@@ -68,7 +68,7 @@ type ProgressCallback func(processed, total int64, percentage float64)
 type LargeFileHandler struct {
 	config        *config.AppConfig
 	pathValidator *security.PathValidator
-	validator     *validation.InputValidator
+	csvValidator  *csvvalidator.Validator
 	logger        *logging.Logger
 
 	// 大文件處理配置
@@ -99,7 +99,7 @@ func NewLargeFileHandler(config *config.AppConfig) *LargeFileHandler {
 	h := &LargeFileHandler{
 		config:        config,
 		pathValidator: security.NewPathValidator(allowedPaths),
-		validator:     validation.NewInputValidator(),
+		csvValidator:  csvvalidator.NewValidator(),
 		logger:        logging.GetLogger("large_file_handler"),
 
 		// 預設配置
@@ -419,7 +419,7 @@ func (h *LargeFileHandler) processStreamingFile(
 	// `=Channel1`）在 substring 比對下假陽性嚴重，但 formula starter（`=cmd|/c calc`）
 	// 仍會被 checkFormulaInjection 擋下，所以 header 的 RejectsHeaderInjection 契約
 	// 不受影響。
-	if err := h.validator.ValidateCSVHeaderRow(headers, 1, -1, fileInfo.Path); err != nil {
+	if err := h.csvValidator.ValidateHeaderRow(headers, 1, -1, fileInfo.Path); err != nil {
 		return nil, errors.WrapError(err, errors.ErrCodeDataParsing, "標題行驗證失敗")
 	}
 
@@ -519,7 +519,7 @@ func (h *LargeFileHandler) executeStreamingLoop(ctx *streamingContext, processor
 		// 失敗即終止：streaming 路徑與 csv_handler bulk 路徑語意對齊（malicious row 必須
 		// fail-fast，不能默默 continue 然後在後續分析輸出污染結果）。
 		validationRow := int(ctx.processedLines + 1)
-		if err := h.validator.ValidateCSVRow(record, validationRow, -1, ctx.fileInfo.Path); err != nil {
+		if err := h.csvValidator.ValidateRow(record, validationRow, -1, ctx.fileInfo.Path); err != nil {
 			return fmt.Errorf("第 %d 行內容驗證失敗: %w", validationRow, err)
 		}
 

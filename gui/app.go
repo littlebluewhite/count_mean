@@ -27,7 +27,7 @@ import (
 	"count_mean/internal/phase_sync"
 	"count_mean/internal/security/redact"
 	"count_mean/internal/synchronizer"
-	"count_mean/internal/validation"
+	"count_mean/internal/validation/filename"
 )
 
 // Sentinel errors for validation.
@@ -74,7 +74,7 @@ type App struct {
 	ctx                 atomic.Pointer[context.Context] //nolint:containedctx // Required by Wails framework
 	state               atomic.Pointer[appState]        // 取代原 5 個 mutable 欄位,保證 swap 原子性
 	logger              *logging.Logger
-	validator           *validation.InputValidator
+	filenameValidator   *filename.Validator
 	phaseSyncAnalyzer   *phase_sync.PhaseSyncAnalyzer
 	cciAnalyzer         *cci.CCIAnalyzer
 	muscleRatioAnalyzer *muscle_ratio.Analyzer
@@ -128,7 +128,7 @@ func NewApp(cfg *config.AppConfig, version string) *App {
 func NewAppWithConfigPath(cfg *config.AppConfig, version, configPath string) *App {
 	a := &App{
 		logger:              logging.GetLogger("app"),
-		validator:           validation.NewInputValidator(),
+		filenameValidator:   filename.NewValidator(),
 		phaseSyncAnalyzer:   phase_sync.NewPhaseSyncAnalyzer(),
 		cciAnalyzer:         cci.NewCCIAnalyzer(),
 		muscleRatioAnalyzer: muscle_ratio.NewAnalyzer(),
