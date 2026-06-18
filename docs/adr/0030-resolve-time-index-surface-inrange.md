@@ -12,7 +12,7 @@
 
 - `inRange` 在 empty 檢查後**算一次**(`target >= times[0]-emgTimeEpsilon && target <= times[len-1]+emgTimeEpsilon`),所有 return 路徑都帶它。
 - `idx` 的計算邏輯(clamp short-circuit + binary search + left/right tie-break)**一字不改**;越界時 idx 仍 clamp 到邊界索引(0 / len-1)。
-- `idx` 與 `inRange` 正交:idx 的越界 clamp 是零成本保留舊行為,目前無 caller 在 `inRange=false` 時消費 idx —— 所有 caller 一律先看 `inRange`。
+- `idx` 與 `inRange` 正交:idx 的越界 clamp 是零成本保留舊行為。caller 有兩種合法消費 idx 的方式:(a) 先看 `inRange` 才用 idx(CCI `phaseAt`/`dropOutOfRangePhases`、muscle_ratio 越界攔截);(b) in-range 已由 precondition 確立後丟棄 `inRange`(CCI `computeRow` 凸中點、muscle_ratio `buildPhasePoints` 已驗證點)。無 caller 在未確立 in-range 時消費越界 clamp 的 idx。
 
 ### 2. in-range 偵測 3→1(deletion test)
 

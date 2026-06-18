@@ -149,8 +149,11 @@ const emgTimeEpsilon = 1e-6
 //	target 在範圍內(或邊界 ±容差)          → (nearest, true)
 //
 // idx 與 inRange 正交:越界時 idx 仍 clamp 到邊界索引(0 / len-1)—— 純粹保留舊
-// FindNearestTimeIndex 的既有行為(零成本),目前無 caller 在 inRange=false 時用它。
-// 所有 caller 一律先看 inRange;idx 只在 inRange=true 時被消費。
+// FindNearestTimeIndex 的既有行為(零成本)。caller 有兩種合法消費 idx 的方式:
+// (a) 先看 inRange、僅在 true 時用 idx(CCI phaseAt/dropOutOfRangePhases、
+// muscle_ratio collectPhasePoints 越界攔截);(b) in-range 已由 precondition 確立後
+// 丟棄 inRange(CCI computeRow 凸中點、muscle_ratio buildPhasePoints 已驗證點)。
+// 無 caller 在 in-range 未經確立時消費越界 clamp 的 idx。
 func ResolveTimeIndex(times []float64, target float64) (idx int, inRange bool) {
 	if len(times) == 0 {
 		return -1, false
