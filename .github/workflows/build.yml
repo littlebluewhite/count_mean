@@ -497,7 +497,7 @@ jobs:
         echo "Resolved release tag: ${TAG}"
 
     - name: Create Release
-      uses: softprops/action-gh-release@9d7c94cfd0a1f3ed45544c887983e9fa900f0564 # v2.0.4
+      uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
       with:
         tag_name: ${{ steps.tag.outputs.tag }}
         name: EMG 資料分析工具 ${{ steps.tag.outputs.tag }}
