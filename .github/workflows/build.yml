@@ -61,7 +61,7 @@ jobs:
     # SHA 來源:`gh api repos/golangci/golangci-lint-action/git/refs/tags/v9.2.0`
     #          `gh api repos/securego/gosec/tags`
     - name: Run lint (pinned golangci-lint-action v9.2.0)
-      uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+      uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
       with:
         version: v2.12.0
         args: --timeout=5m
@@ -81,7 +81,7 @@ jobs:
     # darwin 跑兩次(amd64 / arm64)成本太高且行為等價,只跑 windows 已能涵蓋
     # 主要 cross-platform build tag pile。
     - name: Run lint (GOOS=windows cross-platform tags, advisory)
-      uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+      uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
       with:
         version: v2.12.0
         args: --timeout=5m
