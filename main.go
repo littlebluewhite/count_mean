@@ -120,7 +120,7 @@ func resolveDefaultConfigPath() string {
 // 模式尚未實作並回傳非零 exit code。提煉成獨立函式供測試在不啟動 GUI 的
 // 情況下 verify 行為。
 //
-// CLAUDE.md 長期宣稱「支援 GUI + CLI」,但 codebase 從來沒有 CLI
+// AGENTS.md 長期宣稱「支援 GUI + CLI」,但 codebase 從來沒有 CLI
 // 實作。與其默默無視 `-cli` 然後啟動 GUI 讓使用者困惑,不如顯式告知並 exit 2,
 // 讓 doc 與 runtime contract 對齊。真正的 CLI 由未來 task 補上(out of scope)。
 //
@@ -267,7 +267,7 @@ func parseArgs(args []string) (parsedArgs, error) {
 }
 
 func main() {
-	// `-cli` 是 placeholder:CLAUDE.md 文件層級宣稱支援 CLI,實際上沒有實作。
+	// `-cli` 是 placeholder:AGENTS.md 文件層級宣稱支援 CLI,實際上沒有實作。
 	// 與其默默忽略 flag 直接啟 GUI(困惑),不如顯式告知並 exit 2。詳見
 	// runCLIPlaceholder doc。
 	parsed, err := parseArgs(os.Args[1:])
