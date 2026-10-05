@@ -47,6 +47,6 @@
 
 3. **`scalingFactor` source(grill Q4)近-cosmetic、非 load-bearing** — DataParser `p.scalingFactor` 是 `NewDataParser` ctor-field;streaming `state.scalingFactor`（large_file_handler.go:627）亦從 `h.config.ScalingFactor` init-snapshot（:740）後以 param 串接。兩者皆 config 的 init-time 快照,差異僅「struct-field 存取 vs 顯式 param threading」,**不構成 merge 理由也不構成 split 理由**。但天真地「全改 param」會觸及 [[ADR-0005]] §Option D 所保護的 snapshot-field 契約(`s.maxMeanCalc` ↔ `s.config.ScalingFactor` 同源配對),故非完全無關。本決策 load-bearing 的是 Q1(pool)+ Q3(tolerance),Q4 誠實降級。
 
-4. **CONTEXT.md 不動(grill Q6)** — shared parse kernel 即使被採納也是 implementation helper、非 domain concept,對齊 [[ADR-0008]] 對 `EChartsGenerator` 的判定(impl 型別不入 glossary)。本 ADR 無新 domain term。
+4. **GLOSSARY.md 不動(grill Q6)** — shared parse kernel 即使被採納也是 implementation helper、非 domain concept,對齊 [[ADR-0008]] 對 `EChartsGenerator` 的判定(impl 型別不入 glossary)。本 ADR 無新 domain term。
 
 5. **無 code 變更、無新 test(grill Q5)** — design-only + preserve 現狀。`internal/parsers/data_parser_test.go` 與 `internal/io/large_file_handler_streaming_test.go`（及 `large_file_handler_test.go`）既有 contract test 各自鎖兩邊 divergent 契約,不需動。若 candidate 4 的 kernel 當初 pass,才需要 kernel 自己的 unit test + 兩 caller 各保留 contract test。

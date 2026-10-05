@@ -39,13 +39,13 @@ P3-5(value 型別)與 P3-13(惡意掃描順序)是同一 numeric 層內的次級
 - **A. 完整移除(chosen)。** numeric 層(含 interface/ranges)+ synchronizer 三函式 + self-referential 測試。優點:complexity 真實消失、死碼 surface 收乾。缺點:幾乎沒有 —— 無 production consumer。
 - **B. 保留 numeric 當「未來驗證 library」。** 拒:把零 caller 的 facade 留著當 hypothetical 彈性,等於以 dead code 形式偷渡 speculative 設計([[ADR-0008]] Option B 同理由)。若未來真需要數值驗證,從屆時需求 fresh 寫(成本與維護 anaemic facade 等同)。
 - **C. Janitorial(只拔 wiring,保留型別)。** 拒:留下 numeric 套件 + interface + self-referential test,未來 review 重挖([[ADR-0006]]/[[ADR-0008]] Option C 同被拒)。
-- **`EMGTimeToMotionIndex` 保留當對稱反向。** 拒:它是 live `MotionIndexToEMGTime` 的數學反向,但「對稱完整性」不足以保留 production 死碼(CLAUDE.md「無 speculative 彈性」)。代價極小(若未來出現 caller,重加 8 行)。移除其 3 處附帶測試引用屬「清理自身移除造成的 orphan」,非亂動無關測試。
+- **`EMGTimeToMotionIndex` 保留當對稱反向。** 拒:它是 live `MotionIndexToEMGTime` 的數學反向,但「對稱完整性」不足以保留 production 死碼(AGENTS.md「無 speculative 彈性」)。代價極小(若未來出現 caller,重加 8 行)。移除其 3 處附帶測試引用屬「清理自身移除造成的 orphan」,非亂動無關測試。
 
 ## Consequences
 
 - **InputValidator 對外契約收窄**:不再實作已刪的 `NumericValidator` interface(該 interface 一併刪),filename/csv/directory 方法不變,三個 production 持有者不受影響。
 - **Test surface**:刪 numeric 套件測試 + validator 2 測試 + synchronizer 3 個專屬/附帶測試引用;synchronizer 的 `ConcurrentAccess`/`RoundTrip`/`MathematicalRelationships` 保留對活方法的覆蓋。
-- **CONTEXT.md 不動**:numeric.Validator 與 synchronizer 三函式都是 implementation 細節,非 domain term。
+- **GLOSSARY.md 不動**:numeric.Validator 與 synchronizer 三函式都是 implementation 細節,非 domain term。
 
 ## Reversibility
 

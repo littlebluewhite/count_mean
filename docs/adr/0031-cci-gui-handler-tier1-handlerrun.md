@@ -13,7 +13,7 @@
 3. **死碼清除**：
    - `handler.Run` 後的 `runErr` 分流（`errors.Is(runErr, ErrInternalPanic)` → 走 Go err 通道；其餘 expected error → `failedCCIResult`）連同 `Run` 外另接的 chart / phases 錯誤返回，整併為六步在同一 HandlerRun body 內一致的各步直接 fail-fast（`failedCCIResult(...), nil`；panic 由 HandlerRun 自帶 recover 接管）。
    - 兩個 CCI 專屬 sentinel（`ErrCCIAnalysisFailed` / `ErrCCICSVExportFailed`）從未透過 `errors.Is` 被外部 caller 使用，確認為死碼，移除。
-4. **CONTEXT.md 家族異動**：`AnalyzeCCI` 離開 [[Analysis pipeline family]]（見 CONTEXT.md `Analysis pipeline family` 概念塊）；`cci` domain analyzer 本身仍存在，形狀（compute-only）不變。
+4. **GLOSSARY.md 家族異動**：`AnalyzeCCI` 離開 [[Analysis pipeline family]]（見 GLOSSARY.md `Analysis pipeline family` 概念塊）；`cci` domain analyzer 本身仍存在，形狀（compute-only）不變。
 
 ### Amends ADR-0018
 
@@ -65,7 +65,7 @@ CCI 繼續是四個成員唯一的雙 recover 稅繳費者，且與結構相同�
 
 ## Consequences
 
-- **`AnalyzeCCI` 離開 Analysis pipeline family**（CONTEXT.md 已更新）：家族由 4 → 3 member（`AnalyzePhases`、`AnalyzePhaseSync`、`AnalyzeMuscleRatio`）。`AnalysisHandler[P,R]` 樣板仍服務剩餘 3 個成員。
+- **`AnalyzeCCI` 離開 Analysis pipeline family**（GLOSSARY.md 已更新）：家族由 4 → 3 member（`AnalyzePhases`、`AnalyzePhaseSync`、`AnalyzeMuscleRatio`）。`AnalysisHandler[P,R]` 樣板仍服務剩餘 3 個成員。
 - **`cci` domain analyzer 不受影響**：`internal/cci` 的 compute-only 形狀、ADR-0004 Boundary 2、ADR-0012 的「CCI compute-only vs muscle_ratio compute+write」分歧全部不變。
 - **兩個 sentinel 消失**：`ErrCCIAnalysisFailed`、`ErrCCICSVExportFailed` 為確認死碼（無 `errors.Is` 外部 caller）；移除後 production 行為不變，expected failure 仍以 `failedCCIResult(fmt.Sprintf("...: %s", redact.RedactForMessage(err)))` + `nil` err 回傳（single-channel envelope，**不**走 Go err 通道；僅 panic 才走 err 通道）。
 - **測試**：nil-logger panic test 斷言存活（HandlerRun 在 logger 前無呼叫）；`runErr` 分流相關的既有覆蓋隨之溶解；Tier-1 六步 body 的 failure-path 測試覆蓋直列路徑。
@@ -84,5 +84,5 @@ CCI 繼續是四個成員唯一的雙 recover 稅繳費者，且與結構相同�
 ## Notes
 
 - **GUI smoke 未驗**：native webview 在 headless 環境下無法呼叫 `window.go` binding（見 `feedback_wails_dev_browser_binding_gap`）。本次重構對 RPC 簽名、前端 binding 與 result struct 均無變更，risk 低；但比照 repo 慣例，GUI smoke 標記為 **unchecked**。
-- **CONTEXT.md 更新**：`Analysis pipeline family` 概念塊由 4 → 3 member，`_Not included_` 新增 `AnalyzeCCI` 離開理由，`Domain analyzer` 概念塊的 membership 旁注更新為「兩層現在都是 3 member，但集合仍不相同」── 完整保留「兩軸、不同集合」的 ADR-0012 設計意圖。
+- **GLOSSARY.md 更新**：`Analysis pipeline family` 概念塊由 4 → 3 member，`_Not included_` 新增 `AnalyzeCCI` 離開理由，`Domain analyzer` 概念塊的 membership 旁注更新為「兩層現在都是 3 member，但集合仍不相同」── 完整保留「兩軸、不同集合」的 ADR-0012 設計意圖。
 - 本 ADR 屬 2026-06-19 CCI Tier-1 HandlerRun 遷移，與 [[InputValidator facade collapse 候選#2]] 同日正交。

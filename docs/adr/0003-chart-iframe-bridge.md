@@ -44,7 +44,7 @@
 
 - **不抽 bridge,各 caller 自寫**:現狀,sandbox trap 每個新 adapter 重學一次。拒絕:LANGUAGE.md「two adapters = real seam」threshold 已過、memory 已記載重複 cost。
 - **薄 bridge(僅 subscribe/send,callers 自寫 requestReply Promise wrapper)**:Composer 那 14 行 boilerplate 留在 caller、第二個 requestReply 用者複製。拒絕:違反 depth 原則。
-- **每 adapter 自定 protocol shape(不對稱 markData / checkedPhases)**:Composer 維持 `markData` payload、CCI 走新 `checkedPhases`。拒絕:bridge 退化為 transport、leverage = 0、CONTEXT.md 無法收乾 `phase marker` domain 概念。
+- **每 adapter 自定 protocol shape(不對稱 markData / checkedPhases)**:Composer 維持 `markData` payload、CCI 走新 `checkedPhases`。拒絕:bridge 退化為 transport、leverage = 0、GLOSSARY.md 無法收乾 `phase marker` domain 概念。
 - **計算留 parent,bridge 純 transport**:parent 仍持有 chart-internal 知識(targetIdx、xAxis 形狀);Composer 已 ship 的 deep 路線(parent 不碰 chart-internal)退化向後對齊 CCI shallow shape。拒絕:倒退已有的好設計。
 - **保留 CCI category mode cross-frame access**:bridge 只收 Composer 那側、CCI 仍 cross-frame。拒絕:latent bomb 留著、seam adapter 數退回 borderline 不過 threshold。
 - **錯誤訊號改走「不回」走 timeout fallback**:iframe 遇 error silent swallow,parent 等到 10s timeout 視為失敗。拒絕:debug 困難 — caller 拿到 timeout 但 root cause 是 iframe 內 200ms 就 throw、trace 不到。

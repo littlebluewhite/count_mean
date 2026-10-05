@@ -14,7 +14,7 @@
 
 The `.mjs` is **byte-identical** for both engines because `myChart`, the inbound event, and the reply-type are all runtime arguments. The reply-type is passed as a **full literal** (`'cci-png-result'` / `'composer-png-result'`) rather than composed from a prefix, because request/reply suffixes are asymmetric (`-request-png` in vs `-png-result` out).
 
-`CONTEXT.md` does not get a new term. `window.__chartComms` is iframe transport plumbing, not EMG analysis domain language.
+`GLOSSARY.md` does not get a new term. `window.__chartComms` is iframe transport plumbing, not EMG analysis domain language.
 
 ## Why
 

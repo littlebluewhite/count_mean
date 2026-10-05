@@ -12,7 +12,7 @@ func (a *App) downloadValidatedPNG(imageData, outputPath string) (*ChartResult, 
 
 兩個 Wails RPC handler 只保留 adapter 差異：`DownloadCCIChart` 從 `params.Subject` sanitize 後組出 `{safeSubject}_CCI_Rudolph.png`；`DownloadChartComposerImage` 保留 nil params guard，sanitize `filepath.Base(params.OutputPath)`，必要時補 `.png`，再與原目錄組回 final `outputPath`。`recoverHandlerPanic` 留在 RPC handler，因為 panic recovery 是 entrypoint contract，不是 PNG 寫檔 helper 的責任。
 
-`ErrInvalidImageFormat` 與 `DecodeAndValidatePNG` 維持 live，不搬也不刪；本決策只讓它們從「兩個 caller 都知道整條管線」變成「一個 helper 持有管線」。`CONTEXT.md` 不新增詞條：PNG 下載安全管線是 implementation module，不是 EMG 分析領域概念。
+`ErrInvalidImageFormat` 與 `DecodeAndValidatePNG` 維持 live，不搬也不刪；本決策只讓它們從「兩個 caller 都知道整條管線」變成「一個 helper 持有管線」。`GLOSSARY.md` 不新增詞條：PNG 下載安全管線是 implementation module，不是 EMG 分析領域概念。
 
 ## Why
 

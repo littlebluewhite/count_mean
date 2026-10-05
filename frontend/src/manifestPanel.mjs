@@ -8,7 +8,7 @@
 // phase-checkbox render,而是傳一個 spec object 給 `ManifestPanel.run`。
 //
 // 與 Analysis pipeline family(backend Go-side handler 家族)不衝突 — 後者
-// compute + CSV、本 module frontend panel layer,兩個正交軸(CONTEXT.md
+// compute + CSV、本 module frontend panel layer,兩個正交軸(GLOSSARY.md
 // ManifestPanel 條目 + ADR-0007 §1 已釘)。
 //
 // API contract(by ADR-0007 §6,locked,M2-M4 5 個 spec 直接吃此 shape):

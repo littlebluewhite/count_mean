@@ -52,7 +52,7 @@ caller 殘留只剩 drop-vs-skip 的 domain policy([[ADR-0012]] 要求其分歧)
 
 ## Consequences
 
-- **CONTEXT.md 不動**:`ResolveTimeIndex` 是 implementation 細節非 domain 詞彙([[ADR-0029]] 先例)。
+- **GLOSSARY.md 不動**:`ResolveTimeIndex` 是 implementation 細節非 domain 詞彙([[ADR-0029]] 先例)。
 - **i18n 不動**:muscle_ratio 越界錯誤 key/訊息不變,只是觸發門檻從 strict-0 放寬到 `1e-6`。
 - **歷史 ADR 不回改**:[[ADR-0014]]/[[ADR-0018]]/[[ADR-0022]]/[[ADR-0029]] 字面引用舊名 `FindNearestTimeIndex`,是 immutable 歷史,留著。`ResolveTimeIndex` 的 docstring 保留一句對舊名的溯源(說明 idx clamp 行為的來歷)。
 - **承 [[ADR-0018]] §3**:CCI「present-but-out-of-range 分期點視為缺漏」政策不變;本案把 0018 §3 對齊 `validateEMGBounds` 的 `1e-6` 容差**升格為共享 seam 契約**。

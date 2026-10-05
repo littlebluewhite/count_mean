@@ -51,5 +51,5 @@
 
 - **2026-05-29 grill-with-docs session 產物。** 6 個決策(EMG 載入機制 / 渲染順序 / 色票 / 標準化視圖語意 / 命名 / UI 布局)逐一 grill。本 ADR 只 capture 架構面(EMG 載入機制 = Option B);其餘(色票 hex + 欄位序、版面、標準化視圖按鈕)可逆性高,寫進設計摘要 + inline 註解,不另開 ADR(grill-with-docs「ADR sparingly」)。
 - **ADR 編號:** 0013 確認 free(0001–0012 全 committed、無 untracked ADR、無平行 charting worktree;2026-05-29 驗,對齊 [[memory:feedback_adr_number_collision]])。
-- **CONTEXT.md 同步:** 「資料做圖」由 [[Chart Composer]] 詞條 `_Avoid_` 升為 UI 同義詞(比照 [[Subject]] ↔ 分析主題)。注意:[[ADR-0008]] process note 曾載「資料做圖 retire 記在 `_Avoid_`」,該句指**舊單檔流程**的 retire;現「資料做圖」專指 Chart Composer 的 UI 標題,語意已轉。
+- **GLOSSARY.md 同步:** 「資料做圖」由 [[Chart Composer]] 詞條 `_Avoid_` 升為 UI 同義詞(比照 [[Subject]] ↔ 分析主題)。注意:[[ADR-0008]] process note 曾載「資料做圖 retire 記在 `_Avoid_`」,該句指**舊單檔流程**的 retire;現「資料做圖」專指 Chart Composer 的 UI 標題,語意已轉。
 - **Impl-time 提醒:** 開工前重跑一輪 grep(含 `*_test.go` + panic / AST 系列 —— `app_panic_ast_test.go` 已知引用 `LoadChartComposerEMGChannels`)確認無漏網 caller;impl 後 `wails generate` + `make build-wails` 移除殘留 binding,`make test` / `make lint` 綠。走 TDD([[memory:feedback_handoff_after_design]])。

@@ -62,7 +62,7 @@ func (a *CCIAnalyzer) computeCCI(
 
 新增 `computeCCI_test.go`，以 hand-built in-memory inputs 驗證 gait re-anchor + `dropOutOfRange` + phase-stats 組裝的正確性，且在 CI / 乾淨 checkout 下 always-run。`AnalyzeCCI` 的公開簽章不變，外部行為除上述取消優先序精化（見 Why）外不變；既有全部測試繼續通過。
 
-**CONTEXT.md 不動。** "compute core" / "I/O adapter" / "seam" 是架構詞彙，屬 LANGUAGE.md 語境，非 CONTEXT.md 領域術語。Domain analyzer 的領域職責（load → parse → compute）沒有改變，不需要更新領域詞彙表。
+**GLOSSARY.md 不動。** "compute core" / "I/O adapter" / "seam" 是架構詞彙，屬 LANGUAGE.md 語境，非 GLOSSARY.md 領域術語。Domain analyzer 的領域職責（load → parse → compute）沒有改變，不需要更新領域詞彙表。
 
 ## Related
 

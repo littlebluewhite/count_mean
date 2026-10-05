@@ -72,5 +72,5 @@ AtomicWriteFile(path string, basePaths []string, write func(io.Writer) error) er
 - **opus review 抓 1 個 CI-failing lint**:重構**改善型別**反而引入 staticcheck **ST1023**(`var underlying io.Writer = w` — main 上 RHS 是具體 `*os.File` 故標註必要,抽出後 `w` 已是 `io.Writer` 故標註冗餘)→ 改 `var underlying = w`。opus 並點名最有價值缺測(validated 分支 callback-error 清理),已補。
 - **codex×3 不重疊切角**:R1 default(clean)/ R2 security+cleanup(clean,fd/dirfd 洩漏、TOCTOU、sentinel 全保持)/ R3 byte-identity+測試品質(3×P3:config byte golden + CSV byte golden 已補;1024-probe 有 `safe_writer_p1_14_test.go` 覆蓋故 dismiss;**fdNone fallback + 非空 basePaths 缺測 dismiss**——orchestrator 無 fdNone 專屬分支、邏輯在未改的 primitive 內、平台閘控不可攜強制,列 follow-up)。
 - **gate**:`go build ./...`、`make test-unit`/`test-int`/`test-race`(33 套件、零 race)、`make lint`(0 issues,musclemap err113 為已刪 sibling worktree 的陳舊快取雜訊,`golangci-lint cache clean` 後消失)全綠。
-- **CONTEXT.md 不動**:`AtomicWriteFile` 是 architecture-layer(seam/adapter/depth)概念,非 domain 詞;`Format-aware write` 講輸出所有權,與本案正交。
+- **GLOSSARY.md 不動**:`AtomicWriteFile` 是 architecture-layer(seam/adapter/depth)概念,非 domain 詞;`Format-aware write` 講輸出所有權,與本案正交。
 - **GUI smoke 未驗**(config save 經 `gui/app.go` `App.SaveConfig` → native webview,headless 跑不了;比照慣例可授權無 smoke 直接 merge)。

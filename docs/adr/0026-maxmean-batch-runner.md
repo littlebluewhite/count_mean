@@ -14,7 +14,7 @@ RunBatch(ctx, calc *calculator.MaxMeanCalculator, source FileSource, writer Resu
 
 六條設計分叉的結論：
 
-**1. 新 category「Max-mean batch runner」，非 Domain analyzer。** Domain analyzer（CONTEXT.md）判準是「manifest + dataFolder 驅動、恰 3 member」，unit of work 是 [[Subject]]。Max-mean 的 unit of work 是**檔案 / EMGDataset**（目錄探索），不符該判準。塞進去會稀釋 Domain analyzer 的定義。故立**同層、不同 category** 的新概念（CONTEXT.md 新增術語）。
+**1. 新 category「Max-mean batch runner」，非 Domain analyzer。** Domain analyzer（GLOSSARY.md）判準是「manifest + dataFolder 驅動、恰 3 member」，unit of work 是 [[Subject]]。Max-mean 的 unit of work 是**檔案 / EMGDataset**（目錄探索），不符該判準。塞進去會稀釋 Domain analyzer 的定義。故立**同層、不同 category** 的新概念（GLOSSARY.md 新增術語）。
 
 **2. seam 取已解析依賴（resolved deps），非自行重解 config。** `appState` + `SaveConfig` 是 GUI/Wails 概念，**不可洩進 `internal/`**。config-binding 不對稱是根因：`maxMeanCalc`（綁 ScalingFactor）與 `csvHandler`（綁 InputDir/OutputDir）在 SaveConfig 時重建，三個 sibling analyzer 則 config-independent、建一次。故 `RunBatch` 收 `calc` 具體型別 + `source`/`writer` port，snapshot 一致性由 GUI adapter「從同一個 `s` 建三者」維持。
 
@@ -49,7 +49,7 @@ RunBatch(ctx, calc *calculator.MaxMeanCalculator, source FileSource, writer Resu
   - **更新** `gui/app_panic_ast_test.go` `unexportedHelpers` 白名單：移除 4 個搬走的 method。
 - **無 user-observable 行為變更**（GUI envelope + CSV 檔案輸出 byte-identical：`convert(串接)`==`串接(convert)`、outputDirName/OutputPath/per-file write 路徑全保持）。唯一刻意 delta 在**非 user-facing 的 log surface**：batch 逐檔 log module `"app"`→`"maxmean"`（sibling 慣例）、log raw error 非內層中文 wrap。
 - **snapshot 一致性不變式從「註解維持」升級為「結構保證」。**
-- **CONTEXT.md**：新增術語 [[Max-mean batch runner]]、更新 [[Analysis pipeline family]] 的 `_Not included_` 註記（`CalculateMaxMean` orchestration 抽進此 runner 後退化 thin adapter）。
+- **GLOSSARY.md**：新增術語 [[Max-mean batch runner]]、更新 [[Analysis pipeline family]] 的 `_Not included_` 註記（`CalculateMaxMean` orchestration 抽進此 runner 後退化 thin adapter）。
 
 ## Reversibility
 
