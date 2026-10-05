@@ -73,7 +73,7 @@ func TestLoadStartupConfig_InvalidValues(t *testing.T) {
 }
 
 // TestRunCLIPlaceholder 守護 `-cli` 啟動時必須印出「未實作」訊息
-// 並回傳非零 exit code,讓 CLAUDE.md 文件層級宣稱「支援 CLI」與 runtime 行為對齊。
+// 並回傳非零 exit code,讓 AGENTS.md 文件層級宣稱「支援 CLI」與 runtime 行為對齊。
 // 用 io.Writer 注入而非 subprocess,避免在 CI 跑 binary build 拖慢測試。
 func TestRunCLIPlaceholder(t *testing.T) {
 	var stderr bytes.Buffer

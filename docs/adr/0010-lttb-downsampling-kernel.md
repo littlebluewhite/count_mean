@@ -13,7 +13,7 @@
 
 The kernel returns only `[]int`. CCI and Chart Composer remain adapters around that kernel: CCI validates every pair against `TimeValues`, preserves its fail-fast `ErrPairLengthMismatch` policy, and rebuilds `*CCIAnalysisResult`; Chart Composer pre-filters mismatched series, preserves its graceful skip policy, and rebuilds `map[string][]float64`.
 
-`CONTEXT.md` does not get a new term. `UnionLTTBIndices` is chart implementation language, not EMG analysis domain language.
+`GLOSSARY.md` does not get a new term. `UnionLTTBIndices` is chart implementation language, not EMG analysis domain language.
 
 ## Why
 
@@ -29,7 +29,7 @@ This is the downsampling sibling of [[ADR-0003]]: that ADR shared the CCI/Compos
 - **Kernel returns reshaped data**: rejected. It would couple shared chart math to either `*CCIAnalysisResult` or `map[string][]float64`, or invent a third container abstraction just to cross the seam. The container rebuilds are real adapter differences.
 - **Kernel does union+sort but callers cap**: rejected. The cap is the exact drift surface that already required a mirrored bug fix, so leaving it in callers would preserve the most important duplication.
 - **Unify mismatch error policy**: rejected. CCI's invariant is fail-fast with `ErrPairLengthMismatch`; Composer's chart-viewer behavior is graceful skip. Those policies are not the shared kernel's responsibility.
-- **Add a glossary term**: rejected. Downsampling kernel naming belongs in implementation and ADRs, not in `CONTEXT.md`.
+- **Add a glossary term**: rejected. Downsampling kernel naming belongs in implementation and ADRs, not in `GLOSSARY.md`.
 
 ## Test Migration
 

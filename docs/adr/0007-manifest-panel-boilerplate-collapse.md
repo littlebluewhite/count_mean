@@ -73,7 +73,7 @@
 - **不可逆**:
   - 5 panel 從 `show*Panel()` + inline RPC envelope migrate 到 spec object + `ManifestPanel.run` — 動 5 個 spec file + 1 個 main.js,revert 跨 commit 可技術復原但 follow-up code 會在新架構上堆積。
   - `handleMenuAction` switch fold 進 panelDispatch 是單向(switch 整段刪)。
-  - CONTEXT.md `ManifestPanel` 條目 + 本 ADR 一旦 commit,future architecture review 會以此為前提。
+  - GLOSSARY.md `ManifestPanel` 條目 + 本 ADR 一旦 commit,future architecture review 會以此為前提。
 - **可逆**:
   - spec shape 內欄位細節(`formBody` string vs builder function、`silentSuccess` boolean vs object、ctx 欄位增刪)— 都是 ManifestPanel internal 改動,5 panel migration 後改動只影響 spec definition 5 處,可逐 panel 對齊。
   - `mp.attachIframe` 的 `height` 參數對應方式(Composer 寫 `1300px`、CCI 寫 `620px`)— internal helper detail,可逐用例調整。
