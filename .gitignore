@@ -13,6 +13,7 @@
 /prompt.txt
 /.gocache/
 /CLAUDE.md
+/AGENTS.md
 
 # macOS Finder metadata — appears in any directory the user browses in Finder.
 .DS_Store
