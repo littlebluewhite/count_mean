@@ -132,7 +132,7 @@ jobs:
     #   - gosec 根本沒寫出 sarif (極端情況) → 跳過,避免 step 自己 fail
     - name: Upload SARIF to GitHub code-scanning
       if: always() && hashFiles('gosec.sarif') != ''
-      uses: github/codeql-action/upload-sarif@e8893c57a1f3a2b659b6b55564fdfdbbd2982911 # v3.24.0
+      uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
       with:
         sarif_file: gosec.sarif
         category: gosec
