@@ -23,6 +23,7 @@ import { bridge } from './charts/iframeBridge.mjs';
 // ManifestPanel(ADR-0007):5 個 manifest+dataFolder panel 共用 envelope。
 // 各 panel 差異由 spec object 注入(makeXxxSpec(this))。
 import { ManifestPanel } from './manifestPanel.mjs';
+import { handleLegacyResult } from './legacyResult.mjs';
 import { makeCciSpec } from './panels/cci_spec.mjs';
 import { makeChartComposerSpec } from './panels/chart_composer_spec.mjs';
 import { makePhaseSyncSpec } from './panels/phase_sync_spec.mjs';
@@ -731,14 +732,15 @@ class EMGAnalysisApp {
                 isBatch: mode === 'batch'
             });
 
-            if (!result.success) {
-                this.updateStatus(t('status.calculation_failed'));
-                await ShowError(t('dialog.error'), result.message);
-                return;
-            }
-
-            this.updateStatus(t('status.calculation_done'));
-            await ShowMessage(t('dialog.success'), t('success.msg.calculation_done', result.outputPath));
+            await handleLegacyResult(result, {
+                failedStatus: t('status.calculation_failed'),
+                setStatus: (s) => this.updateStatus(s),
+                showError: (m) => ShowError(t('dialog.error'), m),
+                onSuccess: async () => {
+                    this.updateStatus(t('status.calculation_done'));
+                    await ShowMessage(t('dialog.success'), t('success.msg.calculation_done', result.outputPath));
+                },
+            });
         } catch (err) {
             this.updateStatus(t('status.calculation_failed'));
             await ShowError(t('dialog.error'), t('error.msg.calculation_failed', err));
@@ -763,14 +765,15 @@ class EMGAnalysisApp {
                 outputPath: outputName
             });
 
-            if (!result.success) {
-                this.updateStatus(t('status.normalization_failed'));
-                await ShowError(t('dialog.error'), result.message);
-                return;
-            }
-
-            this.updateStatus(t('status.normalization_done'));
-            await ShowMessage(t('dialog.success'), t('success.msg.normalization_done', result.outputPath));
+            await handleLegacyResult(result, {
+                failedStatus: t('status.normalization_failed'),
+                setStatus: (s) => this.updateStatus(s),
+                showError: (m) => ShowError(t('dialog.error'), m),
+                onSuccess: async () => {
+                    this.updateStatus(t('status.normalization_done'));
+                    await ShowMessage(t('dialog.success'), t('success.msg.normalization_done', result.outputPath));
+                },
+            });
         } catch (err) {
             this.updateStatus(t('status.normalization_failed'));
             await ShowError(t('dialog.error'), t('error.msg.normalization_failed', err));
@@ -815,14 +818,15 @@ class EMGAnalysisApp {
                 phases: phases
             });
 
-            if (!result.success) {
-                this.updateStatus(t('status.phase_analysis_failed'));
-                await ShowError(t('dialog.error'), result.message);
-                return;
-            }
-
-            this.updateStatus(t('status.phase_analysis_done'));
-            await ShowMessage(t('dialog.success'), t('success.msg.phase_analysis_done', result.outputPath));
+            await handleLegacyResult(result, {
+                failedStatus: t('status.phase_analysis_failed'),
+                setStatus: (s) => this.updateStatus(s),
+                showError: (m) => ShowError(t('dialog.error'), m),
+                onSuccess: async () => {
+                    this.updateStatus(t('status.phase_analysis_done'));
+                    await ShowMessage(t('dialog.success'), t('success.msg.phase_analysis_done', result.outputPath));
+                },
+            });
         } catch (err) {
             this.updateStatus(t('status.phase_analysis_failed'));
             await ShowError(t('dialog.error'), t('error.msg.phase_analysis_failed', err));

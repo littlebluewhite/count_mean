@@ -36,7 +36,6 @@ var (
 	ErrNoInputFile        = errors.New("請選擇資料檔案")
 	ErrNoPhaseLabels      = errors.New("請輸入階段標籤")
 	ErrNoValidPhaseLabels = errors.New("請輸入有效的階段標籤")
-	ErrNoCSVHeaders       = errors.New("CSV 檔案沒有標題行")
 	ErrNoManifestFile     = errors.New("請選擇分期總檔案")
 	ErrNoDataFolder       = errors.New("請選擇數據資料夾")
 	ErrNoPhaseSelection   = errors.New("請選擇開始和結束分期點")
