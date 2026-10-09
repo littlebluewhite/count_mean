@@ -153,16 +153,6 @@ func (h *CSVHandler) WriteCSVToOutputDirectory(dirName, filename string, data []
 	return h.WriteCSV(fullPath, data)
 }
 
-// ReadCSVFromInput 從輸入目錄讀取CSV檔案.
-func (h *CSVHandler) ReadCSVFromInput(filename string) ([][]string, error) {
-	fullPath, err := h.pathValidator.GetSafePath(h.config.InputDir, filename)
-	if err != nil {
-		return nil, fmt.Errorf("無法構建安全路徑: %w", err)
-	}
-
-	return h.ReadCSV(fullPath)
-}
-
 // readOptions specifies options for reading CSV files.
 //
 // external 區分兩種來源：false 走嚴格 allowedBasePaths 白名單（內部設定路徑），
@@ -439,8 +429,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 	// Linux 用 openat2(RESOLVE_BENEATH)、Darwin 用 O_NOFOLLOW_ANY 取得 kernel-
 	// level atomic 保證。詳見 internal/security/fsperm/validated_open.go 註解。
 	//
-	// GetAllowedBasePaths 透過 PathValidator 的 RWMutex 拿快照,確保與 SetAllowedBasePaths
-	// 並發呼叫安全。
+	// GetAllowedBasePaths 回傳 allow-list 副本(PathValidator 建構後不可變)。
 	file, err := fsperm.OpenWriteValidated(sanitizedPath, h.pathValidator.GetAllowedBasePaths())
 	if err != nil {
 		h.logger.Error("無法建立輸出檔案", err, map[string]any{
@@ -600,11 +589,6 @@ func writeCSVPayload(w stdio.Writer, data [][]string, bomEnabled bool) error {
 	}
 
 	return nil
-}
-
-// GetFileInfo 獲取文件信息.
-func (h *CSVHandler) GetFileInfo(filename string) (*FileInfo, error) {
-	return h.largeFileHandler.GetFileInfo(filename)
 }
 
 // ProcessLargeFile 處理大文件.

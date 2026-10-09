@@ -17,13 +17,6 @@ func NewInjectionDetector() *InjectionDetectorImpl {
 	}
 }
 
-// NewInjectionDetectorWithRegistry creates an injection detector with custom registry.
-func NewInjectionDetectorWithRegistry(registry *PatternRegistry) *InjectionDetectorImpl {
-	return &InjectionDetectorImpl{
-		registry: registry,
-	}
-}
-
 // DetectFormula checks for CSV formula injection patterns.
 func (d *InjectionDetectorImpl) DetectFormula(content string) (bool, string) {
 	// Check formula starters — getRef:只讀遍歷,不 mutate,省去防禦性拷貝。
@@ -121,8 +114,7 @@ func (d *InjectionDetectorImpl) DetectScript(content string) (bool, string) {
 //  2. 再跑長 token substring list（`curl `、`whoami`、`netcat `、`/etc/` 等），
 //     這些子串本身已足夠 specific，不會在合法 EMG cell 上誤命中。
 func (d *InjectionDetectorImpl) DetectCommand(content string) (bool, string) {
-	// (1) word-boundary 短 token — 直接遍歷包級 var,只讀、勿 mutate;省去
-	// CommandInjectionWordTokens() 每次呼叫的防禦性拷貝。
+	// (1) word-boundary 短 token — 直接遍歷包級 var,只讀、勿 mutate;不做防禦性拷貝。
 	for _, re := range commandInjectionWordTokens {
 		if loc := re.FindStringIndex(content); loc != nil {
 			return true, content[loc[0]:loc[1]]
@@ -136,42 +128,6 @@ func (d *InjectionDetectorImpl) DetectCommand(content string) (bool, string) {
 
 	for _, pattern := range patterns {
 		if strings.Contains(contentLower, strings.ToLower(pattern)) {
-			return true, pattern
-		}
-	}
-
-	return false, ""
-}
-
-// DetectAll runs all injection detection and returns the first match.
-func (d *InjectionDetectorImpl) DetectAll(content string) (bool, string, string) {
-	if detected, pattern := d.DetectFormula(content); detected {
-		return true, "formula", pattern
-	}
-
-	if detected, pattern := d.DetectScript(content); detected {
-		return true, "script", pattern
-	}
-
-	if detected, pattern := d.DetectSQL(content); detected {
-		return true, "sql", pattern
-	}
-
-	if detected, pattern := d.DetectCommand(content); detected {
-		return true, "command", pattern
-	}
-
-	return false, "", ""
-}
-
-// DetectMaliciousNumeric checks for malicious patterns in numeric strings.
-func (d *InjectionDetectorImpl) DetectMaliciousNumeric(value string) (bool, string) {
-	valueLower := strings.ToLower(value)
-	// getRef:只讀遍歷,不 mutate,省去防禦性拷貝。
-	patterns := d.registry.getRef(NumericMalicious)
-
-	for _, pattern := range patterns {
-		if strings.Contains(valueLower, strings.ToLower(pattern)) {
 			return true, pattern
 		}
 	}

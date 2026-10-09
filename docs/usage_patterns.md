@@ -281,10 +281,10 @@ func batchWorker(ctx context.Context, cfg *config.AppConfig, jobs <-chan string,
 }
 
 func processSingleFile(ctx context.Context, cfg *config.AppConfig, fileName string, config BatchConfig) error {
-    // 讀取文件（CSVHandler.ReadCSVFromInput 回 [][]string，非 *EMGDataset；
+    // 讀取文件（CSVHandler.ReadCSVFromDirectory 回 [][]string，非 *EMGDataset；
     // 需用 DataParser 解析成 dataset 才能餵給 MaxMeanCalculator.Calculate）
     csvHandler := io.NewCSVHandler(cfg)
-    records, err := csvHandler.ReadCSVFromInput(fileName)
+    records, err := csvHandler.ReadCSVFromDirectory(cfg.InputDir, fileName)
     if err != nil {
         return err
     }

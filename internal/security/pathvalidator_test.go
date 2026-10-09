@@ -140,7 +140,7 @@ func TestPathValidator_SanitizePath(t *testing.T) {
 		{"embedded newline", "test\n.csv"},
 		{"embedded carriage return", "test\r.csv"},
 		// canonical silent-rewrite case:`...//etc/passwd` 經 `../`/`./` 替換 +
-		// filterTraversalElements 後 output 看似乾淨,但與 input 語意不同 —
+		// element 過濾後 output 看似乾淨,但與 input 語意不同 —
 		// caller 拿著 sanitized 結果做 ValidateFilePath 會通過,實際 OS 開到
 		// 另一條檔。改為「移除字元 != 0」就 reject。
 		{"traversal followed by double slash", "...//etc/passwd"},
@@ -203,42 +203,6 @@ func TestPathValidator_GetSafePath(t *testing.T) {
 				t.Errorf("GetSafePath() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
-	}
-}
-
-// DefaultValidator() 回傳的 process-wide singleton 必須 immutable — 任何
-// SetAllowedBasePaths 呼叫都要回 ErrValidatorFrozen,避免「init 階段設定好的
-// allow-list 被任意 caller 後續改寫」形成 trust boundary 破口。
-//
-// 設計選擇:不從 public API 移除 SetAllowedBasePaths(NewPathValidator 建構的
-// instance 仍合理需要設定 base paths);用 frozen flag 在入口處檢查即可。
-func TestDefaultValidator_IsImmutable(t *testing.T) {
-	t.Parallel()
-
-	v := DefaultValidator()
-
-	err := v.SetAllowedBasePaths([]string{"/tmp/should-not-apply"})
-	if err == nil {
-		t.Fatalf("DefaultValidator().SetAllowedBasePaths 應 reject,got nil error")
-	}
-	if !errors.Is(err, ErrValidatorFrozen) {
-		t.Errorf("expected ErrValidatorFrozen, got %v", err)
-	}
-
-	// 確保 allow-list 沒被修改 — DefaultValidator 預設為 nil whitelist。
-	if got := v.GetAllowedBasePaths(); len(got) != 0 {
-		t.Errorf("DefaultValidator allow-list 應為空,被修改為 %v", got)
-	}
-}
-
-// 確認 frozen flag 只 apply 到 default singleton — 一般 NewPathValidator(...)
-// 建構的 instance 仍可呼叫 SetAllowedBasePaths,可變性是合約。
-func TestNewPathValidator_StillMutable(t *testing.T) {
-	t.Parallel()
-
-	v := NewPathValidator([]string{"/tmp/a"})
-	if err := v.SetAllowedBasePaths([]string{"/tmp/b"}); err != nil {
-		t.Fatalf("非 default validator 應允許 SetAllowedBasePaths,got %v", err)
 	}
 }
 
@@ -341,7 +305,7 @@ func TestPathValidator_AcceptsLegitimateDotsInFilename(t *testing.T) {
 // Regression:substring-based `..` 替換會把 `report..v2.csv` 改寫成
 // `reportv2.csv`,而 GetSafePath 的 element-based check 又會放它過 — validation
 // 接受、sanitization 改寫、caller 讀/寫到完全不同的檔案。統一改 element-based
-// 過濾 (`filterTraversalElements`)。
+// 過濾。
 func TestPathValidator_SanitizePath_PreservesDoubleDotFilename(t *testing.T) {
 	t.Parallel()
 
@@ -397,60 +361,6 @@ func TestPathValidator_GetSafePath_RoundTripsDoubleDotFilename(t *testing.T) {
 			}
 		})
 	}
-}
-
-// SetAllowedBasePaths(nil) 與空 slice 都必須 reject 並維持原 allow-list 不變,
-// 避免 silently 退化到「無白名單」模式;若確實要無白名單請改用 NewPathValidator(nil)。
-func TestPathValidator_SetAllowedBasePaths_RejectsEmpty(t *testing.T) {
-	t.Parallel()
-
-	initial := []string{"/tmp/safe-zone"}
-	validator := NewPathValidator(initial)
-
-	t.Run("nil slice is rejected", func(t *testing.T) {
-		t.Parallel()
-		err := validator.SetAllowedBasePaths(nil)
-		if err == nil {
-			t.Fatalf("SetAllowedBasePaths(nil) should reject empty input, got nil error")
-		}
-	})
-
-	t.Run("empty slice is rejected", func(t *testing.T) {
-		t.Parallel()
-		err := validator.SetAllowedBasePaths([]string{})
-		if err == nil {
-			t.Fatalf("SetAllowedBasePaths([]) should reject empty input, got nil error")
-		}
-	})
-
-	t.Run("slice of only blank strings is rejected", func(t *testing.T) {
-		t.Parallel()
-		err := validator.SetAllowedBasePaths([]string{"", "  "})
-		if err == nil {
-			t.Fatalf("SetAllowedBasePaths(blanks) should reject empty-after-filter input, got nil error")
-		}
-	})
-
-	t.Run("allow-list is preserved when rejected", func(t *testing.T) {
-		t.Parallel()
-		v := NewPathValidator(initial)
-		_ = v.SetAllowedBasePaths(nil)
-		got := v.GetAllowedBasePaths()
-		if len(got) != 1 {
-			t.Fatalf("allow-list mutated after rejected SetAllowedBasePaths(nil): got %v, want 1 entry", got)
-		}
-	})
-
-	t.Run("non-empty slice is still accepted", func(t *testing.T) {
-		t.Parallel()
-		v := NewPathValidator(nil)
-		if err := v.SetAllowedBasePaths([]string{"/tmp/new-zone"}); err != nil {
-			t.Fatalf("SetAllowedBasePaths(non-empty) returned error: %v", err)
-		}
-		if len(v.GetAllowedBasePaths()) != 1 {
-			t.Fatalf("non-empty SetAllowedBasePaths did not update allow-list")
-		}
-	})
 }
 
 // Reject 契約:silent rewrite 後語意偏離的 path(例 `....//foo.csv` → `.foo.csv`、

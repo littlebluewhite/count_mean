@@ -21,7 +21,7 @@ import (
 //	OpenWriteValidated("allowed/escape/loot.csv", []string{"allowed"})
 //
 // 過去 lexical Rel("allowed", "allowed/escape/loot.csv") = "escape/loot.csv"
-// (不含 ..) 通過 isPathWithinAnyBase；接著 os.OpenFile 再 syscall 解析 symlink,
+// (不含 ..) 通過 matchAnyBase；接著 os.OpenFile 再 syscall 解析 symlink,
 // 把檔案寫到 outside/loot.csv (O_NOFOLLOW 只擋 leaf component 為 symlink 的 case,
 // 不擋父層)。
 //

@@ -16,7 +16,7 @@
 // 原本實作的問題:
 //
 //	resolvedPath, _ := EvalSymlinks(path)        // step 1: 校驗
-//	isPathWithinAnyBase(resolvedPath, basePaths) // step 2: rel check
+//	matchAnyBase(resolvedPath, basePaths)        // step 2: rel check
 //	os.OpenFile(path, WriteFlags, FilePerm)      // step 3: 用 unresolved path 開
 //
 // step 1 與 step 3 之間有 TOCTOU 縫隙:攻擊者 swap symlink 後,kernel 在 step 3
@@ -186,13 +186,4 @@ func matchAnyBase(resolvedPath string, basePaths []string) (string, bool) {
 		return resolvedBase, true
 	}
 	return "", false
-}
-
-// isPathWithinAnyBase 為 matchAnyBase 的舊版 wrapper,保留給未來可能用得到的
-// boolean-only caller (目前無外部 caller)。新 code 應直接用 matchAnyBase。
-//
-//nolint:unused // 保留為 future-proof helper（golangci-lint v2 已將 deadcode 合進 unused）
-func isPathWithinAnyBase(resolvedPath string, basePaths []string) bool {
-	_, ok := matchAnyBase(resolvedPath, basePaths)
-	return ok
 }

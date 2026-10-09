@@ -42,16 +42,6 @@ func NewValidator() *Validator {
 	}
 }
 
-// WithAllowedExtensions sets the allowed file extensions.
-func (v *Validator) WithAllowedExtensions(extensions []string) {
-	v.allowedExtensions = extensions
-}
-
-// GetAllowedExtensions returns the current allowed extensions.
-func (v *Validator) GetAllowedExtensions() []string {
-	return v.allowedExtensions
-}
-
 // ValidateFilename validates a *base* filename for safety and correctness.
 //
 // Contract: 本 validator 只驗 base filename — 含 path separator 即 reject。

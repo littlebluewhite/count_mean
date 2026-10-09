@@ -14,7 +14,7 @@ func TestPatternRegistry_GetRef_ContentParityWithGet(t *testing.T) {
 	for _, cat := range []PatternCategory{
 		FormulaInjection, DangerousFunctions, ScriptInjection,
 		SQLInjection, CommandInjection, DangerousChars,
-		SuspiciousExtensions, ReservedNames, NumericMalicious,
+		SuspiciousExtensions, ReservedNames,
 	} {
 		ref := r.getRef(cat)
 		cp := r.Get(cat)
@@ -42,7 +42,7 @@ func TestPatternRegistry_GetRef_ContentParityWithGet(t *testing.T) {
 func TestInjectionDetector_IsReservedName_HonorsCustomRegistry(t *testing.T) {
 	// 自訂 registry:ReservedNames 為空 → 該 detector 不該把任何名稱當保留字。
 	customReg := &PatternRegistry{patterns: map[PatternCategory][]string{ReservedNames: {}}}
-	d := NewInjectionDetectorWithRegistry(customReg)
+	d := &InjectionDetectorImpl{registry: customReg}
 	if d.IsReservedName("CON") {
 		t.Errorf("detector with empty custom ReservedNames must NOT treat CON as reserved (should honor injected registry)")
 	}

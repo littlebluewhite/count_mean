@@ -806,7 +806,7 @@ contextLogger.Info("用戶操作", map[string]interface{}{
 
 `PathValidator` 提供路徑安全驗證功能。
 
-內部結構（`mu sync.RWMutex; allowedBasePaths []string`）受 RWMutex 保護，可在不同 goroutine 之間安全併用：呼叫者可在某 goroutine 透過 `SetAllowedBasePaths` 變更白名單，同時其他 goroutine 透過 `ValidateFilePath` 讀取（commit `1287572` 修補的 race condition）。
+內部結構（`allowedBasePaths []string`）於建構後不可變（`SetAllowedBasePaths` 與 RWMutex 已移除，見 ADR-0032），可在不同 goroutine 之間安全併用。
 
 **NewPathValidator**
 

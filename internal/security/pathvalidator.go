@@ -28,12 +28,6 @@ var (
 	ErrSensitiveDirectory = errors.New("路徑指向系統敏感目錄")
 	ErrPathTooLong        = errors.New("路徑長度超過限制")
 	ErrFilenameTooLong    = errors.New("文件名長度超過限制")
-	// ErrAllowedBasePathsEmpty is returned by SetAllowedBasePaths when the
-	// supplied slice is nil, empty, or contains only blank entries — preventing
-	// callers from silently disabling the allow-list. If genuinely no allow-list
-	// is desired, construct the validator with NewPathValidator(nil) instead.
-	ErrAllowedBasePathsEmpty = errors.New("allowedBasePaths 不能為空（請改用 NewPathValidator(nil) 建立無白名單 validator）")
-
 	// ErrPathSanitizationRequired is returned by SanitizePath when the input
 	// contains characters or patterns that would require rewriting (NUL byte,
 	// control chars, `../` traversal). Silent rewrite would let attackers
@@ -46,13 +40,6 @@ var (
 	// (\x00). NUL is a classic file-path truncation vector on POSIX/Windows
 	// OS APIs — caller must never pass a NUL-containing path to OpenFile.
 	ErrPathContainsNUL = errors.New("路徑含 NUL byte (\\x00)")
-
-	// ErrValidatorFrozen is returned by SetAllowedBasePaths when invoked on a
-	// frozen PathValidator (currently only the process-wide DefaultValidator()
-	// singleton). Prevents post-init callers from silently widening or
-	// narrowing the default allow-list, which would break the trust boundary
-	// that downstream code relies on.
-	ErrValidatorFrozen = errors.New("PathValidator 已凍結，不允許修改 allow-list（請改用 NewPathValidator 建構新 instance）")
 )
 
 // Path length constants.
@@ -63,17 +50,9 @@ const (
 )
 
 // PathValidator provides secure path validation functionality.
-// The allowed base paths are protected by an RWMutex so that callers may
-// safely invoke SetAllowedBasePaths from one goroutine while another reads
-// the list via ValidateFilePath or GetAllowedBasePaths.
-//
-// frozen marks the validator immutable (set only by DefaultValidator's
-// singleton, never reset). Frozen validators return ErrValidatorFrozen from
-// SetAllowedBasePaths.
+// 建構後 allowedBasePaths 不可變(只讀),並發讀取安全,故無需鎖。
 type PathValidator struct {
-	mu               sync.RWMutex
 	allowedBasePaths []string
-	frozen           bool
 }
 
 //nolint:gochecknoglobals // intentional process-wide singleton
@@ -83,26 +62,12 @@ var (
 )
 
 // DefaultValidator 回傳 process-wide default PathValidator singleton(無 base paths
-// whitelist)。已 markFrozen(),SetAllowedBasePaths 一律回 ErrValidatorFrozen,
-// 確保 default validator 在 init 之後行為一致。需要自訂 allow-list 的 caller
-// 請改用 NewPathValidator(...) 建構自己的 instance。
+// whitelist)。需要自訂 allow-list 的 caller 請改用 NewPathValidator(...) 建構自己的 instance。
 func DefaultValidator() *PathValidator {
 	defaultValidatorOnce.Do(func() {
 		defaultValidator = NewPathValidator(nil)
-		defaultValidator.markFrozen()
 	})
 	return defaultValidator
-}
-
-// markFrozen marks the validator as immutable. Once frozen, SetAllowedBasePaths
-// returns ErrValidatorFrozen. Currently only called by DefaultValidator() to
-// freeze the process-wide singleton; not exported because the immutability
-// contract should be a property of construction, not a runtime opt-in (callers
-// who want immutability should reach for DefaultValidator() instead).
-func (pv *PathValidator) markFrozen() {
-	pv.mu.Lock()
-	pv.frozen = true
-	pv.mu.Unlock()
 }
 
 // NewPathValidator creates a new path validator with allowed base paths.
@@ -150,10 +115,7 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 		return err
 	}
 
-	// 取得允許路徑的快照，避免在驗證過程中與 SetAllowedBasePaths 競爭
-	pv.mu.RLock()
 	allowed := pv.allowedBasePaths
-	pv.mu.RUnlock()
 
 	// 靈活的白名單驗證機制 - 避免絕對路徑長度限制
 	if len(allowed) == 0 {
@@ -301,39 +263,6 @@ func HasTraversalElement(path string) bool {
 	return false
 }
 
-// filterTraversalElements rebuilds path stripping any path element that is
-// literally `..`. Filenames that merely contain `..` as a substring (e.g.
-// `report..v2.csv`) are preserved — substring-stripping would mangle them
-// into different paths and could redirect file ops to unintended targets.
-func filterTraversalElements(path string) string {
-	if path == "" {
-		return path
-	}
-
-	leading := ""
-	switch {
-	case strings.HasPrefix(path, "/"):
-		leading = "/"
-	case strings.HasPrefix(path, "\\"):
-		leading = "\\"
-	}
-
-	parts := strings.FieldsFunc(path, func(r rune) bool {
-		return r == '/' || r == '\\'
-	})
-	filtered := parts[:0]
-	for _, part := range parts {
-		if part != ".." {
-			filtered = append(filtered, part)
-		}
-	}
-
-	if len(filtered) == 0 {
-		return leading
-	}
-	return leading + strings.Join(filtered, string(filepath.Separator))
-}
-
 // ValidateDirectoryPath validates that a directory path is within allowed directories.
 func (pv *PathValidator) ValidateDirectoryPath(path string) error {
 	return pv.ValidateFilePath(path)
@@ -369,7 +298,7 @@ type charReplacement struct {
 // by SanitizePath. Order is load-bearing:
 //  1. Path traversal patterns (`../`, `..\`) run first so they're removed
 //     before any sub-pattern (`./`, `.\`) can chew them apart and leave a
-//     stray `..` that filterTraversalElements would then strip out of a
+//     stray `..` that would then corrupt a
 //     legitimate filename.
 //  2. Single-dot prefix patterns (`./`, `.\`) follow.
 //  3. Multi-separator normalization (`//`, `\\`) runs after traversal removal
@@ -448,7 +377,7 @@ func SanitizePath(path string) (string, error) {
 	}
 
 	// 走到這裡:input 已乾淨,只做 Clean + ToSlash 正規化(無 character drop)。
-	// filterTraversalElements 仍呼一次當守門 — element-based check 與 dangerous
+	// HasTraversalElement 當守門 — element-based check 與 dangerous
 	// pattern detection 是互補的:前者擋 element 為 `..` 的 case;後者擋
 	// substring `../` / `..\` / 控制字元。dangerousReplacements 已含 `../` 與 `..\`,
 	// 所以走到此處不應有 element-`..` 出現,但留 defense-in-depth check。
@@ -664,60 +593,8 @@ func isWindowsReservedFilename(filename string) bool {
 	return ok
 }
 
-// SetAllowedBasePaths 動態設置允許的基礎路徑(支援長路徑),寫鎖保護避免並行
-// 呼叫者覆蓋彼此設定。
-//
-// 拒絕 nil / 空 slice / 全為空白字串的 slice — 接受 empty 會 silently 把
-// allow-list 清空,等同無聲關閉白名單;若確實要「無白名單」模式,請改用
-// `NewPathValidator(nil)` 在建構時表達意圖。
-//
-// 回傳 ErrAllowedBasePathsEmpty 時保持原有 allow-list 不變(atomic),避免半套狀態。
-func (pv *PathValidator) SetAllowedBasePaths(paths []string) error {
-	// frozen 守門提早 reject,避免下方 Abs 等 work 白做。
-	pv.mu.RLock()
-	frozen := pv.frozen
-	pv.mu.RUnlock()
-	if frozen {
-		return ErrValidatorFrozen
-	}
-
-	absPaths := make([]string, 0, len(paths))
-
-	for _, path := range paths {
-		if strings.TrimSpace(path) == "" {
-			continue
-		}
-
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			// 如果無法獲取絕對路徑，使用清理後的原始路徑
-			absPath = filepath.Clean(path)
-		}
-
-		absPaths = append(absPaths, absPath)
-	}
-
-	if len(absPaths) == 0 {
-		return ErrAllowedBasePathsEmpty
-	}
-
-	// 二次檢查 frozen — 雙 mutex acquisition 之間理論上可能被 markFrozen 截胡,
-	// 保守起見再驗一次。
-	pv.mu.Lock()
-	defer pv.mu.Unlock()
-	if pv.frozen {
-		return ErrValidatorFrozen
-	}
-	pv.allowedBasePaths = absPaths
-
-	return nil
-}
-
 // GetAllowedBasePaths 獲取當前允許的基礎路徑.
 func (pv *PathValidator) GetAllowedBasePaths() []string {
-	pv.mu.RLock()
-	defer pv.mu.RUnlock()
-
 	// 返回副本以防止外部修改
 	result := make([]string, len(pv.allowedBasePaths))
 	copy(result, pv.allowedBasePaths)

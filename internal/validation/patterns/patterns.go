@@ -69,22 +69,10 @@ func IsReservedName(name string) bool {
 	return isReservedNameIn(DefaultRegistry(), name)
 }
 
-// CommandInjectionWordTokens 回傳 word-boundary command-injection regex 切片副本。
-// detector 用此切片做第二段比對(substring list 之外)。
-func CommandInjectionWordTokens() []*regexp.Regexp {
-	out := make([]*regexp.Regexp, len(commandInjectionWordTokens))
-	copy(out, commandInjectionWordTokens)
-
-	return out
-}
-
 // PatternCategory represents different categories of patterns.
 type PatternCategory string
 
 const (
-	// NumericMalicious patterns for detecting malicious numeric inputs.
-	NumericMalicious PatternCategory = "numeric_malicious"
-
 	// FormulaInjection patterns for CSV formula injection detection.
 	FormulaInjection PatternCategory = "formula_injection"
 
@@ -168,16 +156,6 @@ func (r *PatternRegistry) getRef(category PatternCategory) []string {
 
 // initializePatterns populates all pattern categories.
 func (r *PatternRegistry) initializePatterns() {
-	r.patterns[NumericMalicious] = []string{
-		"0x", "0X", "0b", "0B", "0o", "0O", // Different base encodings
-		"++", "--", "+-", "-+", // Multiple signs
-		"ee", "EE", "e+e", "E+E", "e-e", "E-E", // Invalid scientific notation
-		"...", "..", // Multiple decimal points
-		"Infinity", "infinity", "INFINITY", "+Infinity", "-Infinity",
-		"NaN", "nan", "NAN", "+NaN", "-NaN",
-		"inf", "INF",
-	}
-
 	r.patterns[FormulaInjection] = []string{
 		"=", "@", "\t=", "\r=", "\n=",
 	}
