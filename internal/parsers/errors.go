@@ -37,8 +37,6 @@ var (
 	ErrIndexNotFound = errors.New("index not found")
 	// ErrInvalidIndexRange indicates invalid index range.
 	ErrInvalidIndexRange = errors.New("invalid index range")
-	// ErrIndexRangeNotFound indicates no data in index range.
-	ErrIndexRangeNotFound = errors.New("no data found in index range")
 	// ErrInsufficientFields indicates row has insufficient fields.
 	ErrInsufficientFields = errors.New("insufficient fields in row")
 	// ErrUnknownPhasePoint indicates unknown phase point.

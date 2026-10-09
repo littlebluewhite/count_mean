@@ -259,41 +259,6 @@ func TestFindTimeRangeIndices(t *testing.T) {
 	})
 }
 
-func TestFindIndexRangeIndices(t *testing.T) {
-	t.Parallel()
-
-	t.Run("typical", func(t *testing.T) {
-		t.Parallel()
-		indices := []int{1, 2, 3, 4, 5}
-		start, end, err := FindIndexRangeIndices(indices, 2, 4)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if start != 1 || end != 3 {
-			t.Errorf("got (%d, %d), want (1, 3)", start, end)
-		}
-	})
-
-	t.Run("range_fully_outside", func(t *testing.T) {
-		t.Parallel()
-		_, _, err := FindIndexRangeIndices([]int{10, 20}, 100, 200)
-		if !errors.Is(err, ErrIndexRangeNotFound) {
-			t.Errorf("expected ErrIndexRangeNotFound, got %v", err)
-		}
-	})
-
-	t.Run("single_match", func(t *testing.T) {
-		t.Parallel()
-		start, end, err := FindIndexRangeIndices([]int{5, 10, 15}, 10, 10)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if start != 1 || end != 1 {
-			t.Errorf("got (%d, %d), want (1, 1)", start, end)
-		}
-	})
-}
-
 func TestValidateTimeSeries(t *testing.T) {
 	t.Parallel()
 

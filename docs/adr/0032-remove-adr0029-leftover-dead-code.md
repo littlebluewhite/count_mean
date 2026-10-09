@@ -2,7 +2,7 @@
 
 **Status**: accepted · **implemented** (2026-10-09)
 
-ADR-0029 與 commit `b48a481`（`InputValidator` facade 收合）之後，`validation` / `security` / `io` 仍留有「exported（或 `nolint:unused` 保留）但 production 零呼叫者」的符號。本 ADR 為架構重構 W1「清場」的第一部分，記錄這批純刪除（zero behaviour change）。本 ADR 依 area 分節；後續 W1 任務（parsers / calculator / models）以新增 `### Area N` 節的方式 append 於此。
+ADR-0029 與 commit `b48a481`（`InputValidator` facade 收合）之後，`validation` / `security` / `io` 仍留有「exported（或 `nolint:unused` 保留）但 production 零呼叫者」的符號。本 ADR 為架構重構 W1「清場」的第一部分，記錄這批純刪除（zero behaviour change）。本 ADR 依 area 分節；後續 W1 任務（parsers / calculator / models）以新增 `### Area N` 節的方式 append 於此（見 Area 4）。
 
 ## Decision
 
@@ -26,6 +26,19 @@ grep 全樹確認每個符號零 non-test caller 後移除，連同專屬測試�
 
 - 刪 `CSVHandler.ReadCSVFromInput`（`docs/usage_patterns.md` 範例改用 `ReadCSVFromDirectory(cfg.InputDir, fileName)`）。
 - 刪 `CSVHandler.GetFileInfo` wrapper。**保留** `LargeFileHandler.GetFileInfo`（`CSVHandler` 內部與 streaming 路徑仍用；後續 wave 處理）。
+
+### Area 4. parsers / calculator / models
+
+grep 全樹（含 `gui/`、`test/`）確認 production 零呼叫者後移除，連同只測它們的測試：
+
+- `parsers`：刪 `GetANCDataInTimeRange`、`ValidateForceData`、`GetMotionDataAtIndex`、`GetMotionDataInIndexRange`、`FindIndexRangeIndices`、`ValidateMotionData`；刪 `MotionParser.IndexToTime` / `TimeToIndex` / `GetSampleInterval` 與 `ANCParser.GetSampleInterval`。
+- 被上述連帶孤立的符號一併移除：`MotionParser.frequency` 欄位；`ANCParser.frequency` 欄位及三處 `computeFrequencyFromTime` 賦值（`ANCParser` 變為無狀態 `struct{}`）；`ErrIndexRangeNotFound`、`RoundingOffset`。`ValidateTimeSeries` 仍被 EMG 驗證使用，保留。
+- `parsers.ErrPhaseManifestNegativeTime`：宣告但從未回傳（`parseFloat` 明文允許負時間），刪除。
+- `calculator.ValidateStatisticsParams` 及其 4 個 sentinel（`ErrNegativeStartTime` / `ErrNegativeEndTime` / `ErrStartTimeNotBeforeEnd` / `ErrEmptySubject`）：0 caller（含測試），刪除。
+- `models.SyncTime`：僅被自己的測試引用，刪除。
+- `DataParser.GetScalingFactor`：僅測試使用，刪除。
+- **保留** `MaxMeanCalculator.ScalingFactor()`：雖僅測試使用，但 `gui/wails_binding_test.go` 的 `TestApplyConfig_RebuildsComponents` 與 `TestApp_SnapshotConsistency_UnderConcurrentApply` 靠它斷言「重建後的 calculator 吃進新 config」與「snapshot 不撕裂」；刪除會使這兩個回歸測試失去行為斷言。
+- **不動**：`chart.ComposerInput` 的死欄位（W5）、synchronizer 的反向換算 `MotionIndexToTime` / `TimeToMotionIndex` / `MotionIndexToForceTime` / `ForceTimeToMotionIndex`（W4，與 phase timeline 重構一併處理）。
 
 ## Why
 

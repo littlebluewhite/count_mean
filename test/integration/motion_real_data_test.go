@@ -58,8 +58,4 @@ func TestMotionParser_RealNSF2Data(t *testing.T) {
 		assert.Len(t, data.Data[header], len(data.Indices),
 			"Column %s should have same length as indices", header)
 	}
-
-	// 驗證 Motion 數據
-	err = parsers.ValidateMotionData(data)
-	assert.NoError(t, err, "Motion data validation should pass")
 }

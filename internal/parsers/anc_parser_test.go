@@ -19,7 +19,6 @@ import (
 func TestNewANCParser(t *testing.T) {
 	parser := NewANCParser()
 	assert.NotNil(t, parser)
-	assert.Equal(t, 0.0, parser.GetSampleInterval()) // 尚未解析資料，頻率為 0
 }
 
 func TestANCParser_Parse(t *testing.T) {
@@ -396,8 +395,6 @@ func TestANCParser_ParseHeader_LeadingBlankLine_NoMisalignment(t *testing.T) {
 	assert.Equal(t, []string{"Fx", "Fy"}, data.Headers,
 		"ChannelNames 必須正確解出 — 不能因 leading blank 偏移到 Rates handler")
 	assert.Len(t, data.Time, 2, "資料行必須仍可正常解析")
-	assert.InDelta(t, 0.001, parser.GetSampleInterval(), 1e-9,
-		"PreciseRate=1000Hz 必須仍能解出(handler map 沒有偏移)")
 }
 
 // channel name 含空格不能被 Fields 拆兩列。
@@ -446,199 +443,6 @@ func TestANCParser_ChannelName_ContainsSpace_NotSplit(t *testing.T) {
 	assert.InDelta(t, 0.1, data.Forces["Left Quad"][0], 1e-9)
 	assert.InDelta(t, 0.2, data.Forces["Right Glute"][0], 1e-9)
 	assert.InDelta(t, 0.3, data.Forces["Mid Hamstring"][0], 1e-9)
-}
-
-func TestANCParser_GetDataInTimeRange(t *testing.T) {
-	// 創建測試數據
-	testData := &models.ForceData{
-		Time:    []float64{0.0, 0.001, 0.002, 0.003, 0.004, 0.005},
-		Headers: []string{"Fx", "Fy"},
-		Forces: map[string][]float64{
-			"Fx": {1.0, 2.0, 3.0, 4.0, 5.0, 6.0},
-			"Fy": {0.1, 0.2, 0.3, 0.4, 0.5, 0.6},
-		},
-	}
-
-	tests := []struct {
-		name      string
-		startTime float64
-		endTime   float64
-		wantErr   bool
-		checkLen  int
-	}{
-		{
-			name:      "valid time range",
-			startTime: 0.001,
-			endTime:   0.003,
-			wantErr:   false,
-			checkLen:  3, // indices 1, 2, 3
-		},
-		{
-			name:      "start time greater than end time",
-			startTime: 0.003,
-			endTime:   0.001,
-			wantErr:   true,
-		},
-		{
-			name:      "time range outside data",
-			startTime: 0.010,
-			endTime:   0.020,
-			wantErr:   true,
-		},
-		{
-			name:      "exact boundary match",
-			startTime: 0.000,
-			endTime:   0.005,
-			wantErr:   false,
-			checkLen:  6, // all data
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rangeData, err := GetANCDataInTimeRange(testData, tt.startTime, tt.endTime)
-
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-
-			assert.NoError(t, err)
-			assert.NotNil(t, rangeData)
-			assert.Len(t, rangeData.Time, tt.checkLen)
-			assert.Len(t, rangeData.Forces["Fx"], tt.checkLen)
-			assert.Len(t, rangeData.Forces["Fy"], tt.checkLen)
-
-			// 檢查時間範圍
-			if tt.checkLen > 0 {
-				assert.GreaterOrEqual(t, rangeData.Time[0], tt.startTime)
-				assert.LessOrEqual(t, rangeData.Time[len(rangeData.Time)-1], tt.endTime)
-			}
-		})
-	}
-}
-
-func TestANCParser_GetSampleInterval(t *testing.T) {
-	parser := NewANCParser()
-
-	// 解析含 1000Hz 資料的 ANC 檔案後，interval 應為 0.001s
-	ancContent := "1\tFile_Type:\tAMTI_FORCE_PLATE\tGeneration#:\t4\n" +
-		"2\tBoard_Type:\tOR6-5-1000\n" +
-		"3\tTrial_Name:\tTEST\tTrial#:\t1\tDuration(Sec.):\t1.000\t#Channels:\t2\n" +
-		"4\tBitDepth:\t16\tPreciseRate:\t1000.000\n" +
-		"5\t\n6\t\n7\t\n8\t\n" +
-		"9\tName\tFx\tFy\n" +
-		"10\tRate\t1000\t1000\n" +
-		"11\tRange\t2000\t2000\n" +
-		"12\tUnits\tN\tN\n" +
-		"0.000000\t0.1\t0.2\n" +
-		"0.001000\t0.2\t0.3\n" +
-		"0.002000\t0.3\t0.4\n"
-
-	tmpFile, err := os.CreateTemp(t.TempDir(), "test_anc_freq_*.anc")
-	require.NoError(t, err)
-	_, err = tmpFile.WriteString(ancContent)
-	require.NoError(t, err)
-	require.NoError(t, tmpFile.Close())
-
-	fFreq, err := os.Open(tmpFile.Name())
-	require.NoError(t, err)
-	defer fFreq.Close()
-
-	_, err = parser.Parse(fFreq, tmpFile.Name())
-	require.NoError(t, err)
-
-	interval := parser.GetSampleInterval()
-	assert.Equal(t, 0.001, interval) // 1000Hz = 0.001s
-}
-
-func TestValidateForceData(t *testing.T) {
-	tests := []struct {
-		name    string
-		data    *models.ForceData
-		wantErr bool
-		errMsg  string
-	}{
-		{
-			name:    "nil data",
-			data:    nil,
-			wantErr: true,
-			errMsg:  "力板數據為空",
-		},
-		{
-			name: "empty time series",
-			data: &models.ForceData{
-				Time:    []float64{},
-				Forces:  make(map[string][]float64),
-				Headers: []string{},
-			},
-			wantErr: true,
-			errMsg:  "力板時間序列為空",
-		},
-		{
-			name: "no force channels",
-			data: &models.ForceData{
-				Time:    []float64{0.0, 0.001},
-				Forces:  make(map[string][]float64),
-				Headers: []string{},
-			},
-			wantErr: true,
-			errMsg:  "力板沒有任何通道數據",
-		},
-		{
-			name: "non-increasing time series",
-			data: &models.ForceData{
-				Time:    []float64{0.0, 0.001, 0.0005}, // 時間不遞增
-				Headers: []string{"Fx"},
-				Forces: map[string][]float64{
-					"Fx": {1.0, 2.0, 3.0},
-				},
-			},
-			wantErr: true,
-			errMsg:  "力板時間序列在索引 2 處不是遞增的",
-		},
-		{
-			name: "mismatched data length",
-			data: &models.ForceData{
-				Time:    []float64{0.0, 0.001, 0.002},
-				Headers: []string{"Fx", "Fy"},
-				Forces: map[string][]float64{
-					"Fx": {1.0, 2.0, 3.0},
-					"Fy": {0.1, 0.2}, // 長度不匹配
-				},
-			},
-			wantErr: true,
-			errMsg:  "通道 Fy 的數據長度",
-		},
-		{
-			name: "valid data",
-			data: &models.ForceData{
-				Time:    []float64{0.0, 0.001, 0.002},
-				Headers: []string{"Fx", "Fy"},
-				Forces: map[string][]float64{
-					"Fx": {1.0, 2.0, 3.0},
-					"Fy": {0.1, 0.2, 0.3},
-				},
-			},
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateForceData(tt.data)
-
-			if tt.wantErr {
-				assert.Error(t, err)
-
-				if tt.errMsg != "" {
-					assert.Contains(t, err.Error(), tt.errMsg)
-				}
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
 }
 
 func TestANCParser_extractValue(t *testing.T) {
@@ -819,23 +623,10 @@ func TestANCParser_Integration(t *testing.T) {
 		data, err := parser.Parse(f, tmpFile.Name())
 		require.NoError(t, err)
 
-		// 驗證數據完整性
-		err = ValidateForceData(data)
-		assert.NoError(t, err)
-
 		// 檢查數據內容
 		assert.Len(t, data.Time, 4)
 		assert.Len(t, data.Headers, 6)
 		assert.Len(t, data.Forces, 6)
-
-		// 測試時間範圍查詢
-		rangeData, err := GetANCDataInTimeRange(data, 0.001, 0.002)
-		require.NoError(t, err)
-		assert.Len(t, rangeData.Time, 2)
-
-		// 驗證範圍數據
-		err = ValidateForceData(rangeData)
-		assert.NoError(t, err)
 	})
 }
 
@@ -1073,7 +864,7 @@ func TestANCParser_ParseXLSXFile(t *testing.T) {
 }
 
 func TestANCParser_ParseXLSXFile_Validation(t *testing.T) {
-	t.Run("validate parsed xlsx data", func(t *testing.T) {
+	t.Run("parsed xlsx data", func(t *testing.T) {
 		headers := []string{"Time", "Fx", "Fy", "Fz"}
 		data := [][]string{
 			{"0.0", "1.0", "2.0", "3.0"},
@@ -1091,40 +882,7 @@ func TestANCParser_ParseXLSXFile_Validation(t *testing.T) {
 		parser := NewANCParser()
 		forceData, err := parser.Parse(f7, xlsxPath)
 		require.NoError(t, err)
-
-		// 使用 ValidateForceData 驗證
-		err = ValidateForceData(forceData)
-		assert.NoError(t, err)
-	})
-
-	t.Run("xlsx time range query", func(t *testing.T) {
-		headers := []string{"Time", "Fx", "Fy"}
-		data := [][]string{
-			{"0.0", "1.0", "2.0"},
-			{"0.5", "1.5", "2.5"},
-			{"1.0", "2.0", "3.0"},
-			{"1.5", "2.5", "3.5"},
-			{"2.0", "3.0", "4.0"},
-		}
-
-		xlsxPath := createTestXLSXFile(t, headers, data)
-		defer os.Remove(xlsxPath)
-
-		f8, err := os.Open(xlsxPath)
-		require.NoError(t, err)
-		defer f8.Close()
-
-		parser := NewANCParser()
-		forceData, err := parser.Parse(f8, xlsxPath)
-		require.NoError(t, err)
-
-		// 獲取時間範圍內的數據
-		rangeData, err := GetANCDataInTimeRange(forceData, 0.5, 1.5)
-		require.NoError(t, err)
-
-		assert.Len(t, rangeData.Time, 3) // 0.5, 1.0, 1.5
-		assert.Equal(t, 0.5, rangeData.Time[0])
-		assert.Equal(t, 1.5, rangeData.Time[2])
+		assert.Len(t, forceData.Time, 3)
 	})
 }
 

@@ -12,7 +12,6 @@ import (
 
 // MotionParser Motion檔案解析器.
 type MotionParser struct {
-	frequency   float64         // 採樣頻率 Hz
 	categoryRow int             // 類別行（從0開始）- 如 "Trunk Angle"
 	subcatRow   int             // 子類別行（從0開始）- 如 "Trunk Flexion / Extension..."
 	headerRow   int             // 標題所在行（從0開始）- 如 "Series"
@@ -23,7 +22,6 @@ type MotionParser struct {
 // NewMotionParser 創建新的 Motion 解析器.
 func NewMotionParser() *MotionParser {
 	return &MotionParser{
-		frequency:   FrequencyMotion,
 		categoryRow: MotionCategoryRow,
 		subcatRow:   MotionSubcatRow,
 		headerRow:   MotionHeaderRow,
@@ -43,7 +41,6 @@ func NewMotionParserWithLogger(logger *logging.Logger) *MotionParser {
 	}
 
 	return &MotionParser{
-		frequency:   FrequencyMotion,
 		categoryRow: MotionCategoryRow,
 		subcatRow:   MotionSubcatRow,
 		headerRow:   MotionHeaderRow,
@@ -330,97 +327,4 @@ func (p *MotionParser) buildUniqueHeaders(headerRow, categoryRow, subcatRow []st
 	}
 
 	return headers
-}
-
-// GetSampleInterval 獲取採樣間隔（秒）.
-func (p *MotionParser) GetSampleInterval() float64 {
-	return 1.0 / p.frequency
-}
-
-// IndexToTime 將 Motion index 轉換為時間（秒）.
-func (p *MotionParser) IndexToTime(index int) float64 {
-	// Motion index 從 1 開始，時間從 0 開始
-	return float64(index-1) * p.GetSampleInterval()
-}
-
-// TimeToIndex 將時間（秒）轉換為最接近的 Motion index.
-func (p *MotionParser) TimeToIndex(time float64) int {
-	// 四捨五入到最接近的 index
-	index := int(time/p.GetSampleInterval()+RoundingOffset) + 1
-	if index < 1 {
-		index = 1
-	}
-
-	return index
-}
-
-// GetMotionDataAtIndex 獲取指定 index 的數據.
-//
-//nolint:err113 // dynamic errors with Chinese messages for user-facing output
-func GetMotionDataAtIndex(data *models.MotionData, targetIndex int) (map[string]float64, error) {
-	// 查找 index
-	idx := -1
-
-	for i, index := range data.Indices {
-		if index == targetIndex {
-			idx = i
-			break
-		}
-	}
-
-	if idx == -1 {
-		return nil, fmt.Errorf("找不到 index %d 的數據", targetIndex)
-	}
-
-	// 提取該 index 的所有數據
-	result := make(map[string]float64)
-	for columnName, columnData := range data.Data {
-		result[columnName] = columnData[idx]
-	}
-
-	return result, nil
-}
-
-// GetMotionDataInIndexRange 獲取指定 index 範圍內的數據.
-//
-//nolint:err113 // dynamic errors with Chinese messages for user-facing output
-func GetMotionDataInIndexRange(
-	data *models.MotionData, startIndex, endIndex int,
-) (*models.MotionData, error) {
-	if startIndex > endIndex {
-		return nil, fmt.Errorf("開始 index %d 不能大於結束 index %d", startIndex, endIndex)
-	}
-
-	startPos, endPos, err := FindIndexRangeIndices(data.Indices, startIndex, endIndex)
-	if err != nil {
-		return nil, err
-	}
-
-	rangeData := &models.MotionData{
-		Indices: data.Indices[startPos : endPos+1],
-		Data:    make(map[string][]float64),
-		Headers: data.Headers,
-	}
-
-	for columnName, columnData := range data.Data {
-		rangeData.Data[columnName] = columnData[startPos : endPos+1]
-	}
-
-	return rangeData, nil
-}
-
-// ValidateMotionData 驗證 Motion 數據.
-//
-//nolint:err113 // dynamic Chinese error message; Motion is proper noun
-func ValidateMotionData(data *models.MotionData) error {
-	if data == nil {
-		return fmt.Errorf("Motion 數據為空: %w", ErrNilData)
-	}
-
-	return ValidateTimeSeries(data.Indices, data.Data, TimeSeriesLabels{
-		DataName:     "Motion",
-		SeriesName:   "index 序列",
-		SeriesPos:    "位置",
-		ChannelLabel: "列",
-	})
 }

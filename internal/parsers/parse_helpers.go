@@ -213,33 +213,6 @@ func FindTimeRangeIndices(times []float64, startTime, endTime float64) (int, int
 	return startIdx, endIdx, nil
 }
 
-// FindIndexRangeIndices returns the first/last positions in indices whose values
-// fall within [startIndex, endIndex]. Mirrors FindTimeRangeIndices but for the
-// int-typed sample indices that Motion data uses instead of seconds.
-// Returns a wrapped ErrIndexRangeNotFound when no samples qualify.
-func FindIndexRangeIndices(indices []int, startIndex, endIndex int) (int, int, error) {
-	startPos := -1
-	endPos := -1
-
-	for i, idx := range indices {
-		if startPos == -1 && idx >= startIndex {
-			startPos = i
-		}
-
-		if idx <= endIndex {
-			endPos = i
-		} else if endPos != -1 {
-			break
-		}
-	}
-
-	if startPos == -1 || endPos == -1 || startPos > endPos {
-		return -1, -1, fmt.Errorf("找不到有效的 index 範圍數據: %w", ErrIndexRangeNotFound)
-	}
-
-	return startPos, endPos, nil
-}
-
 // TimeSeriesLabels carries the dataset-specific words that ValidateTimeSeries
 // substitutes into its error messages so EMG / Force / Motion validation can
 // share one generic implementation while keeping their user-facing wording.

@@ -43,9 +43,3 @@ const (
 	// PhaseManifestMinFields is the minimum fields per row.
 	PhaseManifestMinFields = 15
 )
-
-// Time conversion constants.
-const (
-	// RoundingOffset for nearest integer rounding (0.5).
-	RoundingOffset = 0.5
-)

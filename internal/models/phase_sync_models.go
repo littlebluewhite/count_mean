@@ -1,7 +1,5 @@
 package models
 
-import "time"
-
 // PhaseManifest 分期總檔案記錄。一筆 PhaseManifest 代表一個受試者試次（subject trial）。
 //
 // 欄位語意：
@@ -122,12 +120,4 @@ type PhaseSyncValidationError struct {
 
 func (e PhaseSyncValidationError) Error() string {
 	return e.Field + ": " + e.Message
-}
-
-// SyncTime 同步時間信息.
-type SyncTime struct {
-	EMGTime   float64
-	ForceTime float64
-	MotionIdx int
-	ValidAt   time.Time
 }

@@ -15,11 +15,10 @@ import (
 	"count_mean/internal/security/fsperm"
 )
 
-// Phase manifest 數值欄位的 sentinel errors（NaN/Inf / negative / DoS scale）。
+// Phase manifest 數值欄位的 sentinel errors（NaN/Inf / DoS scale）。
 // 方便 caller 用 errors.Is 區分。
 var (
 	ErrPhaseManifestInvalidNumeric    = errors.New("非法數值（NaN/Inf 不允許）")
-	ErrPhaseManifestNegativeTime      = errors.New("時間欄位不可為負值")
 	ErrPhaseManifestTimeTooLarge      = errors.New("時間欄位超出合理範圍")
 	ErrPhaseManifestMotionIndexTooBig = errors.New("motion-index 超出合理範圍")
 )

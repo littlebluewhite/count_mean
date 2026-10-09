@@ -14,7 +14,6 @@ import (
 func TestNewDataParser(t *testing.T) {
 	p := NewDataParser(1)
 	assert.NotNil(t, p)
-	assert.Equal(t, 1, p.GetScalingFactor())
 }
 
 func TestNewDataParserWithLogger(t *testing.T) {
@@ -22,13 +21,11 @@ func TestNewDataParserWithLogger(t *testing.T) {
 		logger := logging.GetLogger("test")
 		p := NewDataParserWithLogger(1, logger)
 		assert.NotNil(t, p)
-		assert.Equal(t, 1, p.GetScalingFactor())
 	})
 
 	t.Run("with nil logger falls back to default", func(t *testing.T) {
 		p := NewDataParserWithLogger(1, nil)
 		assert.NotNil(t, p)
-		assert.Equal(t, 1, p.GetScalingFactor())
 	})
 }
 
@@ -248,24 +245,6 @@ func TestParseRawData_WithScalingFactor(t *testing.T) {
 	assert.Equal(t, 0.001, result.Data[0].Time)
 	// 500 times 10 to the power of -3 equals 0.5
 	assert.Equal(t, 0.5, result.Data[0].Channels[0])
-}
-
-func TestGetScalingFactor(t *testing.T) {
-	tests := []struct {
-		name          string
-		scalingFactor int
-	}{
-		{"scaling factor 1", 1},
-		{"scaling factor 1000", 1000},
-		{"scaling factor 0", 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := NewDataParser(tt.scalingFactor)
-			assert.Equal(t, tt.scalingFactor, p.GetScalingFactor())
-		})
-	}
 }
 
 // TestErrInsufficientData_BridgesToAppErrors 防止 parser 的 ErrInsufficientData

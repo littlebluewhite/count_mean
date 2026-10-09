@@ -200,8 +200,3 @@ func (p *DataParser) ParseRawDataWithOptions(records [][]string, opts ParseOptio
 
 	return dataset, nil
 }
-
-// GetScalingFactor 獲取縮放因子.
-func (p *DataParser) GetScalingFactor() int {
-	return p.scalingFactor
-}

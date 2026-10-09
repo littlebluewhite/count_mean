@@ -1,7 +1,6 @@
 package calculator
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -12,18 +11,6 @@ import (
 
 // Report formatting constants.
 const reportSeparatorWidth = 52
-
-// Statistics validation errors.
-var (
-	// ErrNegativeStartTime indicates a negative start time.
-	ErrNegativeStartTime = errors.New("start time cannot be negative")
-	// ErrNegativeEndTime indicates a negative end time.
-	ErrNegativeEndTime = errors.New("end time cannot be negative")
-	// ErrStartTimeNotBeforeEnd indicates start time is not before end time.
-	ErrStartTimeNotBeforeEnd = errors.New("start time must be less than end time")
-	// ErrEmptySubject indicates an empty subject name.
-	ErrEmptySubject = errors.New("subject name cannot be empty")
-)
 
 // EMGStatisticsCalculator EMG 統計計算器.
 type EMGStatisticsCalculator struct{}
@@ -66,28 +53,6 @@ func GenerateOutputFileName(subject string, startPhase, endPhase models.PhasePoi
 	suffix := fmt.Sprintf("%s-%s_statistics", startPhase, endPhase)
 
 	return filename.SubjectOutputName(subject, suffix) + ".csv"
-}
-
-// ValidateStatisticsParams 驗證統計參數.
-func ValidateStatisticsParams(params *StatisticsParams) error {
-	if params.StartTime < 0 {
-		return fmt.Errorf("開始時間不能為負數 (%.3f): %w", params.StartTime, ErrNegativeStartTime)
-	}
-
-	if params.EndTime < 0 {
-		return fmt.Errorf("結束時間不能為負數 (%.3f): %w", params.EndTime, ErrNegativeEndTime)
-	}
-
-	if params.StartTime >= params.EndTime {
-		return fmt.Errorf("開始時間 (%.3f) 必須小於結束時間 (%.3f): %w",
-			params.StartTime, params.EndTime, ErrStartTimeNotBeforeEnd)
-	}
-
-	if params.Subject == "" {
-		return ErrEmptySubject
-	}
-
-	return nil
 }
 
 // StatisticsParams 統計參數.

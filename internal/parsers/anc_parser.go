@@ -43,15 +43,11 @@ const (
 )
 
 // ANCParser ANC力板檔案解析器.
-type ANCParser struct {
-	frequency float64 // 採樣頻率 Hz
-}
+type ANCParser struct{}
 
 // NewANCParser 創建新的 ANC 解析器.
 func NewANCParser() *ANCParser {
-	return &ANCParser{
-		frequency: 0,
-	}
+	return &ANCParser{}
 }
 
 // ANCHeader ANC檔案頭信息.
@@ -324,10 +320,6 @@ func (p *ANCParser) parseANCTextReader(r io.Reader, _ string) (*models.ForceData
 		return nil, err
 	}
 
-	if freq, freqErr := computeFrequencyFromTime(forceData.Time); freqErr == nil {
-		p.frequency = freq
-	}
-
 	return forceData, nil
 }
 
@@ -440,10 +432,6 @@ func (p *ANCParser) parseANCFormatXLSX(rows [][]string, filePath string) (*model
 		}
 	}
 
-	if freq, freqErr := computeFrequencyFromTime(forceData.Time); freqErr == nil {
-		p.frequency = freq
-	}
-
 	return forceData, nil
 }
 
@@ -489,10 +477,6 @@ func (p *ANCParser) parseSimpleXLSX(rows [][]string, filePath string) (*models.F
 		if len(channelData) != dataLen {
 			return nil, fmt.Errorf("通道 %s 的數據長度不一致", channelName)
 		}
-	}
-
-	if freq, freqErr := computeFrequencyFromTime(forceData.Time); freqErr == nil {
-		p.frequency = freq
 	}
 
 	return forceData, nil
@@ -854,62 +838,4 @@ func (p *ANCParser) extractValue(content, label string) string {
 	}
 
 	return ""
-}
-
-// GetANCDataInTimeRange returns force data within the specified time range.
-// Uses integer milliseconds for comparison to avoid floating point precision issues.
-//
-//nolint:err113 // dynamic errors with Chinese messages for user-facing output
-func GetANCDataInTimeRange(data *models.ForceData, startTime, endTime float64) (*models.ForceData, error) {
-	// validator path 已有此 guard，extractor path 需對稱保護避免 data.Time
-	// 索引存取造成 nil-deref panic。空 Time slice 也視為空資料一併 reject。
-	if data == nil || len(data.Time) == 0 {
-		return nil, fmt.Errorf("力板數據為空: %w", ErrNilData)
-	}
-
-	if startTime > endTime {
-		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", startTime, endTime)
-	}
-
-	startIdx, endIdx, err := FindTimeRangeIndices(data.Time, startTime, endTime)
-	if err != nil {
-		return nil, err
-	}
-
-	rangeData := &models.ForceData{
-		Time:    data.Time[startIdx : endIdx+1],
-		Forces:  make(map[string][]float64),
-		Headers: data.Headers,
-	}
-
-	for channelName, forceData := range data.Forces {
-		rangeData.Forces[channelName] = forceData[startIdx : endIdx+1]
-	}
-
-	return rangeData, nil
-}
-
-// GetSampleInterval 獲取採樣間隔（秒）.
-func (p *ANCParser) GetSampleInterval() float64 {
-	if p.frequency == 0 {
-		return 0
-	}
-
-	return 1.0 / p.frequency
-}
-
-// ValidateForceData 驗證力板數據.
-//
-//nolint:err113 // dynamic error message with Chinese for user-facing output
-func ValidateForceData(data *models.ForceData) error {
-	if data == nil {
-		return fmt.Errorf("力板數據為空: %w", ErrNilData)
-	}
-
-	return ValidateTimeSeries(data.Time, data.Forces, TimeSeriesLabels{
-		DataName:     "力板",
-		SeriesName:   "時間序列",
-		SeriesPos:    "索引",
-		ChannelLabel: "通道",
-	})
 }
