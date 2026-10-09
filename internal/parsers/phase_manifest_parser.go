@@ -13,6 +13,7 @@ import (
 	"count_mean/internal/csvutil"
 	"count_mean/internal/models"
 	"count_mean/internal/security/fsperm"
+	csvvalidation "count_mean/internal/validation/csv"
 )
 
 // Phase manifest 數值欄位的 sentinel errors（NaN/Inf / DoS scale）。
@@ -93,6 +94,11 @@ func (p *PhaseManifestParser) ParseFile(filepath string) ([]models.PhaseManifest
 
 	if len(records) == 0 {
 		return nil, fmt.Errorf("檔案為空")
+	}
+
+	// 只做長度 sanity（不檢查 UTF-8：V.16 manifest 為 Big5）；錯誤只帶 row/col。
+	if err := csvvalidation.CheckCells(records); err != nil {
+		return nil, err
 	}
 
 	// 跳過標題行

@@ -172,21 +172,9 @@ func (p *EMGParser) Parse(r io.Reader, name string) (*models.PhaseSyncEMGData, f
 
 // parseEMGRecords 由 Parse 呼叫的 EMG record 解析核心。
 func (p *EMGParser) parseEMGRecords(records [][]string) (*models.PhaseSyncEMGData, float64, error) {
-	// acknowledgement：ReadCSVRecords 走 jagged-row 容忍模式
-	// （FieldsPerRecord=-1, LazyQuotes=true），無法靠 csv.Reader 本身擋 formula
-	// injection / script / SQL / command injection。理想是進入 EMG 語意層前用
-	// csv Validator.ValidateRow 對每筆 cell 過 cell-level injection 守門。
-	//
-	// 既定限制：目前 validation/patterns.go 對 CommandInjection 用 substring 比對，
-	// "invalid_time" 之類的合法 EMG row（含子字串 "id"）會被誤判為 command injection
-	// 而拒。`TestEMGParser_Parse/EMG_file_with_invalid_time_values` 即 pin 住「invalid
-	// time 應被 skip 而非整檔 reject」的契約。在不犧牲此契約的前提下，EMG layer 仍仰賴
-	// 下游 util.Str2Number（嚴格 strconv.ParseFloat）作為 numeric cell 的隱式守門：
-	// formula `=cmd|/c calc!A1` 等惡意 cell 解析必失敗、被 skip。
-	//
-	// 目前 cell-level 守門只在 CSVHandler 讀取路徑（csv Validator.ValidateCSVData）；
-	// EMG phase-sync / muscle ratio path 因 false-positive 包袱，待 patterns
-	// substring-match 收緊（後續 Wave）後再加上 ValidateRow。
+	// 讀取側只留 sanity check：ReadCSVRecords 已用 CheckCells 擋超長 cell；
+	// 不再做 cell-level 注入偵測（防禦只在寫出側 csvutil）。numeric cell 仍由下游
+	// util.Str2Number（嚴格 strconv.ParseFloat）解析，惡意字串解析失敗即被 skip。
 
 	headers, err := p.validateEMGRecords(records)
 	if err != nil {

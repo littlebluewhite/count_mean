@@ -307,3 +307,11 @@ func TestReadCSVRecords_EmptyReader(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, records)
 }
+
+// TestReadCSVRecords_RejectsOversizeCell 釘住讀取側 sanity check:單 cell 超過 32KB 必須拒絕。
+func TestReadCSVRecords_RejectsOversizeCell(t *testing.T) {
+	content := "Time,Ch1\n1.0," + strings.Repeat("a", 32769) + "\n"
+	_, err := ReadCSVRecords(strings.NewReader(content))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "第 2 行第 2 欄")
+}

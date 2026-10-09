@@ -9,18 +9,17 @@ import (
 )
 
 // Validator provides CSV data validation functionality.
-type Validator struct {
-	cellValidator *CellValidator
-}
+type Validator struct{}
 
 // NewValidator creates a new CSV validator.
 func NewValidator() *Validator {
-	return &Validator{
-		cellValidator: NewCellValidator(),
-	}
+	return &Validator{}
 }
 
-// ValidateCSVData validates CSV data structure and detects malicious content.
+// ValidateCSVData 驗證 user-picked 讀取 pipeline 的 CSV 結構與 cell sanity。
+//
+// 只留結構檢查 + CheckCells（cell ≤ 32KB）+ UTF-8；不再做公式 / script / SQL /
+// 命令注入偵測 — 注入防禦只在寫出側（csvutil）。
 func (v *Validator) ValidateCSVData(records [][]string, filename string) error {
 	// Check for empty data
 	if len(records) == 0 {
@@ -59,13 +58,12 @@ func (v *Validator) ValidateCSVData(records [][]string, filename string) error {
 			"CSV 資料行數過多 (最大 1,000,000 行)")
 	}
 
-	// Validate data consistency and detect malicious content.
-	//
-	// records[0] 一律當 header row 處理（IsHeader=true），跳過 SQL / Command
-	// / DangerousFunctions 比對；其餘 body row 仍跑完整守門。
+	if err := CheckCells(records); err != nil {
+		return err
+	}
+
 	for i, record := range records {
-		isHeader := i == 0
-		if err := v.validateRow(record, i+1, expectedColumns, filename, isHeader); err != nil {
+		if err := validateRow(record, i+1, expectedColumns, filename); err != nil {
 			return err
 		}
 	}
@@ -107,41 +105,9 @@ func validateHeaderUniqueness(header []string) error {
 	return nil
 }
 
-// validateRow validates a single row of CSV data.
-func (v *Validator) validateRow(record []string, row, expectedColumns int, filename string, isHeader bool) error {
-	if isHeader {
-		return v.ValidateHeaderRow(record, row, expectedColumns, filename)
-	}
-
-	return v.ValidateRow(record, row, expectedColumns, filename)
-}
-
-// ValidateRow exposes per-row cell-level validation for body rows.
-//
-// 目前由 ValidateCSVData（經 validateRow）逐 row 呼叫；亦可由需要 row-by-row
-// 驗證、不想把整檔 materialize 進 [][]string 的 caller 直接使用。
-// expectedColumns < 0 表示「不檢查欄位數」，由 caller 自行處理 jagged row 容忍度。
-//
-// 本 API 對 body row 跑「全部」cell-level 守門；header row 請改呼
-// ValidateHeaderRow 以避免 EMG header（含 `Subject ID`、`=Channel1`）被誤判。
-func (v *Validator) ValidateRow(record []string, row, expectedColumns int, filename string) error {
-	return v.validateRowInternal(record, row, expectedColumns, filename, false)
-}
-
-// ValidateHeaderRow exposes per-row cell-level validation specifically for header rows.
-//
-// ValidateCSVData（經 validateRow）處理 header row 時呼此 API 而非
-// ValidateRow；直接逐 row 驗證的 caller 亦同，否則 EMG header 的 `Subject ID` / `Frame ID`
-// 等合法欄位名會被 SQL/Command injection substring 比對誤判。formula starter（`=`）
-// / script injection / control char / UTF-8 / suspicious extension 仍對 header
-// 守門（CellValidator.ValidateCell 內部根據 ctx.IsHeader scoped）。
-func (v *Validator) ValidateHeaderRow(record []string, row, expectedColumns int, filename string) error {
-	return v.validateRowInternal(record, row, expectedColumns, filename, true)
-}
-
-func (v *Validator) validateRowInternal(record []string, row, expectedColumns int,
-	filename string, isHeader bool) error {
-	if expectedColumns >= 0 && len(record) != expectedColumns {
+// validateRow 檢查單一 row 的欄位數與（user-picked pipeline 專屬的）UTF-8。
+func validateRow(record []string, row, expectedColumns int, filename string) error {
+	if len(record) != expectedColumns {
 		return errors.NewValidationError("csv_data",
 			map[string]any{
 				"row":           row,
@@ -152,16 +118,8 @@ func (v *Validator) validateRowInternal(record []string, row, expectedColumns in
 			fmt.Sprintf("第 %d 行的欄位數量不一致", row))
 	}
 
-	// Validate each cell
 	for j, cell := range record {
-		var ctx *CellContext
-		if isHeader {
-			ctx = NewHeaderCellContext(row, j+1, filename)
-		} else {
-			ctx = NewCellContext(row, j+1, filename)
-		}
-
-		if err := v.cellValidator.ValidateCell(cell, ctx); err != nil {
+		if err := checkUTF8(cell, row, j+1, filename); err != nil {
 			return err
 		}
 	}

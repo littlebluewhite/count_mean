@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1029,4 +1030,34 @@ func TestPhaseManifest_StripsBOM(t *testing.T) {
 	// Spot-check Subject 字面 — 對齊 TestANCParser_StripsBOM 用 `[]string{"Fx","Fy"}` 比對。
 	assert.Equal(t, "Subject1", manifests[0].Subject)
 	assert.Equal(t, "Subject2", manifests[1].Subject)
+}
+
+const manifestTestHeader = "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L"
+
+// TestPhaseManifestParser_RejectsOversizeCell 釘住 manifest 讀取側 sanity check:
+// 單 cell 超過 32KB 必須拒絕,錯誤不含檔名。
+func TestPhaseManifestParser_RejectsOversizeCell(t *testing.T) {
+	content := manifestTestHeader + "\n" +
+		"S1," + strings.Repeat("m", 32769) + ",force.anc,emg.csv,100,1,2,3,4,5,150,6,7,200,8\n"
+	path := filepath.Join(t.TempDir(), "manifest_oversize.csv")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	_, err := NewPhaseManifestParser().ParseFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "第 2 行第 2 欄")
+	assert.NotContains(t, err.Error(), "manifest_oversize")
+}
+
+// TestPhaseManifestParser_AcceptsBig5Header 守門:真實 V.16 manifest 為 Big5 編碼
+// (非 UTF-8),manifest pipeline 只做長度檢查,不可因編碼被拒。
+func TestPhaseManifestParser_AcceptsBig5Header(t *testing.T) {
+	big5 := "\xa4\xa4\xa4\xe5" // Big5 「中文」,非合法 UTF-8
+	content := manifestTestHeader + "," + big5 + "\n" +
+		"S1,motion.csv,force.anc,emg.csv,100,1,2,3,4,5,150,6,7,200,8,\n"
+	path := filepath.Join(t.TempDir(), "manifest_big5.csv")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	manifests, err := NewPhaseManifestParser().ParseFile(path)
+	require.NoError(t, err)
+	require.Len(t, manifests, 1)
 }

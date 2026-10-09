@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"count_mean/internal/csvutil"
+	csvvalidation "count_mean/internal/validation/csv"
 )
 
 // ReadCSVRecords reads BOM-aware CSV records from an io.Reader.
@@ -34,6 +35,10 @@ func ReadCSVRecords(r io.Reader) ([][]string, error) {
 	records, err := reader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("parse CSV: %w", err)
+	}
+
+	if err := csvvalidation.CheckCells(records); err != nil {
+		return nil, err
 	}
 
 	return records, nil
