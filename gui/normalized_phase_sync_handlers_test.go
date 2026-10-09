@@ -470,3 +470,43 @@ func TestAnalyzeNormalizedPhaseSync_LoadAndNormalizeFailurePrefix(t *testing.T) 
 		})
 	}
 }
+
+// TestAnalyzeNormalizedPhaseSync_StatsRangeErrorPrecedesNormalizeError 釘住 ADR-0047
+// 的錯誤優先序:Stats 區間在標準化之前先解析,所以兩者都會失敗時,回報的是「統計區間」
+// 而不是「標準化失敗」(AnalyzeNormalizedPhaseSync 預先解析 Stats 區間的唯一理由)。
+//
+// 構造:EMG 所有通道恆為 0 → Norm 區間內最大值為 0,標準化會失敗(ErrZeroChannelMax);
+// 同時 manifest 的 L 未提供(NA)→ Stats 區間 S → L 解析失敗(ErrPhaseValueZero)。
+func TestAnalyzeNormalizedPhaseSync_StatsRangeErrorPrecedesNormalizeError(t *testing.T) {
+	app := setupNormalizedPhaseSyncTestApp(t)
+
+	dataFolder := t.TempDir()
+	writeMinimalMotionFile(t, dataFolder, 1000)
+	writeMinimalForceFile(t, dataFolder, 1.0)
+	emg := "Time,Ch1,Ch2\n"
+	for i := 0; i <= 1000; i++ {
+		emg += fmt.Sprintf("%.6f,0,0\n", float64(i)/1000.0)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dataFolder, "emg.csv"), []byte(emg), 0o644))
+
+	manifestContent := "Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n" +
+		"TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,NA"
+	manifestPath := filepath.Join(dataFolder, "manifest.csv")
+	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o644))
+
+	result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
+		ManifestFile:    manifestPath,
+		DataFolder:      dataFolder,
+		SubjectIndex:    0,
+		NormStartPhase:  "P0",
+		NormEndPhase:    "P2",
+		StatsStartPhase: "S",
+		StatsEndPhase:   "L",
+	})
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	assert.True(t, strings.HasPrefix(result.Message, i18n.T(i18n.KeyErrorHandlerStatsRange)+": "),
+		"Stats 區間錯誤應先於標準化錯誤,實際 Message: %s", result.Message)
+	assert.Contains(t, result.Message, "phase value is zero or not set")
+	assert.NotContains(t, result.Message, i18n.T(i18n.KeyErrorHandlerNormalizeFailed))
+}
