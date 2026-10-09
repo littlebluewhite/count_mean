@@ -9,10 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/manifest"
@@ -43,16 +41,20 @@ var (
 )
 
 // PhaseSyncAnalyzer 分期同步分析器.
+//
+// 兩個入口共用 load 與 compute core(computePhaseSync):AnalyzePhaseSync(單一分期區間)
+// 與 AnalyzeNormalizedPhaseSync(標準化區間 + 統計區間,ADR-0047)。
 type PhaseSyncAnalyzer struct {
 	motionParser    *parsers.MotionParser
 	ancParser       *parsers.ANCParser
 	phaseCalculator *synchronizer.PhaseCalculator
 	statsCalculator *calculator.EMGStatisticsCalculator
+	rangeNormalizer *calculator.RangeNormalizer
 }
 
 // NewPhaseSyncAnalyzer 創建新的分期同步分析器.
 // 不持有 PathValidator — manifest 引用的資料檔改走 manifest.OpenDataFile 這道
-// fused 安全門（見 validateEMGFilePath / Load），無 request-scoped validator
+// fused 安全門（見 validateEMGFilePath / load），無 request-scoped validator
 // 狀態需要管理。
 func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 	return &PhaseSyncAnalyzer{
@@ -60,19 +62,23 @@ func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 		ancParser:       parsers.NewANCParser(),
 		phaseCalculator: synchronizer.NewPhaseCalculator(),
 		statsCalculator: calculator.NewEMGStatisticsCalculator(),
+		rangeNormalizer: calculator.NewRangeNormalizer(),
 	}
 }
 
 // validationContext 驗證上下文，用於在驗證步驟之間傳遞數據.
 // baseFolder 在 validateEMGFilePath 內解析後存入，後續 validateMotionFile /
-// validateForceFile 與 Load 的 EMG 解析共用。資料檔改走 manifest.OpenDataFile
+// validateForceFile 與 load 的 EMG 解析共用。資料檔改走 manifest.OpenDataFile
 // 這道門（接受 BTS 字面 "%" 檔名），ctx 不再持有 PathValidator — 避免並發污染。
+// 不含分期點:分期點順序由入口在 I/O 之前驗證(validatePhasePair)。
 type validationContext struct {
-	params      *models.AnalysisParams
-	manifests   []models.PhaseManifest
-	manifest    models.PhaseManifest
-	baseFolder  string
-	emgFilePath string
+	manifestFile string
+	dataFolder   string
+	subjectIndex int
+	manifests    []models.PhaseManifest
+	manifest     models.PhaseManifest
+	baseFolder   string
+	emgFilePath  string
 }
 
 // validationStep 定義驗證步驟函數類型.
@@ -80,7 +86,7 @@ type validationStep func(analyzer *PhaseSyncAnalyzer, ctx *validationContext) er
 
 // validateManifestFile 驗證分期總檔案.
 func validateManifestFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error {
-	manifests, err := manifest.LoadManifests(ctx.params.ManifestFile)
+	manifests, err := manifest.LoadManifests(ctx.manifestFile)
 	if err != nil {
 		return fmt.Errorf("解析分期總檔案失敗: %w", err)
 	}
@@ -92,12 +98,12 @@ func validateManifestFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) e
 
 // validateSubjectIndex 驗證主題索引.
 func validateSubjectIndex(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
-	if ctx.params.SubjectIndex < 0 || ctx.params.SubjectIndex >= len(ctx.manifests) {
+	if ctx.subjectIndex < 0 || ctx.subjectIndex >= len(ctx.manifests) {
 		return fmt.Errorf("無效的主題索引: %d (共有 %d 個主題): %w",
-			ctx.params.SubjectIndex, len(ctx.manifests), ErrInvalidSubjectIndex)
+			ctx.subjectIndex, len(ctx.manifests), ErrInvalidSubjectIndex)
 	}
 
-	ctx.manifest = ctx.manifests[ctx.params.SubjectIndex]
+	ctx.manifest = ctx.manifests[ctx.subjectIndex]
 
 	return nil
 }
@@ -122,9 +128,11 @@ func validateManifestData(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 	return nil
 }
 
-// validatePhaseOrder 驗證分期點順序.
-func validatePhaseOrder(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error {
-	if err := analyzer.phaseCalculator.ValidatePhaseOrder(ctx.params.StartPhase, ctx.params.EndPhase); err != nil {
+// validatePhasePair 驗證一對分期點:名稱合法、開始嚴格早於結束(start == end 的
+// zero-duration 區間也擋下)。兩個入口都在任何 manifest / 檔案 I/O 之前呼叫
+// (ADR-0047),resolvePhaseRange 不再重驗。
+func (analyzer *PhaseSyncAnalyzer) validatePhasePair(startPhase, endPhase models.PhasePoint) error {
+	if err := analyzer.phaseCalculator.ValidatePhaseOrder(startPhase, endPhase); err != nil {
 		return fmt.Errorf("分期點順序驗證失敗: %w", err)
 	}
 
@@ -145,7 +153,7 @@ func validatePhaseOrder(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 // 在 open 階段封死 parent-component symlink 攻擊面。
 //
 // EMG 在此「validate-early」：先開門確認存在性 + 安全性後立即 Close（驗證原子化），
-// 真正解析延後到 Load()——Load() 再開一次門取得 reader。EMG 合法地開兩次，是
+// 真正解析延後到 load()——load() 再開一次門取得 reader。EMG 合法地開兩次，是
 // validate-pipeline 結構的固有特性。validateEMGFilePath 仍存 ctx.emgFilePath
 // （已驗證的解析後路徑）供 LiteralPercent 等 white-box 驗證觀察。
 //
@@ -153,7 +161,7 @@ func validatePhaseOrder(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 // 顯式擋下配合 ErrBaseFolderNotFound 給明確訊息；解析後存入 ctx.baseFolder，
 // 後續 validateMotionFile / validateForceFile 共用（OpenDataFile 接受已解析的 base）。
 func validateEMGFilePath(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
-	baseFolder := ctx.params.DataFolder
+	baseFolder := ctx.dataFolder
 	if info, err := os.Stat(baseFolder); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("資料夾不存在 (%s): %w", baseFolder, ErrBaseFolderNotFound)
@@ -308,7 +316,6 @@ func (analyzer *PhaseSyncAnalyzer) runValidationPipeline(ctx *validationContext)
 		validateManifestFile,
 		validateSubjectIndex,
 		validateManifestData,
-		validatePhaseOrder,
 		validateEMGFilePath,
 		validateMotionFile,
 		validateForceFile,
@@ -323,115 +330,41 @@ func (analyzer *PhaseSyncAnalyzer) runValidationPipeline(ctx *validationContext)
 	return nil
 }
 
-// LoadedPhaseSyncContext 表示完成驗證與 EMG 解析的中間結果，供需要相同前置步驟
-// 的多個分析流程共用。PhaseTimeRange 由 LoadAndExtractRange 在內部一併計算後填入；
-// 直接呼叫 Load 取得的 context 中 PhaseTimeRange 為 nil，需後續呼叫 ResolvePhaseRange
-// 取得具體區間。
-type LoadedPhaseSyncContext struct {
-	Manifest       *models.PhaseManifest
-	EMGData        *models.PhaseSyncEMGData
-	PhaseTimeRange *models.PhaseTimeRange
-}
-
-// parseEMGFileFunc 是 EMG 檔案解析 test hook 的函式型別 alias。
-// 用 named type 讓 atomic.Pointer 的型別參數可讀。
-//
-// reader-based：隨 ADR-0017 遷至 manifest.OpenDataFile 門後,Load() 改由門取得
-// 已驗證的 *os.File（reader）再交給 parser,hook 簽章同步改成收 io.Reader + name
-// （含副檔名的 manifest 欄位,load-bearing 給 ANC text/xlsx branch 與錯誤上下文）。
-type parseEMGFileFunc func(r io.Reader, name string) (*models.PhaseSyncEMGData, float64, error)
-
-// parseEMGFileFnPtr 是 EMG 檔案解析的 test hook (P2-H24, P2-25)。
-//
-// Production 預設為 nil pointer → Load() 走 manifest.LoadEMG;test 可
-// override (用 setParseEMGFileFnForTest) 注入 fake parser,讓 in-flight cancel
-// test 可以「卡住 Parse 直到 cancel 被觸發」確定性化測試 cancel path。
-//
-// 從裸 package-level var 改 atomic.Pointer 以提供讀寫同步。第一個
-// t.Parallel() test 會踩到 data race — atomic.Pointer.Load/Store 提供 happens-before
-// 保證,讓 race detector 通過。
-//
-// 為何維持 package-level (而非 struct field DI):
-//   - struct field 改型別 (從 *parsers.EMGParser → interface) 屬於 invasive change,
-//     違反 surgical changes 原則。
-//   - package-level atomic hook 對 test 是 zero-cost,production 行為完全不變。
-//   - test 用 t.Cleanup 還原成 nil pointer,避免污染其他 test。
-//
-//nolint:gochecknoglobals // test hook by design; nil pointer in production
-var parseEMGFileFnPtr atomic.Pointer[parseEMGFileFunc]
-
-// SetParseEMGFileFnForTest 注入 EMG 解析 test hook,並回傳 cleanup 函式還原 hook。
-// caller (test) 應該用 t.Cleanup 註冊 cleanup,避免污染其他 test。
-//
-// fn 為 nil 表示「不注入 fake,使用 production parser」;Production code path 也是
-// nil pointer。
-func SetParseEMGFileFnForTest(fn parseEMGFileFunc) (cleanup func()) {
-	previous := parseEMGFileFnPtr.Load()
-	if fn == nil {
-		parseEMGFileFnPtr.Store(nil)
-	} else {
-		parseEMGFileFnPtr.Store(&fn)
-	}
-	return func() { parseEMGFileFnPtr.Store(previous) }
-}
-
-// Load 執行分期同步分析的前置載入流程：路徑驗證、manifest 解析、EMG 檔案解析。
-// 不計算任何分期時間範圍（PhaseTimeRange 為 nil），供需要對同一份載入資料解析多組
-// 不同分期區間的工作流共用（例如標準化分期同步分析需要分別解析 normalize 範圍與
-// statistics 範圍）。後續呼叫 ResolvePhaseRange 取得具體時間區間。
+// load 執行兩個入口共用的前置載入：路徑驗證、manifest 解析、EMG 檔案解析，回傳選定
+// [[Subject]] 的 manifest row 與 EMG。不吃分期點、不算任何分期時間範圍 —— 分期點順序
+// 由入口在 load 之前驗證(validatePhasePair),區間由 computePhaseSync / resolvePhaseRange
+// 解析。
 //
 // validateEMGFilePath 內部解析並存入 ctx.baseFolder，後續 Motion / Force 與此處的
 // EMG 解析共用；三者皆走 manifest.OpenDataFile 這道 fused 安全門。
 //
 // EMG 走 validate-twice 結構：validateEMGFilePath 先開門驗證 + 立即 Close，此處
-// 再開門一次取得 reader 交給 parser。重開是 validate-pipeline 的固有特性,門內
-// 原子化 validated-open 保證每次都安全。
+// 經 [[Subject source]](manifest.LoadEMG)再開門一次取得 reader 交給 parser。重開是
+// validate-pipeline 的固有特性,門內原子化 validated-open 保證每次都安全。
 //
-// EMG 載入走 manifest.LoadEMG（test hook 有注入時改走 hook，見 loadEMG）。
-func (analyzer *PhaseSyncAnalyzer) Load(
-	params *models.AnalysisParams,
-) (*LoadedPhaseSyncContext, error) {
-	ctx := &validationContext{params: params}
+// 驗證仍完整 parse Motion / ANC 檔只為讀最後一筆 index / 時間(validateMotionFile /
+// validateForceFile);改成只讀尾端不在 ADR-0047 範圍內。
+func (analyzer *PhaseSyncAnalyzer) load(
+	manifestFile, dataFolder string, subjectIndex int,
+) (*models.PhaseManifest, *models.PhaseSyncEMGData, error) {
+	ctx := &validationContext{manifestFile: manifestFile, dataFolder: dataFolder, subjectIndex: subjectIndex}
 	if err := analyzer.runValidationPipeline(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	emgData, err := analyzer.loadEMG(ctx)
+	emgData, err := manifest.LoadEMG(ctx.baseFolder, &ctx.manifest)
 	if err != nil {
-		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
+		return nil, nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
 	}
 
-	manifestCopy := ctx.manifest
+	row := ctx.manifest
 
-	return &LoadedPhaseSyncContext{
-		Manifest:       &manifestCopy,
-		EMGData:        emgData,
-		PhaseTimeRange: nil,
-	}, nil
-}
-
-// loadEMG 載入 [[Subject source]] 的 EMG：production 走 manifest.LoadEMG；
-// test hook 有注入時改開檔後交給 hook（in-flight cancel test 用，Task 23 隨該 test 一併移除）。
-func (analyzer *PhaseSyncAnalyzer) loadEMG(ctx *validationContext) (*models.PhaseSyncEMGData, error) {
-	hook := parseEMGFileFnPtr.Load()
-	if hook == nil {
-		return manifest.LoadEMG(ctx.baseFolder, &ctx.manifest)
-	}
-
-	f, err := manifest.OpenDataFile(ctx.baseFolder, ctx.manifest.EMGFile)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
-
-	emgData, _, err := (*hook)(f, ctx.manifest.EMGFile)
-
-	return emgData, err
+	return &row, emgData, nil
 }
 
 // ErrNegativePhaseTime 表示請求的 phase point force-time 為負,phase_sync 拒絕用負時間
 // 做 `time * frequency` 取 index 的計算(可能 silently 撞 motion-index < 1 boundary
-// 或下游 sliding window panic)。在 ResolvePhaseRange 入口顯式 reject。
+// 或下游 sliding window panic)。在 resolvePhaseRange 入口顯式 reject。
 //
 // 注意:這只 reject 對應到 force-time 的 phase point(P0/P1/P2/S/C/T0/T/L);
 // motion-index 型 phase point(D/O)是 frame number,非時間,負值已由 ValidatePhaseManifest
@@ -440,16 +373,9 @@ func (analyzer *PhaseSyncAnalyzer) loadEMG(ctx *validationContext) (*models.Phas
 // 時間序列 dump(Output 1);phase_sync 真正取 time-range 才必須擋。
 var ErrNegativePhaseTime = errors.New("phase point force-time 為負值,phase_sync 不接受")
 
-// ResolvePhaseRange 從已 Load 的 context 解析指定的一對分期點為時間範圍，
-// 並驗證該範圍落在 EMG 資料時間範圍內。同一個 LoadedPhaseSyncContext 可重複呼叫
-// 此函式以取得多組不同分期區間。
-//
-// 先呼叫 phaseCalculator.ValidatePhaseOrder 顯式驗證 start < end（嚴格小於）
-// 與 phase 名稱合法性。這個驗證對「直接走 Load + ResolvePhaseRange」的呼叫端
-// （例如標準化分期同步分析對 Stats 那組區間）至關重要——否則 start == end 的
-// 退化情形會穿透到下方只擋 start > end 的時間比較，產生 zero-duration 區間。對「走
-// LoadAndExtractRange」的呼叫端則與 Load 內 pipeline 的 validatePhaseOrder
-// 形成冗餘檢查（無害）。
+// resolvePhaseRange 把 manifest row m 的一對分期點解析為 EMG 時間範圍,並驗證該範圍
+// 落在 emgData 時間範圍內。前提:分期點順序已由入口的 validatePhasePair 驗過(名稱
+// 合法、start 嚴格早於 end),這裡不重驗。
 //
 // 兩端的 EMG 秒數取自 manifest row 的 [[Phase timeline]]（synchronizer.NewPhaseTimeline）；
 // phase_sync 只保留自己的 policy：兩端都必須提供（ErrPhaseValueZero）、開始不得晚於
@@ -460,22 +386,19 @@ var ErrNegativePhaseTime = errors.New("phase point force-time 為負值,phase_sy
 // 參考 muscle_ratio TestAnalyze_NegativeTime_Handled 的設計取捨 — 負時間在
 // manifest parse / muscle_ratio batch 是合法輸入,但 phase_sync 用「time × frequency」
 // 算 motion-index 對負時間沒有有效意義,fail-fast 比 silently 計算錯誤 index 安全。
-func (analyzer *PhaseSyncAnalyzer) ResolvePhaseRange(
-	loaded *LoadedPhaseSyncContext,
+func resolvePhaseRange(
+	emgData *models.PhaseSyncEMGData,
+	m *models.PhaseManifest,
 	startPhase, endPhase models.PhasePoint,
 ) (*models.PhaseTimeRange, error) {
-	if err := analyzer.phaseCalculator.ValidatePhaseOrder(startPhase, endPhase); err != nil {
-		return nil, fmt.Errorf("分期點順序驗證失敗: %w", err)
-	}
-
-	if err := rejectNegativeForceTime(&loaded.Manifest.PhasePoints, startPhase); err != nil {
+	if err := rejectNegativeForceTime(&m.PhasePoints, startPhase); err != nil {
 		return nil, err
 	}
-	if err := rejectNegativeForceTime(&loaded.Manifest.PhasePoints, endPhase); err != nil {
+	if err := rejectNegativeForceTime(&m.PhasePoints, endPhase); err != nil {
 		return nil, err
 	}
 
-	timeline := synchronizer.NewPhaseTimeline(loaded.Manifest)
+	timeline := synchronizer.NewPhaseTimeline(m)
 	startTime, ok := timeline.At(startPhase)
 	if !ok {
 		return nil, fmt.Errorf("計算分期時間範圍失敗: 開始分期點 %s: %w", startPhase, ErrPhaseValueZero)
@@ -491,7 +414,7 @@ func (analyzer *PhaseSyncAnalyzer) ResolvePhaseRange(
 
 	phaseTimeRange := &models.PhaseTimeRange{StartTime: startTime, EndTime: endTime}
 
-	if err := validateEMGTimeRange(loaded.EMGData, phaseTimeRange, loaded.Manifest.EMGMotionOffset); err != nil {
+	if err := validateEMGTimeRange(emgData, phaseTimeRange, m.EMGMotionOffset); err != nil {
 		return nil, err
 	}
 
@@ -501,7 +424,7 @@ func (analyzer *PhaseSyncAnalyzer) ResolvePhaseRange(
 // rejectNegativeForceTime 對單一 phase point 做「force-time 不可為負」防線。
 // motion-index 型 phase point(D/O)直接 pass — 它們是 frame number 不是時間,
 // 由 ValidatePhaseManifest 的 validateMotionIndexOrder 把關;未設定(Set=false)
-// 也直接 pass — 由 ResolvePhaseRange 後續的 timeline 查詢回 ErrPhaseValueZero。
+// 也直接 pass — 由 resolvePhaseRange 後續的 timeline 查詢回 ErrPhaseValueZero。
 func rejectNegativeForceTime(points *models.PhasePoints, phase models.PhasePoint) error {
 	opt, isMotionIndex, err := parsers.GetPhaseValue(points, phase)
 	if err != nil {
@@ -520,32 +443,13 @@ func rejectNegativeForceTime(points *models.PhasePoints, phase models.PhasePoint
 	return nil
 }
 
-// LoadAndExtractRange 為 Load + ResolvePhaseRange 的薄包裝，保留給只需要單一
-// 分期區間的呼叫端使用（例如 AnalyzePhaseSync）。需要多組區間時請改用 Load
-// 搭配多次 ResolvePhaseRange。
-func (analyzer *PhaseSyncAnalyzer) LoadAndExtractRange(
-	params *models.AnalysisParams,
-) (*LoadedPhaseSyncContext, error) {
-	loaded, err := analyzer.Load(params)
-	if err != nil {
-		return nil, err
-	}
-
-	phaseTimeRange, err := analyzer.ResolvePhaseRange(loaded, params.StartPhase, params.EndPhase)
-	if err != nil {
-		return nil, err
-	}
-
-	loaded.PhaseTimeRange = phaseTimeRange
-
-	return loaded, nil
-}
-
-// AnalyzePhaseSync 執行分期同步分析。
+// AnalyzePhaseSync 執行分期同步分析:分期點順序(任何 I/O 之前)→ load → computePhaseSync。
 //
-// ctx 在每個 step 邊界檢查（load / extract / stats），caller 可在分析中途取消
-// 整段工作（Wails Shutdown / 使用者中止）。內部的 file load 與 stats 計算本身
-// 仍同步執行，未來若改為 streaming 可再深度 plumb ctx。
+// ctx 在進入點與 computePhaseSync 的 step 邊界檢查,caller 可在分析中途取消整段工作
+// （Wails Shutdown / 使用者中止）。file load 與 stats 計算本身仍同步執行。
+//
+// 錯誤全文與搬移前相同(ADR-0047 只改了順序錯誤的先後:它排在 manifest / 檔案錯誤
+// 之前);不帶 Stage —— gui 對 AnalyzePhaseSync 只用一個訊息前綴。
 func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(
 	ctx context.Context, params *models.AnalysisParams,
 ) (*models.EMGStatistics, error) {
@@ -553,42 +457,87 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(
 		return nil, err
 	}
 
-	loaded, err := analyzer.LoadAndExtractRange(params)
+	if err := analyzer.validatePhasePair(params.StartPhase, params.EndPhase); err != nil {
+		return nil, err
+	}
+
+	m, emgData, err := analyzer.load(params.ManifestFile, params.DataFolder, params.SubjectIndex)
 	if err != nil {
 		return nil, err
+	}
+
+	stats, err := analyzer.computePhaseSync(ctx, emgData, m, params.StartPhase, params.EndPhase)
+	if err != nil {
+		return nil, phaseSyncComputeError(err)
+	}
+
+	return stats, nil
+}
+
+// phaseSyncComputeError 把 computePhaseSync 的 *AnalysisError 換回 AnalyzePhaseSync 既有的
+// 錯誤全文:切片與統計兩步各加自己的前綴,區間解析錯誤原樣。NPS 的這兩步改由 gui 依
+// Stage 選前綴,不加這兩段字。ctx 錯誤不是 *AnalysisError,原樣回傳。
+func phaseSyncComputeError(err error) error {
+	var stageErr *AnalysisError
+	if !errors.As(err, &stageErr) {
+		return err
+	}
+
+	switch stageErr.Stage {
+	case StageStatsSlice:
+		return fmt.Errorf("提取 EMG 時間範圍數據失敗: %w", stageErr.Err)
+	case StageStatistics:
+		return fmt.Errorf("計算統計信息失敗: %w", stageErr.Err)
+	default:
+		return stageErr.Err
+	}
+}
+
+// computePhaseSync 是兩個入口共用的 compute core(file-free,仿 ADR-0024 的 computeCCI;
+// ADR-0047):在 emgData 上解析 manifest row m 的 [startPhase, endPhase] → 切片 → 統計。
+// AnalyzePhaseSync 傳原始 EMG,AnalyzeNormalizedPhaseSync 傳標準化後的 EMG。
+//
+// 前提:分期點順序已由入口驗過(validatePhasePair)。統計的 StartTime / EndTime 是切片後
+// 實際選到的第一 / 最後一筆 sample 時間(synchronizer.SliceEMG)。
+//
+// 錯誤:ctx 取消原樣回 ctx.Err();其餘為 *AnalysisError —— StageStatsRange(區間解析)、
+// StageStatsSlice(切片)、StageStatistics(統計),Err 是未加前綴的 cause。
+func (analyzer *PhaseSyncAnalyzer) computePhaseSync(
+	ctx context.Context,
+	emgData *models.PhaseSyncEMGData,
+	m *models.PhaseManifest,
+	startPhase, endPhase models.PhasePoint,
+) (*models.EMGStatistics, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	phaseTimeRange, err := resolvePhaseRange(emgData, m, startPhase, endPhase)
+	if err != nil {
+		return nil, &AnalysisError{Stage: StageStatsRange, Err: err}
+	}
+
+	rangeResult, err := synchronizer.SliceEMG(emgData, phaseTimeRange.StartTime, phaseTimeRange.EndTime)
+	if err != nil {
+		return nil, &AnalysisError{Stage: StageStatsSlice, Err: err}
 	}
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	// 6. 提取指定時間範圍的 EMG 數據
-	rangeResult, err := synchronizer.SliceEMG(
-		loaded.EMGData,
-		loaded.PhaseTimeRange.StartTime,
-		loaded.PhaseTimeRange.EndTime,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("提取 EMG 時間範圍數據失敗: %w", err)
-	}
-
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	// 7. 計算統計信息
 	stats, err := analyzer.statsCalculator.CalculateStatistics(
 		rangeResult.Data,
 		calculator.StatisticsParams{
-			Subject:    loaded.Manifest.Subject,
-			StartPhase: params.StartPhase,
+			Subject:    m.Subject,
+			StartPhase: startPhase,
 			StartTime:  rangeResult.ActualStartTime,
-			EndPhase:   params.EndPhase,
+			EndPhase:   endPhase,
 			EndTime:    rangeResult.ActualEndTime,
 		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("計算統計信息失敗: %w", err)
+		return nil, &AnalysisError{Stage: StageStatistics, Err: err}
 	}
 
 	return stats, nil
@@ -642,9 +591,4 @@ func (analyzer *PhaseSyncAnalyzer) LoadManifestSubjects(manifestPath string) ([]
 	}
 
 	return subjects, nil
-}
-
-// GenerateAnalysisReport 生成分析報告.
-func GenerateAnalysisReport(stats *models.EMGStatistics) string {
-	return calculator.FormatStatisticsReport(stats)
 }

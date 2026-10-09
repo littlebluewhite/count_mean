@@ -169,29 +169,21 @@ func TestPhaseSyncAnalyzer_AnalyzePhaseSync_InvalidParams(t *testing.T) {
 	}
 }
 
-func TestGenerateAnalysisReport(t *testing.T) {
-	stats := &models.EMGStatistics{
-		Subject:      "TestSubject",
-		StartPhase:   "P0",
-		EndPhase:     "P2",
-		StartTime:    0.0,
-		EndTime:      2.0,
-		ChannelNames: []string{"Ch1", "Ch2"},
-		ChannelMeans: map[string]float64{
-			"Ch1": 100.5,
-			"Ch2": 200.3,
-		},
-		ChannelMaxes: map[string]float64{
-			"Ch1": 150.0,
-			"Ch2": 250.0,
-		},
-	}
+// TestAnalyzePhaseSync_PhaseOrderCheckedBeforeIO 釘住 ADR-0047:分期點順序錯誤在任何
+// manifest / 檔案 I/O 之前回報 —— manifest 不存在時仍回順序錯誤,錯誤全文不變。
+func TestAnalyzePhaseSync_PhaseOrderCheckedBeforeIO(t *testing.T) {
+	_, err := NewPhaseSyncAnalyzer().AnalyzePhaseSync(context.Background(), &models.AnalysisParams{
+		ManifestFile: filepath.Join(t.TempDir(), "missing_manifest.csv"),
+		DataFolder:   t.TempDir(),
+		StartPhase:   models.PhaseP2,
+		EndPhase:     models.PhaseP0,
+		SubjectIndex: 0,
+	})
 
-	report := GenerateAnalysisReport(stats)
-	assert.NotEmpty(t, report)
-	assert.Contains(t, report, "TestSubject")
-	assert.Contains(t, report, "P0")
-	assert.Contains(t, report, "P2")
+	require.Error(t, err)
+	assert.Equal(t,
+		"分期點順序驗證失敗: 開始分期點 P2 與結束分期點 P0: start phase must be before end phase",
+		err.Error())
 }
 
 func TestPhaseSyncAnalyzer_AnalyzePhaseSync_Integration(t *testing.T) {
@@ -271,7 +263,7 @@ TestSubject,%s,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, motion
 		"manifest 內 absolute path 應被拒（檔名須相對於 DataFolder）")
 }
 
-// TestPhaseSyncAnalyzer_ResolvePhaseRange_RejectsNegativeForceTime釘住:
+// TestResolvePhaseRange_RejectsNegativeForceTime 釘住:
 // phase_sync 入口對「對應到 force-time 的負 phase point」必須 fail-fast。manifest
 // parseFloat 允許負值(機械校準偏移,muscle_ratio batch 走時間序列 dump 仍可用),
 // 但 phase_sync 用「time × frequency」算 motion-index 對負時間沒有有效意義,
@@ -279,7 +271,7 @@ TestSubject,%s,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, motion
 //
 // motion-index 型 phase point(D/O)是 frame number 不是時間,負值已由
 // ValidatePhaseManifest 攔下,此 test 只覆蓋 force-time 路徑(P0/P1/P2/S/C/T0/T/L)。
-func TestPhaseSyncAnalyzer_ResolvePhaseRange_RejectsNegativeForceTime(t *testing.T) {
+func TestResolvePhaseRange_RejectsNegativeForceTime(t *testing.T) {
 	cases := []struct {
 		name       string
 		startPhase models.PhasePoint
@@ -312,68 +304,60 @@ func TestPhaseSyncAnalyzer_ResolvePhaseRange_RejectsNegativeForceTime(t *testing
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			analyzer := NewPhaseSyncAnalyzer()
-
-			loaded := &LoadedPhaseSyncContext{
-				Manifest: &models.PhaseManifest{
-					Subject:         "T",
-					MotionFile:      "m.csv",
-					ForceFile:       "f.csv",
-					EMGFile:         "e.csv",
-					EMGMotionOffset: 100,
-					PhasePoints:     tc.points,
-				},
-				EMGData: &models.PhaseSyncEMGData{
-					Time: []float64{0.0, 1.0, 2.0},
-				},
+			m := &models.PhaseManifest{
+				Subject:         "T",
+				MotionFile:      "m.csv",
+				ForceFile:       "f.csv",
+				EMGFile:         "e.csv",
+				EMGMotionOffset: 100,
+				PhasePoints:     tc.points,
+			}
+			emgData := &models.PhaseSyncEMGData{
+				Time: []float64{0.0, 1.0, 2.0},
 			}
 
-			_, err := analyzer.ResolvePhaseRange(loaded, tc.startPhase, tc.endPhase)
-			require.Error(t, err, "ResolvePhaseRange 必須 reject 負 force-time")
+			_, err := resolvePhaseRange(emgData, m, tc.startPhase, tc.endPhase)
+			require.Error(t, err, "resolvePhaseRange 必須 reject 負 force-time")
 			require.ErrorIs(t, err, ErrNegativePhaseTime,
 				"必須是 ErrNegativePhaseTime sentinel,方便 caller 用 errors.Is 區分")
 		})
 	}
 }
 
-// TestPhaseSyncAnalyzer_ResolvePhaseRange_AllowsMotionIndex (配套) 釘住:
+// TestResolvePhaseRange_AllowsMotionIndex (配套) 釘住:
 // motion-index 型 phase point(D/O)不被 force-time reject 影響,因 D/O 是 frame
-// number 而非時間,負值由 ValidatePhaseManifest 攔下,ResolvePhaseRange 不重複
+// number 而非時間,負值由 ValidatePhaseManifest 攔下,resolvePhaseRange 不重複
 // 檢查。此 case 用 D > 0 / O > 0 normal motion-index 走完路徑,確保 不誤殺。
-func TestPhaseSyncAnalyzer_ResolvePhaseRange_AllowsMotionIndex(t *testing.T) {
-	analyzer := NewPhaseSyncAnalyzer()
-
-	loaded := &LoadedPhaseSyncContext{
-		Manifest: &models.PhaseManifest{
-			Subject:         "T",
-			MotionFile:      "m.csv",
-			ForceFile:       "f.csv",
-			EMGFile:         "e.csv",
-			EMGMotionOffset: 100,
-			PhasePoints: models.PhasePoints{
-				D: 200, // 合法 motion-index
-				O: 300, // 合法 motion-index
-			},
+func TestResolvePhaseRange_AllowsMotionIndex(t *testing.T) {
+	m := &models.PhaseManifest{
+		Subject:         "T",
+		MotionFile:      "m.csv",
+		ForceFile:       "f.csv",
+		EMGFile:         "e.csv",
+		EMGMotionOffset: 100,
+		PhasePoints: models.PhasePoints{
+			D: 200, // 合法 motion-index
+			O: 300, // 合法 motion-index
 		},
-		EMGData: &models.PhaseSyncEMGData{
-			Time: []float64{0.0, 1.0, 2.0, 3.0, 4.0},
-		},
+	}
+	emgData := &models.PhaseSyncEMGData{
+		Time: []float64{0.0, 1.0, 2.0, 3.0, 4.0},
 	}
 
 	// D / O 都是 motion-index,合法值不該被 reject。後續 timeline 換算 EMG time
 	// 可能因為 EMGMotionOffset / motion-index 換算超出 [0, 4] 而 fail,但**錯誤類型**
 	// 不能是 ErrNegativePhaseTime。
-	_, err := analyzer.ResolvePhaseRange(loaded, models.PhaseD, models.PhaseO)
+	_, err := resolvePhaseRange(emgData, m, models.PhaseD, models.PhaseO)
 	if err != nil {
 		require.NotErrorIs(t, err, ErrNegativePhaseTime,
 			"motion-index 不該觸發 ErrNegativePhaseTime; err=%v", err)
 	}
 }
 
-// TestPhaseSyncAnalyzer_ResolvePhaseRange_PhaseValueErrorText 釘住 ResolvePhaseRange
+// TestResolvePhaseRange_PhaseValueErrorText 釘住 resolvePhaseRange
 // 對「分期點未提供」與「開始 EMG 時間晚於結束」兩種失敗的錯誤全文(byte-identical)
 // 與 sentinel。EMGMotionOffset=26:力板 emg = force − 0.1、motion-index emg = (idx−26)/250。
-func TestPhaseSyncAnalyzer_ResolvePhaseRange_PhaseValueErrorText(t *testing.T) {
+func TestResolvePhaseRange_PhaseValueErrorText(t *testing.T) {
 	cases := []struct {
 		name       string
 		startPhase models.PhasePoint
@@ -419,16 +403,14 @@ func TestPhaseSyncAnalyzer_ResolvePhaseRange_PhaseValueErrorText(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			loaded := &LoadedPhaseSyncContext{
-				Manifest: &models.PhaseManifest{
-					Subject:         "T",
-					EMGMotionOffset: 26,
-					PhasePoints:     tc.points,
-				},
-				EMGData: &models.PhaseSyncEMGData{Time: []float64{0.0, 1.0, 2.0}},
+			m := &models.PhaseManifest{
+				Subject:         "T",
+				EMGMotionOffset: 26,
+				PhasePoints:     tc.points,
 			}
+			emgData := &models.PhaseSyncEMGData{Time: []float64{0.0, 1.0, 2.0}}
 
-			_, err := NewPhaseSyncAnalyzer().ResolvePhaseRange(loaded, tc.startPhase, tc.endPhase)
+			_, err := resolvePhaseRange(emgData, m, tc.startPhase, tc.endPhase)
 			require.Error(t, err)
 			assert.Equal(t, tc.wantText, err.Error())
 			assert.ErrorIs(t, err, tc.wantErr)
@@ -458,19 +440,17 @@ func TestResolvePhaseRange_ToleratesSyncDriftAtEMGEdges(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			loaded := &LoadedPhaseSyncContext{
-				Manifest: &models.PhaseManifest{
-					Subject:         "T",
-					EMGMotionOffset: 26,
-					PhasePoints: models.PhasePoints{
-						S: models.MakeOpt(tc.s),
-						L: models.MakeOpt(tc.l),
-					},
+			m := &models.PhaseManifest{
+				Subject:         "T",
+				EMGMotionOffset: 26,
+				PhasePoints: models.PhasePoints{
+					S: models.MakeOpt(tc.s),
+					L: models.MakeOpt(tc.l),
 				},
-				EMGData: &models.PhaseSyncEMGData{Time: []float64{0.2, 0.7, 1.2}},
 			}
+			emgData := &models.PhaseSyncEMGData{Time: []float64{0.2, 0.7, 1.2}}
 
-			got, err := NewPhaseSyncAnalyzer().ResolvePhaseRange(loaded, models.PhaseS, models.PhaseL)
+			got, err := resolvePhaseRange(emgData, m, models.PhaseS, models.PhaseL)
 			if tc.wantErr {
 				require.ErrorIs(t, err, ErrEMGTimeOutOfRange)
 				return
@@ -517,11 +497,10 @@ func BenchmarkPhaseSyncAnalyzer_LoadManifestSubjects(b *testing.B) {
 // parsers.ErrNilData。舊行為:空 Time 時 emgMinTime=emgMaxTime=0.0 靜默通過
 // → 0.0 範圍比對讓任何 StartTime<0 都誤判合法;nil 指標直接 panic。
 //
-// 呼叫路徑已確認:ResolvePhaseRange(:464) → validateEMGTimeRange,
-// 且 LoadedPhaseSyncContext 的 EMGData 欄位可由 callers 直接注入 nil。
+// 呼叫路徑:resolvePhaseRange → validateEMGTimeRange,emgData 可由 caller 直接傳 nil。
 func TestValidateEMGTimeRange_EmptyTimeFailFast(t *testing.T) {
-	// 建立最小可通過 ResolvePhaseRange 前置檢查的 manifest。
-	// P0=1.0, P1=2.0 → 正時間,通過 rejectNegativeForceTime 與 ValidatePhaseOrder。
+	// 建立最小可通過 resolvePhaseRange 前置檢查的 manifest。
+	// P0=1.0, P1=2.0 → 正時間,通過 rejectNegativeForceTime。
 	baseManifest := &models.PhaseManifest{
 		Subject:         "T",
 		MotionFile:      "m.csv",
@@ -554,13 +533,7 @@ func TestValidateEMGTimeRange_EmptyTimeFailFast(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			analyzer := NewPhaseSyncAnalyzer()
-			loaded := &LoadedPhaseSyncContext{
-				Manifest: baseManifest,
-				EMGData:  tc.emgData,
-			}
-
-			_, err := analyzer.ResolvePhaseRange(loaded, models.PhaseP0, models.PhaseP1)
+			_, err := resolvePhaseRange(tc.emgData, baseManifest, models.PhaseP0, models.PhaseP1)
 			require.Error(t, err, "空/nil EMG 必須 fail-fast")
 			require.True(t, errors.Is(err, parsers.ErrNilData),
 				"error 必須包裝 parsers.ErrNilData;實際 err=%v", err)

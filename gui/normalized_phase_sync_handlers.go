@@ -1,11 +1,14 @@
 package gui
 
 import (
+	"context"
+	"errors"
+
 	"count_mean/internal/calculator"
 	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/models"
-	"count_mean/internal/synchronizer"
+	"count_mean/internal/phase_sync"
 )
 
 // NormalizedPhaseSyncParams 標準化分期同步分析參數。
@@ -49,23 +52,24 @@ type NormalizedPhaseSyncResult struct {
 	Message           string             `json:"message"`
 }
 
-// AnalyzeNormalizedPhaseSync 執行「先標準化、再分期同步分析」的組合工作流。
+// AnalyzeNormalizedPhaseSync 執行「先標準化、再分期同步分析」的組合工作流。計算由
+// phase_sync.AnalyzeNormalizedPhaseSync 持有(ADR-0047);這裡只剩 adapter:
 //
-// 流程：
-//  1. PhaseSyncAnalyzer.Load 載入 manifest 與 EMG 資料（不算範圍）
-//  2. ResolvePhaseRange 兩次：分別解析 Norm 視窗與 Stats 視窗
-//  3. 以每條肌肉在 Norm 視窗內的最大值為除數，對整段資料做標準化
-//  4. 將標準化資料輸出為 Output 1：{subject}_normalized.csv
-//  5. 對標準化後的資料於 Stats 視窗內計算統計（mean/max）
-//  6. 將統計結果輸出為 Output 2：
+//  1. 驗證必填欄位
+//  2. phase_sync.AnalyzeNormalizedPhaseSync:載入、兩組區間、標準化、統計全部算完
+//  3. 撰寫 Output 1:{subject}_normalized.csv
+//  4. 撰寫 Output 2:
 //     {subject}_normalized_norm-{normStart}-{normEnd}_stats-{statsStart}-{statsEnd}.csv
 //     （欄位與既有「分期同步分析」相同；檔名同時帶兩組分期點以避免不同設定的輸出混淆）
+//  5. envelope:分析失敗依 phase_sync.Stage 選 i18n 前綴(normalizedPhaseSyncFailKey)
+//
+// 分析任一步失敗都不寫任何輸出(兩個寫入都在分析成功之後)。
 //
 // 錯誤通道契約（Wave 3 Batch R）：
 //
 //	AnalyzeNormalizedPhaseSync 永遠回傳 non-nil *NormalizedPhaseSyncResult；
-//	所有可預期失敗（參數驗證、路徑驗證、load、phase range、normalize、stats、
-//	檔案寫入）都包成 result.Success=false + result.Message。Go err 只在
+//	所有可預期失敗（參數驗證、路徑驗證、分析、檔案寫入）都包成
+//	result.Success=false + result.Message。Go err 只在
 //	`recoverHandlerPanic` 透過 named return 灌入 panic 時才為 non-nil。
 //	前端因此可以單一路徑檢查 result.success / result.message。
 func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (result *NormalizedPhaseSyncResult, err error) {
@@ -83,95 +87,42 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 
 	s := a.state.Load()
 
-	// 抓取 Wails lifecycle ctx,讓 Shutdown / 使用者中止可在
-	// step 之間早停(analyzer.Load / ResolvePhaseRange 內部目前還沒 ctx,
-	// 但這條 handler 在 step boundary 顯式 ctx.Err() 檢查 — 對 norm window
-	// 大 dataset 的 NormalizeByRangeMax 後特別重要)。
+	// 抓取 Wails lifecycle ctx,讓 Shutdown / 使用者中止可在分析的 step 之間
+	// (phase_sync 內)與兩次寫檔之前早停。
 	ctx := a.context()
 
 	if validationErr := validateNormalizedPhaseSyncParams(params); validationErr != nil {
 		return failedNormalizedPhaseSyncResult(inputMessage(validationErr)), nil
 	}
 
-	// 1. 載入 manifest 與 EMG（共用兩組區間的前置步驟）
-	baseParams := &models.AnalysisParams{
-		ManifestFile: params.ManifestFile,
-		DataFolder:   params.DataFolder,
-		StartPhase:   params.NormStartPhase,
-		EndPhase:     params.NormEndPhase,
-		SubjectIndex: params.SubjectIndex,
+	analysis, analyzeErr := a.phaseSyncAnalyzer.AnalyzeNormalizedPhaseSync(ctx, &phase_sync.NormalizedParams{
+		ManifestFile:    params.ManifestFile,
+		DataFolder:      params.DataFolder,
+		SubjectIndex:    params.SubjectIndex,
+		NormStartPhase:  params.NormStartPhase,
+		NormEndPhase:    params.NormEndPhase,
+		StatsStartPhase: params.StatsStartPhase,
+		StatsEndPhase:   params.StatsEndPhase,
+	})
+	if analyzeErr != nil {
+		return failedNormalizedPhaseSyncResult(a.failMessage(normalizedPhaseSyncFailKey(analyzeErr), analyzeErr)), nil
 	}
 
-	loaded, loadErr := a.phaseSyncAnalyzer.Load(baseParams)
-	if loadErr != nil {
-		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerLoadDataFailed, loadErr)), nil
-	}
+	stats := analysis.Stats
 
-	// 2. 分別解析標準化視窗與統計視窗（兩組獨立、不互相驗證）
-	normRange, normRangeErr := a.phaseSyncAnalyzer.ResolvePhaseRange(loaded, params.NormStartPhase, params.NormEndPhase)
-	if normRangeErr != nil {
-		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerNormRange, normRangeErr)), nil
-	}
-
-	statsRange, statsRangeErr := a.phaseSyncAnalyzer.ResolvePhaseRange(loaded, params.StatsStartPhase, params.StatsEndPhase)
-	if statsRangeErr != nil {
-		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerStatsRange, statsRangeErr)), nil
-	}
-
-	// 3. 用 normRange 做標準化（除數來自此區間每條肌肉的最大值）
-	normalizer := calculator.NewRangeNormalizer()
-
-	normalizedData, channelMaxes, normErr := normalizer.NormalizeByRangeMax(
-		loaded.EMGData,
-		normRange.StartTime,
-		normRange.EndTime,
-	)
-	if normErr != nil {
-		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerNormalizeFailed, normErr)), nil
-	}
-
-	// 4. 撰寫 Output 1：標準化後的 EMG CSV
-	// CSVHandler.WriteNormalizedPhaseSyncEMG 持有 Sanitize + 路徑拼接 + boundary
-	// validation + atomic write，呼叫方只需傳 subject；不再本地拼路徑。
-
-	// 在重 IO step 之前檢查 ctx,讓 Shutdown 能及時 cancel(NormalizeByRangeMax
-	// 已跑完,寫檔即將開始 — 此處取消對使用者體驗最有感)。
+	// Output 1:標準化後的 EMG CSV。CSVHandler.WriteNormalizedPhaseSyncEMG 持有
+	// Sanitize + 路徑拼接 + boundary validation + atomic write，呼叫方只需傳 subject。
+	// 寫檔前檢查 ctx,讓 Shutdown 能及時 cancel。
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerCancelled, ctxErr)), nil
 	}
 
-	normalizedEMGPath, csvWriteErr := s.csvHandler.WriteNormalizedPhaseSyncEMG(io.WriteRequest{}, normalizedData, loaded.Manifest.Subject)
+	normalizedEMGPath, csvWriteErr := s.csvHandler.WriteNormalizedPhaseSyncEMG(io.WriteRequest{}, analysis.NormalizedEMG, analysis.Subject)
 	if csvWriteErr != nil {
 		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerWriteNormalizedEMGFailed, csvWriteErr)), nil
 	}
 
-	// 5. 用 statsRange 擷取標準化後的資料 + 計算統計
-	rangeResult, rangeErr := synchronizer.SliceEMG(
-		normalizedData,
-		statsRange.StartTime,
-		statsRange.EndTime,
-	)
-	if rangeErr != nil {
-		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerExtractStatsRangeFailed, rangeErr)), nil
-	}
-
-	statsCalc := calculator.NewEMGStatisticsCalculator()
-
-	stats, statsErr := statsCalc.CalculateStatistics(
-		rangeResult.Data,
-		calculator.StatisticsParams{
-			Subject:    loaded.Manifest.Subject,
-			StartPhase: params.StatsStartPhase,
-			StartTime:  rangeResult.ActualStartTime,
-			EndPhase:   params.StatsEndPhase,
-			EndTime:    rangeResult.ActualEndTime,
-		},
-	)
-	if statsErr != nil {
-		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerCalcStatsFailed, statsErr)), nil
-	}
-
-	// 6. 撰寫 Output 2：Subject-based atomic write;filename + 路徑守門由 CSVHandler 持有。
+	// Output 2：Subject-based atomic write;filename + 路徑守門由 CSVHandler 持有。
 	// 第二輪 ctx 檢查,寫檔前再給一次 cancel 機會。
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerCancelled, ctxErr)), nil
@@ -198,19 +149,48 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		Subject:           stats.Subject,
 		NormStartPhase:    params.NormStartPhase,
 		NormEndPhase:      params.NormEndPhase,
-		NormStartTime:     normRange.StartTime,
-		NormEndTime:       normRange.EndTime,
+		NormStartTime:     analysis.NormRange.StartTime,
+		NormEndTime:       analysis.NormRange.EndTime,
 		StatsStartPhase:   stats.StartPhase,
 		StatsEndPhase:     stats.EndPhase,
 		StatsStartTime:    stats.StartTime,
 		StatsEndTime:      stats.EndTime,
 		ChannelNames:      stats.ChannelNames,
-		ChannelMaxes:      channelMaxes,
+		ChannelMaxes:      analysis.ChannelMaxes,
 		ChannelMeans:      stats.ChannelMeans,
 		Report:            calculator.FormatStatisticsReport(stats),
 		Success:           true,
 		Message:           "分析完成",
 	}, nil
+}
+
+// normalizedPhaseSyncFailKey 依 phase_sync.AnalyzeNormalizedPhaseSync 的失敗選 failMessage
+// 前綴:ctx 取消 →「分析已取消」;其餘是 *phase_sync.AnalysisError,每個 Stage 各用自己的
+// i18n key(與搬移前 handler 逐步選的 key 相同)。取不到 Stage 時退回「載入資料失敗」。
+func normalizedPhaseSyncFailKey(err error) string {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return i18n.KeyErrorHandlerCancelled
+	}
+
+	var stageErr *phase_sync.AnalysisError
+	if errors.As(err, &stageErr) {
+		switch stageErr.Stage {
+		case phase_sync.StageLoad:
+			return i18n.KeyErrorHandlerLoadDataFailed
+		case phase_sync.StageNormRange:
+			return i18n.KeyErrorHandlerNormRange
+		case phase_sync.StageStatsRange:
+			return i18n.KeyErrorHandlerStatsRange
+		case phase_sync.StageNormalize:
+			return i18n.KeyErrorHandlerNormalizeFailed
+		case phase_sync.StageStatsSlice:
+			return i18n.KeyErrorHandlerExtractStatsRangeFailed
+		case phase_sync.StageStatistics:
+			return i18n.KeyErrorHandlerCalcStatsFailed
+		}
+	}
+
+	return i18n.KeyErrorHandlerLoadDataFailed
 }
 
 // validateNormalizedPhaseSyncParams 檢查必填欄位。沿用既有錯誤型別保持訊息一致。

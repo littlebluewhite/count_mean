@@ -42,3 +42,30 @@ func TestCalculateStatistics_NaNChannel_FailFast(t *testing.T) {
 	require.True(t, errors.Is(err, calcerrors.ErrNaNInChannel),
 		"errors.Is 必須穿透 '%%w' 包裝取到 ErrNaNInChannel,實際: %v", err)
 }
+
+// TestFormatStatisticsReport:PhaseSync 與 NormalizedPhaseSync 共用的統計報告
+// (原經 phase_sync.GenerateAnalysisReport 轉呼叫測試,該別名已刪,ADR-0047)。
+func TestFormatStatisticsReport(t *testing.T) {
+	stats := &models.EMGStatistics{
+		Subject:      "TestSubject",
+		StartPhase:   "P0",
+		EndPhase:     "P2",
+		StartTime:    0.0,
+		EndTime:      2.0,
+		ChannelNames: []string{"Ch1", "Ch2"},
+		ChannelMeans: map[string]float64{
+			"Ch1": 100.5,
+			"Ch2": 200.3,
+		},
+		ChannelMaxes: map[string]float64{
+			"Ch1": 150.0,
+			"Ch2": 250.0,
+		},
+	}
+
+	report := FormatStatisticsReport(stats)
+	require.NotEmpty(t, report)
+	require.Contains(t, report, "TestSubject")
+	require.Contains(t, report, "P0")
+	require.Contains(t, report, "P2")
+}

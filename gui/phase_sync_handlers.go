@@ -3,10 +3,10 @@ package gui
 import (
 	"fmt"
 
+	"count_mean/internal/calculator"
 	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/models"
-	"count_mean/internal/phase_sync"
 	"count_mean/internal/synchronizer"
 )
 
@@ -131,7 +131,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 	a.logger.Info("分期同步分析完成", nil)
 
 	// 生成報告
-	report := phase_sync.GenerateAnalysisReport(stats)
+	report := calculator.FormatStatisticsReport(stats)
 
 	a.logger.Info("分期同步分析輸出", map[string]any{"outputPath": outputPath})
 

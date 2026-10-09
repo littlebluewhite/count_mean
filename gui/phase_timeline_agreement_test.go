@@ -117,25 +117,29 @@ func TestPhaseTimelineAgreement_AllCallers(t *testing.T) {
 		assert.InDelta(t, want[models.PhaseL], result.GaitEndTime, 1e-9, "步態終點 = L")
 	})
 
+	// PhaseSync 的區間解析已不 export(ADR-0047):改經公開的 NPS 入口,讀它回傳的
+	// Norm / Stats 區間 —— Phase timeline 解析值,不是切片後的 sample 時間。
 	t.Run("PhaseSync (S,L) 與 (D,O) 區間端點等於手算表", func(t *testing.T) {
 		analyzer := phase_sync.NewPhaseSyncAnalyzer()
-		loaded, err := analyzer.Load(&models.AnalysisParams{
-			ManifestFile: manifestPath,
-			DataFolder:   dataFolder,
-			StartPhase:   models.PhaseS,
-			EndPhase:     models.PhaseL,
-			SubjectIndex: 0,
-		})
-		require.NoError(t, err)
 
 		for _, pair := range [][2]models.PhasePoint{
 			{models.PhaseS, models.PhaseL},
 			{models.PhaseD, models.PhaseO},
 		} {
-			r, err := analyzer.ResolvePhaseRange(loaded, pair[0], pair[1])
-			require.NoErrorf(t, err, "ResolvePhaseRange(%s, %s)", pair[0], pair[1])
-			assert.InDeltaf(t, want[pair[0]], r.StartTime, 1e-9, "PhaseSync start %s", pair[0])
-			assert.InDeltaf(t, want[pair[1]], r.EndTime, 1e-9, "PhaseSync end %s", pair[1])
+			res, err := analyzer.AnalyzeNormalizedPhaseSync(context.Background(), &phase_sync.NormalizedParams{
+				ManifestFile:    manifestPath,
+				DataFolder:      dataFolder,
+				SubjectIndex:    0,
+				NormStartPhase:  pair[0],
+				NormEndPhase:    pair[1],
+				StatsStartPhase: pair[0],
+				StatsEndPhase:   pair[1],
+			})
+			require.NoErrorf(t, err, "AnalyzeNormalizedPhaseSync(%s, %s)", pair[0], pair[1])
+			for _, r := range []models.PhaseTimeRange{res.NormRange, res.StatsRange} {
+				assert.InDeltaf(t, want[pair[0]], r.StartTime, 1e-9, "PhaseSync start %s", pair[0])
+				assert.InDeltaf(t, want[pair[1]], r.EndTime, 1e-9, "PhaseSync end %s", pair[1])
+			}
 		}
 	})
 

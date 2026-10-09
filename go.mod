@@ -8,7 +8,6 @@ require (
 	github.com/stretchr/testify v1.12.1
 	github.com/wailsapp/wails/v2 v2.16.0
 	github.com/xuri/excelize/v2 v2.11.0
-	go.uber.org/goleak v1.3.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0

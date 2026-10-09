@@ -1,16 +1,21 @@
 package gui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/config"
+	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
+	"count_mean/internal/models"
 	"count_mean/internal/phase_sync"
 )
 
@@ -191,9 +196,9 @@ func TestAnalyzeNormalizedPhaseSync_StatsPhaseOrderError(t *testing.T) {
 //
 // Regression：重構前單一範圍時，runValidationPipeline 內 validatePhaseOrder 會以
 // startOrder >= endOrder 為條件擋住「同 phase」case；拆分後 Stats 那組原本只走
-// ResolvePhaseRange 的分期時間計算，該處只擋 start > end，導致 P1 → P1
-// 會穿透並產生 zero-duration stats CSV。修法是在 ResolvePhaseRange 內顯式呼叫
-// ValidatePhaseOrder。
+// 分期時間計算，該處只擋 start > end，導致 P1 → P1 會穿透並產生 zero-duration
+// stats CSV。現在 phase_sync 對兩組分期點都在 I/O 之前呼叫 ValidatePhaseOrder
+// (validatePhasePair,ADR-0047)。
 func TestAnalyzeNormalizedPhaseSync_StatsZeroDurationRejected(t *testing.T) {
 	app := setupNormalizedPhaseSyncTestApp(t)
 	manifestPath, dataFolder := setupNormalizedPhaseSyncFixture(t)
@@ -270,10 +275,8 @@ func TestAnalyzeNormalizedPhaseSync_RejectsInvalidExternalPath(t *testing.T) {
 // TestAnalyzeNormalizedPhaseSync_NormPhaseNotFound 驗證標準化區間 endPhase 不存在
 // 於 manifest 時，handler 回 Success=false 且錯誤訊息明確指出不存在的 phase 名稱。
 //
-// 注意：Norm 那組 phase 是 handler 傳給 Load 的 baseParams.StartPhase/EndPhase，
-// 因此 Load 內 runValidationPipeline 的 validatePhaseOrder 會先 fail，錯誤訊息
-// 前綴為「載入資料失敗: 分期點順序驗證失敗: …」而非「標準化區間: …」。這對使用者
-// 仍然清楚（直接點出未知 phase 名稱），不需要額外包裝。
+// 分期點名稱與順序在任何 I/O 之前驗證(ADR-0047),錯誤訊息前綴為
+// 「標準化區間: 分期點順序驗證失敗: …」(搬移前是「載入資料失敗: …」)。
 func TestAnalyzeNormalizedPhaseSync_NormPhaseNotFound(t *testing.T) {
 	app := setupNormalizedPhaseSyncTestApp(t)
 	manifestPath, dataFolder := setupNormalizedPhaseSyncFixture(t)
@@ -295,4 +298,175 @@ func TestAnalyzeNormalizedPhaseSync_NormPhaseNotFound(t *testing.T) {
 		"錯誤訊息應指明不存在的 phase 名稱以利使用者定位")
 	assert.Contains(t, result.Message, "unknown phase point",
 		"錯誤訊息應指明 phase 未知")
+	assert.True(t, strings.HasPrefix(result.Message, i18n.T(i18n.KeyErrorHandlerNormRange)+": 分期點順序驗證失敗: "),
+		"Message 應以標準化區間前綴開頭,實際 %q", result.Message)
+}
+
+// TestAnalyzeNormalizedPhaseSync_StatsFailureWritesNoOutput 釘住 ADR-0047 的行為改變:
+// 統計步驟失敗時不寫任何輸出(搬移前 Output 1 在統計之前就已寫出)。EMG 在統計區間
+// (S=0.4 → T=0.7)內、標準化區間(P0=0.1 → P2=0.3)外有一筆 NaN:標準化通過(NaN
+// 不在取最大值的區間內),統計的 NaN 檢查失敗。
+func TestAnalyzeNormalizedPhaseSync_StatsFailureWritesNoOutput(t *testing.T) {
+	app := setupNormalizedPhaseSyncTestApp(t)
+	outDir := t.TempDir()
+	app.state.Store(buildAppState(&config.AppConfig{OutputDir: outDir}))
+	manifestPath, dataFolder := setupNormalizedPhaseSyncFixture(t)
+
+	var emg strings.Builder
+	emg.WriteString("Time,Ch1,Ch2\n")
+	for i := 0; i <= 1000; i++ {
+		ch1 := "100.5"
+		if i == 500 {
+			ch1 = "NaN"
+		}
+		fmt.Fprintf(&emg, "%.6f,%s,200.3\n", float64(i)/1000.0, ch1)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dataFolder, "emg.csv"), []byte(emg.String()), 0o600))
+
+	result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
+		ManifestFile:    manifestPath,
+		DataFolder:      dataFolder,
+		SubjectIndex:    0,
+		NormStartPhase:  "P0",
+		NormEndPhase:    "P2",
+		StatsStartPhase: "S",
+		StatsEndPhase:   "T",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.Success)
+	assert.True(t, strings.HasPrefix(result.Message, i18n.T(i18n.KeyErrorHandlerCalcStatsFailed)+": "),
+		"Message 應以統計失敗前綴開頭,實際 %q", result.Message)
+	entries, readErr := os.ReadDir(outDir)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries, "統計失敗時不得寫出 Output 1 / Output 2")
+}
+
+// TestAnalyzeNormalizedPhaseSync_PhaseOrderCheckedBeforeIO 釘住 ADR-0047 的行為改變:
+// 兩組分期點的順序錯誤在任何 I/O 之前回報(manifest 不存在也不會先報載入失敗),
+// 各帶自己區間的前綴。
+func TestAnalyzeNormalizedPhaseSync_PhaseOrderCheckedBeforeIO(t *testing.T) {
+	const orderErr = "分期點順序驗證失敗: 開始分期點 P2 與結束分期點 P0: start phase must be before end phase"
+	cases := []struct {
+		name        string
+		norm, stats [2]models.PhasePoint
+		wantMessage string
+	}{
+		{
+			name:        "標準化區間反序",
+			norm:        [2]models.PhasePoint{models.PhaseP2, models.PhaseP0},
+			stats:       [2]models.PhasePoint{models.PhaseP0, models.PhaseP2},
+			wantMessage: i18n.T(i18n.KeyErrorHandlerNormRange) + ": " + orderErr,
+		},
+		{
+			name:        "統計區間反序",
+			norm:        [2]models.PhasePoint{models.PhaseP0, models.PhaseP2},
+			stats:       [2]models.PhasePoint{models.PhaseP2, models.PhaseP0},
+			wantMessage: i18n.T(i18n.KeyErrorHandlerStatsRange) + ": " + orderErr,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := setupNormalizedPhaseSyncTestApp(t)
+			dataFolder := t.TempDir()
+
+			result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
+				ManifestFile:    filepath.Join(dataFolder, "missing_manifest.csv"),
+				DataFolder:      dataFolder,
+				SubjectIndex:    0,
+				NormStartPhase:  tc.norm[0],
+				NormEndPhase:    tc.norm[1],
+				StatsStartPhase: tc.stats[0],
+				StatsEndPhase:   tc.stats[1],
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.False(t, result.Success)
+			assert.Equal(t, tc.wantMessage, result.Message)
+		})
+	}
+}
+
+// TestNormalizedPhaseSyncFailKey 釘住 adapter 的 stage → i18n key 對映(Ruling 24):
+// 每個 phase_sync.Stage 用搬移前 handler 那一步的 key;ctx 取消 →「分析已取消」。
+func TestNormalizedPhaseSyncFailKey(t *testing.T) {
+	cause := errors.New("cause")
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"load", &phase_sync.AnalysisError{Stage: phase_sync.StageLoad, Err: cause}, i18n.KeyErrorHandlerLoadDataFailed},
+		{"norm range", &phase_sync.AnalysisError{Stage: phase_sync.StageNormRange, Err: cause}, i18n.KeyErrorHandlerNormRange},
+		{"stats range", &phase_sync.AnalysisError{Stage: phase_sync.StageStatsRange, Err: cause}, i18n.KeyErrorHandlerStatsRange},
+		{"normalize", &phase_sync.AnalysisError{Stage: phase_sync.StageNormalize, Err: cause}, i18n.KeyErrorHandlerNormalizeFailed},
+		{"stats slice", &phase_sync.AnalysisError{Stage: phase_sync.StageStatsSlice, Err: cause}, i18n.KeyErrorHandlerExtractStatsRangeFailed},
+		{"statistics", &phase_sync.AnalysisError{Stage: phase_sync.StageStatistics, Err: cause}, i18n.KeyErrorHandlerCalcStatsFailed},
+		{"canceled", context.Canceled, i18n.KeyErrorHandlerCancelled},
+		{"deadline", fmt.Errorf("wrapped: %w", context.DeadlineExceeded), i18n.KeyErrorHandlerCancelled},
+		{"untagged", cause, i18n.KeyErrorHandlerLoadDataFailed},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, normalizedPhaseSyncFailKey(tc.err))
+		})
+	}
+}
+
+// TestAnalyzeNormalizedPhaseSync_LoadAndNormalizeFailurePrefix 經 handler 端到端確認
+// phase_sync 把載入與標準化兩步的失敗標上對的 Stage(Message 前綴與搬移前相同)。
+func TestAnalyzeNormalizedPhaseSync_LoadAndNormalizeFailurePrefix(t *testing.T) {
+	cases := []struct {
+		name       string
+		mutate     func(t *testing.T, dataFolder string)
+		wantPrefix string
+	}{
+		{
+			name: "EMG 檔不存在 → 載入資料失敗",
+			mutate: func(t *testing.T, dataFolder string) {
+				require.NoError(t, os.Remove(filepath.Join(dataFolder, "emg.csv")))
+			},
+			wantPrefix: i18n.T(i18n.KeyErrorHandlerLoadDataFailed) + ": EMG 檔案不存在 (emg.csv)",
+		},
+		{
+			name: "Norm 區間內通道全為 0 → 標準化失敗",
+			mutate: func(t *testing.T, dataFolder string) {
+				var emg strings.Builder
+				emg.WriteString("Time,Ch1,Ch2\n")
+				for i := 0; i <= 1000; i++ {
+					fmt.Fprintf(&emg, "%.6f,0,200.3\n", float64(i)/1000.0)
+				}
+				require.NoError(t, os.WriteFile(filepath.Join(dataFolder, "emg.csv"), []byte(emg.String()), 0o600))
+			},
+			wantPrefix: i18n.T(i18n.KeyErrorHandlerNormalizeFailed) + `: 肌肉 "Ch1"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := setupNormalizedPhaseSyncTestApp(t)
+			manifestPath, dataFolder := setupNormalizedPhaseSyncFixture(t)
+			tc.mutate(t, dataFolder)
+
+			result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
+				ManifestFile:    manifestPath,
+				DataFolder:      dataFolder,
+				SubjectIndex:    0,
+				NormStartPhase:  "P0",
+				NormEndPhase:    "P2",
+				StatsStartPhase: "P0",
+				StatsEndPhase:   "P2",
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.False(t, result.Success)
+			assert.True(t, strings.HasPrefix(result.Message, tc.wantPrefix),
+				"Message 應以 %q 開頭,實際 %q", tc.wantPrefix, result.Message)
+		})
+	}
 }

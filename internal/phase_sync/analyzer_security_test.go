@@ -360,8 +360,8 @@ func TestPhaseSyncValidators_LiteralPercentAccepted(t *testing.T) {
 	t.Run("EMG path validation accepts literal percent", func(t *testing.T) {
 		dataFolder := writePctFile(t)
 		ctx := &validationContext{
-			params:   &models.AnalysisParams{DataFolder: dataFolder},
-			manifest: models.PhaseManifest{EMGFile: literalPercentEMGName},
+			dataFolder: dataFolder,
+			manifest:   models.PhaseManifest{EMGFile: literalPercentEMGName},
 		}
 		err := validateEMGFilePath(NewPhaseSyncAnalyzer(), ctx)
 		require.NoError(t, err, "literal '%%' EMG filename must pass path validation")
@@ -375,8 +375,8 @@ func TestPhaseSyncValidators_LiteralPercentAccepted(t *testing.T) {
 		// validates existence atomically, so the bootstrap EMG must be a real file to
 		// populate ctx.baseFolder before exercising the Motion validator.
 		ctx := &validationContext{
-			params:   &models.AnalysisParams{DataFolder: dataFolder},
-			manifest: models.PhaseManifest{EMGFile: literalPercentEMGName, MotionFile: literalPercentEMGName},
+			dataFolder: dataFolder,
+			manifest:   models.PhaseManifest{EMGFile: literalPercentEMGName, MotionFile: literalPercentEMGName},
 		}
 		require.NoError(t, validateEMGFilePath(analyzer, ctx), "bootstrap EMG validation")
 		if err := validateMotionFile(analyzer, ctx); err != nil {
@@ -392,8 +392,8 @@ func TestPhaseSyncValidators_LiteralPercentAccepted(t *testing.T) {
 		// validates existence atomically, so the bootstrap EMG must be a real file to
 		// populate ctx.baseFolder before exercising the Force validator.
 		ctx := &validationContext{
-			params:   &models.AnalysisParams{DataFolder: dataFolder},
-			manifest: models.PhaseManifest{EMGFile: literalPercentEMGName, ForceFile: literalPercentEMGName},
+			dataFolder: dataFolder,
+			manifest:   models.PhaseManifest{EMGFile: literalPercentEMGName, ForceFile: literalPercentEMGName},
 		}
 		require.NoError(t, validateEMGFilePath(analyzer, ctx), "bootstrap EMG validation")
 		if err := validateForceFile(analyzer, ctx); err != nil {
@@ -445,8 +445,8 @@ TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 func TestValidateEMGFilePath_MissingFile_ReportsNotFound(t *testing.T) {
 	base := t.TempDir() // valid, existing data folder
 	ctx := &validationContext{
-		params:   &models.AnalysisParams{DataFolder: base},
-		manifest: models.PhaseManifest{EMGFile: "does_not_exist.csv"},
+		dataFolder: base,
+		manifest:   models.PhaseManifest{EMGFile: "does_not_exist.csv"},
 	}
 
 	err := validateEMGFilePath(NewPhaseSyncAnalyzer(), ctx)
@@ -489,8 +489,8 @@ func TestPhaseSyncValidators_EMGSymlinkSafety(t *testing.T) {
 		}
 
 		ctx := &validationContext{
-			params:   &models.AnalysisParams{DataFolder: base},
-			manifest: models.PhaseManifest{EMGFile: "escape_emg.csv"},
+			dataFolder: base,
+			manifest:   models.PhaseManifest{EMGFile: "escape_emg.csv"},
 		}
 		err := validateEMGFilePath(NewPhaseSyncAnalyzer(), ctx)
 		require.Error(t, err,
@@ -509,8 +509,8 @@ func TestPhaseSyncValidators_EMGSymlinkSafety(t *testing.T) {
 		}
 
 		ctx := &validationContext{
-			params:   &models.AnalysisParams{DataFolder: base},
-			manifest: models.PhaseManifest{EMGFile: "link_emg.csv"},
+			dataFolder: base,
+			manifest:   models.PhaseManifest{EMGFile: "link_emg.csv"},
 		}
 		require.NoError(t, validateEMGFilePath(NewPhaseSyncAnalyzer(), ctx),
 			"in-folder symlink target stays in base, so the door accepts it")
