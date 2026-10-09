@@ -1,9 +1,6 @@
 package gui
 
 import (
-	"context"
-	"errors"
-
 	"count_mean/internal/i18n"
 	"count_mean/internal/muscle_ratio"
 	"count_mean/internal/security/redact"
@@ -68,70 +65,48 @@ type MuscleRatioResult struct {
 //   - 單一 subject 失敗（檔案不存在、缺通道、phase 時間越界等）→ 包進對應的 SubjectDTO.Error，
 //     不阻斷其他 subject 處理；前端依 Subjects[i].Success 判斷是否該行成功
 func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioResult, err error) {
+	defer recoverHandlerPanic("肌肉比值分析", a.logger, &err)
+
 	a.logger.Info("肌肉比值分析參數", map[string]any{"params": params})
 
 	s := a.state.Load()
-	outputDir := s.config.OutputDir
 
-	handler := &AnalysisHandler[MuscleRatioParams, []muscle_ratio.SubjectResult]{
-		Name:   "肌肉比值分析",
-		Logger: a.logger,
-		CSV:    s.csvHandler,
-		Validate: func(p MuscleRatioParams) error {
-			return validateManifestHandlerParams(p.ManifestFile, p.DataFolder)
-		},
-		Execute: func(ctx context.Context, p MuscleRatioParams) ([]muscle_ratio.SubjectResult, error) {
-			// ctx 由樣板注入,沿用原 a.context() 行為:支援 Wails Shutdown /
-			// 使用者中止取消批次掃描。Analyzer 內 subject 迴圈會 poll
-			// ctx.Done(),Shutdown 時批次立即停,partial results 仍會被回。
-			subjectResults, analyzeErr := a.muscleRatioAnalyzer.Analyze(ctx, &muscle_ratio.Params{
-				ManifestFile: p.ManifestFile,
-				DataFolder:   p.DataFolder,
-				OutputDir:    outputDir,
-				CSVHandler:   s.csvHandler,
-			})
-			if analyzeErr != nil {
-				// error 字面可能含 absolute path(downstream parser 用 %w wrap),
-				// 前端 user-visible message 必須先過 redact 把 system-root prefix
-				// 砍掉,並走 i18n.T 取得 locale 化的「分析失敗」prefix(對齊
-				// TestAnalyzeMuscleRatio_LocaleSwitchAffectsMessage 對 zh-TW /
-				// zh-CN / en-US / ja-JP 各 locale 的 catalog 翻譯期望)。
-				// UIError 包裝:Error() 仍回 i18n 翻譯訊息(維持 result.Message
-				// 契約),sentinel 對接 errors.Is(err, ErrMuscleRatioAnalysisFailed)。
-				return nil, newUIError(ErrMuscleRatioAnalysisFailed,
-					i18n.T(i18n.KeyErrorMuscleRatioHandlerAnalysisFailed, redact.RedactForMessage(analyzeErr)))
-			}
-			return subjectResults, nil
-		},
-		// WriteCSV = nil:batch unit-of-work 不適用 single-path closure (ADR-0004 Boundary 3)。
-		// per-subject row layout 已透過 muscle_ratio.Analyzer 內呼叫 csvHandler.WriteMuscleRatioOutputAll
-		// 與 WriteMuscleRatioOutputPhases 落實;outputPath 由 analyzer 回填到
-		// SubjectResult.OutputAllPath / OutputPhasePath。
-		// 詳見 docs/adr/0004-format-aware-write-collapse-boundaries.md。
-		WriteCSV: nil,
+	a.logger.Info("開始肌肉比值分析", nil)
+
+	// 1 validate:失敗回原 sentinel 文字(對齊 TestAnalyzeMuscleRatio_EmptyParamsUnifiedChannel
+	// 對 ErrNoManifestFile / ErrNoDataFolder.Error() 的字面期望)。redact 對 path-free
+	// sentinel 不變,防未來帶路徑的 validate error 洩漏 PHI。
+	if validateErr := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); validateErr != nil {
+		return failedMuscleRatioResult(redact.RedactForMessage(validateErr)), nil
 	}
 
-	subjectResults, _, runErr := handler.Run(a.context(), params)
-	if runErr != nil {
-		// panic 路徑:HandlerRun 的 recoverHandlerPanic 已將 panic 包成
-		// ErrInternalPanic chain;err 走 named return 上拋,result=nil(對齊
-		// 原 single-channel 契約對 panic 的處理 — Subjects=nil 永遠代表
-		// pre-analysis fail 整批未啟動)。
-		if errors.Is(runErr, ErrInternalPanic) {
-			return nil, runErr
-		}
-		// expected err(Validate / Execute 任一回的 err)走 single-channel
-		// envelope:failedMuscleRatioResult(message) + nil err。Execute closure
-		// 已內含 i18n + redact wrap,Validate 失敗則回原 sentinel(對齊既有
-		// TestAnalyzeMuscleRatio_EmptyParamsUnifiedChannel 對 ErrNoManifestFile /
-		// ErrNoDataFolder.Error() 的字面期望)。redact 對 path-free sentinel 不變,
-		// 防未來帶路徑的 Validate error 洩漏 PHI。
-		return failedMuscleRatioResult(redact.RedactForMessage(runErr)), nil
+	// 2 analyze:batch unit-of-work,per-subject 兩個 CSV 由 muscle_ratio.Analyzer 內呼叫
+	// csvHandler.WriteMuscleRatioOutputAll / WriteMuscleRatioOutputPhases 寫出
+	// (ADR-0012 compute+write),outputPath 回填到 SubjectResult.OutputAllPath / OutputPhasePath。
+	// ctx 支援 Wails Shutdown / 使用者中止:Analyzer 內 subject 迴圈會 poll ctx.Done(),
+	// Shutdown 時批次立即停,partial results 仍會被回。
+	subjectResults, analyzeErr := a.muscleRatioAnalyzer.Analyze(a.context(), &muscle_ratio.Params{
+		ManifestFile: params.ManifestFile,
+		DataFolder:   params.DataFolder,
+		OutputDir:    s.config.OutputDir,
+		CSVHandler:   s.csvHandler,
+	})
+	if analyzeErr != nil {
+		// error 字面可能含 absolute path(downstream parser 用 %w wrap),
+		// 前端 user-visible message 必須先過 redact 把 system-root prefix
+		// 砍掉,並走 i18n.T 取得 locale 化的「分析失敗」prefix(對齊
+		// TestAnalyzeMuscleRatio_LocaleSwitchAffectsMessage 對 zh-TW /
+		// zh-CN / en-US / ja-JP 各 locale 的 catalog 翻譯期望)。外層 redact.Paths
+		// 保留退役前「翻譯後訊息再過一次 RedactForMessage」的位元組行為。
+		return failedMuscleRatioResult(redact.Paths(
+			i18n.T(i18n.KeyErrorMuscleRatioHandlerAnalysisFailed, redact.RedactForMessage(analyzeErr)),
+		)), nil
 	}
 
-	// Result transform — Run 外:Subjects DTO 組裝 + allSuccess 判斷 + i18n status
-	// message 組裝。對應 PRD「Caller 在 Run 外仍處理的事」(Subjects DTO /
-	// allSuccess / KeyStatusMuscleRatioProcessedCount + PartialWarning)。
+	a.logger.Info("肌肉比值分析完成", nil)
+
+	// 3 result transform:Subjects DTO 組裝 + allSuccess 判斷 + i18n status message 組裝
+	// (KeyStatusMuscleRatioProcessedCount + PartialWarning)。
 	subjects := make([]MuscleRatioSubjectDTO, 0, len(subjectResults))
 	allSuccess := true
 

@@ -4,17 +4,14 @@
 // Composer panel 與 backend `internal/chart` composer engine。
 //
 // 設計取捨摘要：
-//   - Handler 1-3 走 [[HandlerRun[R]]] Tier 1 wrapper（panic safety + entry/exit
-//     log + generic err wrapping）。Chart Composer 明確**不**屬於 Analysis pipeline
-//     family（ADR-0002）— 不寫 CSV、無多步驟 pipeline，只做 manifest load / EMG
-//     load / chart render，因此不走 [[AnalysisHandler[P, R]]] Tier 2。
+//   - 每個 handler 與其他 Wails bound method 同形（ADR-0035）：首句
+//     `defer recoverHandlerPanic`，其餘直列在 body。Chart Composer 不寫 CSV、
+//     無多步驟 pipeline（ADR-0002），只做 manifest load / EMG load / chart render。
 //   - Handler 4（DownloadChartComposerImage）鏡像既有 `DownloadCCIChart` 模式
 //     — adapter 端從 params.Subject 經 filename.SubjectOutputName 推導 config.OutputDir
 //     內的 `{subject}_chart_composer.png`,再把
 //     共用 PNG 安全管線（base64 → DecodeAndValidatePNG → validateExternalPathInputs
-//     → fsperm.WriteFileNoFollow）委派給 downloadValidatedPNG（ADR-0009），自己加
-//     recoverHandlerPanic defer。**不**走 HandlerRun 因為 download 路徑的特殊安全鏈
-//     （base64 + path validation）需要精確控制 short-circuit 順序。
+//     → fsperm.WriteFileNoFollow）委派給 downloadValidatedPNG（ADR-0009）。
 //
 // 錯誤通道契約：
 //
@@ -145,69 +142,76 @@ func failedChartComposerSubjectsResult(message string) *ChartComposerSubjectsRes
 
 // LoadChartComposerSubjects 解析 manifest，回 subject dropdown 列表。
 //
-// 走 [[HandlerRun[R]]] Tier 1 wrapper：
-//   - panic safety 由 recoverHandlerPanic 收乾（panic → named return err，result=nil）
-//   - entry/exit log 由 HandlerRun 統一打
-//   - body 內 `(result, nil)` 永遠回 non-nil result（單一通道契約）
+//   - panic safety 由首句 defer recoverHandlerPanic 收乾（panic → named return err，result=nil）
+//   - 非 panic 路徑永遠回 non-nil result + nil err（單一通道契約）
 //
-// nil params guard 由 caller 端在 HandlerRun closure 入口先處理，避免裸 deref。
+// nil params guard 在 body 入口先處理，避免裸 deref。
 func (a *App) LoadChartComposerSubjects(
 	params *LoadChartComposerSubjectsParams,
 ) (result *ChartComposerSubjectsResult, err error) {
-	return HandlerRun(a.logger, "Chart Composer 載入主題", func() (*ChartComposerSubjectsResult, error) {
-		// nil params guard — Wails RPC 入口若被惡意呼叫（或前端 bug）傳 nil，
-		// 不該 panic。回 failedResult + nil err（單一通道契約）。
-		if params == nil {
-			return failedChartComposerSubjectsResult("參數為空"), nil
-		}
+	defer recoverHandlerPanic("Chart Composer 載入主題", a.logger, &err)
 
-		if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
-			return failedChartComposerSubjectsResult(redact.RedactForMessage(err)), nil
+	a.logger.Info("開始Chart Composer 載入主題", nil)
+	// exit log 只在正常返回時打:單一通道下正常返回的 result 必 non-nil,panic
+	// 路徑 result 仍為 nil。
+	defer func() {
+		if result != nil {
+			a.logger.Info("Chart Composer 載入主題完成", nil)
 		}
+	}()
 
-		manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
-		if parseErr != nil {
-			a.logger.Error("Chart Composer 載入 manifest 失敗", parseErr, map[string]any{})
-			return failedChartComposerSubjectsResult(
-				fmt.Sprintf("載入分期總檔案失敗: %s", redact.RedactForMessage(parseErr)),
-			), nil
+	// nil params guard — Wails RPC 入口若被惡意呼叫（或前端 bug）傳 nil，
+	// 不該 panic。回 failedResult + nil err（單一通道契約）。
+	if params == nil {
+		return failedChartComposerSubjectsResult("參數為空"), nil
+	}
+
+	if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
+		return failedChartComposerSubjectsResult(redact.RedactForMessage(err)), nil
+	}
+
+	manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
+	if parseErr != nil {
+		a.logger.Error("Chart Composer 載入 manifest 失敗", parseErr, map[string]any{})
+		return failedChartComposerSubjectsResult(
+			fmt.Sprintf("載入分期總檔案失敗: %s", redact.RedactForMessage(parseErr)),
+		), nil
+	}
+
+	// 收集 unique subject — 與 LoadPhaseManifest 對稱:回 dedup 過的 subject
+	// list,避免相同 subject 在 manifest 內出現多次時 dropdown 重複。
+	seen := make(map[string]struct{}, len(manifests))
+	subjects := make([]string, 0, len(manifests))
+	for i := range manifests {
+		s := manifests[i].Subject
+		if _, exists := seen[s]; exists {
+			continue
 		}
+		seen[s] = struct{}{}
+		subjects = append(subjects, s)
+	}
 
-		// 收集 unique subject — 與 LoadPhaseManifest 對稱:回 dedup 過的 subject
-		// list,避免相同 subject 在 manifest 內出現多次時 dropdown 重複。
-		seen := make(map[string]struct{}, len(manifests))
-		subjects := make([]string, 0, len(manifests))
-		for i := range manifests {
-			s := manifests[i].Subject
-			if _, exists := seen[s]; exists {
-				continue
-			}
-			seen[s] = struct{}{}
-			subjects = append(subjects, s)
+	// Bug 1 整合:Load 階段先掃過所有 EMG 檔,把不存在的 row surface 給前端,
+	// 避免 user 進 dropdown 後在 Generate 階段才看到「EMG 檔案不存在」錯誤。
+	// non-blocking — 即使有 missing,dropdown 仍列出全部 subject,user 自行
+	// 決定下一步(改 manifest / data folder 或忽略 missing 跑其他 OK subject)。
+	missing := manifest.ValidateAllEMGFiles(manifests, params.DataFolder)
+	missingDTOs := make([]MissingFileDTO, len(missing))
+	for i, m := range missing {
+		missingDTOs[i] = MissingFileDTO{
+			Subject: m.Subject,
+			EMGFile: m.EMGFile,
+			// OpenDataFile error 含期待路徑 → 過 redact 防 PHI 洩漏(保留 basename)。
+			ErrMessage: redact.RedactForMessage(m.Err),
 		}
+	}
 
-		// Bug 1 整合:Load 階段先掃過所有 EMG 檔,把不存在的 row surface 給前端,
-		// 避免 user 進 dropdown 後在 Generate 階段才看到「EMG 檔案不存在」錯誤。
-		// non-blocking — 即使有 missing,dropdown 仍列出全部 subject,user 自行
-		// 決定下一步(改 manifest / data folder 或忽略 missing 跑其他 OK subject)。
-		missing := manifest.ValidateAllEMGFiles(manifests, params.DataFolder)
-		missingDTOs := make([]MissingFileDTO, len(missing))
-		for i, m := range missing {
-			missingDTOs[i] = MissingFileDTO{
-				Subject: m.Subject,
-				EMGFile: m.EMGFile,
-				// OpenDataFile error 含期待路徑 → 過 redact 防 PHI 洩漏(保留 basename)。
-				ErrMessage: redact.RedactForMessage(m.Err),
-			}
-		}
-
-		return &ChartComposerSubjectsResult{
-			Subjects:     subjects,
-			MissingFiles: missingDTOs,
-			Success:      true,
-			Message:      fmt.Sprintf("已載入 %d 個主題", len(subjects)),
-		}, nil
-	})
+	return &ChartComposerSubjectsResult{
+		Subjects:     subjects,
+		MissingFiles: missingDTOs,
+		Success:      true,
+		Message:      fmt.Sprintf("已載入 %d 個主題", len(subjects)),
+	}, nil
 }
 
 // GenerateChartComposer 呼叫 chart.RenderComposer 並回 HTML preview。
@@ -226,124 +230,132 @@ func (a *App) LoadChartComposerSubjects(
 func (a *App) GenerateChartComposer(
 	params *GenerateChartComposerParams,
 ) (result *ChartComposerResult, err error) {
-	return HandlerRun(a.logger, "Chart Composer 圖表生成", func() (*ChartComposerResult, error) {
-		if params == nil {
-			return failedChartComposerResult("參數為空"), nil
-		}
+	defer recoverHandlerPanic("Chart Composer 圖表生成", a.logger, &err)
 
-		if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
-			return failedChartComposerResult(redact.RedactForMessage(err)), nil
+	a.logger.Info("開始Chart Composer 圖表生成", nil)
+	// exit log 只在正常返回時打:單一通道下正常返回的 result 必 non-nil,panic
+	// 路徑 result 仍為 nil。
+	defer func() {
+		if result != nil {
+			a.logger.Info("Chart Composer 圖表生成完成", nil)
 		}
+	}()
 
-		if params.Subject == "" {
-			return failedChartComposerResult("Subject 不可為空"), nil
-		}
+	if params == nil {
+		return failedChartComposerResult("參數為空"), nil
+	}
 
-		manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
-		if parseErr != nil {
-			a.logger.Error("Chart Composer 載入 manifest 失敗", parseErr, map[string]any{})
+	if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
+		return failedChartComposerResult(redact.RedactForMessage(err)), nil
+	}
+
+	if params.Subject == "" {
+		return failedChartComposerResult("Subject 不可為空"), nil
+	}
+
+	manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
+	if parseErr != nil {
+		a.logger.Error("Chart Composer 載入 manifest 失敗", parseErr, map[string]any{})
+		return failedChartComposerResult(
+			fmt.Sprintf("載入分期總檔案失敗: %s", redact.RedactForMessage(parseErr)),
+		), nil
+	}
+
+	row, found := findManifestBySubject(manifests, params.Subject)
+	if !found {
+		return failedChartComposerResult(
+			fmt.Sprintf("Subject %q 不存在於分期總檔案", params.Subject),
+		), nil
+	}
+
+	// 載入 EMG(必要)— 走 manifest.OpenDataFile 硬化讀檔門,交出已驗證 *os.File。
+	emgFile, emgOpenErr := manifest.OpenDataFile(params.DataFolder, row.EMGFile)
+	if emgOpenErr != nil {
+		a.logger.Error("Chart Composer 開啟 EMG 失敗", emgOpenErr, map[string]any{})
+		return failedChartComposerResult(
+			fmt.Sprintf("EMG 檔案路徑解析失敗: %s", redact.RedactForMessage(emgOpenErr)),
+		), nil
+	}
+	emgPhaseSync, _, emgErr := parsers.NewEMGParser().Parse(emgFile, row.EMGFile)
+	_ = emgFile.Close() //nolint:errcheck // read-only fd; close error not actionable (data materialized by Parse)
+	if emgErr != nil {
+		a.logger.Error("Chart Composer 解析 EMG 失敗", emgErr, map[string]any{})
+		return failedChartComposerResult(
+			fmt.Sprintf("解析 EMG 失敗: %s", redact.RedactForMessage(emgErr)),
+		), nil
+	}
+	emgDataset := phaseSyncEMGToDataset(emgPhaseSync)
+
+	// 載入 motion(必要 — composer 至少 2-grid,motion 是其中一個 grid)
+	composerMotion, motionErr := loadComposerMotion(
+		params.DataFolder, row.MotionFile, row.EMGMotionOffset,
+	)
+	if motionErr != nil {
+		a.logger.Error("Chart Composer 解析 Motion 失敗", motionErr, map[string]any{})
+		return failedChartComposerResult(
+			fmt.Sprintf("解析 Motion 失敗: %s", redact.RedactForMessage(motionErr)),
+		), nil
+	}
+
+	// 載入 muscle_ratio(可選 — 僅 V.14 manifest 帶 MuscleRatioFile)
+	var muscleRatioData *chart.MuscleRatioData
+	if strings.TrimSpace(row.MuscleRatioFile) != "" {
+		mr, mrErr := loadComposerMuscleRatio(params.DataFolder, row.MuscleRatioFile)
+		if mrErr != nil {
+			a.logger.Error("Chart Composer 解析 muscle_ratio 失敗", mrErr, map[string]any{})
 			return failedChartComposerResult(
-				fmt.Sprintf("載入分期總檔案失敗: %s", redact.RedactForMessage(parseErr)),
+				fmt.Sprintf("解析 muscle_ratio 失敗: %s", redact.RedactForMessage(mrErr)),
 			), nil
 		}
+		muscleRatioData = mr
+	}
 
-		row, found := findManifestBySubject(manifests, params.Subject)
-		if !found {
-			return failedChartComposerResult(
-				fmt.Sprintf("Subject %q 不存在於分期總檔案", params.Subject),
-			), nil
+	// manifest PhasePoints 換算成「phase 名 → EMG 秒數」單一份 map:力板時間欄位
+	// (P0/P1/P2/S/C/T0/T/L)走 ForceTimeToEMGTime,motion-index 欄位(D/O)走
+	// MotionIndexToEMGTime。Chart Composer 的所有 grid X 軸是 **EMG 時間** domain;
+	// 若不換算直接 attach,markLine 會早 / 晚整個 sync offset — silent visual bug。
+	// 這份 map 同時供後端預設 markLine(composerInput.PhaseTimesEMG)與前端 checkbox
+	// /動態 markLine(回傳的 PhaseTimes)使用,兩端共用來源不會分歧。
+	phaseTimes := composerPhaseTimesEMG(row.PhasePoints, row.EMGMotionOffset)
+
+	// SelectedChannels 傳 nil(空)— chart composer 對空走「fallback 全選」
+	// (composer.go:267-273),達成 ADR-0013 的「預設全通道」。
+	composerInput := chart.ComposerInput{
+		Subject:          row.Subject,
+		EMGDataset:       emgDataset,
+		SelectedChannels: nil,
+		MuscleRatioData:  muscleRatioData,
+		MotionData:       composerMotion,
+		PhaseTimesEMG:    phaseTimes,
+		EMGMotionOffset:  row.EMGMotionOffset,
+	}
+
+	var buf bytes.Buffer
+	if renderErr := chart.RenderComposer(a.context(), composerInput, &buf); renderErr != nil {
+		// EMG-required 是 caller bug(我們上面剛確保 emgDataset 非 nil)而非
+		// user-visible 路徑,直接走通用錯誤訊息;ctx cancel 走相同 path。
+		if errors.Is(renderErr, chart.ErrComposerEMGRequired) {
+			return failedChartComposerResult("內部錯誤: EMG dataset 為空"), nil
 		}
+		return failedChartComposerResult(
+			fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(renderErr)),
+		), nil
+	}
 
-		// 載入 EMG(必要)— 走 manifest.OpenDataFile 硬化讀檔門,交出已驗證 *os.File。
-		emgFile, emgOpenErr := manifest.OpenDataFile(params.DataFolder, row.EMGFile)
-		if emgOpenErr != nil {
-			a.logger.Error("Chart Composer 開啟 EMG 失敗", emgOpenErr, map[string]any{})
-			return failedChartComposerResult(
-				fmt.Sprintf("EMG 檔案路徑解析失敗: %s", redact.RedactForMessage(emgOpenErr)),
-			), nil
-		}
-		emgPhaseSync, _, emgErr := parsers.NewEMGParser().Parse(emgFile, row.EMGFile)
-		_ = emgFile.Close() //nolint:errcheck // read-only fd; close error not actionable (data materialized by Parse)
-		if emgErr != nil {
-			a.logger.Error("Chart Composer 解析 EMG 失敗", emgErr, map[string]any{})
-			return failedChartComposerResult(
-				fmt.Sprintf("解析 EMG 失敗: %s", redact.RedactForMessage(emgErr)),
-			), nil
-		}
-		emgDataset := phaseSyncEMGToDataset(emgPhaseSync)
-
-		// 載入 motion(必要 — composer 至少 2-grid,motion 是其中一個 grid)
-		composerMotion, motionErr := loadComposerMotion(
-			params.DataFolder, row.MotionFile, row.EMGMotionOffset,
-		)
-		if motionErr != nil {
-			a.logger.Error("Chart Composer 解析 Motion 失敗", motionErr, map[string]any{})
-			return failedChartComposerResult(
-				fmt.Sprintf("解析 Motion 失敗: %s", redact.RedactForMessage(motionErr)),
-			), nil
-		}
-
-		// 載入 muscle_ratio(可選 — 僅 V.14 manifest 帶 MuscleRatioFile)
-		var muscleRatioData *chart.MuscleRatioData
-		if strings.TrimSpace(row.MuscleRatioFile) != "" {
-			mr, mrErr := loadComposerMuscleRatio(params.DataFolder, row.MuscleRatioFile)
-			if mrErr != nil {
-				a.logger.Error("Chart Composer 解析 muscle_ratio 失敗", mrErr, map[string]any{})
-				return failedChartComposerResult(
-					fmt.Sprintf("解析 muscle_ratio 失敗: %s", redact.RedactForMessage(mrErr)),
-				), nil
-			}
-			muscleRatioData = mr
-		}
-
-		// manifest PhasePoints 換算成「phase 名 → EMG 秒數」單一份 map:力板時間欄位
-		// (P0/P1/P2/S/C/T0/T/L)走 ForceTimeToEMGTime,motion-index 欄位(D/O)走
-		// MotionIndexToEMGTime。Chart Composer 的所有 grid X 軸是 **EMG 時間** domain;
-		// 若不換算直接 attach,markLine 會早 / 晚整個 sync offset — silent visual bug。
-		// 這份 map 同時供後端預設 markLine(composerInput.PhaseTimesEMG)與前端 checkbox
-		// /動態 markLine(回傳的 PhaseTimes)使用,兩端共用來源不會分歧。
-		phaseTimes := composerPhaseTimesEMG(row.PhasePoints, row.EMGMotionOffset)
-
-		// SelectedChannels 傳 nil(空)— chart composer 對空走「fallback 全選」
-		// (composer.go:267-273),達成 ADR-0013 的「預設全通道」。
-		composerInput := chart.ComposerInput{
-			Subject:          row.Subject,
-			EMGDataset:       emgDataset,
-			SelectedChannels: nil,
-			MuscleRatioData:  muscleRatioData,
-			MotionData:       composerMotion,
-			PhaseTimesEMG:    phaseTimes,
-			EMGMotionOffset:  row.EMGMotionOffset,
-		}
-
-		var buf bytes.Buffer
-		if renderErr := chart.RenderComposer(a.context(), composerInput, &buf); renderErr != nil {
-			// EMG-required 是 caller bug(我們上面剛確保 emgDataset 非 nil)而非
-			// user-visible 路徑,直接走通用錯誤訊息;ctx cancel 走相同 path。
-			if errors.Is(renderErr, chart.ErrComposerEMGRequired) {
-				return failedChartComposerResult("內部錯誤: EMG dataset 為空"), nil
-			}
-			return failedChartComposerResult(
-				fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(renderErr)),
-			), nil
-		}
-
-		return &ChartComposerResult{
-			HTML:       buf.String(),
-			PhaseTimes: phaseTimes,
-			Success:    true,
-			Message:    "圖表生成完成",
-		}, nil
-	})
+	return &ChartComposerResult{
+		HTML:       buf.String(),
+		PhaseTimes: phaseTimes,
+		Success:    true,
+		Message:    "圖表生成完成",
+	}, nil
 }
 
 // DownloadChartComposerImage 接前端 base64 PNG dataURL,從 params.Subject 推導
 // config.OutputDir 內的固定檔名({SubjectOutputName(subject, "chart_composer")}.png)
 // 並寫入(對稱 DownloadCCIChart)。
 //
-// 不走 HandlerRun — 此 handler 的 short-circuit 順序敏感(PNG decode 先於 path
-// validation,避免在合法路徑寫進非 PNG 內容),鏡像 `DownloadCCIChart` 既有獨立
-// 模式而非走 template wrap。
+// short-circuit 順序敏感(PNG decode 先於 path validation,避免在合法路徑寫進
+// 非 PNG 內容),鏡像 `DownloadCCIChart`。
 //
 // adapter 職責:從 params.Subject 經 filename.SubjectOutputName 推導檔名(內部強制
 // Sanitize 防 traversal)。共用的 PNG 安全管線(prefix 檢查 → DecodeAndValidatePNG

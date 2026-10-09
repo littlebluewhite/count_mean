@@ -2,13 +2,57 @@ package gui
 
 import (
 	"context"
+	"reflect"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/config"
+	"count_mean/internal/i18n"
 )
+
+// TestBoundMethods_NilDeps_PanicNeverEscapes 用 reflect 對零依賴的 &App{}(logger /
+// state / analyzer / ctx 全為 nil)呼叫每個 exported method(Wails 全數 bind),
+// 引數一律 zero value,斷言沒有任何 panic 逃出 method 邊界。
+//
+// 這是「每個 bound method 首句 defer recoverHandlerPanic*」的 runtime 面守門:
+// 首句之前只要有任何一行碰到 nil 依賴(例如先打 a.logger.Info 或先 a.state.Load()
+// 再 deref),panic 就會繞過 recover 直達 Wails runtime 擊潰整個 desktop process。
+// 形狀面(首句是哪個 recover variant)由 app_panic_ast_test.go 守。
+func TestBoundMethods_NilDeps_PanicNeverEscapes(t *testing.T) {
+	// ResetConfig 走完會切換 process-wide i18n locale;測完還原,避免汙染其他測試。
+	prevLocale := i18n.GetLocale()
+	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
+
+	appType := reflect.TypeFor[*App]()
+	require.Positive(t, appType.NumMethod(), "*App 應有 exported method")
+
+	for i := range appType.NumMethod() {
+		name := appType.Method(i).Name
+
+		t.Run(name, func(t *testing.T) {
+			fn := reflect.ValueOf(&App{}).Method(i)
+
+			args := make([]reflect.Value, fn.Type().NumIn())
+			for j := range args {
+				args[j] = reflect.Zero(fn.Type().In(j))
+			}
+
+			var escaped any
+
+			func() {
+				defer func() { escaped = recover() }()
+				fn.Call(args)
+			}()
+
+			if escaped != nil {
+				t.Errorf("%s 在零依賴下 panic 逃出 method 邊界(首句 defer recover 之前碰到 nil 依賴): %v",
+					name, escaped)
+			}
+		})
+	}
+}
 
 // TestRpcMethods_PanicInBody_RecoveredAsError 守護 修法:9 個原本沒 defer
 // recoverHandlerPanic* 的 RPC method 加上 panic 安全網後,任何 method 內部 panic
@@ -126,4 +170,3 @@ func TestApp_CtxAtomicPointer_NonNilAfterStartup(t *testing.T) {
 	require.NotNil(t, got)
 	require.Equal(t, ctx, *got, "atomic.Pointer round-trip 必須保持 ctx 等價")
 }
-

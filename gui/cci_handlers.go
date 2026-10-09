@@ -48,51 +48,61 @@ type CCIDownloadParams struct {
 //	（不可預期錯誤）。如此前端可以單一路徑檢查 `result.success`/`result.message`，
 //	不必同時 try/catch + 檢 result.success（之前的雙通道設計）。
 func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
-	// ⚠️ HandlerRun 之前不可有任何 a.logger.* 呼叫(維持 nil-logger panic 測試語意)
-	return HandlerRun(a.logger, "CCI 分析", func() (*CCIResult, error) {
-		a.logger.Info("CCI 分析參數", map[string]any{"params": params})
-		s := a.state.Load()
-		ctx := a.context()
+	defer recoverHandlerPanic("CCI 分析", a.logger, &err)
 
-		// 1 validate
-		if vErr := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); vErr != nil {
-			return failedCCIResult(redact.RedactForMessage(vErr)), nil
+	a.logger.Info("開始CCI 分析", nil)
+	// exit log 只在正常返回時打:單一通道下正常返回的 result 必 non-nil,panic
+	// 路徑 result 仍為 nil。
+	defer func() {
+		if result != nil {
+			a.logger.Info("CCI 分析完成", nil)
 		}
-		// 2 execute（domain analyzer）
-		analysisResult, aErr := a.cciAnalyzer.AnalyzeCCI(ctx, &cci.CCIParams{
-			ManifestFile: params.ManifestFile, DataFolder: params.DataFolder, SubjectIndex: params.SubjectIndex,
-		})
-		if aErr != nil {
-			return failedCCIResult(fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(aErr))), nil
-		}
-		// 3 Output 1
-		csvPath, e1 := s.csvHandler.WriteCCIResult(ctx, io.WriteRequest{}, analysisResult)
-		if e1 != nil {
-			return failedCCIResult(fmt.Sprintf("CSV 導出失敗: %s", redact.RedactForMessage(e1))), nil
-		}
-		// 4 chart
-		var buf bytes.Buffer
-		if cErr := cci.GenerateCCIInteractiveChart(ctx, analysisResult, &buf); cErr != nil {
-			return failedCCIResult(fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(cErr))), nil
-		}
-		// 5 report + transform
-		pairNames := make([]string, len(analysisResult.PairResults))
-		for i, pr := range analysisResult.PairResults { pairNames[i] = pr.PairName }
-		report := cci.GenerateReport(analysisResult)
-		// 6 Output 2
-		phasesPath, e2 := s.csvHandler.WriteCCIPhasesResult(ctx, io.WriteRequest{}, analysisResult)
-		if e2 != nil {
-			return failedCCIResult(fmt.Sprintf("分期統計導出失敗: %s", redact.RedactForMessage(e2))), nil
-		}
+	}()
 
-		a.logger.Info("CCI 分析輸出", map[string]any{"csv": csvPath, "phases": phasesPath})
-		return &CCIResult{
-			OutputCSVPath: csvPath, OutputPhasesPath: phasesPath, Subject: analysisResult.Subject,
-			PairNames: pairNames, ChartHTML: buf.String(),
-			PhasePercents: analysisResult.PhasePercents, PhaseTimes: analysisResult.PhaseTimes,
-			Report: report, Success: true, Message: "分析完成",
-		}, nil
+	a.logger.Info("CCI 分析參數", map[string]any{"params": params})
+	s := a.state.Load()
+	ctx := a.context()
+
+	// 1 validate
+	if vErr := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); vErr != nil {
+		return failedCCIResult(redact.RedactForMessage(vErr)), nil
+	}
+	// 2 execute（domain analyzer）
+	analysisResult, aErr := a.cciAnalyzer.AnalyzeCCI(ctx, &cci.CCIParams{
+		ManifestFile: params.ManifestFile, DataFolder: params.DataFolder, SubjectIndex: params.SubjectIndex,
 	})
+	if aErr != nil {
+		return failedCCIResult(fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(aErr))), nil
+	}
+	// 3 Output 1
+	csvPath, e1 := s.csvHandler.WriteCCIResult(ctx, io.WriteRequest{}, analysisResult)
+	if e1 != nil {
+		return failedCCIResult(fmt.Sprintf("CSV 導出失敗: %s", redact.RedactForMessage(e1))), nil
+	}
+	// 4 chart
+	var buf bytes.Buffer
+	if cErr := cci.GenerateCCIInteractiveChart(ctx, analysisResult, &buf); cErr != nil {
+		return failedCCIResult(fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(cErr))), nil
+	}
+	// 5 report + transform
+	pairNames := make([]string, len(analysisResult.PairResults))
+	for i, pr := range analysisResult.PairResults {
+		pairNames[i] = pr.PairName
+	}
+	report := cci.GenerateReport(analysisResult)
+	// 6 Output 2
+	phasesPath, e2 := s.csvHandler.WriteCCIPhasesResult(ctx, io.WriteRequest{}, analysisResult)
+	if e2 != nil {
+		return failedCCIResult(fmt.Sprintf("分期統計導出失敗: %s", redact.RedactForMessage(e2))), nil
+	}
+
+	a.logger.Info("CCI 分析輸出", map[string]any{"csv": csvPath, "phases": phasesPath})
+	return &CCIResult{
+		OutputCSVPath: csvPath, OutputPhasesPath: phasesPath, Subject: analysisResult.Subject,
+		PairNames: pairNames, ChartHTML: buf.String(),
+		PhasePercents: analysisResult.PhasePercents, PhaseTimes: analysisResult.PhaseTimes,
+		Report: report, Success: true, Message: "分析完成",
+	}, nil
 }
 
 // DownloadCCIChart 下載 CCI 圖表為 PNG 檔案.

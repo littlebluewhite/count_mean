@@ -449,27 +449,24 @@ func TestDownloadChartComposerImage_EmptySubjectFallsBackToUntitled(t *testing.T
 // ---------------------------------------------------------------------------
 
 // TestChartComposerHandlers_PanicRecovery 釘住 panic safety:
-// 4 個 handler 的 defer recoverHandlerPanic / HandlerRun 應把任何 panic
+// 每個 handler 首句的 defer recoverHandlerPanic 應把任何 panic
 // 轉成 ErrInternalPanic-wrapped err(named return)。
 //
 // 強制 panic 的最簡單方式:把 app.logger 設成 nil,handler body 進入後第一條
 // logger.Info 會 nil-deref panic。recoverHandlerPanic 內部對 nil logger 已
 // graceful 處理 (logPanic check),但 caller path 仍然有 panic 觸發。
-//
-// 注意:HandlerRun 本身呼叫 logger.Info,nil logger 會在 entry log 階段 panic,
-// 仍由 recoverHandlerPanic 接住。
 func TestChartComposerHandlers_PanicRecovery(t *testing.T) {
-	// 4 個 handler 都用同一個構造方式驗證 panic safety;
+	// 每個 handler 都用同一個構造方式驗證 panic safety;
 	// 個別測試只關心 errors.Is(err, ErrInternalPanic)。
 	t.Run("LoadChartComposerSubjects", func(t *testing.T) {
-		app := &App{logger: nil} // nil logger 走 HandlerRun 內 logger.Info 必 panic
+		app := &App{logger: nil} // nil logger → entry log 必 panic
 		app.state.Store(&appState{config: &config.AppConfig{OutputDir: t.TempDir()}})
 
 		result, err := app.LoadChartComposerSubjects(&LoadChartComposerSubjectsParams{
 			ManifestPath: filepath.Join(t.TempDir(), "x.csv"),
 			DataFolder:   t.TempDir(),
 		})
-		// HandlerRun 內部對 panic 走 recoverHandlerPanic → ErrInternalPanic-wrap;
+		// recoverHandlerPanic 把 panic 包成 ErrInternalPanic;
 		// result 為 zero value(*ChartComposerSubjectsResult nil pointer)。
 		require.Error(t, err, "panic 應透過 named return 灌入 err")
 		assert.ErrorIs(t, err, ErrInternalPanic)
@@ -540,7 +537,7 @@ func writeChartComposerSingleChannelMotion(t *testing.T, path string, rows int) 
 //
 // 第 2 列 ratio 全空(空 cell),其餘列正常填值。composer 對 NaN 走
 // buildComposerLineData line 692-695:`Value: nil`;
-// go-echarts LineData.Value 是 `interface{} \`json:"value,omitempty"\``,
+// go-echarts LineData.Value 是 interface{},struct tag 為 json:"value,omitempty",
 // `nil` 觸發 omitempty → 整個 value field 被省略(空 LineData object {})。
 //
 // 唯一 time 用 0.0123(4 位小數)避免與 echarts 預設 option 字串的 `[0.01,0]`

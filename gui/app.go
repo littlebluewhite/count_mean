@@ -147,6 +147,8 @@ func NewAppWithConfigPath(cfg *config.AppConfig, version, configPath string) *Ap
 // Startup is called when the app starts. The context is saved via
 // atomic.Pointer.Store so並發 RPC method 透過 loadCtx 讀到一致 snapshot。
 func (a *App) Startup(ctx context.Context) {
+	defer recoverHandlerPanicVoid("Startup", a.logger)
+
 	a.ctx.Store(&ctx)
 	a.logger.Info("Wails 應用程序啟動")
 
@@ -162,6 +164,8 @@ func (a *App) Startup(ctx context.Context) {
 // graceful shutdown 訊號(對比 abrupt SIGKILL)。
 // ProgressManager 改為 Wails Events 推播後不再持有 goroutine,無需 Stop。
 func (a *App) Shutdown(_ context.Context) {
+	defer recoverHandlerPanicVoid("Shutdown", a.logger)
+
 	a.logger.Info("Wails 應用程序關閉中")
 }
 
@@ -594,25 +598,14 @@ func convertPhaseResultToAnalysis(phaseResult *models.PhaseAnalysisResult, chann
 	}
 }
 
-// phaseRunData 是 AnalyzePhases 的 [[AnalysisHandler[P, R]]] R 參數:把 Execute
-// 步驟產出的 records + analysis result 一起透出給 caller 端做 envelope 組裝。
-// records 之所以要透出,是因為 headers (records[0]) 與 channelCount 都從 records
-// 推算,WriteCSV 簽章只回 outputPath、不回這兩個衍生資料。
-type phaseRunData struct {
-	records        [][]string
-	analysisResult *calculator.AnalyzeResult
-}
-
 // AnalyzePhases performs phase analysis.
 //
-// 走 [[AnalysisHandler[P, R]]] 樣板:Validate / Execute / WriteCSV 三 closure 分別綁
-// `validatePhaseParams`、`readCSVWithPathValidation + per-call analyzer.AnalyzeFromRawDataWithRanges`、
-// `csvHandler.WritePhaseAnalysis`。panic safety + entry/exit log 由樣板透過
-// [[HandlerRun]] 收乾;handler body 只剩 metadata log + result envelope 組裝。
-//
-// 錯誤通道契約 (`(result, err)` dual channel) 完全不變:Validate / Execute / WriteCSV
-// 任一步失敗都透過 Run 回傳的 err 走 named return,result 為 nil。
+// 錯誤通道契約 (`(result, err)` dual channel):validate / 讀檔 / 分析 / 寫檔任一步
+// 失敗都回 (nil, err);panic 由首句 defer recoverHandlerPanic 轉成 ErrInternalPanic
+// 走 err。
 func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error) {
+	defer recoverHandlerPanic("階段分析", a.logger, &err)
+
 	s := a.state.Load()
 
 	a.logger.Info("階段分析參數", map[string]any{
@@ -620,74 +613,49 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 		"phase_count": len(params.Phases),
 		"output_path": params.OutputPath,
 	})
+	a.logger.Info("開始階段分析", nil)
 
-	// labels / ranges 跨 closure 共用:Validate 內由 validatePhaseParams 產出(名稱與
-	// 時間區間皆來自前端 params.Phases),Execute 內以 labels 建 per-call analyzer、
-	// ranges 作為顯式 phase 邊界,result envelope 組裝時用 len(labels) 作為 phase loop
-	// guard。closure capture 是必要 trick — 樣板的 Validate 簽章 `func(P) error` 不允許
-	// 多回傳值。
-	var (
-		labels []string
-		ranges []models.TimeRange
+	// 1 validate:labels / ranges 皆來自前端 params.Phases(名稱與時間區間),
+	// 不耦合 config.PhaseLabels。
+	labels, ranges, validateErr := validatePhaseParams(params)
+	if validateErr != nil {
+		return nil, validateErr
+	}
+
+	// 2 讀檔
+	records, readErr := a.readCSVWithPathValidation(s, params.InputFile, s.config.InputDir)
+	if readErr != nil {
+		return nil, fmt.Errorf("讀取資料檔案失敗: %w", readErr)
+	}
+
+	// 3 分析:per-call analyzer,phase 名稱用前端 labels、邊界用前端 ranges
+	// (AnalyzeFromRawDataWithRanges 不從字串解析時間點),與 config.PhaseLabels 解耦。
+	analyzer := calculator.NewPhaseAnalyzer(s.config.ScalingFactor, labels)
+
+	analysisResult, analyzeErr := analyzer.AnalyzeFromRawDataWithRanges(records, ranges)
+	if analyzeErr != nil {
+		return nil, fmt.Errorf("階段分析失敗: %w", analyzeErr)
+	}
+
+	// 4 寫檔。Multi-phase merge 與 time-index dedup 由 CSVHandler.WritePhaseAnalysis
+	// 吸進 io 套件 — 此前 caller 需要自己 phaseRows[1:] skip header 與 fullRows[3:]
+	// dedup time row, 那層 row layout leakage 已經消失。
+	outputName := generatePhaseOutputName(params.InputFile, params.OutputPath)
+
+	outputPath, writeErr := s.csvHandler.WritePhaseAnalysis(
+		io.WriteRequest{Filename: outputName}, records[0], analysisResult,
 	)
-
-	handler := &AnalysisHandler[PhaseParams, phaseRunData]{
-		Name:   "階段分析",
-		Logger: a.logger,
-		CSV:    s.csvHandler,
-		Validate: func(p PhaseParams) error {
-			ls, rs, validateErr := validatePhaseParams(p)
-			if validateErr != nil {
-				return validateErr
-			}
-			labels = ls
-			ranges = rs
-			return nil
-		},
-		Execute: func(ctx context.Context, p PhaseParams) (phaseRunData, error) {
-			records, readErr := a.readCSVWithPathValidation(s, p.InputFile, s.config.InputDir)
-			if readErr != nil {
-				return phaseRunData{}, fmt.Errorf("讀取資料檔案失敗: %w", readErr)
-			}
-
-			// per-call analyzer:phase 名稱用前端 labels、邊界用前端 ranges
-			// (AnalyzeFromRawDataWithRanges 不從字串解析時間點),與 config.PhaseLabels 解耦。
-			analyzer := calculator.NewPhaseAnalyzer(s.config.ScalingFactor, labels)
-
-			analysisResult, analyzeErr := analyzer.AnalyzeFromRawDataWithRanges(records, ranges)
-			if analyzeErr != nil {
-				return phaseRunData{}, fmt.Errorf("階段分析失敗: %w", analyzeErr)
-			}
-
-			return phaseRunData{records: records, analysisResult: analysisResult}, nil
-		},
-		WriteCSV: func(handler *io.CSVHandler, data phaseRunData) (string, error) {
-			// 生成輸出檔名並寫入。Multi-phase merge 與 time-index dedup 由
-			// CSVHandler.WritePhaseAnalysis 吸進 io 套件 — 此前 caller 需要自己
-			// phaseRows[1:] skip header 與 fullRows[3:] dedup time row, 那層 row
-			// layout leakage 已經消失。
-			outputName := generatePhaseOutputName(params.InputFile, params.OutputPath)
-			outputPath, writeErr := handler.WritePhaseAnalysis(
-				io.WriteRequest{Filename: outputName}, data.records[0], data.analysisResult,
-			)
-			if writeErr != nil {
-				return "", fmt.Errorf("保存結果失敗: %w", writeErr)
-			}
-
-			return outputPath, nil
-		},
+	if writeErr != nil {
+		return nil, fmt.Errorf("保存結果失敗: %w", writeErr)
 	}
 
-	data, outputPath, err := handler.Run(a.context(), params)
-	if err != nil {
-		return nil, err
-	}
+	a.logger.Info("階段分析完成", nil)
 
-	// 轉換分析結果
-	channelCount := len(data.records[0]) - 1
-	results := make([]PhaseAnalysis, 0, len(data.analysisResult.PhaseResults))
+	// 5 轉換分析結果
+	channelCount := len(records[0]) - 1
+	results := make([]PhaseAnalysis, 0, len(analysisResult.PhaseResults))
 
-	for i, phaseResult := range data.analysisResult.PhaseResults {
+	for i, phaseResult := range analysisResult.PhaseResults {
 		if i >= len(labels) {
 			break
 		}
@@ -703,7 +671,7 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 
 	return &PhaseResult{
 		OutputPath: outputPath,
-		Headers:    data.records[0],
+		Headers:    records[0],
 		Results:    results,
 		Success:    true,
 		Message:    fmt.Sprintf("階段分析成功完成，結果已保存到: %s", outputPath),
@@ -927,112 +895,70 @@ func phasePointSliceToString(phases []models.PhasePoint) []string {
 	return out
 }
 
-// phaseSyncValidateGateErr 把 AnalyzePhaseSync 的 Validate closure 失敗包進來,
-// 讓 caller 端能用 errors.As 區分「Validate 失敗 (走 err channel,維持
-// path_validation_test 對 traversal manifest / data folder 的 (nil, err) 期待)」
-// 與「Execute / WriteCSV 失敗 (走 failed-result + nil err)」,**維持既有 mixed
-// 錯誤通道契約完全不動**。
-//
-// 樣板的 Run 對所有 closure 失敗統一走 err channel — PhaseSync 既有契約是
-// mixed (Validate 走 err、Execute/Write 走 failed-result),所以 caller 端需要
-// 一個 sentinel marker 區分 err 來源。inner 直接透傳原 err,Error() / Unwrap
-// 都保留原 message + chain,所以 strings.Contains("路徑驗證失敗") /
-// errors.Is(err, ErrPathTraversal) 等既有 assertion 全部仍綠。
-type phaseSyncValidateGateErr struct{ inner error }
-
-func (e *phaseSyncValidateGateErr) Error() string { return e.inner.Error() }
-func (e *phaseSyncValidateGateErr) Unwrap() error { return e.inner }
-
 // AnalyzePhaseSync 執行分期同步分析.
 //
-// 走 [[AnalysisHandler[P, R]]] 樣板:Validate / Execute / WriteCSV 三 closure 分別綁
-// 「manifest/folder/phase 必填 + validateExternalPathInputs」、`phaseSyncAnalyzer.AnalyzePhaseSync`、
-// `csvHandler.WritePhaseSyncResult`。panic safety + entry/exit log 由樣板透過
-// [[HandlerRun]] 收乾;handler body 只剩 metadata log + result envelope 組裝 + err 來源分流。
-//
-// 錯誤通道契約 (dual / mixed) 完全不變:Validate 失敗 → `(nil, err)` 走 err
-// channel;Execute / WriteCSV 失敗 → `(failedResult, nil)` 走 failed-result
-// channel;panic 經 HandlerRun 攔成 ErrInternalPanic → `(nil, err)` 走 err channel。
-// 三者由 phaseSyncValidateGateErr sentinel + ErrInternalPanic + stats nil-ness 分流。
+// 錯誤通道契約 (dual / mixed):validate 失敗 → `(nil, err)` 走 err channel
+// (path_validation_test 期待 traversal manifest / data folder 回 (nil, err));
+// 分析 / 寫檔失敗 → `(failedResult, nil)` 走 failed-result channel;panic 由首句
+// defer recoverHandlerPanic 轉成 ErrInternalPanic → `(nil, err)` 走 err channel。
 func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult, err error) {
+	defer recoverHandlerPanic("分期同步分析", a.logger, &err)
+
 	s := a.state.Load()
 	a.logger.Info("分期同步分析參數", map[string]any{"params": params})
+	a.logger.Info("開始分期同步分析", nil)
 
-	// 創建分析參數 — Validate / Execute 都吃這個指標,提前到 Run 外組裝
-	// (PhaseSyncParams → *models.AnalysisParams 是純複製,不涉及 validation)。
-	analysisParams := &models.AnalysisParams{
+	// 1 validate → err channel
+	if validateErr := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); validateErr != nil {
+		return nil, validateErr
+	}
+	if params.StartPhase == "" || params.EndPhase == "" {
+		return nil, ErrNoPhaseSelection
+	}
+	if !params.StartPhase.IsValid() || !params.EndPhase.IsValid() {
+		return nil, fmt.Errorf(
+			"StartPhase=%q EndPhase=%q: %w",
+			params.StartPhase, params.EndPhase, ErrInvalidPhasePoint,
+		)
+	}
+
+	// 2 分析(domain analyzer)→ failed-result channel
+	stats, analyzeErr := a.phaseSyncAnalyzer.AnalyzePhaseSync(a.context(), &models.AnalysisParams{
 		ManifestFile: params.ManifestFile,
 		DataFolder:   params.DataFolder,
 		StartPhase:   params.StartPhase,
 		EndPhase:     params.EndPhase,
 		SubjectIndex: params.SubjectIndex,
-	}
-
-	handler := &AnalysisHandler[*models.AnalysisParams, *models.EMGStatistics]{
-		Name:   "分期同步分析",
-		Logger: a.logger,
-		CSV:    s.csvHandler,
-		Validate: func(p *models.AnalysisParams) error {
-			if err := validateManifestHandlerParams(p.ManifestFile, p.DataFolder); err != nil {
-				return &phaseSyncValidateGateErr{inner: err}
-			}
-			if p.StartPhase == "" || p.EndPhase == "" {
-				return &phaseSyncValidateGateErr{inner: ErrNoPhaseSelection}
-			}
-			if !p.StartPhase.IsValid() || !p.EndPhase.IsValid() {
-				return &phaseSyncValidateGateErr{inner: fmt.Errorf(
-					"StartPhase=%q EndPhase=%q: %w",
-					p.StartPhase, p.EndPhase, ErrInvalidPhasePoint,
-				)}
-			}
-			return nil
-		},
-		Execute: func(ctx context.Context, p *models.AnalysisParams) (*models.EMGStatistics, error) {
-			return a.phaseSyncAnalyzer.AnalyzePhaseSync(ctx, p)
-		},
-		WriteCSV: func(handler *io.CSVHandler, stats *models.EMGStatistics) (string, error) {
-			// 導出結果 — ADR-0001: 寫檔職責由 PhaseSyncAnalyzer 搬到 CSVHandler,
-			// 與其他 Analysis pipeline family handler 走同一條 format-aware write 路徑。
-			return handler.WritePhaseSyncResult(io.WriteRequest{}, stats)
-		},
-	}
-
-	stats, outputPath, runErr := handler.Run(a.context(), analysisParams)
-	if runErr != nil {
-		// 1) Validate gate err → 走 err channel (path_validation_test 期待 (nil, err))。
-		if gateErr, ok := errors.AsType[*phaseSyncValidateGateErr](runErr); ok {
-			return nil, gateErr.inner
-		}
-
-		// 2) Panic 經 HandlerRun 攔成 ErrInternalPanic → 走 err channel (panic 不該降級成 failed-result)。
-		if errors.Is(runErr, ErrInternalPanic) {
-			return nil, runErr
-		}
-
-		// 3) WriteCSV 失敗:樣板會把 stats (Execute 已成功的結果) 一併透出。
-		if stats != nil {
-			a.logger.Error("導出結果失敗", runErr, map[string]any{})
-
-			return &PhaseSyncResult{
-				Success: false,
-				Message: fmt.Sprintf("導出失敗: %s", redact.RedactForMessage(runErr)),
-			}, nil
-		}
-
-		// 4) Execute 失敗:stats == nil 且不是 Validate / panic → analyzer 失敗。
-		a.logger.Error("分期同步分析失敗", runErr, map[string]any{})
+	})
+	if analyzeErr != nil {
+		a.logger.Error("分期同步分析失敗", analyzeErr, map[string]any{})
 
 		return &PhaseSyncResult{
 			Success: false,
-			Message: fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(runErr)),
+			Message: fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(analyzeErr)),
 		}, nil
 	}
+
+	// 3 導出結果 → failed-result channel。ADR-0001: 寫檔職責由 PhaseSyncAnalyzer
+	// 搬到 CSVHandler,走同一條 format-aware write 路徑。
+	outputPath, writeErr := s.csvHandler.WritePhaseSyncResult(io.WriteRequest{}, stats)
+	if writeErr != nil {
+		a.logger.Error("導出結果失敗", writeErr, map[string]any{})
+
+		return &PhaseSyncResult{
+			Success: false,
+			Message: fmt.Sprintf("導出失敗: %s", redact.RedactForMessage(writeErr)),
+		}, nil
+	}
+
+	a.logger.Info("分期同步分析完成", nil)
 
 	// 生成報告
 	report := phase_sync.GenerateAnalysisReport(stats)
 
-	// 返回結果
-	result = &PhaseSyncResult{
+	a.logger.Info("分期同步分析輸出", map[string]any{"outputPath": outputPath})
+
+	return &PhaseSyncResult{
 		OutputPath:   outputPath,
 		Subject:      stats.Subject,
 		StartPhase:   stats.StartPhase,
@@ -1045,9 +971,5 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 		Report:       report,
 		Success:      true,
 		Message:      "分析完成",
-	}
-
-	a.logger.Info("分期同步分析輸出", map[string]any{"outputPath": outputPath})
-
-	return result, nil
+	}, nil
 }

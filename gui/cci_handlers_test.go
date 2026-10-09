@@ -92,22 +92,16 @@ func TestCCIHandler_ErrorMessage_NoAbsolutePath(t *testing.T) {
 	}
 }
 
-// TestAnalyzeCCI_PanicInsideHandlerRun_CaughtAsInternalPanic 釘住 panic safety:
-// AnalyzeCCI 現在走 Tier-1 HandlerRun 直用,六步全進一個 HandlerRun body。
-// HandlerRun 自身在 handler_run.go:27 設置 `defer recoverHandlerPanic`,在
-// handler_run.go:29 的 entry log(a.logger.Info)之前——任何 body 內 panic 都被
-// 這個 defer 攔住並轉成 ErrInternalPanic。
+// TestAnalyzeCCI_PanicInBody_CaughtAsInternalPanic 釘住 panic 的使用者可見契約:
+// AnalyzeCCI 首句 `defer recoverHandlerPanic` 把 body 內任何 panic 轉成
+// (nil, ErrInternalPanic) 走 named-return 通道上拋。
 //
-// 注入手法:把 a.logger 設為 nil。HandlerRun 在 handler_run.go:29 第一條
-// `a.logger.Info`(entry log)即 nil-deref panic。此 panic 發生在 HandlerRun 已
-// 設置 defer(handler_run.go:27)之後,故被 HandlerRun 自己的 recover 攔住,
-// 轉成 (nil, ErrInternalPanic) 走 named-return 通道上拋。
+// 注入手法:把 a.logger 設為 nil。defer 之後的第一條 `a.logger.Info`(entry log)
+// 即 nil-deref panic,模擬任一 body 內不可預期 panic。
 //
 // 驗證目的:確認在 nil-logger 下 AnalyzeCCI 不 panic 出來,且 errors.Is(err, ErrInternalPanic)
-// 為 true、result 為 nil(對齊 dual-channel 契約)。
-func TestAnalyzeCCI_PanicInsideHandlerRun_CaughtAsInternalPanic(t *testing.T) {
-	// logger 刻意 nil:HandlerRun entry log(handler_run.go:29)即 nil-deref panic,
-	// 模擬任一 body 內不可預期 panic;HandlerRun 的 defer(handler_run.go:27)在前,攔得住。
+// 為 true、result 為 nil(panic 不降級成 failed-result)。
+func TestAnalyzeCCI_PanicInBody_CaughtAsInternalPanic(t *testing.T) {
 	app := &App{logger: nil, cciAnalyzer: cci.NewCCIAnalyzer()}
 	app.state.Store(&appState{config: &config.AppConfig{OutputDir: t.TempDir()}})
 
@@ -121,11 +115,10 @@ func TestAnalyzeCCI_PanicInsideHandlerRun_CaughtAsInternalPanic(t *testing.T) {
 			DataFolder:   t.TempDir(),
 			SubjectIndex: 0,
 		})
-	}, "HandlerRun 內 panic 必須被 HandlerRun 自身的 defer recoverHandlerPanic 攔住,不可 propagate")
+	}, "body 內 panic 必須被首句 defer recoverHandlerPanic 攔住,不可 propagate")
 
-	// panic 走 err 通道:errors.Is(err, ErrInternalPanic) 為 true、result 為 nil
-	// (HandlerRun 對 panic 回傳 (nil, wrappedErr),named-return 上拋)。
-	require.Error(t, err, "HandlerRun 內 panic 應轉成 non-nil err")
+	// panic 走 err 通道:errors.Is(err, ErrInternalPanic) 為 true、result 為 nil。
+	require.Error(t, err, "body 內 panic 應轉成 non-nil err")
 	assert.True(t, errors.Is(err, ErrInternalPanic),
 		"panic 應被包成 ErrInternalPanic,got %v", err)
 	assert.Nil(t, result, "panic 路徑不該回 result(panic 不降級成 failed-result)")
