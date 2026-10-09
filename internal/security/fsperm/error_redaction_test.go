@@ -57,7 +57,8 @@ func TestExportedErrors_NoDirSegmentAfterSinkRedact(t *testing.T) {
 	cases := []struct {
 		name    string
 		call    func(t *testing.T) error
-		wantIs  error // nil = 不要求 sentinel(錯誤型別因平台而異)
+		wantIs  error  // nil = 不要求 sentinel(錯誤型別因平台而異)
+		wantMsg string // 非空 = 錯誤須含此子字串,證明走到預期分支(無 sentinel 的列用)
 		symlink bool
 	}{
 		{
@@ -126,6 +127,7 @@ func TestExportedErrors_NoDirSegmentAfterSinkRedact(t *testing.T) {
 				return abortOnly(fsperm.OpenAtomicWriteValidated(
 					filepath.Join(base, "out.csv"), filepath.Join(sub, "out.csv.tmp"), bases))
 			},
+			wantMsg: "必須同目錄",
 		},
 		{
 			name: "OpenAtomicWriteValidated/symlink escape",
@@ -156,6 +158,8 @@ func TestExportedErrors_NoDirSegmentAfterSinkRedact(t *testing.T) {
 
 				return h.Commit()
 			},
+			// dirfd 路徑 "renameat(…)"、fallback 路徑 "rename tmp → target" 共用此前綴。
+			wantMsg: "AtomicWriteHandle.Commit: rename",
 		},
 		{
 			name: "Abort/tmp already removed",
@@ -184,6 +188,7 @@ func TestExportedErrors_NoDirSegmentAfterSinkRedact(t *testing.T) {
 				_, err := fsperm.EvalSymlinksWithFallback(filepath.Join(missingSub, "a", "b"), 3)
 				return err
 			},
+			wantMsg: "層數超過上限",
 		},
 	}
 
@@ -203,6 +208,9 @@ func TestExportedErrors_NoDirSegmentAfterSinkRedact(t *testing.T) {
 			assert.NotContains(t, out, root, "sink redact 後不可留存絕對路徑")
 			if tc.wantIs != nil {
 				assert.ErrorIs(t, err, tc.wantIs, "改寫訊息後 errors.Is 仍須命中")
+			}
+			if tc.wantMsg != "" {
+				assert.ErrorContains(t, err, tc.wantMsg, "應走到預期的失敗分支")
 			}
 		})
 	}
