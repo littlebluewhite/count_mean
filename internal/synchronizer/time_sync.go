@@ -1,17 +1,9 @@
 package synchronizer
 
 import (
-	"errors"
-	"fmt"
 	"math"
 
 	"count_mean/internal/parsers"
-)
-
-// Time synchronization errors.
-var (
-	// ErrStartTimeAfterEnd indicates the start time is after the end time.
-	ErrStartTimeAfterEnd = errors.New("start time is after end time")
 )
 
 // TimeSynchronizer 時間同步器.
@@ -26,44 +18,11 @@ func NewTimeSynchronizer() *TimeSynchronizer {
 	}
 }
 
-// MotionIndexToTime Motion index 從 1 開始，時間從 0 開始.
-func (ts *TimeSynchronizer) MotionIndexToTime(index int) float64 {
-	if index < 1 {
-		return 0
-	}
-
-	return float64(index-1) / ts.motionFreq
-}
-
-// TimeToMotionIndex 將時間轉換為最接近的 Motion index.
-func (ts *TimeSynchronizer) TimeToMotionIndex(time float64) int {
-	if time < 0 {
-		return 1
-	}
-	// 四捨五入到最接近的 index
-	index := int(math.Round(time*ts.motionFreq)) + 1
-	if index < 1 {
-		index = 1
-	}
-
-	return index
-}
-
 // MotionIndexToEMGTime 使用 EMGMotionOffset 進行偏移計算.
 func (ts *TimeSynchronizer) MotionIndexToEMGTime(motionIndex, emgMotionOffset int) float64 {
 	// EMG 時間 = (Motion_index - EMGMotionOffset) * (1/250)
 	// 因為 EMGMotionOffset 表示 EMG 第一筆對應的 Motion index
 	return float64(motionIndex-emgMotionOffset) / ts.motionFreq
-}
-
-// ForceTimeToMotionIndex 力板和 Motion 同步開始.
-func (ts *TimeSynchronizer) ForceTimeToMotionIndex(forceTime float64) int {
-	return ts.TimeToMotionIndex(forceTime)
-}
-
-// MotionIndexToForceTime 力板和 Motion 同步開始.
-func (ts *TimeSynchronizer) MotionIndexToForceTime(motionIndex int) float64 {
-	return ts.MotionIndexToTime(motionIndex)
 }
 
 // ForceTimeToEMGTime 因此：EMG時間 = ForceTime - (EMGMotionOffset - 1) / MotionFreq.
@@ -75,65 +34,6 @@ func (ts *TimeSynchronizer) ForceTimeToEMGTime(forceTime float64, emgMotionOffse
 	// EMG 時間 = Force 時間 - (EMGMotionOffset - 1) / 250
 	emgTimeOffset := float64(emgMotionOffset-1) / ts.motionFreq
 	return forceTime - emgTimeOffset
-}
-
-// GetSyncedTimeRange 根據分期點類型和值，計算出三個系統的對應時間.
-//
-//nolint:revive // flag-parameter: bool params needed to distinguish motion index from force time
-func (ts *TimeSynchronizer) GetSyncedTimeRange(
-	startValue float64,
-	startIsMotionIndex bool,
-	endValue float64,
-	endIsMotionIndex bool,
-	emgMotionOffset int,
-) (*SyncedTimeRange, error) {
-	result := &SyncedTimeRange{}
-
-	// 處理開始時間
-	if startIsMotionIndex {
-		// Motion index 類型
-		startIndex := int(startValue)
-		result.StartMotionIndex = startIndex
-		result.StartForceTime = ts.MotionIndexToForceTime(startIndex)
-		result.StartEMGTime = ts.MotionIndexToEMGTime(startIndex, emgMotionOffset)
-	} else {
-		// 力板時間類型
-		result.StartForceTime = startValue
-		result.StartMotionIndex = ts.ForceTimeToMotionIndex(startValue)
-		result.StartEMGTime = ts.ForceTimeToEMGTime(startValue, emgMotionOffset)
-	}
-
-	// 處理結束時間
-	if endIsMotionIndex {
-		// Motion index 類型
-		endIndex := int(endValue)
-		result.EndMotionIndex = endIndex
-		result.EndForceTime = ts.MotionIndexToForceTime(endIndex)
-		result.EndEMGTime = ts.MotionIndexToEMGTime(endIndex, emgMotionOffset)
-	} else {
-		// 力板時間類型
-		result.EndForceTime = endValue
-		result.EndMotionIndex = ts.ForceTimeToMotionIndex(endValue)
-		result.EndEMGTime = ts.ForceTimeToEMGTime(endValue, emgMotionOffset)
-	}
-
-	// 驗證時間範圍
-	if result.StartEMGTime > result.EndEMGTime {
-		return nil, fmt.Errorf("開始時間 (%.3f) 大於結束時間 (%.3f): %w",
-			result.StartEMGTime, result.EndEMGTime, ErrStartTimeAfterEnd)
-	}
-
-	return result, nil
-}
-
-// SyncedTimeRange 同步的時間範圍.
-type SyncedTimeRange struct {
-	StartMotionIndex int     // 開始 Motion index
-	EndMotionIndex   int     // 結束 Motion index
-	StartForceTime   float64 // 開始力板時間
-	EndForceTime     float64 // 結束力板時間
-	StartEMGTime     float64 // 開始 EMG 時間
-	EndEMGTime       float64 // 結束 EMG 時間
 }
 
 // emgTimeEpsilon 吸收 force-plate↔EMG 時間同步後的 ULP 飄移(~1e-7),設為比

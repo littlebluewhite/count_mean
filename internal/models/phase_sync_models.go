@@ -99,12 +99,10 @@ type ForceData struct {
 	Headers []string             // 標題
 }
 
-// PhaseTimeRange 分期時間範圍.
+// PhaseTimeRange 分期時間範圍(EMG 秒數).
 type PhaseTimeRange struct {
 	StartTime float64
 	EndTime   float64
-	StartType string // "force" or "motion"
-	EndType   string // "force" or "motion"
 }
 
 // PhaseSyncValidationError 驗證錯誤 — phase sync / manifest 解析期間欄位驗證失敗。

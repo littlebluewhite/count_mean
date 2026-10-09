@@ -16,8 +16,6 @@ import (
 	"count_mean/internal/config"
 	"count_mean/internal/i18n"
 	"count_mean/internal/io"
-	"count_mean/internal/models"
-	"count_mean/internal/parsers"
 )
 
 // TestMain 初始化 i18n global singleton，使本 package 所有 test 都能透過 i18n.T()
@@ -1333,71 +1331,6 @@ func TestAnalyze_NilContext(t *testing.T) {
 	})
 	require.Error(t, err, "nil ctx 必須回 error")
 	assert.Contains(t, err.Error(), "ctx", "錯誤訊息應指出 ctx 為 nil")
-}
-
-// TestCollectPhasePoints_MotionIndexBoundary 釘住 修法:
-// motion-index OptFloat 值超出 [1, MaxReasonableMotionIndex] 邊界時,
-// collectPhasePoints 必須 skip 該 phase point(不 panic、不 wrap-around)。
-//
-// 防禦對象:malicious / 損毀 manifest 帶 D=1e15 之類異常大值。parseInt 的 cap
-// 是第一道防線,collectPhasePoints 的 boundary check 是第二道(defense-in-depth);
-// 模擬「繞過 parseInt 直接 struct-init manifest」的攻擊路徑。
-//
-// 測試策略:直接 struct-init PhaseManifest(D 設超過 cap),呼叫 Analyzer 內部
-// collectPhasePoints。期望:不 panic + skip D 後若剩 phase 不足 2 個則回 warn。
-func TestCollectPhasePoints_MotionIndexBoundary(t *testing.T) {
-	a := NewAnalyzer()
-
-	// 製造一個只剩 D 的 manifest(其餘 phase 都未提供),且 D 是越界值。
-	// 預期:D 被 boundary check skip → phases 數=0 → "insufficient phases" warn。
-	m := &models.PhaseManifest{
-		Subject:         "boundary_test",
-		EMGFile:         "ignored",
-		EMGMotionOffset: 1,
-		PhasePoints: models.PhasePoints{
-			// D > MaxReasonableMotionIndex (1e9) — 越界 sentinel,parseInt 不會接受
-			// 此值,但直接 struct-init 可繞過。
-			D: parsers.MaxReasonableMotionIndex + 1,
-		},
-	}
-	emg := &models.PhaseSyncEMGData{
-		Time:    []float64{0.0, 0.001, 0.002},
-		Headers: []string{},
-	}
-
-	// 不應 panic。
-	points, warn := a.collectPhasePoints(m, emg)
-	require.NotEqual(t, "", warn, "越界 D 應使 collectPhasePoints 跳過後 insufficient phases warn")
-	assert.Nil(t, points, "boundary skip 後沒有可用 phase point")
-}
-
-// TestCollectPhasePoints_NegativeMotionIndex 對應 的負值邊界:
-// motionIndexOpt 已對 v<=0 回 NoOpt,collectPhasePoints 不會看到負值。
-// 此 test 是 belt-and-suspenders — 若未來 caller 繞過 motionIndexOpt 直接
-// 注入 MakeOpt(-1) 到 PhasePoints.D,collectPhasePoints 仍要 skip 不 panic。
-//
-// 因為 PhasePoints.D 是 int,negative 走 motionIndexOpt 後變 NoOpt(.Set=false),
-// 不會進 boundary check 路徑。此 test pin 既有契約 — 拿 motion-index 改 OptFloat 後
-// 仍維持「未提供」semantics。
-func TestCollectPhasePoints_NegativeMotionIndex(t *testing.T) {
-	a := NewAnalyzer()
-
-	m := &models.PhaseManifest{
-		Subject:         "negative_test",
-		EMGFile:         "ignored",
-		EMGMotionOffset: 1,
-		PhasePoints: models.PhasePoints{
-			D: -100, // 負 motion index — motionIndexOpt 回 NoOpt
-		},
-	}
-	emg := &models.PhaseSyncEMGData{
-		Time:    []float64{0.0, 0.001, 0.002},
-		Headers: []string{},
-	}
-
-	points, warn := a.collectPhasePoints(m, emg)
-	require.NotEqual(t, "", warn, "負 D 走 NoOpt,collectPhasePoints 應跳過")
-	assert.Nil(t, points)
 }
 
 // TestAnalyze_NilCSVHandlerReturnsErr 驗證 codex review 抓的 P2 — 舊式 Params

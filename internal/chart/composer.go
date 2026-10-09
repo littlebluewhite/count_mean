@@ -806,20 +806,15 @@ var composerMotionPalette = []string{
 	"#9467BD", // 3 紫
 }
 
-// composerPhaseOrder 是 markLine 的 canonical phase 順序,對齊 frontend
-// manifestPanel.mjs 的 phaseOrder whitelist。含 motion-index 衍生的 D(下蹲結束)、
-// O(展體):caller 已用 MotionIndexToEMGTime 換算成 EMG 秒數放進 map。
-var composerPhaseOrder = []string{"P0", "P1", "P2", "S", "C", "D", "T0", "T", "O", "L"}
-
 // composerPhaseMarkLineOpts 把 phase 名 → EMG 秒數 map 轉成 markLine XAxis items。
 //
-// 輸入 phaseTimes 已是 EMG 時間 domain 秒值,由 caller(Wails handler)統一換算:
-// 力板時間欄位(P0/P1/P2/S/C/T0/T/L)走 ForceTimeToEMGTime,motion-index 欄位
-// (D/O)走 MotionIndexToEMGTime。chart 套件不持有 conversion 知識(對齊 ComposerInput
-// doc),只負責把秒值 anchor 成 markLine —— 前端 checkbox(phaseTimes RPC return)與
-// 後端預設 markLine 因此共用同一份 seconds 來源,不會分歧。
+// 輸入 phaseTimes 已是 EMG 時間 domain 秒值,由 caller(Wails handler)從 manifest row 的
+// Phase timeline(synchronizer.NewPhaseTimeline)取得。chart 套件不持有 conversion 知識
+// (對齊 ComposerInput doc),只負責把秒值 anchor 成 markLine —— 前端 checkbox(phaseTimes
+// RPC return)與後端預設 markLine 因此共用同一份 seconds 來源,不會分歧。
 //
-// 依 composerPhaseOrder 挑出 map 內存在的 phase,不存在的 key skip。
+// 依 models.AllPhases() 的 canonical 順序(含 motion-index 衍生的 D、O)挑出 map 內存在的
+// phase,不存在的 key skip。
 //
 // 對齊 CCI markLine 風格:dashed grey、symbol none。
 func composerPhaseMarkLineOpts(phaseTimes map[string]float64) []charts.SeriesOpts {
@@ -827,8 +822,10 @@ func composerPhaseMarkLineOpts(phaseTimes map[string]float64) []charts.SeriesOpt
 		name string
 		sec  float64
 	}
-	pairs := make([]pt, 0, len(composerPhaseOrder))
-	for _, name := range composerPhaseOrder {
+	phases := models.AllPhases()
+	pairs := make([]pt, 0, len(phases))
+	for _, p := range phases {
+		name := string(p)
 		if sec, ok := phaseTimes[name]; ok {
 			pairs = append(pairs, pt{name: name, sec: sec})
 		}

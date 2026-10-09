@@ -191,7 +191,7 @@ func TestAnalyzeNormalizedPhaseSync_StatsPhaseOrderError(t *testing.T) {
 //
 // Regression：重構前單一範圍時，runValidationPipeline 內 validatePhaseOrder 會以
 // startOrder >= endOrder 為條件擋住「同 phase」case；拆分後 Stats 那組原本只走
-// ResolvePhaseRange → GetPhaseTimeRange，後者只擋 start > end，導致 P1 → P1
+// ResolvePhaseRange 的分期時間計算，該處只擋 start > end，導致 P1 → P1
 // 會穿透並產生 zero-duration stats CSV。修法是在 ResolvePhaseRange 內顯式呼叫
 // ValidatePhaseOrder。
 func TestAnalyzeNormalizedPhaseSync_StatsZeroDurationRejected(t *testing.T) {

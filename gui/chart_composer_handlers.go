@@ -294,13 +294,12 @@ func (a *App) GenerateChartComposer(
 		muscleRatioData = mr
 	}
 
-	// manifest PhasePoints 換算成「phase 名 → EMG 秒數」單一份 map:力板時間欄位
-	// (P0/P1/P2/S/C/T0/T/L)走 ForceTimeToEMGTime,motion-index 欄位(D/O)走
-	// MotionIndexToEMGTime。Chart Composer 的所有 grid X 軸是 **EMG 時間** domain;
-	// 若不換算直接 attach,markLine 會早 / 晚整個 sync offset — silent visual bug。
+	// manifest row 的 [[Phase timeline]] 轉成「phase 名 → EMG 秒數」單一份 map。
+	// Chart Composer 的所有 grid X 軸是 **EMG 時間** domain;若不換算直接 attach,
+	// markLine 會早 / 晚整個 sync offset — silent visual bug。
 	// 這份 map 同時供後端預設 markLine(composerInput.PhaseTimesEMG)與前端 checkbox
 	// /動態 markLine(回傳的 PhaseTimes)使用,兩端共用來源不會分歧。
-	phaseTimes := composerPhaseTimesEMG(row.PhasePoints, row.EMGMotionOffset)
+	phaseTimes := composerPhaseTimesEMG(&row)
 
 	// SelectedChannels 傳 nil(空)— chart composer 對空走「fallback 全選」
 	// (composer.go:267-273),達成 ADR-0013 的「預設全通道」。
@@ -571,46 +570,15 @@ func loadComposerMuscleRatio(dataFolder, muscleRatioFile string) (*chart.MuscleR
 	}, nil
 }
 
-// composerPhaseTimesEMG 把 manifest PhasePoints 換算成「phase 名 → EMG 秒數」map,
-// 供 Chart Composer 後端預設 markLine 與前端 phaseTimes RPC return 共用同一份來源。
-//
-// 兩種 domain 各走對應 synchronizer 公式(換算規則是 cross-cutting domain knowledge,
-// 單一來源,故 reuse synchronizer.TimeSynchronizer 而非寫死):
-//
-//   - 力板時間欄位(P0/P1/P2/S/C/T0/T/L,OptFloat 秒值):ForceTimeToEMGTime
-//     emgTime = forceTime - (emgMotionOffset - 1) / FrequencyMotion
-//   - motion-index 欄位(D 下蹲結束 / O 展體,int sentinel):MotionIndexToEMGTime
-//     emgTime = (motionIndex - emgMotionOffset) / FrequencyMotion
-//
-// EMGMotionOffset 單位是「EMG 起點對應的 motion frame index」(1-based),非秒;
-// FrequencyMotion = 250 Hz。Set=false 的 OptFloat 與 <=0 的 motion-index sentinel
-// (0 = 未提供)都 skip — 不在 map 內就不會 inject 偽 markLine,前端也不渲染 checkbox。
-func composerPhaseTimesEMG(src models.PhasePoints, emgMotionOffset int) map[string]float64 {
-	ts := synchronizer.NewTimeSynchronizer()
-	out := make(map[string]float64, 10)
-
-	addOpt := func(name string, o models.OptFloat) {
-		if v, ok := o.Get(); ok {
-			out[name] = ts.ForceTimeToEMGTime(v, emgMotionOffset)
-		}
+// composerPhaseTimesEMG 把 manifest row 的 [[Phase timeline]] 轉成「phase 名 → EMG 秒數」
+// map(ADR-0042),供 Chart Composer 後端預設 markLine 與前端 phaseTimes RPC return
+// 共用同一份來源。未提供的分期點不在 map 內 — 不會 inject 偽 markLine,前端也不渲染 checkbox。
+func composerPhaseTimesEMG(m *models.PhaseManifest) map[string]float64 {
+	timeline := synchronizer.NewPhaseTimeline(m)
+	out := make(map[string]float64, len(timeline))
+	for _, pt := range timeline {
+		out[string(pt.Phase)] = pt.EMGTime
 	}
-	addOpt("P0", src.P0)
-	addOpt("P1", src.P1)
-	addOpt("P2", src.P2)
-	addOpt("S", src.S)
-	addOpt("C", src.C)
-	addOpt("T0", src.T0)
-	addOpt("T", src.T)
-	addOpt("L", src.L)
-
-	addIdx := func(name string, idx int) {
-		if idx > 0 {
-			out[name] = ts.MotionIndexToEMGTime(idx, emgMotionOffset)
-		}
-	}
-	addIdx("D", src.D)
-	addIdx("O", src.O)
-
 	return out
 }
 

@@ -14,7 +14,6 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security/fsperm"
-	"count_mean/internal/synchronizer"
 )
 
 // Helper function to create a temporary test CSV file.
@@ -361,7 +360,7 @@ func TestPhaseSyncAnalyzer_ResolvePhaseRange_AllowsMotionIndex(t *testing.T) {
 		},
 	}
 
-	// D / O 都是 motion-index,合法值不該被 reject。後續 GetPhaseTimeRange 取 EMG time
+	// D / O 都是 motion-index,合法值不該被 reject。後續 timeline 換算 EMG time
 	// 可能因為 EMGMotionOffset / motion-index 換算超出 [0, 4] 而 fail,但**錯誤類型**
 	// 不能是 ErrNegativePhaseTime。
 	_, err := analyzer.ResolvePhaseRange(loaded, models.PhaseD, models.PhaseO)
@@ -389,7 +388,7 @@ func TestPhaseSyncAnalyzer_ResolvePhaseRange_PhaseValueErrorText(t *testing.T) {
 			endPhase:   models.PhaseL,
 			points:     models.PhasePoints{L: models.MakeOpt(1.0)},
 			wantText:   "計算分期時間範圍失敗: 開始分期點 S: phase value is zero or not set",
-			wantErr:    synchronizer.ErrPhaseValueZero,
+			wantErr:    ErrPhaseValueZero,
 		},
 		{
 			name:       "結束分期點未提供",
@@ -397,7 +396,7 @@ func TestPhaseSyncAnalyzer_ResolvePhaseRange_PhaseValueErrorText(t *testing.T) {
 			endPhase:   models.PhaseL,
 			points:     models.PhasePoints{S: models.MakeOpt(0.5)},
 			wantText:   "計算分期時間範圍失敗: 結束分期點 L: phase value is zero or not set",
-			wantErr:    synchronizer.ErrPhaseValueZero,
+			wantErr:    ErrPhaseValueZero,
 		},
 		{
 			name:       "motion-index 結束分期點為 0 sentinel",
@@ -405,7 +404,7 @@ func TestPhaseSyncAnalyzer_ResolvePhaseRange_PhaseValueErrorText(t *testing.T) {
 			endPhase:   models.PhaseO,
 			points:     models.PhasePoints{D: 177},
 			wantText:   "計算分期時間範圍失敗: 結束分期點 O: phase value is zero or not set",
-			wantErr:    synchronizer.ErrPhaseValueZero,
+			wantErr:    ErrPhaseValueZero,
 		},
 		{
 			name:       "開始 EMG 時間晚於結束(跨力板 / motion-index 兩域)",
@@ -414,7 +413,7 @@ func TestPhaseSyncAnalyzer_ResolvePhaseRange_PhaseValueErrorText(t *testing.T) {
 			points:     models.PhasePoints{C: models.MakeOpt(1.0), D: 126},
 			wantText: "計算分期時間範圍失敗: 計算同步時間範圍失敗: " +
 				"開始時間 (0.900) 大於結束時間 (0.400): start time is after end time",
-			wantErr: synchronizer.ErrStartTimeAfterEnd,
+			wantErr: ErrStartTimeAfterEnd,
 		},
 	}
 

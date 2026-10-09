@@ -35,6 +35,11 @@ var (
 	// 不存在會穿透 EvalSymlinks 回到原始字串，後續 PathValidator 才以一個不存在
 	// 的 base 比較，錯誤訊息含糊。此 sentinel 讓 caller 一眼看出設定錯誤。
 	ErrBaseFolderNotFound = errors.New("base folder not found")
+	// ErrPhaseValueZero 表示請求的分期點在 manifest row 未提供(力板時間 Set=false、
+	// motion-index ≤ 0),不在 [[Phase timeline]] 內。
+	ErrPhaseValueZero = errors.New("phase value is zero or not set")
+	// ErrStartTimeAfterEnd 表示開始分期點換算後的 EMG 時間晚於結束分期點。
+	ErrStartTimeAfterEnd = errors.New("start time is after end time")
 )
 
 // PhaseSyncAnalyzer 分期同步分析器.
@@ -428,9 +433,14 @@ var ErrNegativePhaseTime = errors.New("phase point force-time 為負值,phase_sy
 // 先呼叫 phaseCalculator.ValidatePhaseOrder 顯式驗證 start < end（嚴格小於）
 // 與 phase 名稱合法性。這個驗證對「直接走 Load + ResolvePhaseRange」的呼叫端
 // （例如標準化分期同步分析對 Stats 那組區間）至關重要——否則 start == end 的
-// 退化情形會穿透到 GetPhaseTimeRange，產生 zero-duration 區間。對「走
+// 退化情形會穿透到下方只擋 start > end 的時間比較，產生 zero-duration 區間。對「走
 // LoadAndExtractRange」的呼叫端則與 Load 內 pipeline 的 validatePhaseOrder
 // 形成冗餘檢查（無害）。
+//
+// 兩端的 EMG 秒數取自 manifest row 的 [[Phase timeline]]（synchronizer.NewPhaseTimeline）；
+// phase_sync 只保留自己的 policy：兩端都必須提供（ErrPhaseValueZero）、開始不得晚於
+// 結束（ErrStartTimeAfterEnd）、區間須落在 EMG 資料內（validateEMGTimeRange）。
+// 錯誤訊息全文維持既有字樣（含「計算分期時間範圍失敗」「計算同步時間範圍失敗」前綴）。
 //
 // 在計算 PhaseTimeRange 之前先 reject「對應到 force-time 的負 phase point」。
 // 參考 muscle_ratio TestAnalyze_NegativeTime_Handled 的設計取捨 — 負時間在
@@ -451,15 +461,21 @@ func (analyzer *PhaseSyncAnalyzer) ResolvePhaseRange(
 		return nil, err
 	}
 
-	phaseTimeRange, err := analyzer.phaseCalculator.GetPhaseTimeRange(
-		loaded.Manifest.PhasePoints,
-		startPhase,
-		endPhase,
-		loaded.Manifest.EMGMotionOffset,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("計算分期時間範圍失敗: %w", err)
+	timeline := synchronizer.NewPhaseTimeline(loaded.Manifest)
+	startTime, ok := timeline.At(startPhase)
+	if !ok {
+		return nil, fmt.Errorf("計算分期時間範圍失敗: 開始分期點 %s: %w", startPhase, ErrPhaseValueZero)
 	}
+	endTime, ok := timeline.At(endPhase)
+	if !ok {
+		return nil, fmt.Errorf("計算分期時間範圍失敗: 結束分期點 %s: %w", endPhase, ErrPhaseValueZero)
+	}
+	if startTime > endTime {
+		return nil, fmt.Errorf("計算分期時間範圍失敗: 計算同步時間範圍失敗: 開始時間 (%.3f) 大於結束時間 (%.3f): %w",
+			startTime, endTime, ErrStartTimeAfterEnd)
+	}
+
+	phaseTimeRange := &models.PhaseTimeRange{StartTime: startTime, EndTime: endTime}
 
 	if err := validateEMGTimeRange(loaded.EMGData, phaseTimeRange, loaded.Manifest.EMGMotionOffset); err != nil {
 		return nil, err
@@ -471,7 +487,7 @@ func (analyzer *PhaseSyncAnalyzer) ResolvePhaseRange(
 // rejectNegativeForceTime 對單一 phase point 做「force-time 不可為負」防線。
 // motion-index 型 phase point(D/O)直接 pass — 它們是 frame number 不是時間,
 // 由 ValidatePhaseManifest 的 validateMotionIndexOrder 把關;未設定(Set=false)
-// 也直接 pass — 由下游 GetPhaseTimeRange 回 ErrPhaseValueZero。
+// 也直接 pass — 由 ResolvePhaseRange 後續的 timeline 查詢回 ErrPhaseValueZero。
 func rejectNegativeForceTime(points *models.PhasePoints, phase models.PhasePoint) error {
 	opt, isMotionIndex, err := parsers.GetPhaseValue(points, phase)
 	if err != nil {

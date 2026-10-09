@@ -196,8 +196,8 @@ func TestRenderComposer_PhaseMarkLines(t *testing.T) {
 
 // TestRenderComposer_PhaseMarkLinesIncludesMotionIndexDO — Chart Composer
 // 「少了 D / O 分期點」修正的 chart-layer regression。D(下蹲結束)、O(展體)
-// 源自 motion-index,caller 換算成 EMG 秒數後放進 PhaseTimesEMG;composerPhaseOrder
-// 已含 D/O,故只要 map 內有就該渲染成 markLine(過去 whitelist 漏掉這兩個)。
+// 源自 motion-index,caller 換算成 EMG 秒數後放進 PhaseTimesEMG;markLine 順序取自
+// models.AllPhases()(含 D/O),故只要 map 內有就該渲染成 markLine(過去 whitelist 漏掉這兩個)。
 func TestRenderComposer_PhaseMarkLinesIncludesMotionIndexDO(t *testing.T) {
 	in := ComposerInput{
 		Subject:          "S",

@@ -54,18 +54,15 @@ type SubjectResult struct {
 // Analyzer orchestrates the batch pipeline. Concurrency model:
 //   - PathValidator 不掛在 struct 上（per-Analyze 建立 instance），避免 Wails 並行 RPC 場景下
 //     兩個 goroutine 共用 mutable instance → race condition。
-//   - timeSynchronizer 是 stateless（無 mutable field write），可安全共用。
 //   - manifest loading 與 EMG file resolution 走 internal/manifest 套件（stateless package functions）。
 type Analyzer struct {
-	timeSynchronizer *synchronizer.TimeSynchronizer
-	logger           *logging.Logger
+	logger *logging.Logger
 }
 
 // NewAnalyzer creates a new muscle-ratio analyzer.
 func NewAnalyzer() *Analyzer {
 	return &Analyzer{
-		timeSynchronizer: synchronizer.NewTimeSynchronizer(),
-		logger:           logging.GetLogger("muscle_ratio_analyzer"),
+		logger: logging.GetLogger("muscle_ratio_analyzer"),
 	}
 }
 
@@ -301,8 +298,9 @@ var biomechanicalIntervalMidpoints = []struct {
 	{models.PhaseD, models.PhaseT},
 }
 
-// collectPhasePoints converts the manifest's 10 raw phase values to EMG time, drops empties,
-// validates bounds, sorts, and emits two kinds of rows interleaved by time:
+// collectPhasePoints takes the manifest row's [[Phase timeline]] (EMG-time phase points,
+// empties already dropped — ADR-0042), validates bounds, sorts, and emits two kinds of rows
+// interleaved by time:
 //   - actual phase points (up to 10)
 //   - adjacent-pair midpoints between consecutive phases (up to N-1)
 //   - biomechanical-interval midpoints from biomechanicalIntervalMidpoints (up to K, skipped if endpoints absent)
@@ -312,52 +310,13 @@ var biomechanicalIntervalMidpoints = []struct {
 // 第二個回傳值是 warning message — 非空表示 Output 2 該跳過（Output 1 已成功）。
 //
 //nolint:err113 // strings, not errors, for the warning channel
-func (a *Analyzer) collectPhasePoints(
+func (*Analyzer) collectPhasePoints(
 	m *models.PhaseManifest, emg *models.PhaseSyncEMGData,
 ) ([]phasePoint, string) {
-	phases := make([]phasePoint, 0, 10)
-
-	for _, p := range models.AllPhases() {
-		opt, _, err := parsers.GetPhaseValue(&m.PhasePoints, p)
-		if err != nil {
-			continue
-		}
-
-		// Batch T：用 OptFloat.Get() 判斷「該分期點是否已標定」。Set=false（NA / 空字串）
-		// 跳過；Set=true 帶實際值（含 t=0 也是合法時間）。與 cci/analyzer.go
-		// calculateGaitCycle 對稱。
-		v, ok := opt.Get()
-		if !ok {
-			continue
-		}
-
-		var t float64
-		if p.IsMotionIndex() {
-			// `int(v)` 對 v ∉ [MinInt32, MaxInt32] 範圍時行為 unsafe
-			// (float64 → int 對 32-bit platform 是 implementation-defined,且 1e15
-			// 之類異常大值會 wrap-around 或 truncate)。Manifest parseInt 已對
-			// motion-index 欄位 (D/O) cap 在 MaxReasonableMotionIndex (1e9),
-			// 但 OptFloat 路徑來自 dynamic dispatch — 防呆檢查仍必要,避免未來
-			// 引入新 motion-index phase 時漏防。
-			//
-			// 邊界:`MaxReasonableMotionIndex` (1e9) 與 negative motion index
-			// (≤ 0 是 sentinel "未提供",理論上 OptFloat.Set=true 不該帶 0,但
-			// 防呆)。命中邊界外 → skip 該 phase + log warn,不 propagate(整批仍走)。
-			if v <= 0 || v > float64(parsers.MaxReasonableMotionIndex) {
-				a.logger.Warn("motion-index 分期點越界,跳過", map[string]any{
-					"subject": m.Subject,
-					"phase":   string(p),
-					"value":   v,
-					"cap":     parsers.MaxReasonableMotionIndex,
-				})
-				continue
-			}
-			t = a.timeSynchronizer.MotionIndexToEMGTime(int(v), m.EMGMotionOffset)
-		} else {
-			t = a.timeSynchronizer.ForceTimeToEMGTime(v, m.EMGMotionOffset)
-		}
-
-		phases = append(phases, phasePoint{name: string(p), time: t})
+	timeline := synchronizer.NewPhaseTimeline(m)
+	phases := make([]phasePoint, 0, len(timeline))
+	for _, pt := range timeline {
+		phases = append(phases, phasePoint{name: string(pt.Phase), time: pt.EMGTime})
 	}
 
 	if len(phases) < 2 {

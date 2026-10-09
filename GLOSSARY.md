@@ -28,6 +28,10 @@ _Avoid_: phase line(舊內部變數名,實際上是 markLine + label 組合)、m
 CCI 分析把單一 [[Subject]] 的共收縮曲線正規化到的百分比時間軸:**0% = S(啟動瞬間)、100% = L(落地瞬間)**,duration = `L − S` 的 EMG 時間。落地後尾段(延伸到 L+150ms)以 **>100%** 表示、啟動前引段(到 S−150ms)以 **<0%** 表示 — 因 `pct` 公式無 clamp,延伸範圍自然產生 cycle 外百分比。P0/P1/P2 是啟動**前**的準備點,落在此 cycle 之外,不參與 CCI 的百分比軸與 [[Phase marker]] 渲染。S/L 為必填錨點(缺任一 CCI fail-fast)。CCI 的分期視窗統計(`_CCI_Rudolph_phases.csv`,各分期點 ±50/±25ms、前100ms、L 落地後穩定、與分期區間中點±50ms)即定義在此時間軸上。
 _Avoid_: gait %(口語)、normalized time、jump cycle(code 用 gait cycle)、把 P0 當 0%(舊行為,[[ADR-0018]] 重錨為 S).
 
+**Phase timeline**
+一筆 [[Manifest]] row(一個 [[Subject]])的分期點在 EMG 時間軸上的位置:`synchronizer.NewPhaseTimeline(row)` 依 canonical 順序(`models.AllPhases()`,P0 → L)列出**已提供**的分期點與其 EMG 秒數,`At(p)` 查單點。是否提供由 `parsers.GetPhaseValue` 判斷(力板時間 `OptFloat` Set=false、motion-index D/O ≤ 0 為未提供);換算:力板時間 `emg = t − (EMGMotionOffset − 1) / 250`,motion-index `emg = (idx − EMGMotionOffset) / 250`,不設 motion-index 上限 guard(parser 已擋)。它是「分期點 → EMG 秒數」的唯一 owner;各 caller 只保留自己的 policy —— CCI 排除 P0–P2 並要求 S/L([[Gait cycle (CCI)]])、MuscleRatio 檢查 in-range 後排序加中點、[[Chart Composer]] 全部渲染成 [[Phase marker]]、PhaseSync 取一對分期點。見 [[ADR-0042]]。
+_Avoid_: synced time range(已刪的 `GetSyncedTimeRange`)、phase times map(那是 Composer / CCI 的輸出形狀,不是來源)、在 caller 內自行判斷力板時間 / motion-index 再換算.
+
 **Manifest**
 描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析都先解析 manifest 取得 dataset 集合再計算。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有四個 analyzer 不消費此欄位，向後相容。
 _Avoid_: config, batch file, descriptor, sheet.

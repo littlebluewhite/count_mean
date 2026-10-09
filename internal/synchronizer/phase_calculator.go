@@ -1,6 +1,6 @@
 // Package synchronizer provides time synchronization utilities for EMG, motion,
-// and force plate data analysis. It handles phase calculation, time conversion
-// between different sampling frequencies, and phase validation.
+// and force plate data analysis. It owns the phase timeline (manifest-row phase
+// points → EMG seconds), the EMG time-index seam, and phase-order validation.
 package synchronizer
 
 import (
@@ -8,19 +8,10 @@ import (
 	"fmt"
 
 	"count_mean/internal/models"
-	"count_mean/internal/parsers"
 )
-
-// PhaseTypeMotion represents the motion phase type.
-const PhaseTypeMotion = "motion"
-
-// PhaseTypeForce represents the force phase type.
-const PhaseTypeForce = "force"
 
 // Phase validation errors.
 var (
-	// ErrPhaseValueZero indicates a phase point value is zero or not set.
-	ErrPhaseValueZero = errors.New("phase value is zero or not set")
 	// ErrUnknownPhase indicates an unknown phase point was specified.
 	ErrUnknownPhase = errors.New("unknown phase point")
 	// ErrPhaseOrderInvalid indicates the start phase is not before the end phase.
@@ -28,81 +19,11 @@ var (
 )
 
 // PhaseCalculator 分期點計算器.
-type PhaseCalculator struct {
-	timeSynchronizer *TimeSynchronizer
-}
+type PhaseCalculator struct{}
 
 // NewPhaseCalculator 創建新的分期點計算器.
 func NewPhaseCalculator() *PhaseCalculator {
-	return &PhaseCalculator{
-		timeSynchronizer: NewTimeSynchronizer(),
-	}
-}
-
-// GetPhaseTimeRange 根據開始和結束分期點，計算時間範圍.
-//
-// Batch T：startValue / endValue 從 float64 換成 OptFloat。Set=false（未提供）
-// 仍回 ErrPhaseValueZero — 與既有錯誤訊息對外契約保持一致。
-//
-//nolint:gocritic // hugeParam: phasePoints passed by value for API compatibility
-func (pc *PhaseCalculator) GetPhaseTimeRange(
-	phasePoints models.PhasePoints,
-	startPhase models.PhasePoint,
-	endPhase models.PhasePoint,
-	emgMotionOffset int,
-) (*models.PhaseTimeRange, error) {
-	// 獲取開始分期點的值和類型
-	startOpt, startIsMotionIndex, err := parsers.GetPhaseValue(&phasePoints, startPhase)
-	if err != nil {
-		return nil, fmt.Errorf("獲取開始分期點 %s 失敗: %w", startPhase, err)
-	}
-
-	// 獲取結束分期點的值和類型
-	endOpt, endIsMotionIndex, err := parsers.GetPhaseValue(&phasePoints, endPhase)
-	if err != nil {
-		return nil, fmt.Errorf("獲取結束分期點 %s 失敗: %w", endPhase, err)
-	}
-
-	// 檢查值的有效性 — Set=false 視為「未提供」
-	startValue, startOK := startOpt.Get()
-	if !startOK {
-		return nil, fmt.Errorf("開始分期點 %s: %w", startPhase, ErrPhaseValueZero)
-	}
-
-	endValue, endOK := endOpt.Get()
-	if !endOK {
-		return nil, fmt.Errorf("結束分期點 %s: %w", endPhase, ErrPhaseValueZero)
-	}
-
-	// 計算同步的時間範圍
-	syncedRange, err := pc.timeSynchronizer.GetSyncedTimeRange(
-		startValue, startIsMotionIndex,
-		endValue, endIsMotionIndex,
-		emgMotionOffset,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("計算同步時間範圍失敗: %w", err)
-	}
-
-	// 創建結果
-	startType := PhaseTypeForce
-	if startIsMotionIndex {
-		startType = PhaseTypeMotion
-	}
-
-	endType := PhaseTypeForce
-	if endIsMotionIndex {
-		endType = PhaseTypeMotion
-	}
-
-	result := &models.PhaseTimeRange{
-		StartTime: syncedRange.StartEMGTime,
-		EndTime:   syncedRange.EndEMGTime,
-		StartType: startType,
-		EndType:   endType,
-	}
-
-	return result, nil
+	return &PhaseCalculator{}
 }
 
 // ValidatePhaseOrder 驗證分期點的順序.

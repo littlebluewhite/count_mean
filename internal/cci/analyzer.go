@@ -45,18 +45,15 @@ type CCIParams struct {
 //
 // Concurrency model:
 //   - PathValidator 不掛在 struct 上（request-scoped）— commit 1287572 修過的 race。
-//   - timeSynchronizer 是 stateless（無 mutable field write），可安全共用。
 //   - manifest loading 與 EMG file resolution 走 internal/manifest 套件（stateless package functions）。
 type CCIAnalyzer struct {
-	timeSynchronizer *synchronizer.TimeSynchronizer
-	logger           *logging.Logger
+	logger *logging.Logger
 }
 
 // NewCCIAnalyzer creates a new CCI analyzer instance.
 func NewCCIAnalyzer() *CCIAnalyzer {
 	return &CCIAnalyzer{
-		timeSynchronizer: synchronizer.NewTimeSynchronizer(),
-		logger:           logging.GetLogger("cci_analyzer"),
+		logger: logging.GetLogger("cci_analyzer"),
 	}
 }
 
@@ -102,8 +99,8 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 
 // computeCCI is the pure, file-free CCI assembly: it runs over already-loaded EMG
 // data and a validated manifest, with no filesystem access. AnalyzeCCI is the thin
-// I/O adapter that loads inputs and delegates here (ADR-0024). Dependencies
-// (timeSynchronizer/logger) come from the receiver; subject comes from m.Subject.
+// I/O adapter that loads inputs and delegates here (ADR-0024). The logger
+// comes from the receiver; subject comes from m.Subject.
 // Extracted so the regression-prone assembly (gait re-anchor / ±150ms extract /
 // drop-out-of-range / phase stats — ADR-0018/0022) is testable without real files.
 func (a *CCIAnalyzer) computeCCI(
@@ -213,38 +210,6 @@ func (a *CCIAnalyzer) loadEMGData(
 	return emgData, nil
 }
 
-// phasePointDef defines a phase point for iteration.
-//
-// Batch T：value 從 float64 換成 OptFloat — calculateGaitCycle 用 OptFloat.Get()
-// 判斷「該分期點是否已標定」，t=0 不再被誤判為未提供。
-type phasePointDef struct {
-	name          string
-	value         models.OptFloat
-	isMotionIndex bool
-}
-
-// getPhasePointDefs extracts all phase point definitions from a manifest.
-// 用 models.AllPhases() + PhasePoint.IsMotionIndex() 集中 domain invariant，
-// 避免「D 與 O 是 motion index」散落多處。
-func getPhasePointDefs(manifest *models.PhaseManifest) []phasePointDef {
-	allPhases := models.AllPhases()
-	defs := make([]phasePointDef, 0, len(allPhases))
-
-	for _, phase := range allPhases {
-		// GetPhaseValue 只在 default case return error；allPhases 已涵蓋全部 10 個合法
-		// case，error path 不可達，故 swallow。isMotionIndex 不用 GetPhaseValue 回的 bool，
-		// 改用 phase.IsMotionIndex() 才能跟 models 的 domain invariant 對齊。
-		opt, _, _ := parsers.GetPhaseValue(&manifest.PhasePoints, phase) //nolint:errcheck // unreachable error path
-		defs = append(defs, phasePointDef{
-			name:          string(phase),
-			value:         opt,
-			isMotionIndex: phase.IsMotionIndex(),
-		})
-	}
-
-	return defs
-}
-
 // gaitMinDurationSampleCount 是 calculateGaitCycle reject「duration ≈ 0」邊界
 // 的門檻 — 步態週期長度必須 ≥ gaitMinDurationSampleCount × sample interval。
 //
@@ -266,46 +231,19 @@ const gaitExtensionSeconds = 0.150
 func (a *CCIAnalyzer) calculateGaitCycle(
 	manifest *models.PhaseManifest, emgData *models.PhaseSyncEMGData,
 ) (float64, float64, map[string]float64, map[string]float64, error) {
-	points := getPhasePointDefs(manifest)
 	emgTimes := make(map[string]float64)
 
-	for _, pt := range points {
+	// EMG 秒數取自 manifest row 的 [[Phase timeline]](ADR-0042);此處只留 CCI 的 policy。
+	for _, pt := range synchronizer.NewPhaseTimeline(manifest) {
 		// ADR-0018：步態週期錨定 0%=S、100%=L,P0/P1/P2 是 pre-gait 事件,
 		// 排除在週期之外(不參與錨定也不計 percent)。曲線的 lead-in 由 B3 的
 		// extended extraction range 自然帶出 <0%,而非把 P0/P1/P2 算進週期。
-		switch pt.name {
-		case string(models.PhaseP0), string(models.PhaseP1), string(models.PhaseP2):
+		switch pt.Phase {
+		case models.PhaseP0, models.PhaseP1, models.PhaseP2:
 			continue
 		}
 
-		v, ok := pt.value.Get()
-		if !ok {
-			continue
-		}
-
-		var emgTime float64
-		if pt.isMotionIndex {
-			// 同 muscle_ratio collectPhasePoints — int(v) 對極端大 v
-			// (例如惡意 / 損毀 manifest 帶 1e15) 是 implementation-defined。
-			// MaxReasonableMotionIndex (1e9) 是 parseInt cap 邊界,OptFloat
-			// 路徑同樣 enforce 此 cap 防止下游 hot loop OOM / wrap-around。
-			if v <= 0 || v > float64(parsers.MaxReasonableMotionIndex) {
-				a.logger.Warn("motion-index 分期點越界,跳過", map[string]any{
-					"subject": manifest.Subject,
-					"phase":   pt.name,
-					"value":   v,
-					"cap":     parsers.MaxReasonableMotionIndex,
-				})
-				continue
-			}
-			emgTime = a.timeSynchronizer.MotionIndexToEMGTime(
-				int(v), manifest.EMGMotionOffset)
-		} else {
-			emgTime = a.timeSynchronizer.ForceTimeToEMGTime(
-				v, manifest.EMGMotionOffset)
-		}
-
-		emgTimes[pt.name] = emgTime
+		emgTimes[string(pt.Phase)] = pt.EMGTime
 	}
 
 	if len(emgTimes) < 2 {
