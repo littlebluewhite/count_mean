@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -13,6 +14,7 @@ import (
 	"count_mean/internal/cci"
 	"count_mean/internal/config"
 	"count_mean/internal/models"
+	"count_mean/internal/security/redact"
 )
 
 // placementCase 描述一個 Subject-based writer:在 subDir 下以 subject "subj_01" 寫出,
@@ -234,6 +236,33 @@ func TestSubjectWriters_EscapeErrorCarriesNoSubDir(t *testing.T) {
 			_, err := tc.write(h, "../"+secret)
 			require.ErrorIs(t, err, errOutputPathEscapesOutputDir)
 			require.NotContains(t, err.Error(), secret)
+		})
+	}
+}
+
+// MkdirAll 失敗時,錯誤文字不得帶出目錄路徑(末段可能是病患資料夾名,sink 只會遮到最後一段之前):
+// 只包底層 errno,errors.Is 仍可比對。
+func TestSubjectWriters_MkdirFailureCarriesNoDirPath(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("以一般檔案佔住目錄位置的 ENOTDIR 行為僅在 unix 驗證")
+	}
+
+	const secret = "PatientAlice_PHI_out"
+
+	for _, tc := range placementCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h, dir := newFormatAwareTestHandler(t)
+			// 以一般檔案佔住 SubDir 位置 → MkdirAll 失敗(ENOTDIR)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, secret), []byte("x"), 0o600))
+
+			_, err := tc.write(h, secret)
+			require.Error(t, err)
+			require.ErrorIs(t, err, syscall.ENOTDIR)
+			require.Contains(t, err.Error(), "輸出目錄建立失敗")
+			require.NotContains(t, redact.Paths(err.Error()), secret)
 		})
 	}
 }

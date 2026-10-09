@@ -57,7 +57,7 @@ _Avoid_: structured write, typed write, formatted output.
 _Avoid_: raw read, direct open.
 
 **Subject output placement**
-Subject-based write 把輸出落檔的唯一步驟 `placeSubjectOutput`：`SubjectOutputName` 推導檔名 → containment join → `ValidateExternalPath` → `MkdirAll` → `WriteCSVAtomic`（帶 `BasePaths`），回傳實際寫入路徑。7 個 Subject-based writer 只持有 row layout。錯誤文字固定為「輸出路徑無效」「輸出目錄建立失敗」，不帶 SubDir / 目錄路徑。見 [[ADR-0040]]。
+Subject-based write 把輸出落檔的唯一步驟 `placeSubjectOutput`：`SubjectOutputName` 推導檔名 → containment join → `ValidateExternalPath` → `MkdirAll` → `WriteCSVAtomic`（帶 `BasePaths`），回傳實際寫入路徑。7 個 Subject-based writer 只持有 row layout。錯誤文字固定為「輸出路徑無效」「輸出目錄建立失敗」。PHI 性質依分支而異：containment 失敗是固定哨兵（不帶 SubDir）；`MkdirAll` 失敗只包底層 errno（不帶目錄路徑）；`ValidateExternalPath` 失敗以 `%w` 包 validator error，可帶輸出「檔案」路徑，經 webview sink 時只剩檔名（ADR-0036 D5）。見 [[ADR-0040]]。
 與 File-based write 的單一寫門 `writeFileOutput`（非 atomic、檔名由 caller 傳入）是兩條不同的路。
 _Avoid_: phase-sync atomic write, output dir validation.
 

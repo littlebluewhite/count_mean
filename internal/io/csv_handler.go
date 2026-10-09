@@ -9,6 +9,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	stdio "io" // alias to avoid name shadow with package io
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -708,8 +709,12 @@ func (h *CSVHandler) writeFileOutput(req WriteRequest, data [][]string) (string,
 // 7 個 Subject-based writer 只持有 row layout,沒有任何一個能繞過本步驟。
 // 輸出檔名 = filename.SubjectOutputName(subject, suffix) + ".csv"(subject 內部強制 Sanitize)。
 //
-// 錯誤文字統一為「輸出路徑無效」「輸出目錄建立失敗」並以 %w 包底層 error,不帶 SubDir /
-// 目錄路徑(目錄末段可能是病患資料夾名)。
+// 錯誤文字統一為「輸出路徑無效」「輸出目錄建立失敗」並以 %w 包底層 error。各分支的 PHI 性質:
+//   - containment 失敗(errOutputPathEscapesOutputDir):固定哨兵,不帶 SubDir / 目錄路徑。
+//   - MkdirAll 失敗:只包底層 errno(去掉 *fs.PathError 的路徑),不帶目錄路徑。
+//   - ValidateExternalPath 失敗:以 %w 包 validator error,可帶輸出「檔案」路徑
+//     (webview sink 只保留檔名,見 ADR-0036 D5)。
+//   - WriteCSVAtomic 失敗:原樣回傳底層 error,不另加前綴。
 func (h *CSVHandler) placeSubjectOutput(
 	subDir, subject, suffix string,
 	header []string,
@@ -725,6 +730,12 @@ func (h *CSVHandler) placeSubjectOutput(
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outputPath), fsperm.DirPerm); err != nil {
+		// *fs.PathError 的文字帶目錄路徑(末段可能是病患資料夾名),只包底層 errno,
+		// errors.Is(err, fs.ErrPermission) 等比對仍成立。
+		var pe *fs.PathError
+		if stderrors.As(err, &pe) {
+			err = pe.Err
+		}
 		return "", fmt.Errorf("輸出目錄建立失敗: %w", err)
 	}
 
@@ -817,9 +828,10 @@ func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
 // — caller cancel 後立即停寫並回 ctx.Err。csvutil.WriteCSVAtomic 對 emit 回 error 走
 // tmp file abort 路徑,不留下半成品。
 //
-// ADR-0001 invariant 延伸到 CCI: pathValidator 守門覆蓋原 cci.ExportToCSV 缺少的
-// defense-in-depth(原路徑走 security.NewPathValidator(nil) 未整合 CSVHandler 既有
-// allowedPaths;由本 method 統一補上)。
+// ADR-0016 invariant: Subject-based write ⟹ WriteCSVAtomic + BasePaths,經 placeSubjectOutput
+// 落檔(ADR-0040);pathValidator 守門覆蓋原 cci.ExportToCSV 缺少的 defense-in-depth
+// (原路徑走 security.NewPathValidator(nil) 未整合 CSVHandler 既有 allowedPaths;
+// 由本 method 統一補上)。
 func (h *CSVHandler) WriteCCIResult(
 	ctx context.Context, req WriteRequest, result *cci.CCIAnalysisResult,
 ) (string, error) {
@@ -1031,7 +1043,7 @@ func formatMuscleRatioCell(values []float64, idx int) string {
 // 的 SubDir(如 traversal "../evil")。絕對 SubDir(如 "/etc")經 filepath.Join 被當成相對片段,
 // 結果落在 OutputDir/etc 之內,並非逸出;其敏感位置由 ValidateExternalPath 把關。
 //
-// ADR-0001 invariant:writeFileOutput 與直接走 csvutil.WriteCSVAtomic 的 writer
+// ADR-0016 / ADR-0040:writeFileOutput 與直接走 csvutil.WriteCSVAtomic 的 writer
 // (placeSubjectOutput)共用本 helper 守住 OutputDir 邊界,
 // 確保 SubDir traversal 不會把 *.csv 寫到 OutputDir 外面。
 func (h *CSVHandler) safeJoinOutput(subDir, filename string) (string, error) {
@@ -1046,7 +1058,7 @@ var errEmptyMuscleRatioPayload = stderrors.New("WriteMuscleRatio*: payload 缺 T
 
 var errEmptyCCIPhasesPayload = stderrors.New("WriteCCIPhasesResult: payload has no rows")
 
-// errOutputPathEscapesOutputDir 標示 SubDir 含 traversal 或絕對路徑導致 join
+// errOutputPathEscapesOutputDir 標示 SubDir 含 traversal 導致 join
 // 後的路徑逸出 OutputDir;供 safeJoinOutput 回傳、placeSubjectOutput wrap。
 var errOutputPathEscapesOutputDir = stderrors.New("輸出路徑逸出 OutputDir")
 
