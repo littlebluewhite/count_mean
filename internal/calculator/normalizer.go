@@ -179,7 +179,7 @@ func (n *Normalizer) Normalize(dataset, reference *models.EMGDataset) (*models.E
 	// 預配 totalPoints*channelCount 大小的 buffer，逐 row 切 sub-slice：
 	// 30 萬點 × 16 channel 級別下，per-row make 會產生 30 萬次 allocation；
 	// 改用三索引切片 buf[i:j:j] 限制 cap，未來若有 append(channels, ...) 也只會新配置不會寫穿。
-	// 下游消費者 (csv writer / convertNormalizedDataToArray / chart) 全部僅讀，sub-slice 安全。
+	// 下游消費者只有 csv writer (gui NormalizeData → csvHandler.WriteNormalized)，僅讀，sub-slice 安全。
 	// 所有 row 已在上方統一驗證寬度,fast path 100% 命中,不再需要 fallback alloc。
 	totalPoints := len(dataset.Data)
 	channelCount := len(refValues)

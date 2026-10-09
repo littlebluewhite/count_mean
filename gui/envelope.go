@@ -10,13 +10,14 @@ import (
 )
 
 // [[Webview envelope]] 的 Message 通道(ADR-0036):handler 把可預期失敗包進
-// result 字串欄位(Message、MR SubjectDTO.Error、Composer MissingFileDTO.ErrMessage)
+// result 字串欄位(Message、MuscleRatioSubjectDTO.Error、Composer MissingFileDTO.ErrMessage)
 // 時,只能經這三個 helper 產生文字。err 通道的出口在 recover.go
 // (recoverHandlerPanic → redactForWebview)。
 //
 // 兩條通道都只做 sink-side redact.Paths:目錄段換成 `<redacted-path>/`,**末段
 // (basename)保留**。錯誤若以病患資料夾名結尾(例如 DataFolder 本身不存在),
-// 那一段仍會出現 —— source-side 的 fsperm redactBasePaths 因此保留。
+// 那一段仍會出現 —— source-side 的 fsperm redactBasePaths 因此保留。不符 redact
+// 目錄段文法的段(含 `"`、`: ` 等,見 ADR-0036 Decision 5)也會原文留存。
 //
 // i18n 規則:handler 層 localize(failMessage 的前綴),analyzer 只回 error /
 // sentinel;cci / muscle_ratio / phase_sync 內部既有的 i18n 字串留待後續 wave 遷移。

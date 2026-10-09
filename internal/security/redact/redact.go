@@ -17,7 +17,7 @@
 //   - handler 錯誤訊息塞給前端前在 gui 的 Webview envelope(ADR-0036)出口 redact:
 //     Message 通道 gui/envelope.go(failMessage / inputMessage → RedactForMessage)、
 //     err 通道 gui/recover.go(recoverHandlerPanic → Paths)
-//   - internal/logging/logger.go::sanitizeMessage 加入 redact.PathPattern() / 直接調用 Paths()
+//   - internal/logging/logger.go::sanitizeMessage 直接調用 Paths()
 //
 // # 為什麼不直接 export pathRedactPattern
 //
@@ -130,12 +130,12 @@ func Paths(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-// RedactForMessage 對 error 文字做 path-redact 處理後回傳 string,專供 handler
-// 把 err 訊息塞給前端前用。nil error 回空字串,讓 caller 可直接:
+// RedactForMessage 對 error 文字做 path-redact 處理後回傳 string。nil error 回空
+// 字串,caller 不必先 nil-check。
 //
-//	result.Message = redact.RedactForMessage(err)
-//
-// 不必先 nil-check。
+// gui 的 caller 只有 gui/envelope.go 的 failMessage / inputMessage([[Webview envelope]],
+// ADR-0036):handler 不得自己呼叫它拼 Message,一律經那兩個 helper(AST 守門:gui 內
+// 只有 envelope.go 與 recover.go 可 import 本套件)。
 //
 // 主目標:happy-path error message 不能塞 absolute path PII 給 webview。
 // patient 看到的錯誤訊息走 RedactForMessage 後,絕對 path 都會被換成 `<redacted-path>`,

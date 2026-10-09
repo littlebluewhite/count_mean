@@ -1,10 +1,11 @@
 package gui
 
 import (
-	"count_mean/internal/calculator"
-	"count_mean/internal/io"
 	"fmt"
 	"path/filepath"
+
+	"count_mean/internal/calculator"
+	"count_mean/internal/io"
 )
 
 // CalculateMaxMean calculates maximum mean values.

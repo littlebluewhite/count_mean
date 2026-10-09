@@ -149,8 +149,8 @@ export function makeCciSpec(app) {
             });
 
             // backend handler 用 Success=false 表 soft error(non-panic,見
-            // cci_handlers.go:114 failedCCIResult);envelope 需要 throw 才能走
-            // ShowError → 把 soft error 升 throw(對齊 main.js:1356 ShowError 路徑)。
+            // gui/cci_handlers.go 的 failedCCIResult);envelope 需要 throw 才能走
+            // ShowError → 把 soft error 升 throw(對齊 main.js 的 ShowError 路徑)。
             if (!result.success) {
                 throw new Error(result.message || 'CCI 分析失敗');
             }

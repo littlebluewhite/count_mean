@@ -516,8 +516,8 @@ func TestBOMBytes(t *testing.T) {
 
 // TestCSVHandler_ReadCSV_StripsLeadingBOM 釘住 cross-compare review 真正 bug:
 // readAndParseCSV 過去直接 csv.NewReader 沒處理 UTF-8 BOM，導致 Excel 匯出的
-// CSV 開頭 0xEF 0xBB 0xBF 會污染 records[0][0]，下游 GetCSVHeaders 等 caller
-// 把帶 BOM 的字串回傳給前端 / 用於 channel 比對都會 broken。
+// CSV 開頭 0xEF 0xBB 0xBF 會污染 records[0][0]，下游 caller 把帶 BOM 的 header
+// 寫進輸出 CSV / 用於 channel 比對都會 broken。
 // parsers/csv_reader.go 已在 PR-E 用 PeekBOM 修，這條 io 路徑漏修，testdata
 // 過去全部無 BOM 沒能 cover。
 func TestCSVHandler_ReadCSV_StripsLeadingBOM(t *testing.T) {

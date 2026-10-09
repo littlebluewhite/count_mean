@@ -1,12 +1,13 @@
 package gui
 
 import (
+	"fmt"
+
 	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/models"
 	"count_mean/internal/phase_sync"
 	"count_mean/internal/synchronizer"
-	"fmt"
 )
 
 // PhaseSyncParams 分期同步分析參數.

@@ -1,9 +1,10 @@
 package gui
 
 import (
-	"count_mean/internal/io"
 	"fmt"
 	"path/filepath"
+
+	"count_mean/internal/io"
 )
 
 // NormalizeData performs data normalization.

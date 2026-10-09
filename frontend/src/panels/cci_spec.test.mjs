@@ -196,7 +196,7 @@ test('spec.rpc 在 subjectIdx 為負時 throw', async () => {
 // ---------- spec.rpc backend soft-error 升 throw ----------
 
 test('spec.rpc 在 backend result.success=false 時 throw(升 soft error 為 ShowError)', async () => {
-    // backend handler 用 Success=false 表 soft error(cci_handlers.go:114
+    // backend handler 用 Success=false 表 soft error(gui/cci_handlers.go 的
     // failedCCIResult)。envelope 需 throw 才走 ShowError,故 rpc 把 soft error
     // 升 throw。此 test 走到 AnalyzeCCI binding(window['go']['gui']['App']),
     // 故 stub window.go。

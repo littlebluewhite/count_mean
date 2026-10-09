@@ -135,8 +135,8 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 
 // ValidateExternalPath validates an externally-selected path (e.g. from a GUI
 // file dialog) without enforcing the allowed-base-paths whitelist. Use for
-// GetCSVHeaders / chart preview / any reader where the user has explicitly
-// chosen the file.
+// external CSV reads (CSVHandler.ReadCSVExternal), manifest / data-folder inputs
+// and output / configured directories — any path the user has explicitly chosen.
 //
 // Symlink defense (critical): lexical Clean+Abs alone is insufficient —
 //

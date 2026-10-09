@@ -1,14 +1,15 @@
 package gui
 
 import (
-	"count_mean/internal/calculator"
-	"count_mean/internal/io"
-	"count_mean/internal/models"
 	"fmt"
 	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"count_mean/internal/calculator"
+	"count_mean/internal/io"
+	"count_mean/internal/models"
 )
 
 // validatePhaseParams validates phase analysis parameters and returns the phase

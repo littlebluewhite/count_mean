@@ -223,8 +223,8 @@ func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
 
 	// 用 bufio 包 *os.File 避免 csv.Reader 每次 Read 都觸發 syscall（大檔差異明顯）。
 	// BOM 處理：Excel 匯出的 UTF-8 CSV 常帶 0xEF 0xBB 0xBF 前綴。若不剝除，
-	// records[0][0] 會帶 U+FEFF，會在 GetCSVHeaders 直接回前端時造成 user-visible
-	// 怪字元，並污染後續以 header 字串比對 channel 名稱的路徑。
+	// records[0][0] 會帶 U+FEFF，污染後續以 header 字串比對 channel 名稱的路徑，
+	// header 寫進輸出 CSV 時也會帶出 user-visible 怪字元。
 	// 與 internal/parsers/csv_reader.go 對稱：先 bufio.NewReaderSize 再 PeekBOM
 	// 再 csv.NewReader（PeekBOM 在 < 3 bytes 輸入時視為「無 BOM」回 nil，
 	// 不會把空檔的 EOF 提前丟出）。

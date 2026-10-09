@@ -1,8 +1,9 @@
 package gui
 
 import (
-	"count_mean/internal/maxmean"
 	"errors"
+
+	"count_mean/internal/maxmean"
 )
 
 // Sentinel errors for validation.

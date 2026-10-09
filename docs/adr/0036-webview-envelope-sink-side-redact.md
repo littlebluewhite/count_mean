@@ -2,7 +2,7 @@
 
 **Status**: accepted · **implemented** (2026-10-09)
 
-Go 端文字有兩條路進 Wails webview：**err 通道** —— bound method 回的 Go err，Wails dispatcher 以 `err.Error()` 序列化成 rejected promise，frontend `main.js` 原樣顯示；**Message 通道** —— failed result 的 `Message`，以及 MuscleRatio `SubjectDTO.Error`、Chart Composer `MissingFileDTO.ErrMessage` 等字串欄位。過去兩條通道要不要 redact 逐分支決定：約 31 處手寫 `fmt.Sprintf("<前綴>: %s", redact.RedactForMessage(err))`、9 個 err 通道 handler 原文送出、MR `Subjects[i].Error` 原樣轉送 analyzer 字串 —— 共 10 個實測可重現的病患路徑洩漏點。log 早有單一出口（`Logger.sanitizeMessage`），webview 沒有。
+Go 端文字有兩條路進 Wails webview：**err 通道** —— bound method 回的 Go err，Wails dispatcher 以 `err.Error()` 序列化成 rejected promise，frontend `main.js` 原樣顯示；**Message 通道** —— failed result 的 `Message`，以及 `MuscleRatioSubjectDTO.Error`、Chart Composer `MissingFileDTO.ErrMessage` 等字串欄位。過去兩條通道要不要 redact 逐分支決定：約 31 處手寫 `fmt.Sprintf("<前綴>: %s", redact.RedactForMessage(err))`、9 個 err 通道 handler 原文送出、MR `Subjects[i].Error` 原樣轉送 analyzer 字串 —— 共 10 個實測可重現的病患路徑洩漏點。log 早有單一出口（`Logger.sanitizeMessage`），webview 沒有。
 
 本 ADR 把兩條出口合稱 **[[Webview envelope]]**，記錄 W2「GUI handler seam」的兩步：err 通道出口 redact（commit `862fe9e`，當時未寫 ADR）與 Message 通道唯一建構 + handler 層 i18n。接續 [[ADR-0035]]。
 
@@ -12,17 +12,21 @@ Go 端文字有兩條路進 Wails webview：**err 通道** —— bound method �
    - `webviewErr{msg, original}`（仿 `panicErrWithChain`）：`Error()` 只回 `redact.Paths` 後文字，`Unwrap()` 回原 err，`errors.Is/As` 仍走得到完整 chain（含帶原路徑的 `*fs.PathError`，只供 Go 端判斷，不序列化進 webview）。
    - 文字沒變（不含路徑或 nil）就原樣回傳原 err，保留 identity。panic 分支不變。
    - [[ADR-0035]] 的「首句 defer」AST 規則保證每個回 error 的 bound method 都經過這裡 —— 這是所有 Go err 進 webview 前的唯一出口，handler 不必各自 redact err。
-2. **Message 通道：只能經 `gui/envelope.go` 三個 helper 建構**：
+2. **Message 通道：失敗文字只能經 `gui/envelope.go` 三個 helper 建構**（範圍是失敗訊息 —— 成功分支的 Message 由 handler 直接組、不經 helper、不過 redact，故不得帶目錄路徑；PNG 下載的「圖表已下載至: 」原本接 outputPath 絕對路徑，已改為只接檔名）：
    - `(a *App) failMessage(key, err)`：可預期失敗（下游 analyzer / IO / 計算錯誤）。回 `i18n.T(key) + ": " + redact 後的 err 文字`，並以 `a.logger.Error` 記一次；handler 分支不另打 Error log。log 訊息是 localized 前綴，context 帶 `handler`（呼叫端函式名，`runtime.Callers`）、`caller`（呼叫端 file:line）與 `i18n`（key，供跨 locale grep）—— 欄位不叫 `key`，因 logger 的 sensitive pattern 會遮蔽 `key=` 形狀的值。
    - `inputMessage(err)`：驗證 sentinel（`ErrNoManifestFile`、路徑驗證失敗、Composer 找不到 Subject）。只 redact，不加前綴、不 log —— 使用者輸入問題不是系統錯誤。
-   - `redactText(s)`：Message 以外的字串欄位（MR `SubjectDTO.Error`、Composer `MissingFileDTO.ErrMessage`），只 redact、不 log。
-   - `failed*Result(...)` 的引數只能是字串字面值、`failMessage(...)` 或 `inputMessage(...)`。`AnalyzePhaseSync` 的分析 / 寫檔分支改用新 `failedPhaseSyncResult`。
+   - `redactText(s)`：Message 以外的字串欄位（`MuscleRatioSubjectDTO.Error`、Composer `MissingFileDTO.ErrMessage`），只 redact、不 log。
+   - `failed*Result(...)` 的引數只能是字串字面值、`failMessage(...)` 或 `inputMessage(...)`。`AnalyzePhaseSync` 的分析 / 寫檔分支改用新 `failedPhaseSyncResult`。AST 規則只檢查這一點；`redactText` 的兩個欄位沒有 AST 規則 —— `MuscleRatioSubjectDTO.Error` 由 runtime 測試（第 4 點）守，`MissingFileDTO.ErrMessage` 只靠呼叫點本身。
 3. **i18n 規則：handler 層 localize，analyzer 只回 error / sentinel**。新增 19 個 `error.handler.*` key（4 locale），值只是前綴（無 verb、無冒號），多個 handler 的同義步驟共用一個 key；zh-TW 值與遷移前硬編碼前綴逐位元組相同。`internal/cci` / `muscle_ratio` / `phase_sync` 內部既有的 `i18n.T` 呼叫與硬編碼中文**這次不遷移**（後續 W4 / W5）；在那之前 Message = handler 的 localized 前綴 + analyzer 的（語言不一的）錯誤文字。刪除 orphan key `KeyErrorCCIOutputDirInvalid` / `KeyErrorCCIMkdirFailed`，以及 MR 改走 `failMessage` 後無 production caller 的 `KeyErrorMuscleRatioHandlerAnalysisFailed`。
 4. **守門測試**：
    - AST：`TestFailedResultArgs_OnlyLiteralOrEnvelope`（第 2 點的引數規則）、`TestRedactImport_OnlyEnvelopeAndRecover`（gui 非測試檔中只有 `envelope.go` 與 `recover.go` 可 import `internal/security/redact`）。
-   - runtime：`TestRPCErrChannel_NoAbsolutePath`（9 列 err 通道 handler）、`TestRPCMessage_NoAbsolutePath`（6 列：CCI、NPS、Composer×2、PhaseSync 分析分支、MR `Subjects[i].Error`），共用 `requireNoDirLeak`（system-root 前綴、植入的病患目錄段、反向保險 `<redacted-path>` 標記）；`TestFailMessage_LocalizedAndRedacted`（zh-TW / en-US / 缺 key 時回 bare key）。
+   - runtime：`TestRPCErrChannel_NoAbsolutePath`（8 列 err 通道 handler）、`TestRPCMessage_NoAbsolutePath`（6 列：CCI、NPS、Composer×2、PhaseSync 分析分支、MR `Subjects[i].Error`），共用 `requireNoDirLeak`（system-root 前綴、植入的病患目錄段、反向保險 `<redacted-path>` 標記）；`TestFailMessage_LocalizedAndRedacted`（zh-TW / en-US / 缺 key 時回 bare key）。
    - `gui/main_test.go` 的 `TestMain` 比照 production 載入內建 catalog 並 `SetLocale(zh-TW)`。
-5. **已知限制：sink-side redact 保留末段**。兩條通道都只過 `redact.Paths` —— 目錄段換成 `<redacted-path>/`，**最後一段（basename）保留**。錯誤若以病患資料夾名結尾（例如 DataFolder 本身不存在：`stat /Users/x/PatientAlice: no such file` → `stat <redacted-path>/PatientAlice: …`），那個名字仍會出現在 err 文字與 Message 裡。這正是 fsperm 保留 source-side `redactBasePaths`（對 base path 先補 `/`，連末段一併脫敏）的原因；測試把植入目錄放在非末段，只斷言 `redact.Paths` 真正保證的部分。
+5. **已知限制：sink-side redact 只脫敏「符合目錄段文法的非末段」**。兩條通道都只過 `redact.Paths`（與 log 的 `sanitizeMessage` 同一個 pattern）：
+   - **末段保留**：目錄段換成 `<redacted-path>/`，**最後一段（檔名或資料夾名）保留**。錯誤若以病患資料夾名結尾（例如 DataFolder 本身不存在：`stat /Users/x/PatientAlice: no such file` → `stat <redacted-path>/PatientAlice: …`），那個名字仍會出現在 err 文字與 Message 裡。這正是 fsperm 保留 source-side `redactBasePaths`（對 base path 先補 `/`，連末段一併脫敏）的原因。
+   - **目錄段文法**（POSIX `/…/`、drive-letter `C:\…\` / `C:/…/`、UNC `\\server\share\…\` 三個分支一致）：段 = 以一或多個半形空白分隔的詞；詞不含空白、`/`、`"`，詞的中間（不在頭尾）可夾 `'`。POSIX 詞的中間另可夾 `:`（macOS Finder 名稱裡的 `/` 在 POSIX 層是 `:`），詞裡的 `\` 不可接 `n` / `r` / `t`（logger 先把換行跳脫成字面 `\n` / `\t` 再呼叫 `Paths`，否則跳脫後的多行 stack 會黏成一個段）；drive-letter / UNC 的詞不含 `\` 與 `:`，分隔字元另接受 `%q` 格式化後成對的 `\\`。涵蓋 `Jane Doe`、`OneDrive - Hospital`、`EMG Data`、`O'Neil`、雙空白、`2026:05:18`、`resolved=%q` 形狀的 Windows / UNC 路徑（`7b9a058` 之前，drive-letter / UNC 段內的空白、各分支的 `'` 與雙空白、POSIX 的 `:`、`%q` 跳脫都會讓該段原文留存）。
+   - **不符文法的目錄段原文留存**，其後的目錄段仍由下一個匹配脫敏：含 `"`、tab 等非半形空白、冒號後接空白、以 `'` 或空白開頭 / 結尾的段，以及 POSIX 段內 `\` 後接 `n` / `r` / `t` 的段（如 `Doe\nancy`）。例：`/Users/x/Study: Phase 1/S01/emg.csv` → `<redacted-path>/Study: Phase 1<redacted-path>/emg.csv`。這些形狀放寬就會吃掉路徑後的錯誤文字 —— 允許 `: ` 時，`open …/c.csv: input/output error` 的 `c.csv: input/` 會被當成目錄段。`TestPaths_DocumentedSurvivingSegments` 釘住留存的形狀，`TestPaths_KeepsOrdinaryTextAroundPaths` 釘住不得過度脫敏的文字。
+   - 測試把植入目錄放在非末段、名稱符合文法，只斷言 `redact.Paths` 真正保證的部分。
 
 ### Amends ADR-0035
 
