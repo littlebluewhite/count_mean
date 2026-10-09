@@ -144,7 +144,9 @@ func TestDownloadValidatedPNG_HappyPath(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, outputPath, result.OutputPath)
 	assert.True(t, result.Success)
-	assert.Equal(t, "圖表已下載至: "+outputPath, result.Message)
+	// Message 進 webview 顯示:只帶檔名,不帶輸出目錄的絕對路徑。
+	assert.Equal(t, "圖表已下載至: chart.png", result.Message)
+	assert.NotContains(t, result.Message, filepath.Dir(outputPath))
 
 	// 檔案真的被寫出，且內容等於 decode 後的 PNG bytes。
 	written, readErr := os.ReadFile(outputPath)

@@ -2,6 +2,7 @@ package gui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"count_mean/internal/security/fsperm"
@@ -35,9 +36,10 @@ func (a *App) downloadValidatedPNG(imageData, outputPath string) (*ChartResult, 
 		return nil, fmt.Errorf("保存圖片失敗: %w", writeErr)
 	}
 
+	// Message 由 Composer 前端原樣顯示:只帶檔名,輸出目錄的絕對路徑不進 webview 文字。
 	return &ChartResult{
 		OutputPath: outputPath,
 		Success:    true,
-		Message:    fmt.Sprintf("圖表已下載至: %s", outputPath),
+		Message:    "圖表已下載至: " + filepath.Base(outputPath),
 	}, nil
 }
