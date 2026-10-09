@@ -200,7 +200,7 @@ func (h *CSVHandler) checkFileSizeAndFormat(filename string, opts readOptions) (
 
 // isCSVFile checks if the file has a CSV extension.
 func (h *CSVHandler) isCSVFile(path string) bool {
-	return h.pathValidator.IsCSVFile(path)
+	return security.IsCSVFile(path)
 }
 
 // readAndParseCSV opens and parses a CSV file.
@@ -378,7 +378,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 		"bom_enabled": h.config.BOMEnabled,
 	})
 
-	sanitizedPath, sanitizeErr := h.pathValidator.SanitizePath(filename)
+	sanitizedPath, sanitizeErr := security.SanitizePath(filename)
 	if sanitizeErr != nil {
 		h.logger.Error("寫入路徑淨化失敗", sanitizeErr, map[string]any{
 			"original_path": filename,
@@ -395,7 +395,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 		return fmt.Errorf("路徑驗證失敗: %w", err)
 	}
 
-	if !h.pathValidator.IsCSVFile(sanitizedPath) {
+	if !security.IsCSVFile(sanitizedPath) {
 		err := fmt.Errorf("檔案 '%s': %w", sanitizedPath, errInvalidCSVFile)
 		h.logger.Error("檔案格式驗證失敗", err, map[string]any{
 			"path": sanitizedPath,

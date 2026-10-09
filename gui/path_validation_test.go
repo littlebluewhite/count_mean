@@ -540,3 +540,23 @@ func TestValidateManifestHandlerParams_RejectsTraversalDataFolder(t *testing.T) 
 		})
 	}
 }
+
+// TestValidateManifestHandlerParams_RejectsSensitiveDataFolder 釘住 dataFolder 走
+// 「目錄」語意驗證:系統敏感目錄本身(`/etc`、`~/.ssh`,結尾無 slash)也必須被擋。
+// 檔案語意的 ValidateExternalPath 靠 sensitive pattern 的結尾 slash 命中,
+// 對目錄根本身會漏。
+func TestValidateManifestHandlerParams_RejectsSensitiveDataFolder(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	manifest := t.TempDir() + "/manifest.csv"
+
+	for _, folder := range []string{"/etc", filepath.Join(home, ".ssh")} {
+		t.Run(folder, func(t *testing.T) {
+			err := validateManifestHandlerParams(manifest, folder)
+			require.Error(t, err, "敏感 dataFolder 必須被擋下: %s", folder)
+			assert.ErrorIs(t, err, security.ErrSensitiveDirectory)
+			assert.Contains(t, err.Error(), "資料夾")
+		})
+	}
+}

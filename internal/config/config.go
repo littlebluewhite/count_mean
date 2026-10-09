@@ -281,7 +281,7 @@ func (c *AppConfig) Validate() error {
 	}
 
 	// Traversal / system-dir / null-byte 驗證 — 拒絕 "../../etc"、"/etc"、含 \x00 等。
-	// security.PathValidator.ValidateExternalPath 自動把相對路徑（如 "./output"）以 cwd
+	// security.PathValidator.ValidateExternalDir 自動把相對路徑（如 "./output"）以 cwd
 	// 展開為絕對路徑後再檢，因此預設 config 不會誤拒。InputDir / OutputDir / OperateDir /
 	// LogDirectory / TranslationsDir 五個 user-controllable directory 都一併保護。
 	//
@@ -311,12 +311,9 @@ func (c *AppConfig) Validate() error {
 			return fmt.Errorf("%s 含 null byte", f.name)
 		}
 
-		// Directory 語意：OutputDir 等是「未來寫入路徑的 prefix」，附 dummy child 後再驗
-		// 確保 OutputDir 本身就是 system root（"/etc"）也被擋 — performBasicSecurityChecks
-		// 的 sensitive pattern "/etc/" 等需要結尾 slash 才命中。"/etc-backup" 不會誤擋
-		// 因為 join 後是 "/etc-backup/_marker" 不含 "/etc/"。
-		checkPath := filepath.Join(f.path, "_validation_marker")
-		if err := validator.ValidateExternalPath(checkPath); err != nil {
+		// Directory 語意:ValidateExternalDir 讓目錄根本身(如 "/etc")也被擋,
+		// "/etc-backup" 不會誤擋。
+		if err := validator.ValidateExternalDir(f.path); err != nil {
 			return fmt.Errorf("%s 驗證失敗: %w", f.name, err)
 		}
 	}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -98,10 +97,9 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 	}
 
 	// Defense-in-depth：config 載入時已驗證 OutputDir，但 GUI file dialog 等繞過
-	// config 的 caller 仍可能傳壞值。附 dummy child 後 ValidateExternalPath 擋
+	// config 的 caller 仍可能傳壞值。ValidateExternalDir 擋
 	// traversal / system-dir prefix，避免後續 os.MkdirAll 走到 /etc 等敏感目錄。
-	checkPath := filepath.Join(params.OutputDir, "_validation_marker")
-	if err := security.NewPathValidator(nil).ValidateExternalPath(checkPath); err != nil {
+	if err := security.DefaultValidator().ValidateExternalDir(params.OutputDir); err != nil {
 		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorMuscleRatioOutputDirInvalid), err)
 	}
 

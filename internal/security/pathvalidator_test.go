@@ -68,7 +68,6 @@ func TestPathValidator_ValidateFilePath(t *testing.T) {
 }
 
 func TestPathValidator_IsCSVFile(t *testing.T) {
-	validator := NewPathValidator([]string{"."})
 
 	tests := []struct {
 		name string
@@ -99,7 +98,7 @@ func TestPathValidator_IsCSVFile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := validator.IsCSVFile(tt.path); got != tt.want {
+			if got := IsCSVFile(tt.path); got != tt.want {
 				t.Errorf("IsCSVFile() = %v, want %v", got, tt.want)
 			}
 		})
@@ -110,10 +109,9 @@ func TestPathValidator_IsCSVFile(t *testing.T) {
 // silent-rewrite 攻擊 pattern(如 `report\x01..csv`,silent strip 後通過
 // element-based traversal check 卻 OS 開到別的檔)一律 reject,caller 必須處理。
 func TestPathValidator_SanitizePath(t *testing.T) {
-	validator := NewPathValidator([]string{"."})
 
 	t.Run("clean path passes through unchanged", func(t *testing.T) {
-		got, err := validator.SanitizePath("test.csv")
+		got, err := SanitizePath("test.csv")
 		if err != nil {
 			t.Fatalf("clean path should not error: %v", err)
 		}
@@ -123,7 +121,7 @@ func TestPathValidator_SanitizePath(t *testing.T) {
 	})
 
 	t.Run("clean path with double-dot filename passes through", func(t *testing.T) {
-		got, err := validator.SanitizePath("report..v2.csv")
+		got, err := SanitizePath("report..v2.csv")
 		if err != nil {
 			t.Fatalf("legitimate double-dot filename should not error: %v", err)
 		}
@@ -153,7 +151,7 @@ func TestPathValidator_SanitizePath(t *testing.T) {
 
 	for _, tt := range rejected {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := validator.SanitizePath(tt.path)
+			got, err := SanitizePath(tt.path)
 			if err == nil {
 				t.Fatalf("SanitizePath(%q) should reject silent rewrite, got cleaned=%q err=nil",
 					tt.path, got)
@@ -309,8 +307,6 @@ func TestPathValidator_AcceptsLegitimateDotsInFilename(t *testing.T) {
 func TestPathValidator_SanitizePath_PreservesDoubleDotFilename(t *testing.T) {
 	t.Parallel()
 
-	validator := NewPathValidator([]string{"."})
-
 	preserved := []struct {
 		name string
 		path string
@@ -324,7 +320,7 @@ func TestPathValidator_SanitizePath_PreservesDoubleDotFilename(t *testing.T) {
 	for _, tt := range preserved {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := validator.SanitizePath(tt.path)
+			got, err := SanitizePath(tt.path)
 			if err != nil {
 				t.Fatalf("SanitizePath(%q) unexpected error: %v", tt.path, err)
 			}

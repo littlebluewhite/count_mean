@@ -158,6 +158,27 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 // symlink 防護(見 fsperm/flags_windows.go);本檢查補強 Windows boundary,不
 // 替代 caller 端 O_NOFOLLOW。
 func (pv *PathValidator) ValidateExternalPath(path string) error {
+	return pv.validateExternal(path, false)
+}
+
+// ValidateExternalDir 驗證使用者外部選取的「目錄」(output / data folder / config 目錄),
+// 與 ValidateExternalPath 擋同一組系統敏感位置,但以目錄語意判定。
+//
+// 目錄根本身(`/etc`、`~/.ssh`)結尾沒有 slash,sensitive pattern(`/etc/`)不會命中;
+// 因此在 path 後附一個內部 sentinel child 再驗,讓目錄根與其子孫等價被擋。
+// 同時 sentinel 讓「檔名」類規則(檔名長度、Windows reserved device name)不套用到
+// 目錄本身 — 那些規則只對檔案有意義。
+func (pv *PathValidator) ValidateExternalDir(dir string) error {
+	return pv.validateExternal(dir, true)
+}
+
+// externalDirSentinel 是 ValidateExternalDir 附加於目錄後的內部 child 名稱,
+// 僅用於讓目錄根命中 sensitive pattern 的結尾 slash;不會出現在任何回傳值。
+const externalDirSentinel = "_validation_marker"
+
+// validateExternal 是 ValidateExternalPath / ValidateExternalDir 共用的實作。
+// isDir 為 true 時,path 以目錄語意處理(見 ValidateExternalDir)。
+func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 	if path == "" {
 		return nil
 	}
@@ -174,6 +195,9 @@ func (pv *PathValidator) ValidateExternalPath(path string) error {
 	absPath, _, err := pv.validatePathFormat(path, false)
 	if err != nil {
 		return err
+	}
+	if isDir {
+		absPath = filepath.Join(absPath, externalDirSentinel)
 	}
 
 	// Layer 1：lexical absPath 直接擋字串本身就敏感的 case（不依賴 fs 狀態）。
@@ -268,25 +292,15 @@ func HasTraversalElement(path string) bool {
 	return false
 }
 
-// ValidateDirectoryPath validates that a directory path is within allowed directories.
-func (pv *PathValidator) ValidateDirectoryPath(path string) error {
-	return pv.ValidateFilePath(path)
-}
-
 // IsCSVFile checks if the file has a .csv extension.
 //
 // 取 Ext 前先 TrimRight 把尾端空白與點剝掉:Excel 匯出 / Windows 拖拉常在檔名
 // 尾端留 trailing space 或 dot,這類檔名仍能 open,validator 不該誤判為非 CSV。
 //
 // 本函式只判斷副檔名類別,不負責 sanitize;caller 若要實際開檔請走
-// PathValidator.SanitizePath / SafePath。
+// SanitizePath / PathValidator.GetSafePath。
 func IsCSVFile(path string) bool {
 	return strings.ToLower(filepath.Ext(strings.TrimRight(path, " ."))) == ".csv"
-}
-
-// IsCSVFile checks if the file has a .csv extension (method wrapper).
-func (*PathValidator) IsCSVFile(path string) bool {
-	return IsCSVFile(path)
 }
 
 // charReplacement is a deterministic (from, to) replacement entry used by
@@ -396,14 +410,9 @@ func SanitizePath(path string) (string, error) {
 	return filepath.ToSlash(finalPath), nil
 }
 
-// SanitizePath sanitizes a file path (method wrapper).
-func (*PathValidator) SanitizePath(path string) (string, error) {
-	return SanitizePath(path)
-}
-
 // GetSafePath returns a safe path within the allowed directories.
 func (pv *PathValidator) GetSafePath(basePath, filename string) (string, error) {
-	if err := pv.ValidateDirectoryPath(basePath); err != nil {
+	if err := pv.ValidateFilePath(basePath); err != nil {
 		return "", fmt.Errorf("基礎路徑無效: %w", err)
 	}
 

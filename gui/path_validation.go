@@ -79,7 +79,7 @@ func validateExternalPathInputs(labelPathPairs ...string) error {
 
 // validateManifestHandlerParams 是 7 個「manifest + dataFolder」Wails handler 共用
 // 的 prelude:先走 strict empty check(manifestFile 先, dataFolder 次, 任一為空
-// 即回對應 sentinel),再 delegate 給 validateExternalPathInputs 跑 traversal /
+// 即回對應 sentinel),再 delegate 給 validateExternalPathInputs(manifest,檔案語意)與 validateExternalDirInput(dataFolder,目錄語意)跑 traversal /
 // sensitive prefix / null byte / 超長 path 等 boundary 驗證,label 固定為
 // 「分期總檔案」/「資料夾」。
 //
@@ -92,8 +92,18 @@ func validateManifestHandlerParams(manifestFile, dataFolder string) error {
 	if dataFolder == "" {
 		return ErrNoDataFolder
 	}
-	return validateExternalPathInputs(
-		"分期總檔案", manifestFile,
-		"資料夾", dataFolder,
-	)
+	if err := validateExternalPathInputs("分期總檔案", manifestFile); err != nil {
+		return err
+	}
+	return validateExternalDirInput("資料夾", dataFolder)
+}
+
+// validateExternalDirInput 以「目錄」語意(ValidateExternalDir)驗證單一 dataFolder,
+// 讓 `/etc`、`~/.ssh` 這類敏感目錄根本身也被擋。error wrap 格式與
+// validateExternalPathInputs 一致。
+func validateExternalDirInput(label, dir string) error {
+	if err := security.DefaultValidator().ValidateExternalDir(dir); err != nil {
+		return fmt.Errorf("%s 路徑驗證失敗: %w", label, err)
+	}
+	return nil
 }

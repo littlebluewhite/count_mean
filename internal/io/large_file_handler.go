@@ -96,7 +96,7 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 	})
 
 	// 清理路徑 — 後 SanitizePath 改回 (string, error),原 silent rewrite 取消。
-	sanitizedPath, sanitizeErr := h.pathValidator.SanitizePath(filename)
+	sanitizedPath, sanitizeErr := security.SanitizePath(filename)
 	if sanitizeErr != nil {
 		return nil, errors.WrapError(sanitizeErr, errors.ErrCodePathValidation, "路徑淨化失敗")
 	}
