@@ -23,7 +23,7 @@ Go 端文字有兩條路進 Wails webview：**err 通道** —— bound method �
    - runtime：`TestRPCErrChannel_NoAbsolutePath`（8 列 err 通道 handler）、`TestRPCMessage_NoAbsolutePath`（6 列：CCI、NPS、Composer×2、PhaseSync 分析分支、MR `Subjects[i].Error`），共用 `requireNoDirLeak`（system-root 前綴、植入的病患目錄段、反向保險 `<redacted-path>` 標記）；`TestFailMessage_LocalizedAndRedacted`（zh-TW / en-US / 缺 key 時回 bare key）。
    - `gui/main_test.go` 的 `TestMain` 比照 production 載入內建 catalog 並 `SetLocale(zh-TW)`。
 5. **已知限制：sink-side redact 只脫敏「符合目錄段文法的非末段」**。兩條通道都只過 `redact.Paths`（與 log 的 `sanitizeMessage` 同一個 pattern）：
-   - **末段保留**：目錄段換成 `<redacted-path>/`，**最後一段（檔名或資料夾名）保留**。錯誤若以病患資料夾名結尾（例如 DataFolder 本身不存在：`stat /Users/x/PatientAlice: no such file` → `stat <redacted-path>/PatientAlice: …`），那個名字仍會出現在 err 文字與 Message 裡。這正是 fsperm 保留 source-side `redactBasePaths`（對 base path 先補 `/`，連末段一併脫敏）的原因。
+   - **末段保留**：目錄段換成 `<redacted-path>/`，**最後一段（檔名或資料夾名）保留**。錯誤若以病患資料夾名結尾（例如 DataFolder 本身不存在：`stat /Users/x/PatientAlice: no such file` → `stat <redacted-path>/PatientAlice: …`），那個名字仍會出現在 err 文字與 Message 裡。這正是 fsperm 保留 source-side `redactBasePaths`（對 base path 先補 `/`，連末段一併脫敏）的原因。fsperm 的 source-side 脫敏涵蓋各平台的錯誤字串（Linux openat2 / atomic-write 分支在內）：目錄整條脫敏、檔案只留檔名、不列相對路徑（`TestExportedErrors_NoDirSegmentAfterSinkRedact`）。
    - **目錄段文法**：段 = 以一或多個半形空白分隔的詞，不以空白開頭或結尾。
      - POSIX（`/…/`）：詞不含空白、`/`、`"`；`\` 是一般字元（段尾的 `\`、`%q` 的 `\\`、`Doe\nancy` 都算詞的一部分）；`'` 與 `:` 只能在詞中間（`O'Neil`；macOS Finder 名稱裡的 `/` 在 POSIX 層是 `:`，如 `2026:05:18`）。
      - drive-letter（`C:\…\`、`C:/…/`）/ UNC（`\\server\share\…\`）：詞不含空白、`\`、`/`、`:`、`"`（後兩者在 Windows 名稱不合法），`'` 可在任何位置；分隔字元是 `\`、`/` 或 `%q` 格式化後成對的 `\\`（UNC 開頭可為 `\\\\`）。

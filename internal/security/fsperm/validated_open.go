@@ -113,10 +113,18 @@ func OpenWriteValidated(path string, basePaths []string) (*os.File, error) {
 func redactBasePaths(basePaths []string) string {
 	redacted := make([]string, len(basePaths))
 	for i, p := range basePaths {
-		redacted[i] = redact.Paths(p + "/")
+		redacted[i] = redactDir(p)
 	}
 
 	return fmt.Sprintf("%v", redacted)
+}
+
+// redactDir 是 redactBasePaths 的單一目錄版:先 append "/" 讓末段(可能是病患目錄名)
+// 也被當成目錄段,整條脫成 "<redacted-path>/"。fsperm 錯誤訊息裡的 base / 父目錄 /
+// leaf 目錄一律經此;檔案路徑則用 redact.Paths(保留檔名)。dir 須為絕對路徑 —
+// 相對路徑的首段沒有前導分隔符,redact 不會吃掉它。
+func redactDir(dir string) string {
+	return redact.Paths(dir + "/")
 }
 
 // OpenReadValidated 為 OpenWriteValidated 的 read-side 對稱 helper:讀檔前

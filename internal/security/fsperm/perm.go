@@ -52,7 +52,8 @@ func EvalSymlinksWithFallback(path string, maxDepth int) (string, error) {
 //nolint:err113 // dynamic errors for caller-facing output
 func evalSymlinksWithFallbackDepth(path string, depth, maxDepth int, bounded bool) (string, error) {
 	if bounded && depth <= 0 {
-		return "", fmt.Errorf("evalSymlinks: 路徑遞迴層數超過上限 (%d): %s", maxDepth, path)
+		// 此層 path 必為原路徑的上層目錄 → 整條脫敏,末段可能是病患目錄名。
+		return "", fmt.Errorf("evalSymlinks: 路徑遞迴層數超過上限 (%d): %s", maxDepth, redactDir(path))
 	}
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		return resolved, nil

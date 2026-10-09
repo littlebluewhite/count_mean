@@ -5,6 +5,8 @@ package fsperm
 import (
 	"fmt"
 	"os"
+
+	"count_mean/internal/security/redact"
 )
 
 // openAtomicWrite 在其他 Unix (FreeBSD / OpenBSD / NetBSD 等) 沒有走 openat2 /
@@ -22,7 +24,7 @@ func openAtomicWrite(_ /* baseDir */, _ /* relParent */, _ /* tmpBase */, _ /* t
 	//nolint:gosec // tmpFull 父目錄已 EvalSymlinks + matchAnyBase 校驗 (caller-side)
 	f, err := os.OpenFile(tmpFull, TmpCreateFlags, FilePerm)
 	if err != nil {
-		return nil, fmt.Errorf("OpenFile(%s): %w", tmpFull, err)
+		return nil, fmt.Errorf("OpenFile(%s): %w", redact.Paths(tmpFull), err)
 	}
 	return &AtomicWriteHandle{
 		file:       f,

@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/sys/unix"
+
+	"count_mean/internal/security/redact"
 )
 
 // openAtomicWrite 在 Linux 上以單一 dirfd 錨定整段 tmp-create → rename。dirfd 是
@@ -98,7 +101,7 @@ func openAtomicWrite(baseDir, relParent, tmpBase, targetBase, tmpFull, targetFul
 func openLeafAnchor(baseDir, relParent string) (int, error) {
 	baseDirFD, err := unix.Open(baseDir, unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return fdNone, fmt.Errorf("open base dirfd(%s): %w", baseDir, err)
+		return fdNone, fmt.Errorf("open base dirfd(%s): %w", redactDir(baseDir), err)
 	}
 	if relParent == "." || relParent == "" {
 		return baseDirFD, nil
@@ -115,11 +118,13 @@ func openLeafAnchor(baseDir, relParent string) (int, error) {
 			// 包成 %w 保留 ENOSYS(caller 的 errors.Is 透過 wrap 仍偵測得到)→ 走 non-dirfd fallback。
 			return fdNone, fmt.Errorf("leaf openat2 ENOSYS, fall back to os.Rename: %w", err)
 		}
+		// relParent 是相對路徑(subject 資料夾)、redact 不碰;baseDir 末段是病患目錄名 →
+		// 訊息只帶整條脫敏的 leaf 絕對路徑。
+		leaf := redactDir(filepath.Join(baseDir, relParent))
 		if errors.Is(err, unix.EXDEV) || errors.Is(err, unix.ELOOP) {
-			return fdNone, fmt.Errorf("%w: leaf openat2(%s under %s) rejected: %w",
-				ErrPathEscapesBase, relParent, baseDir, err)
+			return fdNone, fmt.Errorf("%w: leaf openat2(%s) rejected: %w", ErrPathEscapesBase, leaf, err)
 		}
-		return fdNone, fmt.Errorf("leaf openat2(%s under %s): %w", relParent, baseDir, err)
+		return fdNone, fmt.Errorf("leaf openat2(%s): %w", leaf, err)
 	}
 	return leafFD, nil
 }
@@ -132,7 +137,7 @@ func openAtomicWriteFallback(tmpPath, targetPath string) (*AtomicWriteHandle, er
 	//nolint:gosec // tmpPath 父目錄已 EvalSymlinks + matchAnyBase 校驗;TmpCreateFlags 帶 O_NOFOLLOW
 	f, err := os.OpenFile(tmpPath, TmpCreateFlags, FilePerm)
 	if err != nil {
-		return nil, fmt.Errorf("fallback OpenFile(%s): %w", tmpPath, err)
+		return nil, fmt.Errorf("fallback OpenFile(%s): %w", redact.Paths(tmpPath), err)
 	}
 	return &AtomicWriteHandle{
 		file:       f,

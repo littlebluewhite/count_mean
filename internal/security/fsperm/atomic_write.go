@@ -1,7 +1,9 @@
 package fsperm
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,20 +125,20 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 		//nolint:err113 // caller-facing API-misuse message; not a sentinel callers match on (mirrors OpenWriteValidated's dynamic path errors)
 		return nil, fmt.Errorf(
 			"fsperm.OpenAtomicWriteValidated: tmp 與 target 必須同目錄 (tmpDir=%s, targetDir=%s)",
-			redact.Paths(tmpDir), redact.Paths(targetDir))
+			redactDir(tmpDir), redactDir(targetDir))
 	}
 
 	resolvedParent, err := EvalSymlinksWithFallback(targetDir, 0)
 	if err != nil {
 		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: 無法解析父目錄 %s: %w",
-			redact.Paths(targetDir), err)
+			redactDir(targetDir), err)
 	}
 
 	hitBase, ok := matchAnyBase(resolvedParent, basePaths)
 	if !ok {
-		// resolvedParent 與 basePaths 皆絕對路徑 → 過 redact 防 PHI 洩漏。
+		// resolvedParent 與 basePaths 皆為目錄 → 整條脫敏(連末段),防 PHI 洩漏。
 		return nil, fmt.Errorf("%w: 父目錄 %s 不在 %s 之下",
-			ErrPathEscapesBase, redact.Paths(resolvedParent), redactBasePaths(basePaths))
+			ErrPathEscapesBase, redactDir(resolvedParent), redactBasePaths(basePaths))
 	}
 
 	// Anchor on the target's *validated leaf parent*, reached by descending from the
@@ -152,12 +154,12 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 	relParent, relErr := filepath.Rel(hitBase, resolvedParent)
 	if relErr != nil {
 		return nil, fmt.Errorf("fsperm.OpenAtomicWriteValidated: rel(%s,%s): %w",
-			redact.Paths(hitBase), redact.Paths(resolvedParent), relErr)
+			redactDir(hitBase), redactDir(resolvedParent), relErr)
 	}
 	// belt-and-suspenders: the leaf must stay within hitBase.
 	if relParent == ".." || strings.HasPrefix(relParent, ".."+string(filepath.Separator)) {
 		return nil, fmt.Errorf("%w: leaf %s escapes base %s",
-			ErrPathEscapesBase, redact.Paths(resolvedParent), redact.Paths(hitBase))
+			ErrPathEscapesBase, redactDir(resolvedParent), redactDir(hitBase))
 	}
 
 	tmpBase := filepath.Base(tmpPath)
@@ -225,7 +227,7 @@ func (h *AtomicWriteHandle) Abort() error {
 
 	if h.dirfd == fdNone {
 		if err := os.Remove(h.tmpPath); err != nil {
-			return fmt.Errorf("fsperm.AtomicWriteHandle.Abort: remove tmp %s: %w", h.tmpPath, err)
+			return fmt.Errorf("fsperm.AtomicWriteHandle.Abort: remove tmp %s: %w", redact.Paths(h.tmpPath), err)
 		}
 		return nil
 	}
@@ -249,12 +251,18 @@ func SyncParentDir(path string) error {
 	//nolint:gosec // G304: dir is filepath.Dir of caller-validated path
 	d, err := os.Open(dir)
 	if err != nil {
-		return fmt.Errorf("fsperm.SyncParentDir: open parent dir %s: %w", dir, err)
+		// *PathError 帶原始 dir,sink 端 redact 會保留其末段(可能是病患目錄名)→ 換成脫敏後的
+		// dir 再 wrap;Op / errno 不變,errors.Is / errors.As 照常命中。
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			err = &fs.PathError{Op: pathErr.Op, Path: redactDir(dir), Err: pathErr.Err}
+		}
+		return fmt.Errorf("fsperm.SyncParentDir: open parent dir: %w", err)
 	}
 	defer func() { _ = d.Close() }() //nolint:errcheck // best-effort
 
 	if syncErr := fsyncDir(int(d.Fd())); syncErr != nil {
-		return fmt.Errorf("fsperm.SyncParentDir: sync parent dir %s: %w", dir, syncErr)
+		return fmt.Errorf("fsperm.SyncParentDir: sync parent dir %s: %w", redactDir(dir), syncErr)
 	}
 
 	return nil

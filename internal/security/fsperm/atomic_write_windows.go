@@ -5,6 +5,8 @@ package fsperm
 import (
 	"fmt"
 	"os"
+
+	"count_mean/internal/security/redact"
 )
 
 // openAtomicWrite 在 Windows 上沒有 dirfd / openat2 / renameat 等價物,直接以
@@ -26,7 +28,7 @@ func openAtomicWrite(_ /* baseDir */, _ /* relParent */, _ /* tmpBase */, _ /* t
 	//nolint:gosec // tmpFull 父目錄已 EvalSymlinks + matchAnyBase 校驗 (caller-side)
 	f, err := os.OpenFile(tmpFull, TmpCreateFlags, FilePerm)
 	if err != nil {
-		return nil, fmt.Errorf("OpenFile(%s): %w", tmpFull, err)
+		return nil, fmt.Errorf("OpenFile(%s): %w", redact.Paths(tmpFull), err)
 	}
 	return &AtomicWriteHandle{
 		file:       f,

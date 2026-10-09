@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
@@ -76,7 +77,7 @@ func openAtomicWrite(baseDir, relParent, tmpBase, targetBase, tmpFull, targetFul
 func openLeafAnchor(baseDir, relParent string) (int, error) {
 	baseDirFD, err := unix.Open(baseDir, unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return fdNone, fmt.Errorf("open base dirfd(%s): %w", baseDir, err)
+		return fdNone, fmt.Errorf("open base dirfd(%s): %w", redactDir(baseDir), err)
 	}
 	if relParent == "." || relParent == "" {
 		return baseDirFD, nil
@@ -89,11 +90,12 @@ func openLeafAnchor(baseDir, relParent string) (int, error) {
 	}
 	_ = unix.Close(baseDirFD) //nolint:errcheck // base 只用來錨定 leaf 下行
 	if err != nil {
+		// 訊息只帶整條脫敏的 leaf 絕對路徑(理由同 atomic_write_linux.go openLeafAnchor)。
+		leaf := redactDir(filepath.Join(baseDir, relParent))
 		if errors.Is(err, unix.ELOOP) {
-			return fdNone, fmt.Errorf("%w: leaf openat(%s under %s) rejected: %w",
-				ErrPathEscapesBase, relParent, baseDir, err)
+			return fdNone, fmt.Errorf("%w: leaf openat(%s) rejected: %w", ErrPathEscapesBase, leaf, err)
 		}
-		return fdNone, fmt.Errorf("leaf openat(%s under %s): %w", relParent, baseDir, err)
+		return fdNone, fmt.Errorf("leaf openat(%s): %w", leaf, err)
 	}
 	return leafFD, nil
 }

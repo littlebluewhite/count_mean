@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"golang.org/x/sys/unix"
+
+	"count_mean/internal/security/redact"
 )
 
 // openat2FallbackWarning emits a single-shot warning the first time we observe
@@ -89,13 +91,13 @@ func emitOpenat2FallbackWarning() {
 func openValidated(resolvedPath, hitBase string) (*os.File, error) {
 	relPath, err := filepath.Rel(hitBase, resolvedPath)
 	if err != nil {
-		return nil, fmt.Errorf("Rel(%s, %s): %w", hitBase, resolvedPath, err)
+		return nil, fmt.Errorf("Rel(base, %s): %w", redact.Paths(resolvedPath), err)
 	}
 
 	// dirfd 指向 hitBase。O_DIRECTORY 確認真的是 dir;O_CLOEXEC 避免 fork-exec 洩漏。
 	dirfd, err := unix.Open(hitBase, unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open dirfd(%s): %w", hitBase, err)
+		return nil, fmt.Errorf("open dirfd(%s): %w", redactDir(hitBase), err)
 	}
 	defer func() { _ = unix.Close(dirfd) }() //nolint:errcheck // cleanup-only Close;error 無 actionable 處理
 
@@ -131,11 +133,15 @@ func openValidated(resolvedPath, hitBase string) (*os.File, error) {
 		// EXDEV:RESOLVE_BENEATH 違反 (路徑逃出 dirfd 範圍)。
 		// ELOOP:RESOLVE_NO_SYMLINKS / RESOLVE_NO_MAGICLINKS 違反或 O_NOFOLLOW 觸發。
 		// 兩者都當作 escape,回 ErrPathEscapesBase 讓 caller 收到一致錯誤型別。
+		//
+		// 訊息只帶 redact.Paths(resolvedPath)(保留檔名):relPath 是相對路徑、redact 不碰,
+		// 其目錄段(subject 資料夾)會原樣外洩;hitBase 的末段是病患目錄名。base 不列出 ——
+		// 脫敏後不帶資訊,且與檔案路徑同一行時 sink 端再跑 redact.Paths 會把檔名一起吃掉。
 		if errors.Is(err, unix.EXDEV) || errors.Is(err, unix.ELOOP) {
-			return nil, fmt.Errorf("%w: openat2(%s under %s) rejected: %w",
-				ErrPathEscapesBase, relPath, hitBase, err)
+			return nil, fmt.Errorf("%w: openat2(%s) rejected: %w",
+				ErrPathEscapesBase, redact.Paths(resolvedPath), err)
 		}
-		return nil, fmt.Errorf("openat2(%s under %s): %w", relPath, hitBase, err)
+		return nil, fmt.Errorf("openat2(%s): %w", redact.Paths(resolvedPath), err)
 	}
 
 	// 把 raw fd 包成 *os.File 給 caller。filename 用 resolvedPath 方便 log/debug。
@@ -150,12 +156,12 @@ func openValidated(resolvedPath, hitBase string) (*os.File, error) {
 func openReadValidated(resolvedPath, hitBase string) (*os.File, error) {
 	relPath, err := filepath.Rel(hitBase, resolvedPath)
 	if err != nil {
-		return nil, fmt.Errorf("Rel(%s, %s): %w", hitBase, resolvedPath, err)
+		return nil, fmt.Errorf("Rel(base, %s): %w", redact.Paths(resolvedPath), err)
 	}
 
 	dirfd, err := unix.Open(hitBase, unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open dirfd(%s): %w", hitBase, err)
+		return nil, fmt.Errorf("open dirfd(%s): %w", redactDir(hitBase), err)
 	}
 	defer func() { _ = unix.Close(dirfd) }() //nolint:errcheck // cleanup-only Close;error 無 actionable 處理
 
@@ -177,11 +183,12 @@ func openReadValidated(resolvedPath, hitBase string) (*os.File, error) {
 			emitOpenat2FallbackWarning()
 			return os.OpenFile(resolvedPath, ReadFlags, 0) //nolint:gosec,wrapcheck // resolvedPath 已校驗;fallback 透出原始 *PathError 利 caller 偵測 OS 錯誤
 		}
+		// 訊息脫敏同 openValidated:只帶 redact.Paths(resolvedPath)。
 		if errors.Is(err, unix.EXDEV) || errors.Is(err, unix.ELOOP) {
-			return nil, fmt.Errorf("%w: openat2(%s under %s, read) rejected: %w",
-				ErrPathEscapesBase, relPath, hitBase, err)
+			return nil, fmt.Errorf("%w: openat2(%s, read) rejected: %w",
+				ErrPathEscapesBase, redact.Paths(resolvedPath), err)
 		}
-		return nil, fmt.Errorf("openat2(%s under %s, read): %w", relPath, hitBase, err)
+		return nil, fmt.Errorf("openat2(%s, read): %w", redact.Paths(resolvedPath), err)
 	}
 
 	return os.NewFile(uintptr(fd), resolvedPath), nil
