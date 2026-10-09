@@ -3,7 +3,6 @@ package gui
 import (
 	"encoding/base64"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/config"
+	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
 )
@@ -319,22 +319,78 @@ func TestGenerateChartComposer_RejectsTraversalPath(t *testing.T) {
 	assert.Contains(t, result.Message, "路徑驗證失敗")
 }
 
-// TestGenerateChartComposer_UnknownSubject 釘住 manifest 找不到 subject 時的
-// failure path — 應走 failed result + nil err,而非 panic。
-func TestGenerateChartComposer_UnknownSubject(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-	manifestPath, dataFolder := setupChartComposerV10Fixture(t)
+// TestGenerateChartComposer_LoadFailureMessagePerStage 釘住 adapter 的 envelope 對映
+// (Ruling 23):composer.Load 每個失敗 Stage 各用自己的 i18n 前綴(failMessage),
+// Subject 不在 manifest 走 inputMessage(無前綴)。Message 文字與資料組裝搬進
+// internal/composer 前逐字相同。
+func TestGenerateChartComposer_LoadFailureMessagePerStage(t *testing.T) {
+	cases := []struct {
+		name       string
+		mutate     func(t *testing.T, params *GenerateChartComposerParams)
+		wantPrefix string
+	}{
+		{
+			name: "manifest 載入失敗",
+			mutate: func(_ *testing.T, p *GenerateChartComposerParams) {
+				p.ManifestPath = filepath.Join(p.DataFolder, "missing_manifest.csv")
+			},
+			wantPrefix: i18n.T(i18n.KeyErrorHandlerLoadManifestFailed) + ": ",
+		},
+		{
+			name:       "Subject 不在 manifest(輸入錯誤)",
+			mutate:     func(_ *testing.T, p *GenerateChartComposerParams) { p.Subject = "Nope" },
+			wantPrefix: `Subject "Nope" 不存在於分期總檔案`,
+		},
+		{
+			name: "EMG 開檔失敗",
+			mutate: func(t *testing.T, p *GenerateChartComposerParams) {
+				require.NoError(t, os.Remove(filepath.Join(p.DataFolder, "emg.csv")))
+			},
+			wantPrefix: i18n.T(i18n.KeyErrorHandlerResolveEMGPathFailed) + ": ",
+		},
+		{
+			name: "EMG 解析失敗",
+			mutate: func(t *testing.T, p *GenerateChartComposerParams) {
+				require.NoError(t, os.WriteFile(filepath.Join(p.DataFolder, "emg.csv"), []byte("Time,R.RA\n"), 0o600))
+			},
+			wantPrefix: i18n.T(i18n.KeyErrorHandlerParseEMGFailed) + ": ",
+		},
+		{
+			name: "motion 失敗",
+			mutate: func(t *testing.T, p *GenerateChartComposerParams) {
+				require.NoError(t, os.Remove(filepath.Join(p.DataFolder, "motion.csv")))
+			},
+			wantPrefix: i18n.T(i18n.KeyErrorHandlerParseMotionFailed) + ": Motion 路徑解析失敗: ",
+		},
+		{
+			name: "muscle_ratio 失敗",
+			mutate: func(t *testing.T, p *GenerateChartComposerParams) {
+				require.NoError(t, os.Remove(filepath.Join(p.DataFolder, "muscle_ratio.csv")))
+			},
+			wantPrefix: i18n.T(i18n.KeyErrorHandlerParseMuscleRatioFailed) + ": muscle_ratio 路徑解析失敗: ",
+		},
+	}
 
-	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath: manifestPath,
-		DataFolder:   dataFolder,
-		Subject:      "Nope",
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := setupChartComposerTestApp(t)
+			manifestPath, dataFolder := setupChartComposerV14Fixture(t)
+			params := &GenerateChartComposerParams{
+				ManifestPath: manifestPath,
+				DataFolder:   dataFolder,
+				Subject:      "TestSubjectV14",
+			}
+			tc.mutate(t, params)
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Success)
-	assert.Contains(t, result.Message, "Nope")
+			result, err := app.GenerateChartComposer(params)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.False(t, result.Success)
+			assert.True(t, strings.HasPrefix(result.Message, tc.wantPrefix),
+				"Message 應以 %q 開頭,實際 %q", tc.wantPrefix, result.Message)
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -463,115 +519,9 @@ func validPNGDataURLForComposer() string {
 }
 
 // ---------------------------------------------------------------------------
-// Codex review fix — P1 + 4 個 P2 regression tests
+// Codex review fix — P2 regression tests(P1 phase 換算、P2 #3 motion 首通道、
+// P2 #4 muscle_ratio 空 cell 的資料組裝 test 已隨 ADR-0046 移到 internal/composer)
 // ---------------------------------------------------------------------------
-
-// writeChartComposerSingleChannelMotion 建立**單一資料 channel** 的 motion CSV。
-// 用於 P2 #3 regression — 確認 handler 不再 silently 把第一個資料 channel 當成
-// Index column skip 掉。
-//
-// CSV 結構同 writeChartComposerMinimalMotion(3 行 metadata + 1 行 header +
-// data),但 header 只有 Index + 1 個 channel "OnlyChannel"。motion parser
-// 經 initializeMotionData → motion.Headers = ["OnlyChannel"];handler 若還
-// 帶舊有 `if k == 0 continue` 行為,整個 motion grid 將為空,HTML 不會含
-// "OnlyChannel" 字串。
-func writeChartComposerSingleChannelMotion(t *testing.T, path string, rows int) {
-	t.Helper()
-
-	var b strings.Builder
-	b.WriteString("Line 1: Metadata\nLine 2: More metadata\nLine 3: Additional info\nIndex,OnlyChannel\n")
-	for i := 1; i <= rows; i++ {
-		fmt.Fprintf(&b, "%d,10.5\n", i)
-	}
-	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o644))
-}
-
-// writeChartComposerMuscleRatioWithBlank 建立**含空 cell** 的 muscle_ratio CSV。
-// 用於 P2 #4 regression — 確認 handler 把空 cell 換成 NaN 而非靜默 0。
-//
-// 第 2 列 ratio 全空(空 cell),其餘列正常填值。composer 對 NaN 走
-// buildComposerLineData line 692-695:`Value: nil`;
-// go-echarts LineData.Value 是 interface{},struct tag 為 json:"value,omitempty",
-// `nil` 觸發 omitempty → 整個 value field 被省略(空 LineData object {})。
-//
-// 唯一 time 用 0.0123(4 位小數)避免與 echarts 預設 option 字串的 `[0.01,0]`
-// 撞;此時間值只在本 fixture 出現,assertion 對「該 time 是否還夾帶數值對 pair」
-// 是穩健的 differentiator。
-//
-// 修法前(bug):空 cell → 0 → HTML 第 2 列 series 含 `[0.0123,0]` 共 4 處(4 條 ratio)
-// 修法後:空 cell → NaN → composer Value:nil → omitempty 省略 value;HTML 不再
-// 含 `[0.0123,0]` 字串。
-func writeChartComposerMuscleRatioWithBlank(t *testing.T, path string) {
-	t.Helper()
-
-	times := []float64{0.0, 0.0123}
-	for i := 2; i <= 100; i++ {
-		times = append(times, float64(i)/100.0)
-	}
-	ratios := make([][]float64, 4)
-	for k, v := range []float64{1.2, 0.8, 1.5, 0.5} {
-		ratios[k] = make([]float64, len(times))
-		for i := range times {
-			ratios[k][i] = v
-		}
-		// 第 2 列 ratio 欄全 NaN — writer 把 NaN/Inf 寫成空 cell
-		ratios[k][1] = math.NaN()
-	}
-	writeChartComposerMuscleRatioFile(t, path, times, ratios)
-}
-
-// TestGenerateChartComposer_PhaseMarkersConvertedToEMGTime 釘住 P1 finding:
-// PhasePoints (P0/P1/.../T0/T/L) 是 force-time domain 秒值,handler 必須透過
-// EMGMotionOffset 換算成 EMG-time domain 才能讓 markLine 正確落在 EMG grid。
-//
-// 換算公式來自 synchronizer.TimeSynchronizer.ForceTimeToEMGTime:
-//
-//	emgTime = forceTime - (emgMotionOffset - 1) / FrequencyMotion
-//
-// fixture: EMGMotionOffset=251 → offset 對應 (251-1)/250 = 1.0 秒;
-// P0=0.5 (force-time) → 換算後 emgTime = 0.5 - 1.0 = -0.5 秒。
-//
-// 修法前(bug):HTML markLine.xAxis 含 `"xAxis":0.5`(原 force-time)
-// 修法後:HTML markLine.xAxis 含 `"xAxis":-0.5`(EMG-time)
-//
-// 也要確保 force-time=0.5 不再出現在 markLine items —— 避免「修了但漏改某一條 path」。
-func TestGenerateChartComposer_PhaseMarkersConvertedToEMGTime(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-
-	dataFolder := t.TempDir()
-	writeChartComposerMinimalMotion(t, filepath.Join(dataFolder, "motion.csv"), 2000)
-	writeChartComposerMinimalForce(t, filepath.Join(dataFolder, "force.anc"), 2.0)
-	writeChartComposerMinimalEMG(t, filepath.Join(dataFolder, "emg.csv"))
-
-	// EMGMotionOffset=251 → (251-1)/250 = 1.0 s 偏移;
-	// P0=0.5 (force-time) → emgTime = 0.5 - 1.0 = -0.5
-	// P1=1.5 (force-time) → emgTime = 1.5 - 1.0 = 0.5
-	// (P2/S/C/T0/T/L 全部設 NA / 0 不影響 markLine,只測 P0/P1 二點即可)
-	manifestContent := "Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n" +
-		"PhaseConvertSubject,motion.csv,force.anc,emg.csv,251,0.5,1.5,NA,NA,NA,0,NA,NA,0,NA"
-	manifestPath := filepath.Join(dataFolder, "manifest_p1.csv")
-	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o644))
-
-	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath: manifestPath,
-		DataFolder:   dataFolder,
-		Subject:      "PhaseConvertSubject",
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.True(t, result.Success, "Message: %s", result.Message)
-
-	// 換算後的 EMG-time 值必須出現在 markLine
-	assert.Contains(t, result.HTML, `"xAxis":-0.5`,
-		"P0=0.5 (force-time) 換算後 EMG-time = -0.5;若仍為原始 force-time 表示 P1 換算未生效")
-	assert.Contains(t, result.HTML, `"xAxis":0.5`,
-		"P1=1.5 (force-time) 換算後 EMG-time = 0.5")
-
-	// 換算前的 force-time 值不該出現在 markLine
-	assert.NotContains(t, result.HTML, `"xAxis":1.5`,
-		"P1 原始 force-time=1.5 不該漏進 markLine — 表示 P1 fix 仍在 force-time domain")
-}
 
 // TestLoadChartComposerSubjects_RejectsEmptyDataFolder 釘住 P2 finding #2:
 // DataFolder 為空字串時應在 manifest 解析前 short-circuit 回 ErrNoDataFolder,
@@ -608,77 +558,4 @@ func TestGenerateChartComposer_RejectsEmptyDataFolder(t *testing.T) {
 	require.NotNil(t, result)
 	assert.False(t, result.Success)
 	assert.Equal(t, ErrNoDataFolder.Error(), result.Message)
-}
-
-// TestGenerateChartComposer_MotionFirstChannelRendered 釘住 P2 finding #3:
-// motion.Headers 已是純 channel 名(parser initializeMotionData strip 過 Index),
-// handler 不該再 `if k == 0 continue` 把第一個真資料 channel 跳過。
-//
-// 用 single-channel motion fixture("OnlyChannel" 為唯一資料 channel);
-// 修法前(bug):k=0 被 skip → motion.Order 為空 → HTML 不含 "OnlyChannel"
-// 修法後:HTML series 名單含 "OnlyChannel"
-func TestGenerateChartComposer_MotionFirstChannelRendered(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-
-	dataFolder := t.TempDir()
-	writeChartComposerSingleChannelMotion(t, filepath.Join(dataFolder, "motion.csv"), 2000)
-	writeChartComposerMinimalForce(t, filepath.Join(dataFolder, "force.anc"), 2.0)
-	writeChartComposerMinimalEMG(t, filepath.Join(dataFolder, "emg.csv"))
-
-	manifestContent := "Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n" +
-		"MotionSingleChannelSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,0.8"
-	manifestPath := filepath.Join(dataFolder, "manifest_motion.csv")
-	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o644))
-
-	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath: manifestPath,
-		DataFolder:   dataFolder,
-		Subject:      "MotionSingleChannelSubject",
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.True(t, result.Success, "Message: %s", result.Message)
-	assert.Contains(t, result.HTML, "OnlyChannel",
-		"motion 唯一資料 channel 必須出現在 series 名單;若被 k==0 skip 邏輯吃掉則 HTML 無此字串")
-}
-
-// TestGenerateChartComposer_EmptyMuscleRatioCellIsNaN 釘住 P2 finding #4:
-// muscle_ratio CSV 空 cell 必須 append 為 NaN(下游 composer 轉成
-// LineData.Value=nil → JSON null,line gap),而非靜默變 0(會在圖上畫出
-// 假的「實值為 0」資料點)。
-//
-// fixture 在 muscle_ratio CSV 第 2 列把所有 ratio 欄留空;composer
-// (buildComposerLineData line 692-695)對 NaN 走 `Value: nil` path,
-// 序列化進 HTML 必含 `null` 字串(opts.LineData{Value: nil} → JSON null)。
-func TestGenerateChartComposer_EmptyMuscleRatioCellIsNaN(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-
-	dataFolder := t.TempDir()
-	writeChartComposerMinimalMotion(t, filepath.Join(dataFolder, "motion.csv"), 2000)
-	writeChartComposerMinimalForce(t, filepath.Join(dataFolder, "force.anc"), 2.0)
-	writeChartComposerMinimalEMG(t, filepath.Join(dataFolder, "emg.csv"))
-	writeChartComposerMuscleRatioWithBlank(t, filepath.Join(dataFolder, "muscle_ratio.csv"))
-
-	manifestContent := "Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L,MuscleRatioFile\n" +
-		"MuscleRatioNaNSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,0.8,muscle_ratio.csv"
-	manifestPath := filepath.Join(dataFolder, "manifest_nan.csv")
-	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o644))
-
-	result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
-		ManifestPath: manifestPath,
-		DataFolder:   dataFolder,
-		Subject:      "MuscleRatioNaNSubject",
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.True(t, result.Success, "Message: %s", result.Message)
-	// 修法前(bug):空 cell → 0 真值 → muscle_ratio 第 2 列(time=0.0123)4 條
-	// ratio series 各序列化出 `[0.0123,0]` 字串;
-	// 修法後:空 cell → NaN → composer Value:nil → opts.LineData omitempty 省略
-	// 整個 value field → HTML 不再含 `[0.0123,0]`。
-	// 用 4 位小數時間值 0.0123 避免與 echarts 預設 option 字串撞點。
-	assert.NotContains(t, result.HTML, "[0.0123,0]",
-		"muscle_ratio 空 cell 必須轉 NaN(序列化省略 value)而非靜默 0 真值")
 }

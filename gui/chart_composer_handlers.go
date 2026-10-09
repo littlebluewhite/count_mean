@@ -7,7 +7,8 @@
 // 設計取捨摘要：
 //   - 每個 handler 與其他 Wails bound method 同形（ADR-0035）：首句
 //     `defer recoverHandlerPanic`，其餘直列在 body。Chart Composer 不寫 CSV、
-//     無多步驟 pipeline（ADR-0002），只做 manifest load / EMG load / chart render。
+//     無多步驟 pipeline（ADR-0002）；Generate 的資料組裝委派 internal/composer
+//     （ADR-0046），handler 只做驗證 / chart render / envelope。
 //   - Handler 3（DownloadChartComposerImage）鏡像既有 `DownloadCCIChart` 模式
 //     — adapter 端從 params.Subject 經 filename.SubjectOutputName 推導 config.OutputDir
 //     內的 `{subject}_chart_composer.png`,再把
@@ -31,25 +32,17 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"count_mean/internal/chart"
+	"count_mean/internal/composer"
 	"count_mean/internal/i18n"
-	"count_mean/internal/io"
 	"count_mean/internal/manifest"
-	"count_mean/internal/models"
-	"count_mean/internal/parsers"
-	"count_mean/internal/synchronizer"
 	"count_mean/internal/validation/filename"
 )
 
-// err113 sentinel — 純承載 user-facing 訊息(caller 把 err.Error() 灌入
-// result.Message,不做 errors.Is 比對;test 走 substring assertion)。
-var (
-	ErrChartComposerNilParams       = errors.New("參數為空")
-	ErrChartComposerMotionFileEmpty = errors.New("manifest 內 MotionFile 為空")
-	ErrChartComposerSubjectNotFound = errors.New("不存在於分期總檔案")
-)
+// ErrChartComposerNilParams err113 sentinel — 純承載 user-facing 訊息
+// (DownloadChartComposerImage 的 nil params guard,不做 errors.Is 比對;test 走 substring assertion)。
+var ErrChartComposerNilParams = errors.New("參數為空")
 
 // LoadChartComposerSubjectsParams Wails RPC params for subject list lookup.
 type LoadChartComposerSubjectsParams struct {
@@ -210,17 +203,13 @@ func (a *App) LoadChartComposerSubjects(
 
 // GenerateChartComposer 呼叫 chart.RenderComposer 並回 HTML preview。
 //
-// 工作流程:
-//  1. 邊界路徑驗證(manifest / data folder)
-//  2. 從 manifest 找指定 Subject 的 row
-//  3. 載入 EMG(必要)、motion(必要)、muscle_ratio(若 MuscleRatioFile 非空)
-//  4. 把 PhaseSyncEMGData(columnar 原樣)/ MotionData / muscle_ratio CSV 組成 chart.ComposerInput
-//  5. 呼叫 chart.RenderComposer 渲染成 HTML
-//
-// ADR-0013:EMGMotionOffset 直接讀 row.EMGMotionOffset(本函式已 load manifest +
-// findManifestBySubject,offset 當場可得,不再經前端往返 — 消除 stale-offset 風險)。
-// chart composer 依 EMG.Headers 渲染全部通道,達成「預設全通道」。motion-index 轉時間
-// 透過 TimeSynchronizer.MotionIndexToEMGTime。
+// 工作流程(adapter):
+//  1. 邊界路徑驗證(manifest / data folder)與 Subject 非空
+//  2. composer.Load 組出 chart.ComposerInput(manifest row → EMG / motion / muscle_ratio /
+//     phase 秒數;ADR-0013 的 EMGMotionOffset 由它從 row 讀,EMG 預設全通道)
+//  3. 呼叫 chart.RenderComposer 渲染成 HTML
+//  4. envelope:載入失敗依 composer.Stage 選 i18n 前綴(chartComposerLoadFailKey),
+//     Subject 不在 manifest 是輸入錯誤(inputMessage)
 func (a *App) GenerateChartComposer(
 	params *GenerateChartComposerParams,
 ) (result *ChartComposerResult, err error) {
@@ -247,85 +236,17 @@ func (a *App) GenerateChartComposer(
 		return failedChartComposerResult("Subject 不可為空"), nil
 	}
 
-	manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
-	if parseErr != nil {
-		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerLoadManifestFailed, parseErr)), nil
-	}
-
-	row, found := findManifestBySubject(manifests, params.Subject)
-	if !found {
-		return failedChartComposerResult(inputMessage(
-			fmt.Errorf("Subject %q %w", params.Subject, ErrChartComposerSubjectNotFound),
-		)), nil
-	}
-
-	// 載入 EMG(必要)— 走 manifest.LoadEMG([[Subject source]]),開檔失敗與解析失敗各用自己的 key。
-	emgPhaseSync, emgErr := manifest.LoadEMG(params.DataFolder, &row)
-	if emgErr != nil {
-		var parseErr *manifest.EMGParseError
-		if errors.As(emgErr, &parseErr) {
-			return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseEMGFailed, emgErr)), nil
+	composerInput, loadErr := composer.Load(params.ManifestPath, params.DataFolder, params.Subject)
+	if loadErr != nil {
+		if errors.Is(loadErr, composer.ErrSubjectNotFound) {
+			return failedChartComposerResult(inputMessage(loadErr)), nil
 		}
-		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerResolveEMGPathFailed, emgErr)), nil
-	}
-
-	// 載入 motion(必要 — composer 至少 2-grid,motion 是其中一個 grid)
-	composerMotion, motionErr := loadComposerMotion(
-		params.DataFolder, row.MotionFile, row.EMGMotionOffset,
-	)
-	if motionErr != nil {
-		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseMotionFailed, motionErr)), nil
-	}
-
-	// 載入 muscle_ratio(可選 — 僅 V.14 manifest 帶 MuscleRatioFile)
-	var muscleRatioData *chart.MuscleRatioData
-	if strings.TrimSpace(row.MuscleRatioFile) != "" {
-		// 開檔走 manifest.OpenDataFile 硬化讀檔門(內部 lenient resolve + atomic
-		// validated-open),支援 BTS 匯出含字面 "%" 的檔名;CSV 解析委派
-		// io.ReadMuscleRatioOutputAll(WriteMuscleRatioOutputAll 的反函式)。
-		mrFile, mrErr := manifest.OpenDataFile(params.DataFolder, row.MuscleRatioFile)
-		if mrErr != nil {
-			return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseMuscleRatioFailed,
-				fmt.Errorf("muscle_ratio 路徑解析失敗: %w", mrErr))), nil
-		}
-		mrPayload, mrErr := io.ReadMuscleRatioOutputAll(mrFile)
-		_ = mrFile.Close() //nolint:errcheck // read-only fd; close error not actionable
-		if mrErr != nil {
-			if !errors.Is(mrErr, io.ErrMuscleRatioCSVEmpty) && !errors.Is(mrErr, io.ErrMuscleRatioCSVNoHeader) {
-				mrErr = fmt.Errorf("讀取 muscle_ratio CSV 失敗: %w", mrErr)
-			}
-			return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseMuscleRatioFailed, mrErr)), nil
-		}
-		mrSeries := make(map[string][]float64, len(mrPayload.PairLabels))
-		for k, name := range mrPayload.PairLabels {
-			mrSeries[name] = mrPayload.Ratios[k]
-		}
-		muscleRatioData = &chart.MuscleRatioData{
-			Time:   mrPayload.Times,
-			Series: mrSeries,
-			Order:  mrPayload.PairLabels,
-		}
-	}
-
-	// manifest row 的 [[Phase timeline]] 轉成「phase 名 → EMG 秒數」單一份 map。
-	// Chart Composer 的所有 grid X 軸是 **EMG 時間** domain;若不換算直接 attach,
-	// markLine 會早 / 晚整個 sync offset — silent visual bug。
-	// 這份 map 同時供後端預設 markLine(composerInput.PhaseTimesEMG)與前端 checkbox
-	// /動態 markLine(回傳的 PhaseTimes)使用,兩端共用來源不會分歧。
-	phaseTimes := composerPhaseTimesEMG(&row)
-
-	// chart composer 依 EMG.Headers 渲染全部通道,達成 ADR-0013 的「預設全通道」。
-	composerInput := chart.ComposerInput{
-		Subject:         row.Subject,
-		EMG:             emgPhaseSync,
-		MuscleRatioData: muscleRatioData,
-		MotionData:      composerMotion,
-		PhaseTimesEMG:   phaseTimes,
+		return failedChartComposerResult(a.failMessage(chartComposerLoadFailKey(loadErr), loadErr)), nil
 	}
 
 	var buf bytes.Buffer
-	if renderErr := chart.RenderComposer(a.context(), composerInput, &buf); renderErr != nil {
-		// EMG-required 是 caller bug(我們上面剛確保 EMG 非 nil)而非
+	if renderErr := chart.RenderComposer(a.context(), *composerInput, &buf); renderErr != nil {
+		// EMG-required 是 caller bug(composer.Load 成功必帶 EMG)而非
 		// user-visible 路徑,直接走通用錯誤訊息;ctx cancel 走相同 path。
 		if errors.Is(renderErr, chart.ErrComposerEMGRequired) {
 			return failedChartComposerResult("內部錯誤: EMG dataset 為空"), nil
@@ -333,12 +254,36 @@ func (a *App) GenerateChartComposer(
 		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerChartRenderFailed, renderErr)), nil
 	}
 
+	// PhaseTimes 與 chart 預設 markLine 共用 composer.Load 產出的同一份 map,
+	// 前端 checkbox / 動態 markLine 與後端不會分歧。
 	return &ChartComposerResult{
 		HTML:       buf.String(),
-		PhaseTimes: phaseTimes,
+		PhaseTimes: composerInput.PhaseTimesEMG,
 		Success:    true,
 		Message:    "圖表生成完成",
 	}, nil
+}
+
+// chartComposerLoadFailKey 依 composer.Load 失敗的 Stage 選 failMessage 前綴:每個載入
+// 階段各用自己的 i18n key。Load 的非輸入失敗都是 *composer.LoadError;取不到 Stage 時
+// 退回通用的「載入資料失敗」。
+func chartComposerLoadFailKey(err error) string {
+	var loadErr *composer.LoadError
+	if errors.As(err, &loadErr) {
+		switch loadErr.Stage {
+		case composer.StageManifest:
+			return i18n.KeyErrorHandlerLoadManifestFailed
+		case composer.StageEMGOpen:
+			return i18n.KeyErrorHandlerResolveEMGPathFailed
+		case composer.StageEMGParse:
+			return i18n.KeyErrorHandlerParseEMGFailed
+		case composer.StageMotion:
+			return i18n.KeyErrorHandlerParseMotionFailed
+		case composer.StageMuscleRatio:
+			return i18n.KeyErrorHandlerParseMuscleRatioFailed
+		}
+	}
+	return i18n.KeyErrorHandlerLoadDataFailed
 }
 
 // DownloadChartComposerImage 接前端 base64 PNG dataURL,從 params.Subject 推導
@@ -383,86 +328,4 @@ func (a *App) DownloadChartComposerImage(
 	})
 
 	return result, nil
-}
-
-// findManifestBySubject 在 manifest list 內找第一個 Subject 等於 target 的 row。
-// 第二個回傳值 false 表示沒找到。比對為 case-sensitive exact match。
-func findManifestBySubject(
-	manifests []models.PhaseManifest, target string,
-) (models.PhaseManifest, bool) {
-	for i := range manifests {
-		if manifests[i].Subject == target {
-			return manifests[i], true
-		}
-	}
-	return models.PhaseManifest{}, false
-}
-
-// loadComposerMotion 從 motion CSV 載入後轉成 chart.MotionData
-// (time-series + per-channel slice + 可預測 channel 順序)。
-//
-// motion-index 透過 TimeSynchronizer.MotionIndexToEMGTime 換算為 EMG 時間軸,
-// 讓 motion grid 與 EMG grid 在同一條 X 軸上對齊。
-//
-// 開檔走 manifest.OpenDataFile 硬化讀檔門(內部 lenient resolve + atomic
-// validated-open),對齊 muscle_ratio analyzer 內的 EMG file 處理風格。
-func loadComposerMotion(
-	dataFolder, motionFile string, emgMotionOffset int,
-) (*chart.MotionData, error) {
-	if strings.TrimSpace(motionFile) == "" {
-		// motion 是必要 grid;空檔名直接 fail。
-		return nil, ErrChartComposerMotionFileEmpty
-	}
-
-	motionFileHandle, err := manifest.OpenDataFile(dataFolder, motionFile)
-	if err != nil {
-		return nil, fmt.Errorf("Motion 路徑解析失敗: %w", err)
-	}
-	defer func() { _ = motionFileHandle.Close() }() //nolint:errcheck // read-only fd; close error not actionable
-
-	motion, err := parsers.NewMotionParser().Parse(motionFileHandle, motionFile)
-	if err != nil {
-		return nil, fmt.Errorf("解析 Motion 失敗: %w", err)
-	}
-
-	ts := synchronizer.NewTimeSynchronizer()
-	times := make([]float64, len(motion.Indices))
-	for i, idx := range motion.Indices {
-		times[i] = ts.MotionIndexToEMGTime(idx, emgMotionOffset)
-	}
-
-	// motion.Headers 已是純資料 channel 名 — parsers.MotionParser.initializeMotionData
-	// 已透過 `Headers: headers[1:]` 把 Index 欄剝掉(motion_parser.go line 133)。
-	// 過去這段對 `k == 0 continue` 是錯認 Index 仍在 Headers 內,結果把第一個真資料
-	// channel 永遠不渲染(單 channel motion 整 grid 空白)。直接 iterate 即可。
-	order := make([]string, 0, len(motion.Headers))
-	series := make(map[string][]float64, len(motion.Headers))
-	for _, name := range motion.Headers {
-		vals := motion.Data[name]
-		// 防呆:若 parser 因 jagged row 略 row 而 vals 不齊,直接 skip 該 series
-		// 而非 panic;motion 資料量大,degraded mode 比 hard fail 對使用者好。
-		if len(vals) != len(times) {
-			continue
-		}
-		order = append(order, name)
-		series[name] = vals
-	}
-
-	return &chart.MotionData{
-		Time:   times,
-		Series: series,
-		Order:  order,
-	}, nil
-}
-
-// composerPhaseTimesEMG 把 manifest row 的 [[Phase timeline]] 轉成「phase 名 → EMG 秒數」
-// map(ADR-0042),供 Chart Composer 後端預設 markLine 與前端 phaseTimes RPC return
-// 共用同一份來源。未提供的分期點不在 map 內 — 不會 inject 偽 markLine,前端也不渲染 checkbox。
-func composerPhaseTimesEMG(m *models.PhaseManifest) map[string]float64 {
-	timeline := synchronizer.NewPhaseTimeline(m)
-	out := make(map[string]float64, len(timeline))
-	for _, pt := range timeline {
-		out[string(pt.Phase)] = pt.EMGTime
-	}
-	return out
 }
