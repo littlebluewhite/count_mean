@@ -66,7 +66,7 @@ func OutsideEMG(times []float64, t float64) (before, after bool) {
 	return before, after
 }
 
-// ErrTimeRangeNotFound 表示 SliceEMG 的區間 [start−ε, end+ε] 內沒有任何 EMG sample。
+// ErrTimeRangeNotFound 表示 SliceEMG 的區間(毫秒取整後)內沒有任何 EMG sample。
 var ErrTimeRangeNotFound = errors.New("no data found in time range")
 
 // EMGSlice 是 SliceEMG 的結果。Data 的 Time 與各通道是原資料的子切片(共用底層
@@ -77,14 +77,23 @@ type EMGSlice struct {
 	ActualEndTime   float64 // 實際選取的最後一筆 sample 時間
 }
 
-// SliceEMG 取出 [[EMG time axis]] 上落在 [start−ε, end+ε](含端點,ε = emgTimeEpsilon)的
-// samples —— 與 OutsideEMG 同一個容差:通過 OutsideEMG 的區間端點,其邊界 sample
-// 一定被切進來(ADR-0043;取代舊的整數毫秒取整切片)。d.Time 須升冪排序;掃描在
-// 第一個超過 end+ε 的 sample 停止。
+// msPerSecond 是 SliceEMG 毫秒取整的換算係數。
+const msPerSecond = 1000
+
+// SliceEMG 是 [[EMG time axis]] 唯一的切片規則(ADR-0043):start、end 與每筆 sample
+// 都先 math.Round 到整數毫秒,再取含端點的 [startMs, endMs]。掃描在第一筆取整後
+// 超過 endMs 的 sample 停止;d.Time 須升冪排序。
+//
+// 切片刻意不用 OutsideEMG 的 ±emgTimeEpsilon:manifest 的力板時間是毫秒精度的值,
+// 以 float32 匯出、印到 6 位小數後帶 1e-6 起跳的雜訊(16.780001、17.809999),且隨
+// 時間變大(32–64 s 可達 2e-6),超過 ε 時 ±ε 會靜默少切一筆邊界 sample;以毫秒
+// 取整則與資料的有效精度一致。math.Round 單調,所以通過 OutsideEMG 的端點,其
+// 邊界 sample 一定被切入。限制:假設 sample interval ≥ 1 ms;> 1 kHz 時相鄰 sample
+// 可能取整到同一毫秒,區間兩端各可能多切入一筆(距端點 < 0.5 ms)。
 //
 //	d 為 nil 或 Time 為空 → parsers.ErrNilData
 //	start > end           → 錯誤(無 sentinel)
-//	區間內沒有 sample      → ErrTimeRangeNotFound(start 或 end 為 NaN 也落在這裡)
+//	區間內沒有 sample      → ErrTimeRangeNotFound
 //
 //nolint:err113 // start > end 的動態錯誤沿用既有 user-facing 字樣
 func SliceEMG(d *models.PhaseSyncEMGData, start, end float64) (*EMGSlice, error) {
@@ -97,16 +106,17 @@ func SliceEMG(d *models.PhaseSyncEMGData, start, end float64) (*EMGSlice, error)
 		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", start, end)
 	}
 
-	lo := start - emgTimeEpsilon
-	hi := end + emgTimeEpsilon
+	startMs := int64(math.Round(start * msPerSecond))
+	endMs := int64(math.Round(end * msPerSecond))
 
 	startIdx, endIdx := -1, -1
 	for i, t := range d.Time {
-		if startIdx == -1 && t >= lo {
+		tMs := int64(math.Round(t * msPerSecond))
+		if startIdx == -1 && tMs >= startMs {
 			startIdx = i
 		}
 
-		if t <= hi {
+		if tMs <= endMs {
 			endIdx = i
 		} else if endIdx != -1 {
 			break

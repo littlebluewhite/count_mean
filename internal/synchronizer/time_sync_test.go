@@ -183,6 +183,8 @@ func TestOutsideEMG(t *testing.T) {
 	}
 }
 
+// TestSliceEMG 釘住 SliceEMG 的毫秒取整規則(ADR-0043):start、end 與 sample 都
+// math.Round 到整數毫秒後取含端點區間。
 func TestSliceEMG(t *testing.T) {
 	data := &models.PhaseSyncEMGData{
 		Time:    []float64{0.0, 0.001, 0.002, 0.003, 0.004, 0.005},
@@ -209,14 +211,14 @@ func TestSliceEMG(t *testing.T) {
 			wantTime: []float64{0.003, 0.004, 0.005}, wantCh1: []float64{103, 104, 105}},
 		{name: "區間大於資料 → 兩端自然收在首末筆", start: -1, end: 10,
 			wantTime: data.Time, wantCh1: data.Channels["Ch1"]},
-		{name: "端點落在 sample 之間", start: 0.0015, end: 0.0035,
-			wantTime: []float64{0.002, 0.003}, wantCh1: []float64{102, 103}},
 		{name: "start == end 落在 sample 上", start: 0.002, end: 0.002,
 			wantTime: []float64{0.002}, wantCh1: []float64{102}},
-		{name: "端點在 sample 內側 ε 內 → 該 sample 仍切入", start: 0.001 + 0.5e-6, end: 0.003 - 0.5e-6,
+		{name: "端點與 sample 差 < 0.5ms → 取整到同一毫秒,該 sample 切入", start: 0.0014, end: 0.0026,
 			wantTime: []float64{0.001, 0.002, 0.003}, wantCh1: []float64{101, 102, 103}},
-		{name: "端點在 sample 內側超出 ε → 該 sample 不切入", start: 0.001 + 2e-6, end: 0.003 - 2e-6,
+		{name: "端點與 sample 差 > 0.5ms → 該 sample 不切入", start: 0.0016, end: 0.0024,
 			wantTime: []float64{0.002}, wantCh1: []float64{102}},
+		{name: "端點只差同步飄移(1e-7)", start: 0.001 + 1e-7, end: 0.003 - 1e-7,
+			wantTime: []float64{0.001, 0.002, 0.003}, wantCh1: []float64{101, 102, 103}},
 	}
 
 	for _, tt := range tests {
@@ -234,11 +236,49 @@ func TestSliceEMG(t *testing.T) {
 	}
 }
 
+// TestSliceEMG_Float32NoiseAtLargeTime 釘住 ADR-0043 選毫秒取整的理由:manifest 的
+// 力板時間以 float32 匯出,雜訊隨時間變大(60 s 附近 float32 ULP ≈ 3.8e-6),會超過
+// emgTimeEpsilon(1e-6)。毫秒取整下,雜訊端點仍與 sample 取整到同一毫秒,邊界
+// sample 照樣切入;若改用 ±1e-6,下列每一列都會靜默少切 60.12 這一筆。
+func TestSliceEMG_Float32NoiseAtLargeTime(t *testing.T) {
+	data := &models.PhaseSyncEMGData{ // 100 Hz
+		Time:     []float64{60.10, 60.11, 60.12, 60.13, 60.14},
+		Headers:  []string{"Ch1"},
+		Channels: map[string][]float64{"Ch1": {0, 1, 2, 3, 4}},
+	}
+
+	tests := []struct {
+		name       string
+		start, end float64
+		wantTime   []float64
+	}{
+		{name: "終點 60.119997(−3e-6)保留 60.12", start: 60.10, end: 60.119997,
+			wantTime: []float64{60.10, 60.11, 60.12}},
+		{name: "終點 float32(60.12) = 60.1199989…(−1.07e-6)保留 60.12", start: 60.10, end: float64(float32(60.12)),
+			wantTime: []float64{60.10, 60.11, 60.12}},
+		{name: "起點 60.120003(+3e-6)保留 60.12", start: 60.120003, end: 60.14,
+			wantTime: []float64{60.12, 60.13, 60.14}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SliceEMG(data, tt.start, tt.end)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantTime, got.Data.Time)
+		})
+	}
+}
+
 // TestSliceEMG_Errors 釘住三種失敗的 sentinel 與錯誤全文(沿用舊
 // parsers.GetEMGDataInTimeRange / FindTimeRangeIndices 的 user-facing 字樣)。
 func TestSliceEMG_Errors(t *testing.T) {
 	data := &models.PhaseSyncEMGData{
 		Time:     []float64{0.0, 0.001, 0.002},
+		Headers:  []string{"Ch1"},
+		Channels: map[string][]float64{"Ch1": {1, 2, 3}},
+	}
+	sparse := &models.PhaseSyncEMGData{ // 100 Hz
+		Time:     []float64{0.0, 0.01, 0.02},
 		Headers:  []string{"Ch1"},
 		Channels: map[string][]float64{"Ch1": {1, 2, 3}},
 	}
@@ -260,11 +300,7 @@ func TestSliceEMG_Errors(t *testing.T) {
 			wantErr: ErrTimeRangeNotFound, wantText: "找不到有效的時間範圍數據: no data found in time range"},
 		{name: "區間整段在資料之前", data: data, start: -2, end: -1,
 			wantErr: ErrTimeRangeNotFound, wantText: "找不到有效的時間範圍數據: no data found in time range"},
-		{name: "區間夾在兩筆 sample 之間", data: data, start: 0.0012, end: 0.0018,
-			wantErr: ErrTimeRangeNotFound, wantText: "找不到有效的時間範圍數據: no data found in time range"},
-		{name: "start 為 NaN", data: data, start: math.NaN(), end: 0.002,
-			wantErr: ErrTimeRangeNotFound, wantText: "找不到有效的時間範圍數據: no data found in time range"},
-		{name: "end 為 NaN", data: data, start: 0.0, end: math.NaN(),
+		{name: "區間夾在兩筆 sample 之間(取整後也碰不到)", data: sparse, start: 0.003, end: 0.007,
 			wantErr: ErrTimeRangeNotFound, wantText: "找不到有效的時間範圍數據: no data found in time range"},
 	}
 
@@ -281,12 +317,11 @@ func TestSliceEMG_Errors(t *testing.T) {
 	}
 }
 
-// TestSliceEMG_SubMillisecondEndBoundary 記錄 ADR-0043 的預期行為改變:切片從
-// 「整數毫秒取整後比較」改為 [start−ε, end+ε](ε = 1e-6)。舊規則把 end 與 sample
-// 都 math.Round 到毫秒,所以 end 之後不到 0.5ms 的 sample 會被切進來;> 1kHz 時
-// (相鄰 sample 間距 < 1ms)這會多切一筆。以 2.5kHz 時間軸為例:end = 1.0008 時,
-// 舊規則 round(1000.8) = round(1001.2) = 1001ms,把 end 之後 0.4ms 的 1.0012 也
-// 切入;新規則只到 1.0008。start 側對稱:舊規則會把 start 之前 0.4ms 的 sample 切入。
+// TestSliceEMG_SubMillisecondEndBoundary 記錄毫秒取整規則在 sample interval < 1 ms
+// 時的已知行為(ADR-0043 的限制):end 與 sample 都取整到毫秒,所以 end 之後不到
+// 0.5 ms、且取整到同一毫秒的 sample 也會切入。以 2.5 kHz 時間軸為例:end = 1.0008 與
+// 1.0012 都取整到 1001 ms,1.0012 一併切入;start 側對稱,1.0008 會隨 start = 1.0012
+// 切入。
 func TestSliceEMG_SubMillisecondEndBoundary(t *testing.T) {
 	data := &models.PhaseSyncEMGData{
 		Time:     []float64{1.0, 1.0004, 1.0008, 1.0012, 1.0016},
@@ -294,24 +329,24 @@ func TestSliceEMG_SubMillisecondEndBoundary(t *testing.T) {
 		Channels: map[string][]float64{"Ch1": {0, 1, 2, 3, 4}},
 	}
 
-	t.Run("end 之後 0.4ms 的 sample 不再切入(舊:切入 1.0012)", func(t *testing.T) {
+	t.Run("end 之後 0.4ms、同一毫秒的 sample 切入", func(t *testing.T) {
 		got, err := SliceEMG(data, 1.0, 1.0008)
 		require.NoError(t, err)
-		assert.Equal(t, []float64{1.0, 1.0004, 1.0008}, got.Data.Time)
-		assert.Equal(t, 1.0008, got.ActualEndTime)
+		assert.Equal(t, []float64{1.0, 1.0004, 1.0008, 1.0012}, got.Data.Time)
+		assert.Equal(t, 1.0012, got.ActualEndTime)
 	})
 
-	t.Run("start 之前 0.4ms 的 sample 不再切入(舊:切入 1.0008)", func(t *testing.T) {
+	t.Run("start 之前 0.4ms、同一毫秒的 sample 切入", func(t *testing.T) {
 		got, err := SliceEMG(data, 1.0012, 1.0016)
 		require.NoError(t, err)
-		assert.Equal(t, []float64{1.0012, 1.0016}, got.Data.Time)
-		assert.Equal(t, 1.0012, got.ActualStartTime)
+		assert.Equal(t, []float64{1.0008, 1.0012, 1.0016}, got.Data.Time)
+		assert.Equal(t, 1.0008, got.ActualStartTime)
 	})
 
-	t.Run("end 只差同步飄移(< ε)仍切入邊界 sample", func(t *testing.T) {
-		got, err := SliceEMG(data, 1.0, 1.0008-5e-7)
+	t.Run("end 之後 0.4ms、但取整到下一毫秒的 sample 不切入", func(t *testing.T) {
+		got, err := SliceEMG(data, 1.0, 1.0004)
 		require.NoError(t, err)
-		assert.Equal(t, []float64{1.0, 1.0004, 1.0008}, got.Data.Time)
+		assert.Equal(t, []float64{1.0, 1.0004}, got.Data.Time)
 	})
 }
 

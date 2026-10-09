@@ -33,8 +33,8 @@ _Avoid_: gait %(口語)、normalized time、jump cycle(code 用 gait cycle)、�
 _Avoid_: synced time range(已刪的 `GetSyncedTimeRange`)、phase times map(那是 Composer / CCI 的輸出形狀,不是來源)、在 caller 內自行判斷力板時間 / motion-index 再換算.
 
 **EMG time axis**
-[[PhaseSyncEMGData]] 的 `Time`(秒,升冪)。[[Phase timeline]] 的 EMG 秒數落在這條軸上時,只有兩個操作,且共用同一個容差 `emgTimeEpsilon = 1e-6`(吸收力板 ↔ EMG 同步後的 ULP 飄移):**in-range** —— `synchronizer.OutsideEMG(times, t)` 回報 t 在首 / 末筆 ±ε 之外的哪一側(`ResolveTimeIndex` 的 inRange 由它推導);**切片** —— `synchronizer.SliceEMG(data, start, end)` 取 `[start−ε, end+ε]` 內的 samples(含端點)。通過 in-range 檢查的端點,其邊界 sample 一定被切入。越界時是 fail、drop 還是 skip,由各 analyzer 自己決定。見 [[ADR-0030]]、[[ADR-0043]]。
-_Avoid_: 毫秒取整比較(已刪的 `FindTimeRangeIndices`)、caller 內私有的 epsilon、strict-0 邊界比較.
+[[PhaseSyncEMGData]] 的 `Time`(秒,升冪)。[[Phase timeline]] 的 EMG 秒數落在這條軸上時只有兩個操作,都由 `synchronizer` 持有:**in-range** —— `synchronizer.OutsideEMG(times, t)` 以 ±`emgTimeEpsilon`(1e-6,吸收力板 ↔ EMG 同步後的 ULP 飄移)判斷 t 在首 / 末筆外的哪一側(`ResolveTimeIndex` 的 inRange 由它推導);**切片** —— `synchronizer.SliceEMG(data, start, end)` 把 start、end 與每筆 sample 都取整到整數毫秒,取含端點的 `[startMs, endMs]`。切片刻意不用 ±ε:manifest 力板時間是毫秒精度、以 float32 匯出,印到 6 位小數的雜訊從 1e-6 起跳並隨時間變大,±ε 會靜默少切邊界 sample。通過 in-range 檢查的端點,其邊界 sample 一定被切入。越界時是 fail、drop 還是 skip,由各 analyzer 自己決定。見 [[ADR-0030]]、[[ADR-0043]]。
+_Avoid_: 切片用 ±ε、caller 內私有的 epsilon、strict-0 邊界比較、在 caller 內自行毫秒取整切片.
 
 **Manifest**
 描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析都先解析 manifest 取得 dataset 集合再計算。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有四個 analyzer 不消費此欄位，向後相容。

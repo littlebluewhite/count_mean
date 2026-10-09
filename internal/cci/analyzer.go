@@ -123,8 +123,8 @@ func (a *CCIAnalyzer) computeCCI(
 
 	// ADR-0018 anchor-vs-extraction split:錨點 [gaitStart, gaitEnd] = [S, L] 驅動
 	// percent;抽取範圍兩側各延伸 ±150ms,讓曲線顯示 <0% lead-in 與 >100% landing。
-	// 低端不需守門:SliceEMG 從第一筆 ≥ start−ε 的 sample 切起,低於首筆的 start
-	// 自然收在 index 0;高端則 clamp 到資料末筆,避免越界。emgData.Time 此處保證非空——
+	// 低端不需守門:SliceEMG 從第一筆(毫秒取整後)≥ start 的 sample 切起,低於首筆的
+	// start 自然收在 index 0;高端則 clamp 到資料末筆,避免越界。emgData.Time 此處保證非空——
 	// calculateGaitCycle 內的 validateEMGBounds 已擋下空資料。
 	extractStart := gaitStart - gaitExtensionSeconds
 	extractEnd := gaitEnd + gaitExtensionSeconds
