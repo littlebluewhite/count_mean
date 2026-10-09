@@ -157,6 +157,13 @@ func TestCalculateCCITimeSeries_I18n_LengthMismatch_EnUS(t *testing.T) {
 		"en-US locale 應出現英文 channel keyword")
 }
 
+// TestBuildChannelMap_MissingChannel_ZhTW 釘住缺失肌肉錯誤被轉成 cci 既有 zh-TW 訊息 (含肌肉名)。
+func TestBuildChannelMap_MissingChannel_ZhTW(t *testing.T) {
+	_, err := BuildChannelMap([]string{"L.RA: EMG 1", "R.RA: EMG 1"})
+	require.Error(t, err)
+	assert.Equal(t, "缺少必要的肌肉通道: ES", err.Error())
+}
+
 // TestBuildChannelMap_I18n_MissingChannel_EnUS 釘住 BuildChannelMap 的 i18n。
 func TestBuildChannelMap_I18n_MissingChannel_EnUS(t *testing.T) {
 	defer i18n.SetLocale(i18n.LocaleZhTW)

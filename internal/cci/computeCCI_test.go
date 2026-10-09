@@ -48,7 +48,7 @@ func buildInMemoryCCIFixture() (*models.PhaseSyncEMGData, *models.PhaseManifest)
 	// deliberately NOT in DefaultMusclePairs() / RA-ES-IL-... order, so an order- or
 	// index-based channel-map regression (e.g. "first header => RA") would bind the
 	// constants to the wrong muscles and shift the CCI values — proving the mapping
-	// is name-based (via MapHeaderToShortName), not file-order based. [codex R2]
+	// is name-based (via musclemap.RightSideChannels), not file-order based. [codex R2]
 	headerConst := map[string]float64{
 		"R.RA: EMG 1":    1.0,
 		"R.ES: EMG 2":    2.0,

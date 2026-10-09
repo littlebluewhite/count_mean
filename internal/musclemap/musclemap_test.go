@@ -1,61 +1,97 @@
 package musclemap
 
 import (
-	"strings"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestAssignShort_FirstAssignment 守護:第一次塞 short → 寫入成功,無 error。
-func TestAssignShort_FirstAssignment(t *testing.T) {
-	cm := make(map[string]string)
-	err := AssignShort(cm, "RA", "R.RA: EMG 1")
-	require.NoError(t, err)
-	assert.Equal(t, "R.RA: EMG 1", cm["RA"])
-}
-
-// TestAssignShort_DuplicateFailFast 守護 核心:重複 short → fail-fast,
-// error 訊息含「重複的肌肉通道」+ 兩個 header 字串供 user 診斷。
-// muscle_ratio 與 cci 兩個 caller 共用此 helper,確保行為對稱。
-func TestAssignShort_DuplicateFailFast(t *testing.T) {
-	cm := map[string]string{
-		"RA": "R.RA: EMG 1 (first)",
+// rightHeaders 是 8 個右側通道 header (含 TA&IO 與 GMax 大小寫變體)。
+func rightHeaders() []string {
+	return []string{
+		"R.RA: EMG 1 (from SF8_...) ->Filter->RMS []",
+		"R.ES: EMG 2 (from SF8_...)",
+		"R.IL: EMG 3 (from SF8_...)",
+		"R.GMax: EMG 4 (from SF8_...)",
+		"R.RF: EMG 5 (from SF8_...)",
+		"R.BF: EMG 6 (from SF8_...)",
+		"R.TA&IO: EMG 7 (from SF8_...)",
+		"R.MF: EMG 8 (from SF8_...)",
 	}
-	err := AssignShort(cm, "RA", "R.RA: EMG 2 (second)")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "重複的肌肉通道")
-	assert.Contains(t, err.Error(), "RA")
-	assert.Contains(t, err.Error(), "first")
-	assert.Contains(t, err.Error(), "second")
-
-	// 重要契約:重複時不能 overwrite,既有 mapping 保留為「前者」
-	assert.Equal(t, "R.RA: EMG 1 (first)", cm["RA"], "重複時 map 不該被改寫,前者保留")
 }
 
-// TestAssignShort_DifferentShortsCoexist 守護:不同 short name 不衝突,
-// 兩個 distinct short 同時存在 map 中。
-func TestAssignShort_DifferentShortsCoexist(t *testing.T) {
-	cm := make(map[string]string)
-	require.NoError(t, AssignShort(cm, "RA", "R.RA: EMG 1"))
-	require.NoError(t, AssignShort(cm, "ES", "R.ES: EMG 2"))
-	assert.Len(t, cm, 2)
-	assert.Equal(t, "R.RA: EMG 1", cm["RA"])
-	assert.Equal(t, "R.ES: EMG 2", cm["ES"])
-}
+func TestRightSideChannels(t *testing.T) {
+	t.Run("CanonicalNames", func(t *testing.T) {
+		h := rightHeaders()
+		got, err := RightSideChannels(h)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{
+			"RA": h[0], "ES": h[1], "IL": h[2], "GMax": h[3],
+			"RF": h[4], "BF": h[5], "TAIO": h[6], "MF": h[7],
+		}, got)
+	})
 
-// TestAssignShort_ErrorMessageStable 守護 error 訊息穩定性 — 前端 / log 可能解析格式,
-// 動詞與字面 substring 不該被未來重構破壞。
-func TestAssignShort_ErrorMessageStable(t *testing.T) {
-	cm := map[string]string{"RA": "H1"}
-	err := AssignShort(cm, "RA", "H2")
-	require.Error(t, err)
-	msg := err.Error()
-	// 必含的 substring,用於前端可預測解析
-	expectations := []string{"重複", "RA", "H1", "H2"}
-	for _, exp := range expectations {
-		assert.True(t, strings.Contains(msg, exp),
-			"error message %q 缺少必要 substring %q", msg, exp)
-	}
+	t.Run("CaseInsensitiveSuffix", func(t *testing.T) {
+		h := rightHeaders()
+		h[3] = "R.GMAX: EMG 4"
+		got, err := RightSideChannels(h)
+		require.NoError(t, err)
+		assert.Equal(t, "R.GMAX: EMG 4", got["GMax"])
+	})
+
+	t.Run("IgnoresNonRight", func(t *testing.T) {
+		h := append(rightHeaders(),
+			"L.RA: EMG 9 (left)",
+			"EMG without colon",
+			"R RECTUS ABDOMINIS: full name",
+			"X.RA: unknown side",
+			"R.UNKNOWN: not in table",
+		)
+		got, err := RightSideChannels(h)
+		require.NoError(t, err)
+		assert.Len(t, got, 8)
+		assert.Equal(t, rightHeaders()[0], got["RA"])
+	})
+
+	t.Run("RightWinsInterleaved", func(t *testing.T) {
+		var h []string
+		for _, r := range rightHeaders() {
+			h = append(h, "L."+r[2:], r) // L.* 排在 R.* 之前
+		}
+		got, err := RightSideChannels(h)
+		require.NoError(t, err)
+		for short, header := range got {
+			assert.Equal(t, "R.", header[:2], "短名 %q 應對應 R.* header", short)
+		}
+	})
+
+	t.Run("DuplicateFailFast", func(t *testing.T) {
+		h := append(rightHeaders(), "R.RA: EMG 2 (second session)")
+		h[0] = "R.RA: EMG 1 (first session)"
+		got, err := RightSideChannels(h)
+		require.Error(t, err)
+		assert.Nil(t, got)
+		var missing *MissingMuscleError
+		assert.False(t, errors.As(err, &missing), "重複不是缺失")
+		assert.Contains(t, err.Error(), "重複的肌肉通道 RA")
+		assert.Contains(t, err.Error(), "first session")
+		assert.Contains(t, err.Error(), "second session")
+	})
+
+	t.Run("MissingIsTyped", func(t *testing.T) {
+		h := rightHeaders()
+		h = append(h[:3], h[4:]...) // 拿掉 GMax
+		_, err := RightSideChannels(h)
+		var missing *MissingMuscleError
+		require.ErrorAs(t, err, &missing)
+		assert.Equal(t, "GMax", missing.Muscle)
+		assert.Equal(t, "缺少必要的肌肉通道: GMax", err.Error())
+
+		// 只有左側 → 回第一個必要肌肉 RA
+		_, err = RightSideChannels([]string{"L.RA: x", "L.ES: x"})
+		require.ErrorAs(t, err, &missing)
+		assert.Equal(t, "RA", missing.Muscle)
+	})
 }

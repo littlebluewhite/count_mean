@@ -17,6 +17,7 @@ import (
 	"count_mean/internal/logging"
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
+	"count_mean/internal/musclemap"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
@@ -194,7 +195,7 @@ func (a *Analyzer) analyzeSubject(
 		return result
 	}
 
-	channelMap, err := BuildRightSideChannelMap(emg.Headers)
+	channelMap, err := musclemap.RightSideChannels(emg.Headers)
 	if err != nil {
 		result.Error = err.Error()
 		return result

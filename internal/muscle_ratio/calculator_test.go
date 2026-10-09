@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"count_mean/internal/models"
+	"count_mean/internal/musclemap"
 )
 
 func TestRatio_NaNOnZeroDenominator(t *testing.T) {
@@ -70,83 +71,6 @@ func TestDefaultRatios_OrderLocked(t *testing.T) {
 	}
 }
 
-func TestBuildRightSideChannelMap_RejectsLeftSide(t *testing.T) {
-	// L.RA 在前、R.RA 在後 → 不應該被 L.RA 干擾或覆蓋
-	headers := []string{
-		"L.RA: EMG 1 (left)",
-		"R.RA: EMG 1 (from ...) ->Filter->RMS []",
-		"R.ES: EMG 2",
-		"R.IL: EMG 3",
-		"R.GMax: EMG 4",
-		"R.RF: EMG 5",
-		"R.BF: EMG 6",
-		"R.TA&IO: EMG 7",
-		"R.MF: EMG 8",
-	}
-
-	cm, err := BuildRightSideChannelMap(headers)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if got := cm["RA"]; got != "R.RA: EMG 1 (from ...) ->Filter->RMS []" {
-		t.Errorf("cm[RA] = %q, want the R.RA header (not L.RA)", got)
-	}
-
-	// 全部 L. → fail-fast
-	leftOnly := []string{
-		"L.RA: x", "L.ES: x", "L.IL: x", "L.GMax: x",
-		"L.RF: x", "L.BF: x", "L.TA&IO: x", "L.MF: x",
-	}
-
-	if _, err := BuildRightSideChannelMap(leftOnly); err == nil {
-		t.Fatalf("expected error for left-only headers, got nil")
-	}
-}
-
-func TestBuildRightSideChannelMap_RejectsFullName(t *testing.T) {
-	// "R RECTUS ABDOMINIS" 沒有 "R." dot prefix（是 "R " 空格），應被視為非右側 EMG header
-	headers := []string{
-		"R RECTUS ABDOMINIS: EMG 1",
-		"R ERECTOR SPINAE: EMG 2",
-		"R ILIOPSOAS: EMG 3",
-		"R GLUTEUS MAXIMUS: EMG 4",
-		"R RECTUS FEMORIS: EMG 5",
-		"R BICEPS FEMORIS: EMG 6",
-		"R TIBIALIS ANTERIOR: EMG 7",
-		"R MULTIFIDUS: EMG 8",
-	}
-
-	if _, err := BuildRightSideChannelMap(headers); err == nil {
-		t.Fatalf("expected error for full-name headers without R. prefix, got nil")
-	}
-}
-
-func TestBuildRightSideChannelMap_AllChannels(t *testing.T) {
-	// 完整 8 個 R.* 標頭 → 全部映射成功
-	headers := []string{
-		"R.RA: EMG 1 ()",
-		"R.ES: EMG 2 ()",
-		"R.IL: EMG 3 ()",
-		"R.GMax: EMG 4 ()",
-		"R.RF: EMG 5 ()",
-		"R.BF: EMG 6 ()",
-		"R.TA&IO: EMG 7 ()",
-		"R.MF: EMG 8 ()",
-	}
-
-	cm, err := BuildRightSideChannelMap(headers)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	for _, m := range []string{"RA", "ES", "IL", "GMax", "RF", "BF", "TAIO", "MF"} {
-		if _, ok := cm[m]; !ok {
-			t.Errorf("missing channel %q in map: %+v", m, cm)
-		}
-	}
-}
-
 func TestComputeAllRatios_NaNAndShape(t *testing.T) {
 	emg := &models.PhaseSyncEMGData{
 		Time: []float64{0.0, 0.001, 0.002},
@@ -166,9 +90,9 @@ func TestComputeAllRatios_NaNAndShape(t *testing.T) {
 		},
 	}
 
-	cm, err := BuildRightSideChannelMap(emg.Headers)
+	cm, err := musclemap.RightSideChannels(emg.Headers)
 	if err != nil {
-		t.Fatalf("BuildRightSideChannelMap: %v", err)
+		t.Fatalf("RightSideChannels: %v", err)
 	}
 
 	got := ComputeAllRatios(emg, cm)

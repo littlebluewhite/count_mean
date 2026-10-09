@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"strings"
 
 	"count_mean/internal/i18n"
 	"count_mean/internal/musclemap"
@@ -136,77 +135,20 @@ func CalculateCCITimeSeries(ctx context.Context, ch1Data, ch2Data []float64) ([]
 	return result, nil
 }
 
-// shortNameMap maps normalized prefixes to standard short muscle names.
-var shortNameMap = map[string]string{
-	"RA":    "RA",
-	"ES":    "ES",
-	"IL":    "IL",
-	"GMAX":  "GMax",
-	"RF":    "RF",
-	"BF":    "BF",
-	"TAIO":  "TAIO",
-	"TA&IO": "TAIO",
-	"MF":    "MF",
-}
-
-// MapHeaderToShortName extracts the canonical short muscle name from a right-side EMG header.
-// 行為與 muscle_ratio.mapHeaderToRightShortName 對齊 — 跨 analyzer 對同份 EMG 取同一組通道。
-// 非 "R." 前綴的 header（含 "L." 與其他）一律回空字串，由 BuildChannelMap 跳過。
-//
-// Examples:
-//
-//	"R.RA: EMG 1 (from ...) ->Filter->RMS []" → "RA"
-//	"R.TA&IO: EMG 7 (...)"                    → "TAIO"
-//	"R.GMax: EMG 4 (...)"                     → "GMax"
-//	"L.RA: EMG 1 ..."                         → ""  (左側 skipped)
-//	"R RECTUS ABDOMINIS: ..."                 → ""  (無 "R." 點前綴)
-//	"EMG without colon"                       → ""  (格式不符)
-func MapHeaderToShortName(header string) string {
-	colonIdx := strings.Index(header, ":")
-	if colonIdx < 0 {
-		return ""
-	}
-
-	prefix := strings.TrimSpace(header[:colonIdx])
-	if !strings.HasPrefix(prefix, "R.") {
-		return ""
-	}
-
-	upper := strings.ToUpper(prefix[2:])
-	if short, ok := shortNameMap[upper]; ok {
-		return short
-	}
-
-	return ""
-}
-
 // BuildChannelMap maps short muscle names to their actual header strings
-// as stored in PhaseSyncEMGData.Channels. 與 muscle_ratio.BuildRightSideChannelMap 對稱：
-// 僅取右側通道，缺任一必要肌肉即 fail-fast。
-//
-// 加入重複偵測,與 muscle_ratio.BuildRightSideChannelMap 對稱 — 兩個 R.RA
-// 過去 silent overwrite (last-wins),現在透過 musclemap.AssignShort fail-fast。
+// as stored in PhaseSyncEMGData.Channels。規則 (僅右側、重複 fail-fast、缺任一必要肌肉
+// fail-fast) 由 musclemap.RightSideChannels 擁有;本函式只把缺失錯誤轉成 i18n 訊息。
 //
 //nolint:err113 // dynamic error for user-facing output (i18n-backed)
 func BuildChannelMap(headers []string) (map[string]string, error) {
-	channelMap := make(map[string]string, len(headers))
-
-	for _, header := range headers {
-		shortName := MapHeaderToShortName(header)
-		if shortName == "" {
-			continue
+	channelMap, err := musclemap.RightSideChannels(headers)
+	if err != nil {
+		var missing *musclemap.MissingMuscleError
+		if errors.As(err, &missing) {
+			return nil, errors.New(i18n.T(i18n.KeyErrorCCIMissingMuscleChannel, missing.Muscle))
 		}
 
-		if err := musclemap.AssignShort(channelMap, shortName, header); err != nil {
-			return nil, err
-		}
-	}
-
-	required := []string{"RA", "ES", "IL", "GMax", "RF", "BF", "TAIO", "MF"}
-	for _, name := range required {
-		if _, ok := channelMap[name]; !ok {
-			return nil, errors.New(i18n.T(i18n.KeyErrorCCIMissingMuscleChannel, name))
-		}
+		return nil, err
 	}
 
 	return channelMap, nil
