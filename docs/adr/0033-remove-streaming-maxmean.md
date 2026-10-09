@@ -10,8 +10,8 @@
 - 刪 `internal/io/buffer_pool.go`、`memory_stats.go` 與對應測試；刪 streaming 專屬測試（`large_file_handler_streaming_test.go`、`large_file_handler_p2_j_test.go`，以及 `large_file_handler_test.go` 中只測 streaming 的案例）。
 - 刪 benchmark：`internal/benchmark` 的 `BenchmarkLargeFileProcessing`、`test/benchmark` 的 `BenchmarkLargeFileHandler_SlidingWindow` / `BenchmarkLargeFileProcessing`（含僅供它們使用的 CSV 產生 helper）。
 - 刪 orphan i18n key `KeyErrorFileTooLarge`（常數、四個語系 catalog、`test/demo/i18n_demo` 的用法）。
-- **保留** `LargeFileHandler.GetFileInfo` / `scanFileStructure` / `isLargeFileThreshold`：`CSVHandler.checkFileSizeAndFormat` 仍在讀取路徑上呼叫，留待 W3 處理。
-- 超過 100 MB 的使用者訊息由「文件過大，請使用大文件處理功能」改為「檔案過大（上限 100 MB），請分割檔案後再試」（interim；讀取入口在後續 wave 定稿）。
+- **保留** `LargeFileHandler.GetFileInfo` / `scanFileStructure` / `isLargeFileThreshold`：`CSVHandler.checkFileSizeAndFormat` 仍在讀取路徑上呼叫，留待 W3 處理（W3 已刪，見 [[ADR-0039]]）。
+- 超過 100 MB 的使用者訊息由「文件過大，請使用大文件處理功能」改為「檔案過大（上限 100 MB），請分割檔案後再試」（interim；讀取入口在後續 wave 定稿，最終訊息見 [[ADR-0039]]：「檔案過大（%d MB，上限 100 MB），請分割檔案後再試」）。
 - 同步更新 `README.md`、`docs/api.md`、`docs/usage_patterns.md`、`docs/testing_automation.md` 中描述 streaming / 大檔處理 / buffer pool 的段落。
 
 ## Why
@@ -43,7 +43,7 @@
 - 超過 100 MB 的 CSV 一律被讀取路徑以 `ErrCodeFileTooLarge` 拒絕；使用者需先分割檔案。
 - i18n loader 會拒絕含未知 key 的 JSON（`internal/i18n/i18n.go` `validateTranslationKeys`），因此先前由 `SaveTranslations`（僅 `test/demo/i18n_demo` 呼叫）寫出、仍含 `error.file_too_large` 的 `translations/*.json` 現在會載入失敗；app 本身從不寫這些檔案，風險可忽略。
 - `test/benchmark` 與 `internal/benchmark` 仍保留其餘 benchmark，兩個 package 皆未被清空。
-- 遺留（已於同一 wave 後續 commit 清理）：`validation/csv/csv_validator.go`（`ValidateRow` / `ValidateHeaderRow` 註解）、`parsers/emg_parser.go`、`util/str2number.go` 內提及 `processStreamingFile` / `executeStreamingLoop` / `large_file_handler` 為 caller 的過時註解已改寫；`LargeFileHandler.csvValidator` 欄位（streaming 刪除後無人讀取）已移除；`csv_handler.go` package doc、`docs/usage_patterns.md`「大文件處理模式」章節（改名「檔案大小限制」）與 `MaxMeanCalculator` worker pool / backpressure 描述、`README.md` 架構圖的 `BackpressureController` 同步修正。`KeyStatusLargeFileProc` i18n key 仍在，留待後續 wave。
+- 遺留（已於同一 wave 後續 commit 清理）：`validation/csv/csv_validator.go`（`ValidateRow` / `ValidateHeaderRow` 註解）、`parsers/emg_parser.go`、`util/str2number.go` 內提及 `processStreamingFile` / `executeStreamingLoop` / `large_file_handler` 為 caller 的過時註解已改寫；`LargeFileHandler.csvValidator` 欄位（streaming 刪除後無人讀取）已移除；`csv_handler.go` package doc、`docs/usage_patterns.md`「大文件處理模式」章節（改名「檔案大小限制」）與 `MaxMeanCalculator` worker pool / backpressure 描述、`README.md` 架構圖的 `BackpressureController` 同步修正。`KeyStatusLargeFileProc` i18n key 仍保留作測試 fixture（i18n 測試、`test/demo/i18n_demo`、一個 integration test 以它當 `%f` 範例），無 production caller。
 
 ## Related
 

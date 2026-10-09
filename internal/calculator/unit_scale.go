@@ -4,7 +4,7 @@ import "math"
 
 // UnitScale 是 [[Scaled domain]] (縮放域) 換算的單一 owner。
 //
-// 時間與 EMG 值經 util.Str2Number 解析後已乘 10^scalingFactor (整數化以避開浮點誤差),
+// 時間與 EMG 值經 util.Str2Number 解析後已乘 10^scalingFactor,
 // 該域稱縮放域;使用者輸入 (秒) 與 CSV 輸出 (原單位) 則在原域。ToScaled 把原域值
 // 轉入縮放域,FromScaled 轉回。scalingFactor 於 calculator ctor 時固定
 // (ADR-0049;ADR-0005 Option D 的 per-call 注入仍維持拒絕)。

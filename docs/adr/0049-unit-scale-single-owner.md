@@ -2,7 +2,7 @@
 
 **Status**: accepted · **implemented** (2026-10-10)
 
-[[Scaled domain]]（縮放域，值已乘 10^scalingFactor）與原域（使用者輸入的秒、CSV 輸出的原單位）之間的換算，原本散落四處各自寫 `math.Pow10`。本 ADR 把它收為 `calculator.UnitScale` 單一 owner，並**關閉 ADR-0029 Notes 的「scaling-domain 反縮放契約」未決註記**。
+[[Scaled domain]]（縮放域，值已乘 10^scalingFactor）與原域（使用者輸入的秒、CSV 輸出的原單位）之間的換算，原本散落四處各自寫 `math.Pow10`。本 ADR 把它收為 `calculator.UnitScale` 單一 owner，並**關閉 ADR-0029 Notes 的「scaling-domain 反縮放契約」未決註記**。其中關於 `io.ReverseScale` 與 GUI 陣列反縮放的部分，已由 ADR-0037 刪除（commit 4f0dec4；兩者原由 ac05007 引入）而被取代；現在 csvConverter 的 `UnitScale.FromScaled` 是唯一的反縮放點。
 
 ## Decision
 
@@ -14,12 +14,12 @@
 
 ## Why
 
-- 縮放域換算的方向（乘 / 除）是兩個已發生的靜默回歸之根：`0e9cebb`（秒單位 phase range 未轉入縮放域 → 每個 phase 統計全 0）與 `812ebac`（>922 s 溢位）。單一 owner 讓「哪個值在哪個域」只有一處可查，方向接反由 `TestUnitScale_Direction` 與既有回歸測試（`TestAnalyzePhases_HonorsFrontendPhasesAndNames`、`TestMaxMean_ScaledTimeOverflow_WindowMiscompute`）攔截。
+- 縮放域換算的「哪個值在哪個域」（漏乘、多乘 ×1e6）是兩個已發生的靜默回歸之根：`0e9cebb`（秒單位 phase range 未轉入縮放域 → 每個 phase 統計全 0）與 `812ebac`（>922 s 溢位）。單一 owner 讓「哪個值在哪個域」只有一處可查，方向接反由 `TestUnitScale_Direction` 與既有回歸測試（`TestAnalyzePhases_HonorsFrontendPhasesAndNames`、`TestMaxMean_ScaledTimeOverflow_WindowMiscompute`）攔截。
 - ADR-0029 把反縮放契約留在「實作層自我說明、未升 ADR；縮放域邊界再起爭議再立」。邊界已再次橫跨 calculator 與 io 兩層，故於此立案並結案。
 
 ## Considered Options
 
 - **A. `calculator.UnitScale`，ctor-time 建立（chosen）**：見上。
 - **B. 維持散落的 `math.Pow10`（status quo）**：拒。方向約定只存在於註解，已兩度出錯。
-- **C. 把 `UnitScale` 放進 util 並讓 Str2Number 也用**：拒。`Str2Number` 的整數化語意與泛型簽章不同，硬併會擴大 util 公開面；bit-for-bit 一致用測試鎖即可。
+- **C. 把 `UnitScale` 放進 util 並讓 Str2Number 也用**：拒。`Str2Number` 的泛型簽章、NaN/Inf 拒絕與字串解析步驟都不是純換算，硬併會擴大 util 公開面。bit-for-bit 一致用測試鎖即可。
 - **D. ADR-0005 Option D：`scalingFactor` 移出 ctor、per-call 注入 —— 仍拒絕**。本案 `UnitScale` 正是在 ctor 以 ctor-time `scalingFactor` 建立，不改任何方法簽章；ADR-0005 拒絕 Option D 的理由（擴張 method 簽章、破壞 GUI snapshot 與 `appState` 配對的 `ScalingFactor` 一致性）完全不受影響。

@@ -52,9 +52,11 @@ func TestUnitScale_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestUnitScale_BeyondInt64Microseconds 對應 812ebac:SF=10 下 >922 秒的時間仍須是
-// 可比較的 float64 (舊 ×1e6 轉 int64 會 clamp);ToScaled 不得取整或溢位。
-func TestUnitScale_BeyondInt64Microseconds(t *testing.T) {
+// TestUnitScale_MonotonicBeyondInt64Microseconds 僅記錄:SF=10 下 >922 秒的時間
+// (舊 ×1e6 轉 int64 會 clamp 的範圍) ToScaled 仍是保序的 float64 乘法。
+// 812ebac 的真正釘子是 TestMaxMean_ScaledTimeOverflow_WindowMiscompute
+// (maxmean_invariants_test.go),不是本測試。
+func TestUnitScale_MonotonicBeyondInt64Microseconds(t *testing.T) {
 	u := NewUnitScale(10)
 	a, b := u.ToScaled(1000.0), u.ToScaled(1001.0)
 	assert.Less(t, a, b)

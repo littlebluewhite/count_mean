@@ -25,7 +25,7 @@ grep 全樹確認每個符號零 non-test caller 後移除，連同專屬測試�
 ### Area 3. io（`CSVHandler`）
 
 - 刪 `CSVHandler.ReadCSVFromInput`（`docs/usage_patterns.md` 範例改用 `ReadCSVFromDirectory("", fileName)`（該函式內部已 join `InputDir`，故 `dirName` 傳空字串；傳 `cfg.InputDir` 會變成 InputDir/InputDir/file.csv））。
-- 刪 `CSVHandler.GetFileInfo` wrapper。**保留** `LargeFileHandler.GetFileInfo`（`CSVHandler.checkFileSizeAndFormat`（CSV 讀取路徑）仍用；streaming 路徑已由 [[ADR-0033]] 刪除；後續 wave 處理）。
+- 刪 `CSVHandler.GetFileInfo` wrapper。**保留** `LargeFileHandler.GetFileInfo`（`CSVHandler.checkFileSizeAndFormat`（CSV 讀取路徑）仍用；streaming 路徑已由 [[ADR-0033]] 刪除；後續 wave 處理；W3 已刪，見 [[ADR-0039]]）。
 
 ### Area 4. parsers / calculator / models
 

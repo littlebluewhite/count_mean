@@ -682,7 +682,7 @@ func (h *CSVHandler) WritePhaseAnalysis(
 // writeFileOutput 是 File-based write 的單一寫門:join(OutputDir/SubDir/Filename,
 // 含 containment 檢查)→ MkdirAll → WriteCSV。回傳「實際寫入的路徑」,caller 不得自行重組。
 //
-// 路徑不做 URL-decode:`%`、`+` 皆為字面檔名字元([[File-based write]])。
+// 路徑不做 URL-decode:`%`、`+` 皆為字面檔名字元([[Format-aware write]])。
 func (h *CSVHandler) writeFileOutput(req WriteRequest, data [][]string) (string, error) {
 	path, err := h.safeJoinOutput(req.SubDir, req.Filename)
 	if err != nil {

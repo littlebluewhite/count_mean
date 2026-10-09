@@ -54,14 +54,14 @@
 
 - phase_sync 的 export 面:刪 `Load`、`ResolvePhaseRange`、`LoadAndExtractRange`、`LoadedPhaseSyncContext`、`SetParseEMGFileFnForTest`、`GenerateAnalysisReport`;新增 `AnalyzeNormalizedPhaseSync`、`NormalizedParams`、`NormalizedResult`、`Stage`(6 個常數)、`AnalysisError`。
 - `ResolvePhaseRange` 的 in-package 測試改呼叫 `resolvePhaseRange`(錯誤全文、sentinel、ADR-0043 的容差不變);`TestGenerateAnalysisReport` 移到 calculator 成為 `TestFormatStatisticsReport`。
-- phase_sync 硬編碼的 zh 錯誤字串不在此遷移(另案 i18n)。
+- phase_sync 硬編碼的 zh 錯誤字串不在此遷移(另案 i18n)（已由 [[ADR-0048]] 遷移，除 2 處 PhaseSyncValidationError）。
 - GLOSSARY 更新 **Domain analyzer**(phase_sync 兩個入口、NPS 不是第 4 個 member)。
 
 ### Amends
 
 - **[[ADR-0024]]**「為何不碰 phase_sync:已把 Load 與 compute 分離」:當時 `Load` 的介面仍吃分期點、compute 沒有 file-free seam;現在 `computePhaseSync` 才是 phase_sync 的這個 seam。
 - **[[ADR-0044]] 第 5 點**(`SetParseEMGFileFnForTest` 暫留):hook 與 in-flight cancel 測試已刪,`load` 只走 `LoadEMG`。
-- **[[ADR-0043]]** 表中第 1 列的 `ResolvePhaseRange` 現為不 export 的 `resolvePhaseRange`,越界規則不變。
+- **[[ADR-0042]] Decision 2 與 [[ADR-0043]] 表第 1 列**的 `ResolvePhaseRange` 現為不 export 的 `resolvePhaseRange`,越界規則不變。
 
 ## Related
 

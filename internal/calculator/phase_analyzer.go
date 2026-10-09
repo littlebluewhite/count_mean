@@ -285,7 +285,7 @@ func (p *PhaseAnalyzer) AnalyzeFromRawDataWithRanges(
 	}
 
 	// 前端 ranges 以「秒」為單位,但 ParseRawData 已用 Str2Number 把時間欄
-	// × 10^scalingFactor ([[Scaled domain]])。比照舊路徑 parsePhases 以 UnitScale.ToScaled 把 ranges 轉到同域,
+	// × 10^scalingFactor ([[Scaled domain]])。比照 parsePhases 經 util.Str2Number 的縮放,此處以 UnitScale.ToScaled 把 ranges 轉到同域,
 	// 否則已 scale 的 data.Time 永遠落不進原始秒區間 → 每個 phase 統計全 0。
 	// 建新 slice,不就地改 caller 傳入的 phases。
 	scaled := make([]models.TimeRange, len(phases))

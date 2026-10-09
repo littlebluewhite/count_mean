@@ -42,7 +42,7 @@
 func NewMaxMeanCalculator(scalingFactor int) *MaxMeanCalculator
 ```
 
-創建新的最大平均值計算器實例。`scalingFactor` 控制時間軸的精度倍率（與 `AppConfig.ScalingFactor` 一致，用於將秒換算為微秒比較）。
+創建新的最大平均值計算器實例。`scalingFactor` 控制時間軸的精度倍率（與 `AppConfig.ScalingFactor` 一致，用於縮放域換算：時間值經 `Str2Number` 乘 10^scalingFactor，使用者輸入的秒由 `calculator.UnitScale` 轉入同一域後再比較，見 ADR-0049）。
 
 **示例：**
 ```go
@@ -394,7 +394,7 @@ fmt.Printf("解析成功：%d 筆 row, %d 個 channel\n",
 
 ```go
 type CSVHandler struct {
-    // 內部欄位：config、logger、pathValidator、largeFileHandler
+    // 內部欄位：config、pathValidator、csvValidator、filenameValidator、logger、converter
 }
 ```
 
