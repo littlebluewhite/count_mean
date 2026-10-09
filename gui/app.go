@@ -443,10 +443,8 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	// NormalizeData 的 envelope)。
 	return &MaxMeanResult{
 		OutputPath: outputPath,
-		Headers:    records[0],
-		Results:    convertMaxMeanResultsToArray(results, s.config.ScalingFactor),
 		Success:    true,
-		Message:    fmt.Sprintf("最大平均值計算成功完成，結果已保存到: %s", outputPath),
+		Message:    fmt.Sprintf("最大平均值計算成功完成，結果已保存到: %s", filepath.Base(outputPath)),
 	}, nil
 }
 
@@ -499,18 +497,15 @@ func (a *App) NormalizeData(params NormalizeParams) (result *NormalizeResult, er
 	if err != nil {
 		return nil, fmt.Errorf("保存結果失敗: %w", err)
 	}
-	data := convertNormalizedDataToArray(normalizedData)
 
 	a.logger.Info("資料標準化完成", map[string]any{
 		"output_file":   outputPath,
-		"data_points":   len(data),
+		"data_points":   len(normalizedData.Data),
 		"channel_count": len(normalizedData.Headers) - 1,
 	})
 
 	return &NormalizeResult{
 		OutputPath: outputPath,
-		Headers:    normalizedData.Headers,
-		Data:       data,
 		Success:    true,
 		Message:    "資料標準化成功完成",
 	}, nil
@@ -566,37 +561,6 @@ func generatePhaseOutputName(inputFile, outputPath string) string {
 	return resolveOutputName(outputPath, baseName, SuffixPhaseAnalysis)
 }
 
-// convertPhaseResultToAnalysis converts a PhaseAnalysisResult to PhaseAnalysis.
-func convertPhaseResultToAnalysis(phaseResult *models.PhaseAnalysisResult, channelCount int) PhaseAnalysis {
-	maxValues := make([]float64, channelCount)
-	meanValues := make([]float64, channelCount)
-
-	// MaxValues/MeanValues 的 key 是 0-based channel index(key 0 = Ch1,見
-	// calculator.computePhaseStatistics)。直接以 colIdx 對應輸出槽;先前的
-	// colIdx-1 會丟掉 Ch1 並整體位移一格。
-	for colIdx, val := range phaseResult.MaxValues {
-		if colIdx >= 0 && colIdx < len(maxValues) {
-			maxValues[colIdx] = val
-		}
-	}
-
-	for colIdx, val := range phaseResult.MeanValues {
-		if colIdx >= 0 && colIdx < len(meanValues) {
-			meanValues[colIdx] = val
-		}
-	}
-
-	return PhaseAnalysis{
-		PhaseLabel: phaseResult.PhaseName,
-		StartTime:  0,
-		EndTime:    0,
-		Duration:   0,
-		Average:    meanValues,
-		MaxValues:  maxValues,
-		MinValues:  []float64{},
-	}
-}
-
 // AnalyzePhases performs phase analysis.
 //
 // 錯誤通道契約 (`(result, err)` dual channel):validate / 讀檔 / 分析 / 寫檔任一步
@@ -650,30 +614,16 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 
 	a.logger.Info("階段分析完成", nil)
 
-	// 5 轉換分析結果
-	channelCount := len(records[0]) - 1
-	results := make([]PhaseAnalysis, 0, len(analysisResult.PhaseResults))
-
-	for i, phaseResult := range analysisResult.PhaseResults {
-		if i >= len(labels) {
-			break
-		}
-
-		results = append(results, convertPhaseResultToAnalysis(&phaseResult, channelCount))
-	}
-
 	a.logger.Info("階段分析輸出", map[string]any{
 		"output_file":   outputPath,
-		"phase_count":   len(results),
-		"channel_count": channelCount,
+		"phase_count":   len(analysisResult.PhaseResults),
+		"channel_count": len(records[0]) - 1,
 	})
 
 	return &PhaseResult{
 		OutputPath: outputPath,
-		Headers:    records[0],
-		Results:    results,
 		Success:    true,
-		Message:    fmt.Sprintf("階段分析成功完成，結果已保存到: %s", outputPath),
+		Message:    fmt.Sprintf("階段分析成功完成，結果已保存到: %s", filepath.Base(outputPath)),
 	}, nil
 }
 
@@ -713,31 +663,6 @@ func (a *App) ShowError(title, message string) {
 	})
 }
 
-// CSVHeadersParams holds parameters for GetCSVHeaders.
-type CSVHeadersParams struct {
-	FilePath string `json:"filePath"`
-}
-
-// GetCSVHeaders returns the first row (headers) of a CSV file.
-//
-// 走 readCSVWithPathValidation 路由（內部走嚴格 allowlist、外部走 lenient
-// performBasicSecurityChecks），避免之前 raw ReadCSV bypass 驗證導致任意檔讀取。
-func (a *App) GetCSVHeaders(params CSVHeadersParams) (headers []string, err error) {
-	defer recoverHandlerPanic("GetCSVHeaders", a.logger, &err)
-
-	s := a.state.Load()
-	records, err := a.readCSVWithPathValidation(s, params.FilePath, s.config.InputDir)
-	if err != nil {
-		return nil, fmt.Errorf("讀取 CSV 標題失敗: %w", err)
-	}
-	// 確保有標題行
-	if len(records) == 0 {
-		return nil, ErrNoCSVHeaders
-	}
-
-	return records[0], nil
-}
-
 // Parameter structures
 
 // MaxMeanParams holds parameters for maximum mean calculation.
@@ -751,11 +676,9 @@ type MaxMeanParams struct {
 
 // MaxMeanResult holds the result of maximum mean calculation.
 type MaxMeanResult struct {
-	OutputPath string      `json:"outputPath"`
-	Headers    []string    `json:"headers"`
-	Results    [][]float64 `json:"results"`
-	Success    bool        `json:"success"`
-	Message    string      `json:"message"`
+	OutputPath string `json:"outputPath"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message"`
 }
 
 // NormalizeParams holds parameters for data normalization.
@@ -767,11 +690,9 @@ type NormalizeParams struct {
 
 // NormalizeResult holds the result of data normalization.
 type NormalizeResult struct {
-	OutputPath string      `json:"outputPath"`
-	Headers    []string    `json:"headers"`
-	Data       [][]float64 `json:"data"`
-	Success    bool        `json:"success"`
-	Message    string      `json:"message"`
+	OutputPath string `json:"outputPath"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message"`
 }
 
 // ChartResult holds the result of chart generation.
@@ -804,22 +725,9 @@ type PhaseParams struct {
 
 // PhaseResult holds the result of phase analysis.
 type PhaseResult struct {
-	OutputPath string          `json:"outputPath"`
-	Headers    []string        `json:"headers"`
-	Results    []PhaseAnalysis `json:"results"`
-	Success    bool            `json:"success"`
-	Message    string          `json:"message"`
-}
-
-// PhaseAnalysis holds individual phase analysis data.
-type PhaseAnalysis struct {
-	PhaseLabel string    `json:"phaseLabel"`
-	StartTime  float64   `json:"startTime"`
-	EndTime    float64   `json:"endTime"`
-	Duration   float64   `json:"duration"`
-	Average    []float64 `json:"average"`
-	MaxValues  []float64 `json:"maxValues"`
-	MinValues  []float64 `json:"minValues"`
+	OutputPath string `json:"outputPath"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message"`
 }
 
 // PhaseSyncParams 分期同步分析參數.

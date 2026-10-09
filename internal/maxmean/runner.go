@@ -15,11 +15,9 @@ type BatchParams struct {
 	EndTime    float64
 }
 
-// BatchResult 是 compute 端累積結果(domain 型);GUI 負責 presentation
-// (convertMaxMeanResultsToArray / 中文 Message / OutputPath)。
+// BatchResult 是 compute 端累積的成敗計數;GUI 負責 presentation
+// (中文 Message / OutputPath)。各檔結果已由 ResultWriter 寫出,不再累積。
 type BatchResult struct {
-	Headers      []string               // 第一個成功檔的 headers
-	Results      []models.MaxMeanResult // 各成功檔結果串接(順序保留)
 	SuccessCount int
 	FailCount    int
 }
@@ -45,8 +43,6 @@ func RunBatch(
 		return nil, ErrNoCSVFilesInFolder
 	}
 
-	var allHeaders []string
-	allResults := make([]models.MaxMeanResult, 0, len(files)*10)
 	successCount, failCount := 0, 0
 
 	for _, f := range files {
@@ -82,11 +78,6 @@ func RunBatch(
 			continue
 		}
 
-		if len(allHeaders) == 0 {
-			allHeaders = records[0]
-		}
-
-		allResults = append(allResults, results...)
 		successCount++
 
 		logger.Info("檔案處理成功", map[string]any{
@@ -96,8 +87,6 @@ func RunBatch(
 	}
 
 	return &BatchResult{
-		Headers:      allHeaders,
-		Results:      allResults,
 		SuccessCount: successCount,
 		FailCount:    failCount,
 	}, nil

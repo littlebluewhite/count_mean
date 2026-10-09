@@ -86,7 +86,7 @@ func newRPCRedactTestApp(t *testing.T, outputDir, configPath string) *App {
 //     frontend main.js 原樣顯示)
 //  2. errors.Is(err, 原 sentinel) 仍成立(redact 只改文字,不斷 chain)
 //
-// 名單:SaveConfig、CalculateMaxMean、NormalizeData、AnalyzePhases、GetCSVHeaders、
+// 名單:SaveConfig、CalculateMaxMean、NormalizeData、AnalyzePhases、
 // LoadPhaseManifest、AnalyzePhaseSync(validate gate)、DownloadCCIChart、
 // DownloadChartComposerImage。其餘回 error 的 bound method 不列:AnalyzeCCI /
 // AnalyzeMuscleRatio / AnalyzeNormalizedPhaseSync / LoadChartComposerSubjects /
@@ -147,16 +147,6 @@ func TestRPCErrChannel_NoAbsolutePath(t *testing.T) {
 					InputFile: filepath.Join(planted, "missing.csv"),
 					Phases:    []PhaseSpec{{Name: "P1", StartTime: "0", EndTime: "1"}},
 				})
-
-				return err
-			},
-		},
-		{
-			name:     "GetCSVHeaders",
-			sentinel: fs.ErrNotExist,
-			call: func(t *testing.T, planted string) error {
-				app := newRPCRedactTestApp(t, t.TempDir(), "")
-				_, err := app.GetCSVHeaders(CSVHeadersParams{FilePath: filepath.Join(planted, "missing.csv")})
 
 				return err
 			},

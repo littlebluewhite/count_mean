@@ -112,10 +112,6 @@ func TestRunBatch_PartialSuccess(t *testing.T) {
 
 	assert.Equal(t, 2, res.SuccessCount, "SuccessCount should be 2")
 	assert.Equal(t, 3, res.FailCount, "FailCount should be 3 (read+calc+write failures)")
-
-	// Only results from the 2 successful files are accumulated;
-	// each goodRecords fixture has 1 channel → 1 MaxMeanResult per file.
-	assert.Len(t, res.Results, 2, "Results should have entries from the 2 successful files only")
 }
 
 // TestRunBatch_NameAndRangeMapping asserts that Write receives name==BatchFile.Name,
@@ -145,17 +141,15 @@ func TestRunBatch_NameAndRangeMapping(t *testing.T) {
 	assert.Equal(t, wantEnd, call.endRange, "endRange must equal ResolveTimeRange output")
 }
 
-// TestRunBatch_OrderingAndHeaders asserts that Results is the discovery-order
-// concatenation of successful files, and Headers comes from the first SUCCESSFUL
-// file (a leading failed file must NOT set Headers).
-func TestRunBatch_OrderingAndHeaders(t *testing.T) {
+// TestRunBatch_WriteOrder asserts that Write is called once per successful file,
+// in discovery order, with each file's own headers (a leading failed file is skipped).
+func TestRunBatch_WriteOrder(t *testing.T) {
 	calc := newCalc()
 	spy := &spyWriter{}
 
 	headers1 := []string{"Time", "FirstCh"}
 	headers2 := []string{"Time", "SecondCh"}
 
-	// Build records using specific header rows.
 	data1 := goodRecords(1.0)
 	data1[0] = headers1
 	data2 := goodRecords(10.0)
@@ -170,33 +164,14 @@ func TestRunBatch_OrderingAndHeaders(t *testing.T) {
 	res, err := RunBatch(context.Background(), calc, source, spy, BatchParams{WindowSize: 2})
 	require.NoError(t, err)
 
-	// Headers must come from the first SUCCESSFUL file, not the earlier failed one.
-	assert.Equal(t, headers1, res.Headers, "Headers should be from first successful file")
-
-	// Both successful files contributed 1 channel each.
-	require.Len(t, res.Results, 2)
 	assert.Equal(t, 2, res.SuccessCount)
 	assert.Equal(t, 1, res.FailCount)
 
-	// Write calls must be in discovery order.
 	require.Len(t, spy.calls, 2)
 	assert.Equal(t, "first-success", spy.calls[0].name)
+	assert.Equal(t, headers1, spy.calls[0].headers)
 	assert.Equal(t, "second-success", spy.calls[1].name)
-
-	// Results must be the discovery-order CONCATENATION of each successful file's
-	// own per-file results — content AND order, not merely the right length. Oracle:
-	// the per-file results the spy writer received (RunBatch hands the same slice to
-	// Write and then appends it), so a mutation that reordered, dropped, or duplicated
-	// the accumulation would break this equality. The two files span disjoint time
-	// domains (1–4 vs 10–13) so their results genuinely differ — the order assertion bites.
-	require.NotEqual(t, spy.calls[0].results, spy.calls[1].results,
-		"fixture sanity: the two files' results must differ so ordering is observable")
-	var wantResults []models.MaxMeanResult
-	for _, c := range spy.calls {
-		wantResults = append(wantResults, c.results...)
-	}
-	assert.Equal(t, wantResults, res.Results,
-		"Results must equal the in-order concat of the per-file results handed to the writer")
+	assert.Equal(t, headers2, spy.calls[1].headers)
 }
 
 // TestRunBatch_EmptySource asserts that an empty file list returns ErrNoCSVFilesInFolder.

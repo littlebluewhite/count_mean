@@ -76,26 +76,6 @@ func buildOutputFilename(baseName, suffix string) string {
 	return fmt.Sprintf("%s%s.csv", baseName, suffix)
 }
 
-// convertMaxMeanResultsToArray converts MaxMeanResult slice to [][]float64 format.
-//
-// MaxMean/StartTime/EndTime 是計算域的縮放後值,輸出前以 scalingFactor 反縮放,
-// 與 CSV 輸出路徑 (csvConverter.scaleValue) 的單位對齊 — 否則此陣列與寫出的 CSV
-// 單位分歧 (放大 10^SF 倍)。
-func convertMaxMeanResultsToArray(results []models.MaxMeanResult, scalingFactor int) [][]float64 {
-	resultData := make([][]float64, 0, len(results))
-
-	for _, result := range results {
-		row := []float64{
-			io.ReverseScale(result.MaxMean, scalingFactor),
-			io.ReverseScale(result.StartTime, scalingFactor),
-			io.ReverseScale(result.EndTime, scalingFactor),
-		}
-		resultData = append(resultData, row)
-	}
-
-	return resultData
-}
-
 // calculateWithTimeRange performs MaxMean calculation with optional time range.
 //
 // 接 *appState snapshot 而非自行 a.state.Load(),保證與 entry method 看到的
@@ -140,18 +120,4 @@ func resolveOutputName(outputPath, baseName, suffix string) string {
 	}
 
 	return buildOutputFilename(baseName, suffix)
-}
-
-// convertNormalizedDataToArray converts EMGDataset to [][]float64 format.
-func convertNormalizedDataToArray(data *models.EMGDataset) [][]float64 {
-	result := make([][]float64, 0, len(data.Data))
-
-	for _, row := range data.Data {
-		floatRow := make([]float64, 0, 1+len(row.Channels))
-		floatRow = append(floatRow, row.Time)
-		floatRow = append(floatRow, row.Channels...)
-		result = append(result, floatRow)
-	}
-
-	return result
 }

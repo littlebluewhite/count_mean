@@ -37,18 +37,23 @@ func TestAnalyzePhases_HonorsFrontendPhasesAndNames(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.Success, "Message: %s", result.Message)
-	require.Len(t, result.Results, 2, "應產出 2 個 phase 結果")
-	assert.Equal(t, "站立期", result.Results[0].PhaseLabel,
-		"phase 名稱必須來自前端傳入,不耦合 config.PhaseLabels")
-	assert.Equal(t, "擺動期", result.Results[1].PhaseLabel)
 	assert.NotEmpty(t, result.OutputPath)
+	assert.NotContains(t, result.Message, filepath.Dir(result.OutputPath), "Message 不得含輸出目錄絕對路徑")
+
+	// 結果只落在輸出 CSV:phase 名稱來自前端傳入(不耦合 config.PhaseLabels),
+	// row layout = header / 站立期 最大值 / 平均值 / 擺動期 最大值 / 平均值 / time-index。
+	rows := readCSVRowsForTest(t, result.OutputPath)
+	require.GreaterOrEqual(t, len(rows), 5)
+	assert.Equal(t, "站立期 最大值", rows[1][0])
+	assert.Equal(t, "站立期 平均值", rows[2][0])
+	assert.Equal(t, "擺動期 最大值", rows[3][0])
+	assert.Equal(t, "擺動期 平均值", rows[4][0])
 
 	// 前端 ranges 是「秒」,但 parsed-data 的時間欄被 Str2Number scale 過(×10^ScalingFactor)。
 	// ranges 必須 scale 到同域,否則沒有任何樣本落入 phase → 統計全為 0(panel 看似成功卻空)。
-	assert.NotZero(t, result.Results[0].MaxValues[0],
+	assert.NotZero(t, parseCSVFloat(t, rows[1][1]),
 		"phase 區間內應有樣本 → 統計非零;ranges 未 scale 到縮放時間域會導致全 0")
-	assert.NotZero(t, result.Results[0].Average[0],
-		"phase 區間內 mean 應非零")
+	assert.NotZero(t, parseCSVFloat(t, rows[2][1]), "phase 區間內 mean 應非零")
 }
 
 // TestValidatePhaseParams_RejectsBadInput 釘住新 contract 的驗證邊界。邊界以原始字串

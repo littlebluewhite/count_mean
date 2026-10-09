@@ -12,7 +12,6 @@ import {
     CalculateMaxMean,
     NormalizeData,
     AnalyzePhases,
-    GetCSVHeaders,
     GetAvailablePhases,
     DownloadCCIChart,
     GetVersion,
@@ -732,6 +731,12 @@ class EMGAnalysisApp {
                 isBatch: mode === 'batch'
             });
 
+            if (!result.success) {
+                this.updateStatus(t('status.calculation_failed'));
+                await ShowError(t('dialog.error'), result.message);
+                return;
+            }
+
             this.updateStatus(t('status.calculation_done'));
             await ShowMessage(t('dialog.success'), t('success.msg.calculation_done', result.outputPath));
         } catch (err) {
@@ -757,6 +762,12 @@ class EMGAnalysisApp {
                 referenceFile: referenceFile,
                 outputPath: outputName
             });
+
+            if (!result.success) {
+                this.updateStatus(t('status.normalization_failed'));
+                await ShowError(t('dialog.error'), result.message);
+                return;
+            }
 
             this.updateStatus(t('status.normalization_done'));
             await ShowMessage(t('dialog.success'), t('success.msg.normalization_done', result.outputPath));
@@ -803,6 +814,12 @@ class EMGAnalysisApp {
                 inputFile: inputFile,
                 phases: phases
             });
+
+            if (!result.success) {
+                this.updateStatus(t('status.phase_analysis_failed'));
+                await ShowError(t('dialog.error'), result.message);
+                return;
+            }
 
             this.updateStatus(t('status.phase_analysis_done'));
             await ShowMessage(t('dialog.success'), t('success.msg.phase_analysis_done', result.outputPath));
