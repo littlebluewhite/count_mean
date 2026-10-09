@@ -9,7 +9,6 @@ import (
 	"unicode"
 
 	"count_mean/internal/errors"
-	"count_mean/internal/validation/patterns"
 )
 
 // windowsDriveLetterPrefix 識別 Windows DOS-style drive-letter 前綴 (例 `C:foo.csv`)。
@@ -28,16 +27,31 @@ import (
 //nolint:gochecknoglobals // 編譯期正規表達式,並發安全
 var windowsDriveLetterPrefix = regexp.MustCompile(`^[A-Za-z]:`)
 
+// illegalFilenameChars 是 Windows 檔案系統不允許的檔名字元（`/` `\` 與控制字元
+// 由前面的檢查另行處理）。
+const illegalFilenameChars = `<>:"|?*`
+
+// isReservedName 回報 name 是否為 Windows 保留裝置名（CON/PRN/AUX/NUL/COM1-9/LPT1-9，
+// 不分大小寫）。Validate 與 Sanitize 共用，保留字集合只有這一份（ADR-0015）。
+func isReservedName(name string) bool {
+	switch strings.ToUpper(name) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+
+	return false
+}
+
 // Validator provides filename validation functionality.
 type Validator struct {
-	detector          *patterns.InjectionDetectorImpl
 	allowedExtensions []string
 }
 
 // NewValidator creates a new filename validator with default extensions.
 func NewValidator() *Validator {
 	return &Validator{
-		detector:          patterns.NewInjectionDetector(),
 		allowedExtensions: []string{".csv"},
 	}
 }
@@ -53,7 +67,7 @@ func NewValidator() *Validator {
 //   - Path separators `/` `\` （base filename 不可含）
 //   - Unicode format chars (\p{Cf}) / surrogate (\p{Cs})：阻擋 RTL override
 //     (U+202E) 顯示欺騙、ZWSP smuggling。
-//   - Dangerous chars from registry pattern (Windows reserved chars 等)
+//   - 檔案系統非法字元 `<>:"|?*`（注入防禦不在此層，見 ADR-0041）
 //   - Windows reserved names (CON / PRN / COMx / LPTx)
 //   - 長度上限 255
 //   - 限定副檔名白名單
@@ -96,10 +110,10 @@ func (v *Validator) ValidateFilename(filename string) error {
 		return err
 	}
 
-	// Check for dangerous characters
-	if detected, char := v.detector.DetectDangerousChars(filename); detected {
+	// 只擋檔案系統非法字元；`'` `&` `--` `sp_` 等是常見 EMG 命名，放行。
+	if i := strings.IndexAny(filename, illegalFilenameChars); i >= 0 {
 		return errors.NewValidationError("filename", filename,
-			fmt.Sprintf("檔案名稱包含非法字符: %s", char))
+			fmt.Sprintf("檔案名稱包含非法字符: %c", filename[i]))
 	}
 
 	// Check for reserved names (Windows).
@@ -121,7 +135,7 @@ func (v *Validator) ValidateFilename(filename string) error {
 		}
 
 		seg := strings.ToUpper(segment)
-		if v.detector.IsReservedName(seg) {
+		if isReservedName(seg) {
 			return errors.NewValidationError("filename", filename,
 				fmt.Sprintf("檔案名稱不能使用保留字: %s", seg))
 		}

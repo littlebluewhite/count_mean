@@ -4,8 +4,6 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"count_mean/internal/validation/patterns"
 )
 
 // Sanitize 把可能造成路徑穿越或檔名衝突的字元替換為底線。
@@ -78,7 +76,7 @@ func Sanitize(name string) string {
 	dotPrefixLen := len(cleaned) - len(strings.TrimLeft(cleaned, "."))
 	afterDots := cleaned[dotPrefixLen:]
 	stemAfterDots := strings.SplitN(afterDots, ".", 2)[0]
-	if patterns.IsReservedName(stemAfterDots) {
+	if isReservedName(stemAfterDots) {
 		// 在 stem 末尾插入 _safe,保留原本副檔名 (含多副檔名) 與 leading dot:
 		// "CON.csv"    → "CON_safe.csv"
 		// "CON.tar.gz" → "CON_safe.tar.gz"

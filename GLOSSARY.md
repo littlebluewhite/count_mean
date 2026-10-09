@@ -61,6 +61,10 @@ Subject-based write 把輸出落檔的唯一步驟 `placeSubjectOutput`：`Subje
 與 File-based write 的單一寫門 `writeFileOutput`（非 atomic、檔名由 caller 傳入）是兩條不同的路。
 _Avoid_: phase-sync atomic write, output dir validation.
 
+**Read sanity / write escape**
+驗證詞彙依 context 分開：讀端（`ValidateCSVData`、`ReadCSVRecords`、manifest parser）只做 sanity —— 結構、cell ≤32KB（`CheckCells`），user-picked pipeline 另加 UTF-8；不判斷內容像不像攻擊。注入防禦只在寫端，由 `csvutil` 逸出 formula starter。filename 驗證只擋檔案系統非法（`<>:"|?*`、控制字元、分隔符、磁碟代號、保留裝置名）。見 [[ADR-0041]]。
+_Avoid_: injection detection on read, dangerous-pattern registry.
+
 **WriteRequest**
 所有 format-aware write 共用的請求外殼，欄位有 Filename（檔名）、SubDir（可選的 OutputDir 子目錄，空字串 = 寫到 OutputDir 根）、Headers、Data（generic payload）。
 _Avoid_: write options, write spec, csv request.

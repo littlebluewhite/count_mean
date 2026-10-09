@@ -178,6 +178,41 @@ func TestValidator_RejectsWindowsDriveLetterPrefix(t *testing.T) {
 	}
 }
 
+// 常見 EMG 命名含 `sp_`、`'`、`&`、`--`，不是檔案系統非法字元，必須放行(ADR-0041)。
+func TestValidateFilename_AcceptsCommonEMGNames(t *testing.T) {
+	v := NewValidator()
+	for _, in := range []string{
+		"resp_01.csv",
+		"grasp_EMG.csv",
+		"O'Neil.csv",
+		"trial--1.csv",
+		"R&D.csv",
+	} {
+		t.Run(in, func(t *testing.T) {
+			if err := v.ValidateFilename(in); err != nil {
+				t.Errorf("expected nil err for %q, got %v", in, err)
+			}
+		})
+	}
+}
+
+// 仍須拒絕的檔案系統非法字元 / 路徑分隔符 / 磁碟代號 / 保留名稱 / 副檔名。
+func TestValidateFilename_StillRejected(t *testing.T) {
+	v := NewValidator()
+	for _, in := range []string{
+		"a<b.csv", "a>b.csv", "a:b.csv", `a"b.csv`, "a|b.csv", "a?b.csv", "a*b.csv",
+		"a\x00b.csv", "a\x07b.csv", "a/b.csv", `a\b.csv`,
+		"C:foo.csv", "CON.csv", "foo.NUL.csv", "com1.csv",
+		"a.exe", "a.txt",
+	} {
+		t.Run(in, func(t *testing.T) {
+			if err := v.ValidateFilename(in); err == nil {
+				t.Errorf("expected error for %q, got nil", in)
+			}
+		})
+	}
+}
+
 func TestValidator_RejectsReservedNames(t *testing.T) {
 	v := NewValidator()
 	for _, in := range []string{"CON.csv", "PRN.csv", "COM1.csv", "LPT9.csv"} {
