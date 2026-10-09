@@ -5,11 +5,11 @@ EMG 肌電訊號分析工具的領域概念字典。架構詞彙（module / inte
 ## Language
 
 **EMGDataset**
-一筆完整的肌電訊號量測，包含 headers（通道名稱）、time-series rows、與 OriginalTimePrecision。[[Max-mean]]、Phase analysis 與 Normalize 等 calculator 路徑先把輸入解析為 EMGDataset；以 [[Manifest]] 為入口的 [[Domain analyzer]] 與 NPS（NormalizedPhaseSync）直接使用 [[PhaseSyncEMGData]]，不經 EMGDataset；[[Chart Composer]] 同樣先載入 PhaseSyncEMGData，但在 `gui` 以 `phaseSyncEMGToDataset` 轉成 EMGDataset 供 chart 渲染（後續 wave 移除此轉換）。
+一筆完整的肌電訊號量測，包含 headers（通道名稱）、time-series rows、與 OriginalTimePrecision。[[Max-mean]]、Phase analysis 與 Normalize 等 calculator 路徑先把輸入解析為 EMGDataset；以 [[Manifest]] 為入口的 [[Domain analyzer]] 與 NPS（NormalizedPhaseSync）直接使用 [[PhaseSyncEMGData]]，不經 EMGDataset；[[Chart Composer]] 也是（`chart.ComposerInput.EMG` 直接吃 PhaseSyncEMGData，[[ADR-0046]]）。
 _Avoid_: data file, signal data, EMG records.
 
 **PhaseSyncEMGData**
-[[Domain analyzer]]（CCI / MuscleRatio / PhaseSync）、NormalizedPhaseSync 與 [[Chart Composer]] 使用的 EMG 資料形狀（`models.PhaseSyncEMGData`）：以**秒**為時間域、**columnar** 排列 —— 一條 `Time []float64` 加 `Channels map[通道名]→[]float64` 與 `Headers` 通道順序。與逐 row 記錄的 [[EMGDataset]] 是不同結構（兩者之間只有 Composer 的 `phaseSyncEMGToDataset` 明確橋接，不可互換）：切片 [[Phase]] 區間時直接以秒定位，不經 row 迭代。
+[[Domain analyzer]]（CCI / MuscleRatio / PhaseSync）、NormalizedPhaseSync 與 [[Chart Composer]] 使用的 EMG 資料形狀（`models.PhaseSyncEMGData`）：以**秒**為時間域、**columnar** 排列 —— 一條 `Time []float64` 加 `Channels map[通道名]→[]float64` 與 `Headers` 通道順序。與逐 row 記錄的 [[EMGDataset]] 是不同結構（兩者之間沒有橋接，不可互換）：切片 [[Phase]] 區間時直接以秒定位，不經 row 迭代。
 _Avoid_: 把它當成 EMGDataset 的別名.
 
 **Channel**
@@ -108,6 +108,7 @@ _Avoid_: AnalysisPanel(Chart Composer 不是分析,且易與 backend 分析 hand
 
 **Chart Composer**
 Visualization-only feature：讀 [[Manifest]] + 數據資料夾後，把單一 subject 的 EMG / motion / muscle_ratio output1 三類資料同框渲染成三張帶 [[Phase]] 虛線與時期百分比軸的圖。**不計算、不寫 CSV、不產生新的 result struct** —— 與分析 handler 的形狀差異就在這裡：它是 multi-source viewer，不是 analyzer。Phase line / 百分比軸的 UX 機制沿用既有 CCI chart（go-echarts + Wails postMessage），但資料來源不同。
+資料組裝由 `internal/composer` 持有：`composer.Load(manifestPath, dataFolder, subject)` 找 Subject 的 row，經 [[Subject source]] 載入 EMG（columnar [[PhaseSyncEMGData]] 原樣交給 chart、渲染全部通道）、motion-index 換到 EMG 時間軸、以 `io.ReadMuscleRatioOutputAll`（與 Output-1 writer 同在 `internal/io`）讀 muscle_ratio output1（`MuscleRatioFile` 非空才載）、[[Phase timeline]] 轉成 phase 名 → EMG 秒數，組成 `chart.ComposerInput`。載入失敗是帶 Stage 的 `*composer.LoadError`（Subject 不在 manifest 則是 `ErrSubjectNotFound` 輸入錯誤）；gui `GenerateChartComposer` 只是 adapter：驗證 → `composer.Load` → `chart.RenderComposer` → 依 Stage 選訊息前綴的 envelope。見 [[ADR-0046]]。
 在 UI(panel 標題)以「資料做圖」呈現 — 與 Chart Composer **同義**;canonical code/domain 術語仍為 Chart Composer(比照 [[Subject]] ↔ 分析主題)。「資料做圖」原為舊單檔流程口語名,Composer panel 沿用為標題,故由 _Avoid_ 升為 UI 同義詞。
 _Avoid_: data plotting, chart panel, multi-chart viewer.
 
