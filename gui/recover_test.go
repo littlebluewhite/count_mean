@@ -40,6 +40,33 @@ func TestRecoverHandlerPanic_NoPanic_LeavesErrUnchanged(t *testing.T) {
 	}
 }
 
+// 無 panic 但 err 帶路徑時:文字 redact(webview 看到的是 err.Error()),
+// errors.Is / errors.As 仍走訪原 chain,原 *fs.PathError 節點保留原路徑供 Go 端判斷。
+func TestRecoverHandlerPanic_NoPanic_RedactsPathKeepsChain(t *testing.T) {
+	const patientPath = "/Users/alice/patient/case_2026_05_18/emg_raw.csv"
+
+	err := fmt.Errorf("讀取失敗: %w",
+		&fs.PathError{Op: "open", Path: patientPath, Err: fs.ErrNotExist})
+	func() {
+		defer recoverHandlerPanic("TestHandler", nil, &err)
+	}()
+
+	if got, want := err.Error(), "讀取失敗: open <redacted-path>/emg_raw.csv: file does not exist"; got != want {
+		t.Errorf("err 文字應 redact 目錄段\n got: %q\nwant: %q", got, want)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("errors.Is(err, fs.ErrNotExist) 應仍成立,got %v", err)
+	}
+
+	var pathErr *fs.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("errors.As(*fs.PathError) 應仍成立,got %v", err)
+	}
+	if pathErr.Path != patientPath {
+		t.Errorf("chain 內原 PathError 應保留原路徑,got %q", pathErr.Path)
+	}
+}
+
 // 當 caller 已在 panic 前塞 non-nil err 時,panic 必須*無條件覆寫*為
 // ErrInternalPanic wrap — panic 屬於不可預期內部錯誤,優先級高於 caller 預期 err,
 // 使用者看到 ErrInternalPanic 比看到 boundary validation err 更重要(前者代表
@@ -508,8 +535,8 @@ func TestRedactPathsInStack_CoversExtendedPlatformRoots(t *testing.T) {
 }
 
 // 當 caller 直接 panic 一個含 absolute path 的 fs.PathError 時,recoverHandlerPanic
-// 把 recovered value 文字化後塞進 logger.Error 前必須先過 redactPathsInStack —
-// logger.sanitizeMessage 只攔 password/token/secret keyword,對純路徑無感。
+// 把 recovered value 文字化後塞進 logger.Error 前必須先過 redactPathsInStack
+// (logger.sanitizeMessage 雖也串接 redact.Paths,recover 路徑不依賴它)。
 func TestLogPanic_PanicWithPathError_RedactsRecovered(t *testing.T) {
 	var buf bytes.Buffer
 	testLogger := logging.NewLogger(logging.LevelInfo, &buf, false)

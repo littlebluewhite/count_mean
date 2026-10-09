@@ -51,6 +51,45 @@ func (e *panicErrWithChain) Unwrap() []error {
 	return []error{e.wrap, e.original}
 }
 
+// webviewErr 是 err 通道離開 Go、送進 webview 前的 redact 包裝。Wails dispatcher
+// 以 err.Error() 序列化成 rejected promise,frontend 原樣顯示;caller err 常帶
+// 病患資料路徑(`stat /Users/<name>/patient/.../emg.csv: no such file`)。
+//
+// 仿 panicErrWithChain 拆開兩條契約:
+//   - Error() string:只回 redact.Paths 後的文字(PII contract)
+//   - Unwrap() error:回原 error,errors.Is/As 仍可走訪完整 chain(含 *fs.PathError
+//     等帶原路徑的節點 — 只供 Go 端判斷,不會被序列化進 webview)
+type webviewErr struct {
+	msg      string // redact 後的文字,Error() 用此
+	original error  // 原 err,只供 errors.Is/As 走訪
+}
+
+// Error 只回 redact 後的文字 — 不含 absolute path(PII contract)。
+func (e *webviewErr) Error() string {
+	return e.msg
+}
+
+// Unwrap 回原 err,讓 errors.Is/As 走訪原 chain。
+func (e *webviewErr) Unwrap() error {
+	return e.original
+}
+
+// redactForWebview 把 err 文字過 redact.Paths;文字沒變(不含路徑或 nil)就原樣
+// 回傳,保留 caller 的 error identity(err == sentinel 比較不受影響)。
+func redactForWebview(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	text := err.Error()
+	msg := redact.Paths(text)
+	if msg == text {
+		return err
+	}
+
+	return &webviewErr{msg: msg, original: err}
+}
+
 // ErrAppNotReady 是 Wails Startup 設 a.ctx 之前 frontend 已啟動並呼叫 RPC 時
 // 對外回傳的 sentinel。caller 可用 errors.Is 判斷並引導使用者稍候再試。
 var ErrAppNotReady = errors.New("App 尚未完成啟動，請稍候再試")
@@ -69,6 +108,14 @@ var ErrAppNotReady = errors.New("App 尚未完成啟動，請稍候再試")
 //
 // 對於不回 error 的 method(如 ShowMessage / GetVersion),改用
 // recoverHandlerPanicVoid(只 log 不 propagate)。
+//
+// # 無 panic 時:err 通道出口 redact
+//
+// 沒有 panic 時把 *errPtr 換成 redactForWebview(*errPtr):err 文字的 absolute
+// path 換成 `<redacted-path>/`,errors.Is/As chain 不變(見 webviewErr)。
+// app_panic_ast_test.go 強制每個回 error 的 bound method 首句都是這個 defer,
+// 所以這裡是所有 Go err 進 webview 前的唯一出口,handler 不必各自 redact err
+// (result 的 Message 字串不經此處)。
 //
 // # errPtr 設計意圖
 //
@@ -102,6 +149,10 @@ var ErrAppNotReady = errors.New("App 尚未完成啟動，請稍候再試")
 func recoverHandlerPanic(handlerName string, logger *logging.Logger, errPtr *error) {
 	r := recover()
 	if r == nil {
+		if errPtr != nil {
+			*errPtr = redactForWebview(*errPtr)
+		}
+
 		return
 	}
 
@@ -199,9 +250,9 @@ func newPanicUUID() string {
 //   - Debug level:完整 redacted stack。default production 不輸出,只在 logger
 //     level=Debug 時才寫進 log file。
 //
-// 為何不直接把 stack 寫進 Error context:logger.sanitizeMessage 只 match
-// `password / token / secret` keyword,對「純路徑」(/Users/foo/pCloud/...) 不
-// 會 redact。主動先 redact 再餵給 logger,確保 default level 下 log file 乾淨。
+// 為何仍主動先 redact 再餵給 logger:logger.sanitizeMessage 已對 message / err /
+// context 串接 redact.Paths(internal/logging/logger.go),這裡的 redact 屬
+// defense-in-depth,讓 recover 路徑的 PII 保證不依賴 logger 內部實作。
 //
 // `redactedOriginalErr` 由 caller(recoverHandlerPanic)把 caller named return
 // err 經 redactPathsInStack 過濾後傳入;空字串代表 caller 沒 ok-path err,此時
@@ -226,11 +277,11 @@ func logPanic(
 		errCtx["original_err"] = redactedOriginalErr
 	}
 
-	// recovered value 在塞進 logger.Error 前必須先 redact。caller 可能
+	// recovered value 在塞進 logger.Error 前先 redact。caller 可能
 	// `panic(fmt.Errorf("讀檔失敗: %w", &fs.PathError{Path:"/Users/alice/.../emg.csv"}))`,
-	// 那條 absolute path 經 %v 文字化後會原樣寫進 Error log;
-	// logger.sanitizeMessage 只對 password/token/secret keyword 兜底,對純路徑
-	// 無感(見上方註解)。先過 redactPathsInStack 再用 errors.New 包成 error。
+	// 那條 absolute path 經 %v 文字化後會進 Error log;logger.sanitizeMessage
+	// 雖會再過 redact.Paths 兜底,此處仍先 redact(defense-in-depth,見上方註解)。
+	// 先過 redactPathsInStack 再用 errors.New 包成 error。
 	redactedRecovered := redactPathsInStack(fmt.Sprintf("%v", recovered))
 	logger.Error(label, errors.New(redactedRecovered), errCtx) //nolint:err113 // recovered value is dynamic string after redact
 
