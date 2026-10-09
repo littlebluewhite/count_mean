@@ -23,8 +23,8 @@
 | `ValidateExternalPath` | 使用者選的外部**檔案**(GUI dialog、CSV 讀寫目標) |
 | `ValidateExternalDir`(新) | 使用者選的外部**目錄**(output / data folder / config 目錄) |
 
-1. `ValidateExternalPath` 與 `ValidateExternalDir` 共用 private `validateExternal(path string, isDir bool)`：擋同一組系統敏感位置(`/etc`、`~/.ssh`…)與 symlink 穿透。`isDir` 時在 path 後附內部 sentinel child 再驗，使目錄根本身(結尾無 slash)也命中 sensitive pattern，同時檔名專屬規則(檔名長度、Windows reserved device name)不套到目錄名。
-2. **取代 `_validation_marker` 手法**：`internal/config/config.go`(5 個目錄)與 `internal/muscle_ratio/analyzer.go` 不再自行 `filepath.Join(dir, "_validation_marker")`，改呼叫 `ValidateExternalDir`；muscle_ratio 同時改用 `DefaultValidator()`，不再每次呼叫新建 validator。(io 的 `validateMuscleRatioOutputDir` 留待後續 task。)
+1. `ValidateExternalPath` 與 `ValidateExternalDir` 共用 private `validateExternal(path string, isDir bool)`：擋同一組系統敏感位置(`/etc`、`~/.ssh`…)與 symlink 穿透。目錄有自己的檢查：`isDir` 時只跑 `checkSensitiveLocation`(敏感位置 + 路徑長度，比對前補結尾分隔符，使目錄根本身 `/etc` 也命中 `/etc/` 這類 pattern；lexical 與 symlink resolve 後各一次)，不附任何假 child；檔名專屬規則(`checkFilename`：檔名長度、Windows reserved device name)只對檔案跑。
+2. **取代 dummy-child 手法**：`internal/config/config.go`(5 個目錄)與 `internal/muscle_ratio/analyzer.go` 不再自行 `filepath.Join(dir, "_validation_marker")`，改呼叫 `ValidateExternalDir`；muscle_ratio 同時改用 `DefaultValidator()`，不再每次呼叫新建 validator。(io 的 `validateMuscleRatioOutputDir` 留待後續 task。)
 3. **GUI `dataFolder` 改走目錄檢查**：`gui/path_validation.go` 的 `validateManifestHandlerParams` 對 dataFolder 呼叫 `ValidateExternalDir`。**這是刻意的行為收緊**：原本 `dataFolder = "/etc"` 或 `~/.ssh` 因缺結尾 slash 而通過，現在被擋(紅測試 `TestValidateManifestHandlerParams_RejectsSensitiveDataFolder`)。錯誤仍由 `inputMessage` / err 通道送出，格式 `資料夾 路徑驗證失敗: …` 不變。
 4. 刪除 pass-through：`PathValidator.IsCSVFile` / `PathValidator.SanitizePath` method(caller 改用同名 package 函式 `security.IsCSVFile` / `security.SanitizePath`)與 `ValidateDirectoryPath`(= `ValidateFilePath`，`GetSafePath` 直接呼叫後者)。只測 method wrapper 的測試改為直接測 package 函式。
 

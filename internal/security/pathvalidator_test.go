@@ -67,8 +67,7 @@ func TestPathValidator_ValidateFilePath(t *testing.T) {
 	}
 }
 
-func TestPathValidator_IsCSVFile(t *testing.T) {
-
+func TestIsCSVFile(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
@@ -108,8 +107,7 @@ func TestPathValidator_IsCSVFile(t *testing.T) {
 // 釘住 SanitizePath 的 (string, error) 契約:含 `\x00` / `\n` 等控制字元或
 // silent-rewrite 攻擊 pattern(如 `report\x01..csv`,silent strip 後通過
 // element-based traversal check 卻 OS 開到別的檔)一律 reject,caller 必須處理。
-func TestPathValidator_SanitizePath(t *testing.T) {
-
+func TestSanitizePath(t *testing.T) {
 	t.Run("clean path passes through unchanged", func(t *testing.T) {
 		got, err := SanitizePath("test.csv")
 		if err != nil {
@@ -304,7 +302,7 @@ func TestPathValidator_AcceptsLegitimateDotsInFilename(t *testing.T) {
 // `reportv2.csv`,而 GetSafePath 的 element-based check 又會放它過 — validation
 // 接受、sanitization 改寫、caller 讀/寫到完全不同的檔案。統一改 element-based
 // 過濾。
-func TestPathValidator_SanitizePath_PreservesDoubleDotFilename(t *testing.T) {
+func TestSanitizePath_PreservesDoubleDotFilename(t *testing.T) {
 	t.Parallel()
 
 	preserved := []struct {
@@ -471,12 +469,10 @@ func TestPathValidator_ValidateExternalPath_RejectsSymlinkToSensitive(t *testing
 		t.Errorf("ValidateExternalPath(%q) 應回 ErrSensitiveDirectory，got %v", childPath, err)
 	}
 
-	// Case 2：典型 GUI / config 場景 — caller 用 `filepath.Join(linkPath, "_validation_marker")`
-	// 構造 dummy child 來驗 OutputDir 是否安全。即便 linkPath 還沒建立 marker，
-	// fallback 邏輯應走 parent symlink resolve 到 /private/etc，再 join "_validation_marker"
-	// 後命中 sensitive prefix。釘住 config.Validate / cci.ExportToCSV / muscle_ratio.Analyze
-	// 對此 path 仍能擋下 symlink 偽裝的 OutputDir。
-	dummyChild := filepath.Join(linkPath, "_validation_marker")
+	// Case 2：symlink 目錄下尚未存在的 child path。
+	// fallback 邏輯應走 parent symlink resolve 到 /private/etc，再 join "child_dir"
+	// 後命中 sensitive prefix。(目錄本身的驗證見 ValidateExternalDir 的測試。)
+	dummyChild := filepath.Join(linkPath, "child_dir")
 	if err := validator.ValidateExternalPath(dummyChild); err == nil {
 		t.Errorf("ValidateExternalPath(%q) 應 reject symlink-to-sensitive 的 dummy-child 驗證形式，got nil error",
 			dummyChild)
@@ -487,9 +483,8 @@ func TestPathValidator_ValidateExternalPath_RejectsSymlinkToSensitive(t *testing
 
 // TestPathValidator_ValidateExternalPath_AllowsNonExistentChildOfSafeParent 確認
 // 修法後對「未存在的 output path」仍能正常通過 — typical case 是 config
-// validation 用 `filepath.Join(OutputDir, "_validation_marker")` 構造 dummy
-// child path 來驗證 OutputDir 的 sensitive prefix。若 fallback 邏輯壞掉、把
-// 未存在的 child 視為 error，會把所有 config validation 都打掛。
+// output 寫檔目標常是尚未存在的 child path。
+// 若 fallback 邏輯壞掉、把未存在的 child 視為 error，會把所有寫檔驗證都打掛。
 func TestPathValidator_ValidateExternalPath_AllowsNonExistentChildOfSafeParent(t *testing.T) {
 	t.Parallel()
 

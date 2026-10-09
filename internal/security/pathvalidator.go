@@ -164,17 +164,13 @@ func (pv *PathValidator) ValidateExternalPath(path string) error {
 // ValidateExternalDir 驗證使用者外部選取的「目錄」(output / data folder / config 目錄),
 // 與 ValidateExternalPath 擋同一組系統敏感位置,但以目錄語意判定。
 //
-// 目錄根本身(`/etc`、`~/.ssh`)結尾沒有 slash,sensitive pattern(`/etc/`)不會命中;
-// 因此在 path 後附一個內部 sentinel child 再驗,讓目錄根與其子孫等價被擋。
-// 同時 sentinel 讓「檔名」類規則(檔名長度、Windows reserved device name)不套用到
-// 目錄本身 — 那些規則只對檔案有意義。
+// 目錄走自己的檢查:只做「敏感位置 + 路徑長度」(checkSensitiveLocation,isDir=true
+// 時比對前補結尾分隔符,讓目錄根 `/etc`、`~/.ssh` 與其子孫等價命中 `/etc/` 這類
+// pattern),lexical 與 symlink resolve 後各跑一次。「檔名」類規則(檔名長度、
+// Windows reserved device name)只對檔案有意義,不套用到目錄。
 func (pv *PathValidator) ValidateExternalDir(dir string) error {
 	return pv.validateExternal(dir, true)
 }
-
-// externalDirSentinel 是 ValidateExternalDir 附加於目錄後的內部 child 名稱,
-// 僅用於讓目錄根命中 sensitive pattern 的結尾 slash;不會出現在任何回傳值。
-const externalDirSentinel = "_validation_marker"
 
 // validateExternal 是 ValidateExternalPath / ValidateExternalDir 共用的實作。
 // isDir 為 true 時,path 以目錄語意處理(見 ValidateExternalDir)。
@@ -196,12 +192,17 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 	if err != nil {
 		return err
 	}
-	if isDir {
-		absPath = filepath.Join(absPath, externalDirSentinel)
+
+	// 檔案:位置 + 檔名規則;目錄:只有位置規則。
+	check := func(p string) error {
+		if isDir {
+			return checkSensitiveLocation(p, true)
+		}
+		return performBasicSecurityChecks(p)
 	}
 
 	// Layer 1：lexical absPath 直接擋字串本身就敏感的 case（不依賴 fs 狀態）。
-	if err := performBasicSecurityChecks(absPath); err != nil {
+	if err := check(absPath); err != nil {
 		return err
 	}
 
@@ -216,7 +217,7 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 
 	// Resolved 路徑可能與 absPath 相同（無 symlink）— 重複跑一次也 cheap，且
 	// 程式邏輯簡潔（不需特判 absPath == resolvedPath）。
-	return performBasicSecurityChecks(resolvedPath)
+	return check(resolvedPath)
 }
 
 // validatePathFormat performs the URL-decode + traversal + absolute-resolution
@@ -466,6 +467,17 @@ func (pv *PathValidator) GetSafePath(basePath, filename string) (string, error) 
 // test fixture 與 GUI 暫存區。Carve-out 比「pattern enumeration 列敏感 vendor」
 // 維護成本低、安全姿態更保守(預設擋,明示放行)。
 func performBasicSecurityChecks(absPath string) error {
+	if err := checkSensitiveLocation(absPath, false); err != nil {
+		return err
+	}
+
+	return checkFilename(absPath)
+}
+
+// checkSensitiveLocation 檢查 absPath 是否落在系統敏感位置、或超過路徑長度上限。
+// isDir 為 true 時比對前補結尾分隔符,讓目錄根本身(`/etc`)也命中以 `/` 結尾的
+// pattern(`/etc/`);`/etc-backup` 補完是 `/etc-backup/`,不會誤中。
+func checkSensitiveLocation(absPath string, isDir bool) error {
 	// 跨平台系統敏感路徑。`.ssh/` / `.aws/` / `.kube/` 用 `/` 開頭涵蓋
 	// Unix home(`~/.ssh/`)與 Windows %USERPROFILE%。Windows 端用 `\Windows\`、
 	// `\System32\` 等 leading-backslash 形式涵蓋非 C: drive(VM / Bootcamp)。
@@ -505,6 +517,9 @@ func performBasicSecurityChecks(absPath string) error {
 		return strings.ReplaceAll(filepath.ToSlash(strings.ToLower(s)), `\`, "/")
 	}
 	absPathSlash := normalizePath(absPath)
+	if isDir && !strings.HasSuffix(absPathSlash, "/") {
+		absPathSlash += "/"
+	}
 
 	// `\AppData\Local\Temp\` carve-out:Windows runner 與一般 user 的 `t.TempDir()`
 	// 都落在這個子樹下(`C:\Users\<u>\AppData\Local\Temp\Test...\001\...`),等同
@@ -538,6 +553,11 @@ func performBasicSecurityChecks(absPath string) error {
 		return fmt.Errorf("%w (%d 字符): %d", ErrPathTooLong, maxPathLength, len(absPath))
 	}
 
+	return nil
+}
+
+// checkFilename 檢查檔名專屬規則(長度、Windows reserved device name);僅適用檔案。
+func checkFilename(absPath string) error {
 	// 檢查文件名長度
 	filename := filepath.Base(absPath)
 
