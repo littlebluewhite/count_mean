@@ -37,8 +37,8 @@ func setupChartComposerTestApp(t *testing.T) *App {
 }
 
 // writeChartComposerMinimalEMG 建立最小 EMG CSV(2 sec, 2 channels)。
-// EMG header 內含 R.RA / R.ES 等;GenerateChartComposer 對空 SelectedChannels
-// 走 composer fallback 全選,會把這些 channel 都渲染進圖表。
+// EMG header 內含 R.RA / R.ES 等;chart composer 依 EMG.Headers 渲染全部通道,
+// 會把這些 channel 都渲染進圖表。
 func writeChartComposerMinimalEMG(t *testing.T, path string) {
 	t.Helper()
 
@@ -254,8 +254,8 @@ func TestLoadChartComposerSubjects_SurfacesMissingEMGFiles(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestGenerateChartComposer_V10_TwoGrid 驗 V.10(無 muscle_ratio)一鍵生成:
-// 不再傳 SelectedChannels(空 → composer fallback 全選);EMGMotionOffset 由
-// handler 內部從 row 讀取(ADR-0013)。兩個 EMG channel 應都渲染進 HTML。
+// 預設全通道,EMGMotionOffset 從 manifest row 讀取(ADR-0013)。兩個 EMG channel
+// 應都渲染進 HTML。
 func TestGenerateChartComposer_V10_TwoGrid(t *testing.T) {
 	app := setupChartComposerTestApp(t)
 	manifestPath, dataFolder := setupChartComposerV10Fixture(t)
@@ -272,11 +272,9 @@ func TestGenerateChartComposer_V10_TwoGrid(t *testing.T) {
 	assert.NotEmpty(t, result.HTML, "HTML 應包含 echarts 渲染後內容")
 	// 對齊 chart.RenderComposer 渲染後典型內容 — title "Chart Composer" subtitle 帶 subject。
 	assert.Contains(t, result.HTML, "Chart Composer")
-	// 空 SelectedChannels → composer fallback 全選,兩個 EMG channel 都應出現。
-	assert.Contains(t, result.HTML, "R.RA",
-		"空 SelectedChannels 應 fallback 全選 — R.RA 必須渲染")
-	assert.Contains(t, result.HTML, "R.ES",
-		"空 SelectedChannels 應 fallback 全選 — R.ES 必須渲染")
+	// 預設全通道,兩個 EMG channel 都應出現。
+	assert.Contains(t, result.HTML, "R.RA", "預設全通道 — R.RA 必須渲染")
+	assert.Contains(t, result.HTML, "R.ES", "預設全通道 — R.ES 必須渲染")
 }
 
 func TestGenerateChartComposer_V14_ThreeGrid(t *testing.T) {

@@ -15,19 +15,22 @@ import (
 	"count_mean/internal/models"
 )
 
-// makeEMG 建構共用 EMG dataset：headers = ["time", ch1, ch2, ...]，每筆 channels 與 headers[1:] 一致。
-func makeEMGDataset(n int, channelNames ...string) *models.EMGDataset {
-	headers := append([]string{"time"}, channelNames...)
-	data := make([]models.EMGData, n)
+// makeEMG 建構共用 columnar EMG：Headers = channelNames，每個通道與 Time 等長。
+func makeEMG(n int, channelNames ...string) *models.PhaseSyncEMGData {
+	t := make([]float64, n)
 	for i := 0; i < n; i++ {
-		channels := make([]float64, len(channelNames))
-		for c := range channelNames {
-			// 給每個 channel 不同 amplitude，避免 LTTB bucket 全平
-			channels[c] = float64(i)*0.001 + float64(c)
-		}
-		data[i] = models.EMGData{Time: float64(i) * 0.001, Channels: channels}
+		t[i] = float64(i) * 0.001
 	}
-	return &models.EMGDataset{Headers: headers, Data: data, OriginalTimePrecision: 3}
+	channels := make(map[string][]float64, len(channelNames))
+	for c, name := range channelNames {
+		vals := make([]float64, n)
+		for i := 0; i < n; i++ {
+			// 給每個 channel 不同 amplitude，避免 LTTB bucket 全平
+			vals[i] = float64(i)*0.001 + float64(c)
+		}
+		channels[name] = vals
+	}
+	return &models.PhaseSyncEMGData{Time: t, Channels: channels, Headers: channelNames}
 }
 
 func makeMotionData(n int, channelNames ...string) *MotionData {
@@ -78,11 +81,10 @@ func renderToString(t *testing.T, ctx context.Context, in ComposerInput) string 
 // 用 substring count 而非 JSON parse 對齊既有 CCI test 風格。
 func TestRenderComposer_ThreeGridLayout(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S1",
-		EMGDataset:       makeEMGDataset(100, "RA", "ES"),
-		SelectedChannels: []string{"RA", "ES"},
-		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"),
-		MotionData:       makeMotionData(50, "knee_angle"),
+		Subject:         "S1",
+		EMG:             makeEMG(100, "RA", "ES"),
+		MuscleRatioData: makeMuscleRatioData(100, "RA/ES"),
+		MotionData:      makeMotionData(50, "knee_angle"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -97,11 +99,10 @@ func TestRenderComposer_ThreeGridLayout(t *testing.T) {
 // TestRenderComposer_TwoGridLayout — MuscleRatioData == nil → 兩個 grid。
 func TestRenderComposer_TwoGridLayout(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S1",
-		EMGDataset:       makeEMGDataset(100, "RA", "ES"),
-		SelectedChannels: []string{"RA", "ES"},
-		MuscleRatioData:  nil,
-		MotionData:       makeMotionData(50, "knee_angle"),
+		Subject:         "S1",
+		EMG:             makeEMG(100, "RA", "ES"),
+		MuscleRatioData: nil,
+		MotionData:      makeMotionData(50, "knee_angle"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -119,10 +120,9 @@ func TestRenderComposer_EMGDownsampleTriggered(t *testing.T) {
 	const total = 12000
 
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(total, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(100, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(total, "RA"),
+		MotionData: makeMotionData(100, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -141,10 +141,9 @@ func TestRenderComposer_MotionNotDownsampled(t *testing.T) {
 	const motionLen = 10000
 
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(motionLen, "knee_angle"),
+		Subject:    "S",
+		EMG:        makeEMG(50, "RA"),
+		MotionData: makeMotionData(motionLen, "knee_angle"),
 	}
 	var buf bytes.Buffer
 	err := RenderComposer(context.Background(), in, &buf)
@@ -164,10 +163,9 @@ func TestRenderComposer_MotionNotDownsampled(t *testing.T) {
 // PhasePoints 各 OptFloat 設定後,composer 應把秒值轉成 markLine xAxis item。
 func TestRenderComposer_PhaseMarkLines(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(100, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 		PhaseTimesEMG: map[string]float64{
 			"P0": 0.010,
 			"S":  0.030,
@@ -200,10 +198,9 @@ func TestRenderComposer_PhaseMarkLines(t *testing.T) {
 // models.AllPhases()(含 D/O),故只要 map 內有就該渲染成 markLine(過去 whitelist 漏掉這兩個)。
 func TestRenderComposer_PhaseMarkLinesIncludesMotionIndexDO(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(100, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 		PhaseTimesEMG: map[string]float64{
 			"P0": 0.00,
 			"D":  0.25, // motion-index 換算後落於 P0 與 L 之間
@@ -234,11 +231,10 @@ func TestRenderComposer_PhaseMarkLinesIncludesMotionIndexDO(t *testing.T) {
 // 應的 markLine.name 應出現 ≥ 8 次(每條 series 一次)。
 func TestRenderComposer_MarkLineOnEveryGrid(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA", "ES"),
-		SelectedChannels: []string{"RA", "ES"},
-		MuscleRatioData:  makeMuscleRatioData(100, "IL_GMax", "RA_ES", "RF_BF", "TAIO_MF"),
-		MotionData:       makeMotionData(50, "knee", "ankle"),
+		Subject:         "S",
+		EMG:             makeEMG(100, "RA", "ES"),
+		MuscleRatioData: makeMuscleRatioData(100, "IL_GMax", "RA_ES", "RF_BF", "TAIO_MF"),
+		MotionData:      makeMotionData(50, "knee", "ankle"),
 		PhaseTimesEMG: map[string]float64{
 			"P0": 0.010,
 			"L":  0.090,
@@ -268,11 +264,10 @@ func TestRenderComposer_MarkLineOnEveryGrid(t *testing.T) {
 // 顯式 emit `"max":0.49`(三個 grid 同樣 Max 值)。
 func TestRenderComposer_BottomXAxisUnionRange(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA"), // t=[0..0.099]
-		SelectedChannels: []string{"RA"},
-		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"), // t=[0..0.099]
-		MotionData:       makeMotionData(50, "knee"),        // t=[0..0.49] — 最大
+		Subject:         "S",
+		EMG:             makeEMG(100, "RA"),                // t=[0..0.099]
+		MuscleRatioData: makeMuscleRatioData(100, "RA/ES"), // t=[0..0.099]
+		MotionData:      makeMotionData(50, "knee"),        // t=[0..0.49] — 最大
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -299,10 +294,9 @@ func TestRenderComposer_BottomXAxisUnionRange(t *testing.T) {
 // buffer。
 func TestRenderComposer_DataZoomSliderPosition(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(50, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -324,11 +318,10 @@ func TestRenderComposer_DataZoomSliderPosition(t *testing.T) {
 // (區域縮放只縮 x,與 inside/slider 一致)。
 func TestRenderComposer_ToolboxDataZoomXOnly(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MuscleRatioData:  makeMuscleRatioData(50, "RA/ES"),
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:         "S",
+		EMG:             makeEMG(50, "RA"),
+		MuscleRatioData: makeMuscleRatioData(50, "RA/ES"),
+		MotionData:      makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -345,10 +338,9 @@ func TestRenderComposer_ToolboxDataZoomXOnly(t *testing.T) {
 // 被 iframe 邊界裁切。
 func TestRenderComposer_ContainerHeightAccommodatesZoomBar(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(50, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -364,11 +356,10 @@ func TestRenderComposer_ContainerHeightAccommodatesZoomBar(t *testing.T) {
 // 修法:Right 拉大到 "120px" 以上,讓 yAxis name 完整顯示。
 func TestRenderComposer_GridRightMargin(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA"),
-		SelectedChannels: []string{"RA"},
-		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"),
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:         "S",
+		EMG:             makeEMG(100, "RA"),
+		MuscleRatioData: makeMuscleRatioData(100, "RA/ES"),
+		MotionData:      makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -421,10 +412,9 @@ func TestRenderComposer_GridGapEnough(t *testing.T) {
 // TestRenderComposer_HasComposerPhaseMarkersListener。
 func TestRenderComposer_NoComposerUpdatePhaseLinesListener(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(50, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -448,10 +438,9 @@ func TestRenderComposer_NoComposerUpdatePhaseLinesListener(t *testing.T) {
 // 解構、`__phaseMarkers` IIFE 注入,且仍走 series-level markLine patch。
 func TestRenderComposer_HasComposerPhaseMarkersListener(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(50, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -474,10 +463,9 @@ func TestRenderComposer_HasComposerPhaseMarkersListener(t *testing.T) {
 // timeout(user report)。
 func TestRenderComposer_RelaxedOriginCheck(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(50, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -502,10 +490,9 @@ func TestRenderComposer_RelaxedOriginCheck(t *testing.T) {
 // IIFE is concatenated into the Composer customJS (ADR-0003 family).
 func TestRenderComposer_ChartCommsInjected(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(50, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -528,10 +515,9 @@ func TestRenderComposer_ChartCommsInjected(t *testing.T) {
 // 防線:customJS 必須含 `body.style.margin = '0'` 等樣式 reset。
 func TestRenderComposer_BodyMarginReset(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(50, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -554,10 +540,9 @@ func TestRenderComposer_BodyMarginReset(t *testing.T) {
 //  3. customJS 區段內 `{` 與 `}` 數量相等(若 `//` 吃掉 closing braces 就會不平衡)
 func TestRenderComposer_CustomJSSyntaxValid(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(50, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 		PhaseTimesEMG: map[string]float64{
 			"P0": 0.010,
 			"L":  0.090,
@@ -607,11 +592,10 @@ func TestRenderComposer_CustomJSSyntaxValid(t *testing.T) {
 // 獨立 opts。
 func TestRenderComposer_SeriesRoutingPerGrid(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA", "ES"),
-		SelectedChannels: []string{"RA", "ES"},
-		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"),
-		MotionData:       makeMotionData(50, "knee", "ankle"),
+		Subject:         "S",
+		EMG:             makeEMG(100, "RA", "ES"),
+		MuscleRatioData: makeMuscleRatioData(100, "RA/ES"),
+		MotionData:      makeMotionData(50, "knee", "ankle"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -640,11 +624,10 @@ func TestRenderComposer_SeriesRoutingPerGrid(t *testing.T) {
 // 三個 grid 時 → 至少 3 個 axis 為 bottom、3 個為 top。
 func TestRenderComposer_SharedAxes(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA"),
-		SelectedChannels: []string{"RA"},
-		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"),
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:         "S",
+		EMG:             makeEMG(100, "RA"),
+		MuscleRatioData: makeMuscleRatioData(100, "RA/ES"),
+		MotionData:      makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -666,10 +649,9 @@ func TestRenderComposer_CtxCancelled(t *testing.T) {
 	cancel() // 預先 cancel
 
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:    "S",
+		EMG:        makeEMG(100, "RA"),
+		MotionData: makeMotionData(50, "knee"),
 	}
 
 	var buf bytes.Buffer
@@ -679,25 +661,24 @@ func TestRenderComposer_CtxCancelled(t *testing.T) {
 	assert.Empty(t, buf.String(), "cancel 路徑不該寫出半成品 HTML")
 }
 
-// TestRenderComposer_NilEMGDataset — nil EMG dataset 必須 reject。
-func TestRenderComposer_NilEMGDataset(t *testing.T) {
+// TestRenderComposer_NilEMG — nil EMG 必須 reject。
+func TestRenderComposer_NilEMG(t *testing.T) {
 	in := ComposerInput{
 		Subject:    "S",
-		EMGDataset: nil,
+		EMG:        nil,
 		MotionData: makeMotionData(10, "knee"),
 	}
 	var buf bytes.Buffer
 	err := RenderComposer(context.Background(), in, &buf)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrComposerEMGRequired)
 }
 
 // TestRenderComposer_SubjectXSSEscaped — Subject 走 SanitizeChartString。
 func TestRenderComposer_SubjectXSSEscaped(t *testing.T) {
 	in := ComposerInput{
-		Subject:          `</script><script>alert(1)</script>`,
-		EMGDataset:       makeEMGDataset(50, "RA"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(20, "knee"),
+		Subject:    `</script><script>alert(1)</script>`,
+		EMG:        makeEMG(50, "RA"),
+		MotionData: makeMotionData(20, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -705,25 +686,6 @@ func TestRenderComposer_SubjectXSSEscaped(t *testing.T) {
 		"malicious subject 不該以原樣 escape 進 HTML")
 	assert.NotContains(t, html, "</script><",
 		"任何 </script>< 序列暗示 script context 逸出")
-}
-
-// TestRenderComposer_SelectedChannelsFilter — SelectedChannels 限制顯示的 EMG channels。
-// 即 EMGDataset.Headers 有 [time, RA, ES, BB],但 SelectedChannels=[RA] → 只渲染 RA series。
-func TestRenderComposer_SelectedChannelsFilter(t *testing.T) {
-	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA", "ES", "BB"),
-		SelectedChannels: []string{"RA"},
-		MotionData:       makeMotionData(50, "knee"),
-	}
-	html := renderToString(t, context.Background(), in)
-
-	// "RA" 在 series.name 中該出現,ES / BB 在 SelectedChannels 不含 → 不應出現 series name
-	assert.Contains(t, html, `"name":"RA"`, "selected RA 必須出現")
-	// echarts series 的 name 序列化為 `"name":"<channel>"`,以此檢查未選 channel 不在 EMG series 中。
-	// 注意:motion / muscle_ratio 也可能含 "name":,所以僅 assert ES 完整 series-name 不存在
-	assert.NotContains(t, html, `"name":"ES"`, "未選 ES 不應出現於 EMG series")
-	assert.NotContains(t, html, `"name":"BB"`, "未選 BB 不應出現於 EMG series")
 }
 
 // TestRenderComposer_GridLayoutNoCSSCalc — regression for codex P1 #1.
@@ -738,10 +700,9 @@ func TestRenderComposer_SelectedChannelsFilter(t *testing.T) {
 func TestRenderComposer_GridLayoutNoCSSCalc(t *testing.T) {
 	t.Run("two-grid", func(t *testing.T) {
 		in := ComposerInput{
-			Subject:          "S",
-			EMGDataset:       makeEMGDataset(100, "RA"),
-			SelectedChannels: []string{"RA"},
-			MotionData:       makeMotionData(50, "knee"),
+			Subject:    "S",
+			EMG:        makeEMG(100, "RA"),
+			MotionData: makeMotionData(50, "knee"),
 		}
 		html := renderToString(t, context.Background(), in)
 		assert.NotContains(t, html, "calc(",
@@ -749,11 +710,10 @@ func TestRenderComposer_GridLayoutNoCSSCalc(t *testing.T) {
 	})
 	t.Run("three-grid", func(t *testing.T) {
 		in := ComposerInput{
-			Subject:          "S",
-			EMGDataset:       makeEMGDataset(100, "RA"),
-			SelectedChannels: []string{"RA"},
-			MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"),
-			MotionData:       makeMotionData(50, "knee"),
+			Subject:         "S",
+			EMG:             makeEMG(100, "RA"),
+			MuscleRatioData: makeMuscleRatioData(100, "RA/ES"),
+			MotionData:      makeMotionData(50, "knee"),
 		}
 		html := renderToString(t, context.Background(), in)
 		assert.NotContains(t, html, "calc(",
@@ -780,11 +740,10 @@ func TestRenderComposer_GridLayoutNoCSSCalc(t *testing.T) {
 //     所以這個 assert 純針對 xAxis JSON block 內的 data field。
 func TestRenderComposer_AbsoluteTimeAxis(t *testing.T) {
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA"),
-		SelectedChannels: []string{"RA"},
-		MuscleRatioData:  makeMuscleRatioData(100, "RA/ES"),
-		MotionData:       makeMotionData(50, "knee"),
+		Subject:         "S",
+		EMG:             makeEMG(100, "RA"),
+		MuscleRatioData: makeMuscleRatioData(100, "RA/ES"),
+		MotionData:      makeMotionData(50, "knee"),
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -809,14 +768,10 @@ func TestRenderComposer_AbsoluteTimeAxis(t *testing.T) {
 // motion 2 點 t=[0.5, 1.0],render 後 HTML 內 series.data 應該包含這些 pair。
 func TestRenderComposer_SeriesAsTimeValuePairs(t *testing.T) {
 	// 用「精心構造」的 dataset:EMG 3 點、3 個時間 (0, 0.5, 1.0),3 個值 (10, 20, 30)。
-	emg := &models.EMGDataset{
-		Headers: []string{"time", "RA"},
-		Data: []models.EMGData{
-			{Time: 0.0, Channels: []float64{10}},
-			{Time: 0.5, Channels: []float64{20}},
-			{Time: 1.0, Channels: []float64{30}},
-		},
-		OriginalTimePrecision: 1,
+	emg := &models.PhaseSyncEMGData{
+		Time:     []float64{0.0, 0.5, 1.0},
+		Channels: map[string][]float64{"RA": {10, 20, 30}},
+		Headers:  []string{"RA"},
 	}
 	// motion 2 點:t=[0.5, 1.0],v=[100, 200]
 	motion := &MotionData{
@@ -825,10 +780,9 @@ func TestRenderComposer_SeriesAsTimeValuePairs(t *testing.T) {
 		Order:  []string{"knee"},
 	}
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       emg,
-		SelectedChannels: []string{"RA"},
-		MotionData:       motion,
+		Subject:    "S",
+		EMG:        emg,
+		MotionData: motion,
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -853,14 +807,10 @@ func TestRenderComposer_SeriesAsTimeValuePairs(t *testing.T) {
 // 防線:motion 第一個 sample 必須以 `[1,` 開頭的 pair 出現於 HTML,而非 `[0,`。
 func TestRenderComposer_OffsetMisalignmentRegression(t *testing.T) {
 	// EMG t=[0,1,2], v=[10,20,30]
-	emg := &models.EMGDataset{
-		Headers: []string{"time", "RA"},
-		Data: []models.EMGData{
-			{Time: 0.0, Channels: []float64{10}},
-			{Time: 1.0, Channels: []float64{20}},
-			{Time: 2.0, Channels: []float64{30}},
-		},
-		OriginalTimePrecision: 1,
+	emg := &models.PhaseSyncEMGData{
+		Time:     []float64{0.0, 1.0, 2.0},
+		Channels: map[string][]float64{"RA": {10, 20, 30}},
+		Headers:  []string{"RA"},
 	}
 	// motion t=[1,2,3], v=[100,200,300] — 起始時間比 EMG 慢 1s
 	motion := &MotionData{
@@ -869,10 +819,9 @@ func TestRenderComposer_OffsetMisalignmentRegression(t *testing.T) {
 		Order:  []string{"knee"},
 	}
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       emg,
-		SelectedChannels: []string{"RA"},
-		MotionData:       motion,
+		Subject:    "S",
+		EMG:        emg,
+		MotionData: motion,
 	}
 	html := renderToString(t, context.Background(), in)
 
@@ -901,6 +850,31 @@ func TestBuildComposerLineData_NaNBreaksLine(t *testing.T) {
 	assert.NotNil(t, out[0].Value, "正常值 → [t,v]")
 	assert.Nil(t, out[1].Value, "NaN → nil(line gap)")
 	assert.NotNil(t, out[2].Value, "正常值 → [t,v]")
+}
+
+// TestBuildEMGSeries_SkipsLengthMismatch 釘住 buildEMGSeries 直接讀 columnar EMG 的
+// 通道規則:依 Headers 順序渲染全部通道,slice 缺漏或長度 ≠ len(EMG.Time) 的通道略過
+// (不補 0、不補 NaN,也不進欄位序 nameList)。兩個長度各跑一次:≤ threshold 時
+// downsampleSeriesMap 原樣 passthrough,略過只能由 buildEMGSeries 自己做。
+func TestBuildEMGSeries_SkipsLengthMismatch(t *testing.T) {
+	for _, n := range []int{100, composerDownsampleThreshold * 2} {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			emg := makeEMG(n, "RA", "ES")
+			emg.Channels["SHORT"] = make([]float64, n-1)
+			emg.Channels["LONG"] = make([]float64, n+1)
+			emg.Headers = []string{"SHORT", "RA", "MISSING", "LONG", "ES"}
+
+			gotTime, gotSeries, gotNames, err := buildEMGSeries(context.Background(), emg)
+			require.NoError(t, err)
+
+			assert.Equal(t, []string{"RA", "ES"}, gotNames,
+				"只保留與 Time 等長的通道,且維持 Headers 順序")
+			require.Len(t, gotSeries, 2, "略過的通道不可出現在 series map")
+			for _, name := range gotNames {
+				assert.Len(t, gotSeries[name], len(gotTime), "%s 必須與 downsampled time 等長", name)
+			}
+		})
+	}
 }
 
 // TestDownsampleSeriesMap_GracefulMismatchSkip 釘住 Composer 的「長度不符 channel
@@ -1031,7 +1005,7 @@ func seriesNameOrder(html string, wantNames []string) []string {
 // TestRenderComposer_SeriesRenderedInFieldOrder — Decision 2 regression:
 //
 // 渲染順序必須是「檔案欄位序」而非字母序。三 grid 各自的欄位序來源:
-//   - EMG:buildEMGSeries 回傳的 nameList(= SelectedChannels 順序 / headers 順序)
+//   - EMG:buildEMGSeries 回傳的 nameList(= EMG.Headers 順序)
 //   - muscle:MuscleRatioData.Order
 //   - motion:MotionData.Order
 //
@@ -1039,12 +1013,11 @@ func seriesNameOrder(html string, wantNames []string) []string {
 // ["z_first","a_second"]、motion ["m_two","a_one"]),render 後抽 series name
 // 出現順序,必須等於欄位序;若退回 sortedKeys 會變字母序而失敗。
 func TestRenderComposer_SeriesRenderedInFieldOrder(t *testing.T) {
-	// EMG headers = [time, C, A, B];SelectedChannels 指定 C,A,B → 欄位序 = C,A,B(非字母序)
-	emg := makeEMGDataset(100, "C", "A", "B")
+	// EMG Headers = [C, A, B] → 欄位序 = C,A,B(非字母序)
+	emg := makeEMG(100, "C", "A", "B")
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       emg,
-		SelectedChannels: []string{"C", "A", "B"},
+		Subject: "S",
+		EMG:     emg,
 		// muscle Order 刻意逆字母:z_first 先、a_second 後
 		MuscleRatioData: &MuscleRatioData{
 			Time:   makeMuscleRatioData(100, "z_first", "a_second").Time,
@@ -1090,9 +1063,8 @@ func TestRenderComposer_SeriesRenderedInFieldOrder(t *testing.T) {
 func TestRenderComposer_FixedPalettePerSeries(t *testing.T) {
 	// EMG 3 channel + muscle 4 + motion 4,各對 palette index(muscle/motion 取到 index 3)。
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "ch0", "ch1", "ch2"),
-		SelectedChannels: []string{"ch0", "ch1", "ch2"},
+		Subject: "S",
+		EMG:     makeEMG(100, "ch0", "ch1", "ch2"),
 		MuscleRatioData: &MuscleRatioData{
 			Time:   makeMuscleRatioData(100, "m0", "m1", "m2", "m3").Time,
 			Series: makeMuscleRatioData(100, "m0", "m1", "m2", "m3").Series,
@@ -1182,9 +1154,8 @@ func TestRenderComposer_MuscleGracefulSkip_ColorIndexNoShift(t *testing.T) {
 	}
 
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, "RA"),
-		SelectedChannels: []string{"RA"},
+		Subject: "S",
+		EMG:     makeEMG(100, "RA"),
 		MuscleRatioData: &MuscleRatioData{
 			Time: muscleTime,
 			Series: map[string][]float64{
@@ -1241,9 +1212,8 @@ func TestRenderComposer_PaletteWrapsAround(t *testing.T) {
 
 	muscleSrc := makeMuscleRatioData(100, muscleNames...)
 	in := ComposerInput{
-		Subject:          "S",
-		EMGDataset:       makeEMGDataset(100, emgNames...),
-		SelectedChannels: emgNames,
+		Subject: "S",
+		EMG:     makeEMG(100, emgNames...),
 		MuscleRatioData: &MuscleRatioData{
 			Time:   muscleSrc.Time,
 			Series: muscleSrc.Series,

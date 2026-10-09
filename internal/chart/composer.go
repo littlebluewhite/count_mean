@@ -22,9 +22,9 @@ const composerDownsampleThreshold = 5000
 // 對齊 cci.cciChartCtxCheckInterval = 1024 — chart 點數規模小,密 cadence 提高 cancel-latency 敏感度。
 const composerCtxCheckInterval = 1024
 
-// ErrComposerEMGRequired 表示 RenderComposer 收到 nil EMGDataset。
+// ErrComposerEMGRequired 表示 RenderComposer 收到 nil EMG。
 // EMG 是 composer 必要輸入(整張圖至少含一個 EMG grid),nil 直接 fail-fast。
-var ErrComposerEMGRequired = errors.New("composer: EMGDataset 不可為 nil")
+var ErrComposerEMGRequired = errors.New("composer: EMG 不可為 nil")
 
 // MotionData composer 自有 motion 資料載體;結構刻意脫離 models.MotionData(index-based)
 // 改為時間軸 + 多 series,避免 chart package 反向依賴 motion-domain semantics。
@@ -48,27 +48,24 @@ type MuscleRatioData struct {
 }
 
 // ComposerInput 是 RenderComposer 的全部輸入。所有 user-controlled 字串(Subject、
-// SelectedChannels、MotionData.Order 等)會在內部走 SanitizeChartString 防 XSS。
+// EMG 通道名、MotionData.Order 等)會在內部走 SanitizeChartString 防 XSS。
+//
+// EMG 是 models.PhaseSyncEMGData(秒、columnar),EMG grid 依 EMG.Headers 順序渲染全部通道
+// (ADR-0013「預設全通道」);通道 slice 缺漏或長度與 EMG.Time 不符時略過該通道。
 //
 // MuscleRatioData == nil → 2 grid 配置(EMG + motion)
 // MuscleRatioData != nil → 3 grid 配置(EMG + muscle_ratio + motion)
 //
-// EMGMotionOffset 為 motion-time 對 EMG-time 的位移(以 motion frame 計);
-// 目前 composer 不對 motion-time 做位移轉換(motion data 已是時間序列),保留欄位
-// 為 caller 上層(Wails handler)在準備 MotionData 時換算之用。
-//
-// PhaseTimesEMG 是 phase 名 → EMG 秒數 map,已由 caller 統一換算成 EMG 時間 domain
-// (力板時間欄位走 ForceTimeToEMGTime;motion-index 欄位 D/O 走 MotionIndexToEMGTime)。
-// chart 套件不持有 conversion 知識,只把秒值 anchor 成 markLine —— 與 handler 回給
-// 前端的 phaseTimes 為同一份 map,確保前端 checkbox 與後端 markLine 不分歧。
+// MotionData.Time 與 PhaseTimesEMG 都已由 caller 換到 EMG 時間 domain。
+// PhaseTimesEMG 是 phase 名 → EMG 秒數 map(Phase timeline);chart 套件不持有
+// conversion 知識,只把秒值 anchor 成 markLine —— 與 handler 回給前端的 phaseTimes
+// 為同一份 map,確保前端 checkbox 與後端 markLine 不分歧。
 type ComposerInput struct {
-	Subject          string
-	EMGDataset       *models.EMGDataset
-	SelectedChannels []string
-	MuscleRatioData  *MuscleRatioData // nil → 2-grid (EMG + motion)
-	MotionData       *MotionData
-	PhaseTimesEMG    map[string]float64
-	EMGMotionOffset  int
+	Subject         string
+	EMG             *models.PhaseSyncEMGData
+	MuscleRatioData *MuscleRatioData // nil → 2-grid (EMG + motion)
+	MotionData      *MotionData
+	PhaseTimesEMG   map[string]float64
 }
 
 // RenderComposer 把 Subject 的 EMG + (可選) muscle_ratio + motion 渲染成
@@ -89,7 +86,7 @@ func RenderComposer(ctx context.Context, in ComposerInput, w io.Writer) error {
 		return err
 	}
 
-	if in.EMGDataset == nil {
+	if in.EMG == nil {
 		return ErrComposerEMGRequired
 	}
 
@@ -195,7 +192,7 @@ func buildComposerLine(ctx context.Context, in ComposerInput) (*charts.Line, err
 
 	// EMG / muscle_ratio downsample
 	// emgNames 是 EMG 欄位序(對齊 Decision 2),thread 進 addComposerSeries 取代字母序。
-	emgTime, emgSeries, emgNames, err := buildEMGSeries(ctx, in.EMGDataset, in.SelectedChannels)
+	emgTime, emgSeries, emgNames, err := buildEMGSeries(ctx, in.EMG)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +212,7 @@ func buildComposerLine(ctx context.Context, in ComposerInput) (*charts.Line, err
 
 	// 計算 union time range — 讓三 grid 的 bottom xAxis 共用同一 Min/Max,
 	// 解決 motion 收集起始時間早於 EMG 造成的軸不對齊(Bug C 2026-05-27 image #7)。
-	// 各 series time 都已換到 EMG-time domain(loadComposerMotion 已透過
+	// 各 series time 都已換到 EMG-time domain(caller 已透過
 	// MotionIndexToEMGTime 轉,muscle 也是 EMG 軸 input),只是 visible range
 	// 不同;union 確保 X 刻度在三 grid 對齊。
 	minTime, maxTime := computeUnionTimeRange(emgTime, muscleTime, in.MotionData)
@@ -241,80 +238,35 @@ func buildComposerLine(ctx context.Context, in ComposerInput) (*charts.Line, err
 	return line, nil
 }
 
-// buildEMGSeries 從 EMGDataset 取出 selected channels,跑 LTTB downsample。
+// buildEMGSeries 依 EMG.Headers 順序取出全部通道,跑 LTTB downsample。
 //
-// channelIdx-based 對映:Headers[0] 是 time,channels 由 EMGDataset.Data[i].Channels 索引。
-// SelectedChannels 用 channel 名稱對 Headers[1:] 比對;不存在的名稱 silently skip。
-// SelectedChannels 為空時 fallback 顯示全部 channel(對齊 echarts_generator
-// ShowAllColumns 行為)。
+// 直接讀 columnar 欄位(EMG.Time + EMG.Channels),不經逐 row 轉換。通道 slice 缺漏
+// 或長度與 EMG.Time 不符時略過該通道(不補 0 也不補 NaN —— X 軸對不上的 series 不渲染,
+// 與 downsampleSeriesMap 的 graceful skip 一致)。
 //
 // 回傳:downsampled time slice + map(channel name → downsampled values)+ 欄位序
 // channel 名 slice(nameList)。nameList 是渲染順序的權威來源(對齊 Decision 2 —
 // 字母序 → 欄位序),caller 把它 thread 進 addComposerSeries 取代 sortedKeys。
 func buildEMGSeries(
 	ctx context.Context,
-	dataset *models.EMGDataset,
-	selectedChannels []string,
+	emg *models.PhaseSyncEMGData,
 ) ([]float64, map[string][]float64, []string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, nil, err
 	}
 
-	headers := dataset.Headers
-	channelCount := len(headers) - 1 // headers[0] = "time"
-
-	// channelIdx 表(name → row.Channels 索引)
-	indexByName := make(map[string]int, channelCount)
-	for c := 0; c < channelCount; c++ {
-		indexByName[headers[c+1]] = c
-	}
-
-	// 解析要 render 的 channel 列表:caller 指定 → 取交集;空 → 全部
-	useChannels := selectedChannels
-	if len(useChannels) == 0 {
-		useChannels = make([]string, channelCount)
-		for c := 0; c < channelCount; c++ {
-			useChannels[c] = headers[c+1]
-		}
-	}
-
-	// 為合法 channel 配置 columnar slice(name → values)
-	n := len(dataset.Data)
-	rawMap := make(map[string][]float64, len(useChannels))
-	channelIdxList := make([]int, 0, len(useChannels))
-	nameList := make([]string, 0, len(useChannels))
-	for _, name := range useChannels {
-		idx, ok := indexByName[name]
-		if !ok {
+	rawMap := make(map[string][]float64, len(emg.Headers))
+	nameList := make([]string, 0, len(emg.Headers))
+	for _, name := range emg.Headers {
+		vals, ok := emg.Channels[name]
+		if !ok || len(vals) != len(emg.Time) {
 			continue
 		}
-		rawMap[name] = make([]float64, n)
-		channelIdxList = append(channelIdxList, idx)
+		rawMap[name] = vals
 		nameList = append(nameList, name)
 	}
 
-	// 單一 pass:填 time + 各 channel values。ctx-aware loop。
-	timeRaw := make([]float64, n)
-	for i, row := range dataset.Data {
-		if i > 0 && i%composerCtxCheckInterval == 0 {
-			select {
-			case <-ctx.Done():
-				return nil, nil, nil, ctx.Err()
-			default:
-			}
-		}
-		timeRaw[i] = row.Time
-		for k, channelIdx := range channelIdxList {
-			if channelIdx < len(row.Channels) {
-				rawMap[nameList[k]][i] = row.Channels[channelIdx]
-			} else {
-				// ragged row:該 channel 在本 row 缺值 → NaN(下游 LineData.Value = nil)
-				rawMap[nameList[k]][i] = math.NaN()
-			}
-		}
-	}
-
-	downTime, downMap := downsampleSeriesMap(timeRaw, rawMap, composerDownsampleThreshold)
+	downTime, downMap := downsampleSeriesMap(emg.Time, rawMap, composerDownsampleThreshold)
 	return downTime, downMap, nameList, nil
 }
 
@@ -808,7 +760,7 @@ var composerMotionPalette = []string{
 
 // composerPhaseMarkLineOpts 把 phase 名 → EMG 秒數 map 轉成 markLine XAxis items。
 //
-// 輸入 phaseTimes 已是 EMG 時間 domain 秒值,由 caller(Wails handler)從 manifest row 的
+// 輸入 phaseTimes 已是 EMG 時間 domain 秒值,由 caller 從 manifest row 的
 // Phase timeline(synchronizer.NewPhaseTimeline)取得。chart 套件不持有 conversion 知識
 // (對齊 ComposerInput doc),只負責把秒值 anchor 成 markLine —— 前端 checkbox(phaseTimes
 // RPC return)與後端預設 markLine 因此共用同一份 seconds 來源,不會分歧。

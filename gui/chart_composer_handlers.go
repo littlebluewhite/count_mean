@@ -61,8 +61,7 @@ type LoadChartComposerSubjectsParams struct {
 //
 // ADR-0013:一鍵生成、預設全通道。前端不再先打 LoadChartComposerEMGChannels
 // 取 channel 清單 / EMGMotionOffset 再回傳;handler 自己從 manifest row 讀
-// EMGMotionOffset(單一來源),EMG channel 交給 chart composer 的「空 → fallback
-// 全選」行為。
+// EMGMotionOffset(單一來源),EMG 通道由 chart composer 依 EMG.Headers 全部渲染。
 type GenerateChartComposerParams struct {
 	ManifestPath string `json:"manifestPath"`
 	DataFolder   string `json:"dataFolder"`
@@ -215,13 +214,13 @@ func (a *App) LoadChartComposerSubjects(
 //  1. 邊界路徑驗證(manifest / data folder)
 //  2. 從 manifest 找指定 Subject 的 row
 //  3. 載入 EMG(必要)、motion(必要)、muscle_ratio(若 MuscleRatioFile 非空)
-//  4. 把 PhaseSyncEMGData / MotionData / muscle_ratio CSV 轉成 chart.ComposerInput
+//  4. 把 PhaseSyncEMGData(columnar 原樣)/ MotionData / muscle_ratio CSV 組成 chart.ComposerInput
 //  5. 呼叫 chart.RenderComposer 渲染成 HTML
 //
 // ADR-0013:EMGMotionOffset 直接讀 row.EMGMotionOffset(本函式已 load manifest +
 // findManifestBySubject,offset 當場可得,不再經前端往返 — 消除 stale-offset 風險)。
-// SelectedChannels 一律傳 nil(空),交給 chart composer 的「空 → fallback 全選」,
-// 達成「預設全通道」。motion-index 轉時間透過 TimeSynchronizer.MotionIndexToEMGTime。
+// chart composer 依 EMG.Headers 渲染全部通道,達成「預設全通道」。motion-index 轉時間
+// 透過 TimeSynchronizer.MotionIndexToEMGTime。
 func (a *App) GenerateChartComposer(
 	params *GenerateChartComposerParams,
 ) (result *ChartComposerResult, err error) {
@@ -269,7 +268,6 @@ func (a *App) GenerateChartComposer(
 		}
 		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerResolveEMGPathFailed, emgErr)), nil
 	}
-	emgDataset := phaseSyncEMGToDataset(emgPhaseSync)
 
 	// 載入 motion(必要 — composer 至少 2-grid,motion 是其中一個 grid)
 	composerMotion, motionErr := loadComposerMotion(
@@ -316,21 +314,18 @@ func (a *App) GenerateChartComposer(
 	// /動態 markLine(回傳的 PhaseTimes)使用,兩端共用來源不會分歧。
 	phaseTimes := composerPhaseTimesEMG(&row)
 
-	// SelectedChannels 傳 nil(空)— chart composer 對空走「fallback 全選」
-	// (composer.go:267-273),達成 ADR-0013 的「預設全通道」。
+	// chart composer 依 EMG.Headers 渲染全部通道,達成 ADR-0013 的「預設全通道」。
 	composerInput := chart.ComposerInput{
-		Subject:          row.Subject,
-		EMGDataset:       emgDataset,
-		SelectedChannels: nil,
-		MuscleRatioData:  muscleRatioData,
-		MotionData:       composerMotion,
-		PhaseTimesEMG:    phaseTimes,
-		EMGMotionOffset:  row.EMGMotionOffset,
+		Subject:         row.Subject,
+		EMG:             emgPhaseSync,
+		MuscleRatioData: muscleRatioData,
+		MotionData:      composerMotion,
+		PhaseTimesEMG:   phaseTimes,
 	}
 
 	var buf bytes.Buffer
 	if renderErr := chart.RenderComposer(a.context(), composerInput, &buf); renderErr != nil {
-		// EMG-required 是 caller bug(我們上面剛確保 emgDataset 非 nil)而非
+		// EMG-required 是 caller bug(我們上面剛確保 EMG 非 nil)而非
 		// user-visible 路徑,直接走通用錯誤訊息;ctx cancel 走相同 path。
 		if errors.Is(renderErr, chart.ErrComposerEMGRequired) {
 			return failedChartComposerResult("內部錯誤: EMG dataset 為空"), nil
@@ -401,43 +396,6 @@ func findManifestBySubject(
 		}
 	}
 	return models.PhaseManifest{}, false
-}
-
-// phaseSyncEMGToDataset 把 PhaseSyncEMGData (Time + Channels map) 轉成
-// EMGDataset (Headers + []EMGData rows)。
-//
-// 為何需要轉:phase_sync 系列 parser 走 columnar (Time slice + map[name]values),
-// 對 phase analyzer 友善;chart composer (`internal/chart`) 直接 reuse
-// EMGDataset(Headers + per-row Time + Channels slice),對 chart series
-// 渲染友善。本 helper 是兩個 representation 之間的 thin bridge。
-//
-// 排序:Headers[1:] 走 emg.Headers 順序(parsers.initEMGData 已 strip 時間
-// header),整體 Headers 第一欄填入 "time"。
-func phaseSyncEMGToDataset(emg *models.PhaseSyncEMGData) *models.EMGDataset {
-	if emg == nil {
-		return &models.EMGDataset{}
-	}
-
-	headers := make([]string, 0, 1+len(emg.Headers))
-	headers = append(headers, "time")
-	headers = append(headers, emg.Headers...)
-
-	rows := make([]models.EMGData, len(emg.Time))
-	for i, t := range emg.Time {
-		channels := make([]float64, len(emg.Headers))
-		for k, name := range emg.Headers {
-			vals := emg.Channels[name]
-			if i < len(vals) {
-				channels[k] = vals[i]
-			}
-		}
-		rows[i] = models.EMGData{Time: t, Channels: channels}
-	}
-
-	return &models.EMGDataset{
-		Headers: headers,
-		Data:    rows,
-	}
 }
 
 // loadComposerMotion 從 motion CSV 載入後轉成 chart.MotionData
