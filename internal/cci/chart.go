@@ -60,7 +60,7 @@ func GenerateCCIInteractiveChart(ctx context.Context, result *CCIAnalysisResult,
 	}
 
 	if err := line.Render(w); err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIRenderChartFailed), err)
+		return i18n.WrapError(err, i18n.KeyErrorCCIRenderChartFailed)
 	}
 
 	logger.Info("CCI 互動式圖表生成完成", nil)

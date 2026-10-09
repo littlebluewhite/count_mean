@@ -198,10 +198,9 @@ const (
 	// 批次取消(Wails Shutdown / user cancel)時 caller 訊息。
 	KeyErrorMuscleRatioCancelled = "error.muscle_ratio.cancelled"
 
-	// CCI Analysis Messages — 與 muscle_ratio 的格式一致:user-facing 錯誤訊息由
-	// i18n.T 取得後再 wrap;catalog 字串只含 fmt.Sprintf-compatible verbs
-	// (%s %v %d %.3f),error wrap 由 caller 用
-	// `fmt.Errorf("%s: %w", i18n.T(key), inner)` pattern 處理。
+	// CCI Analysis Messages — cci 以 i18n.NewError / WrapError 回帶 key 的錯誤,handler
+	// 層 Localize(ADR-0048);catalog 字串只含 fmt.Sprintf-compatible verbs
+	// (%s %v %d %.3f),「: cause」由 WrapError 接上。
 	KeyErrorCCIParseManifestFailed     = "error.cci.parse_manifest_failed"
 	KeyErrorCCIInvalidSubjectIndex     = "error.cci.invalid_subject_index"
 	KeyErrorCCIParseEMGFailed          = "error.cci.parse_emg_failed"

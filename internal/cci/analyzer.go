@@ -112,7 +112,7 @@ func (a *CCIAnalyzer) computeCCI(
 
 	channelMap, err := BuildChannelMap(emgData.Headers)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIBuildChannelMapFailed), err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorCCIBuildChannelMapFailed)
 	}
 
 	gaitStart, gaitEnd, phasePercents, phaseTimes, err := a.calculateGaitCycle(
@@ -134,7 +134,7 @@ func (a *CCIAnalyzer) computeCCI(
 
 	rangeResult, err := synchronizer.SliceEMG(emgData, extractStart, extractEnd)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIExtractGaitRangeFailed), err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorCCIExtractGaitRangeFailed)
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -164,17 +164,14 @@ func (a *CCIAnalyzer) computeCCI(
 }
 
 // loadAndValidate parses the manifest and validates the subject index.
-//
-//nolint:err113 // dynamic errors for user-facing output (i18n-backed)
 func (a *CCIAnalyzer) loadAndValidate(params *CCIParams) (*models.PhaseManifest, error) {
 	manifests, err := manifest.LoadManifests(params.ManifestFile)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIParseManifestFailed), err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorCCIParseManifestFailed)
 	}
 
 	if params.SubjectIndex < 0 || params.SubjectIndex >= len(manifests) {
-		return nil, errors.New(
-			i18n.T(i18n.KeyErrorCCIInvalidSubjectIndex, params.SubjectIndex, len(manifests)))
+		return nil, i18n.NewError(i18n.KeyErrorCCIInvalidSubjectIndex, params.SubjectIndex, len(manifests))
 	}
 
 	// 對齊 phase_sync.validateManifestData：選定 subject 後驗證分期不變量（時間順序 /
@@ -183,7 +180,7 @@ func (a *CCIAnalyzer) loadAndValidate(params *CCIParams) (*models.PhaseManifest,
 	// (ADR-0014),故僅 CCI 補此門。
 	m := &manifests[params.SubjectIndex]
 	if err := parsers.ValidatePhaseManifest(m); err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIParseManifestFailed), err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorCCIParseManifestFailed)
 	}
 
 	return m, nil
@@ -191,7 +188,7 @@ func (a *CCIAnalyzer) loadAndValidate(params *CCIParams) (*models.PhaseManifest,
 
 // loadEMGData 走 manifest.LoadEMG 載入 [[Subject source]] 的 EMG（硬化讀檔門，
 // 允許含字面 "%" 的 BTS 匯出檔名 — 見該套件 doc）。
-// CCI fail-fast：開檔失敗原樣回傳，解析失敗加 i18n 前綴，任一失敗立即 return。
+// CCI fail-fast：開檔失敗原樣回傳，解析失敗包成帶 i18n key 的錯誤，任一失敗立即 return。
 func (a *CCIAnalyzer) loadEMGData(
 	dataFolder string, m *models.PhaseManifest,
 ) (*models.PhaseSyncEMGData, error) {
@@ -199,7 +196,7 @@ func (a *CCIAnalyzer) loadEMGData(
 	if err != nil {
 		var parseErr *manifest.EMGParseError
 		if errors.As(err, &parseErr) {
-			return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIParseEMGFailed), err)
+			return nil, i18n.WrapError(err, i18n.KeyErrorCCIParseEMGFailed)
 		}
 		return nil, err
 	}
@@ -223,8 +220,6 @@ const gaitMinDurationSampleCount = 10
 const gaitExtensionSeconds = 0.150
 
 // calculateGaitCycle determines gait cycle boundaries and phase percentages.
-//
-//nolint:err113 // dynamic error for user-facing output (i18n-backed)
 func (a *CCIAnalyzer) calculateGaitCycle(
 	manifest *models.PhaseManifest, emgData *models.PhaseSyncEMGData,
 ) (float64, float64, map[string]float64, map[string]float64, error) {
@@ -244,7 +239,7 @@ func (a *CCIAnalyzer) calculateGaitCycle(
 	}
 
 	if len(emgTimes) < 2 {
-		return 0, 0, nil, nil, errors.New(i18n.T(i18n.KeyErrorCCIInsufficientPhasePoints))
+		return 0, 0, nil, nil, i18n.NewError(i18n.KeyErrorCCIInsufficientPhasePoints)
 	}
 
 	// ADR-0018：步態週期直接錨定 0%=S、100%=L,不再從所有分期點 min/max 推導。
@@ -253,7 +248,7 @@ func (a *CCIAnalyzer) calculateGaitCycle(
 	gaitStart, okS := emgTimes[string(models.PhaseS)]
 	gaitEnd, okL := emgTimes[string(models.PhaseL)]
 	if !okS || !okL {
-		return 0, 0, nil, nil, errors.New(i18n.T(i18n.KeyErrorCCIMissingSLAnchor))
+		return 0, 0, nil, nil, i18n.NewError(i18n.KeyErrorCCIMissingSLAnchor)
 	}
 
 	// Validate against EMG data range
@@ -270,8 +265,8 @@ func (a *CCIAnalyzer) calculateGaitCycle(
 	sampleInterval := estimateSampleInterval(emgData.Time, a.logger)
 	minDuration := sampleInterval * float64(gaitMinDurationSampleCount)
 	if duration < minDuration {
-		return 0, 0, nil, nil, errors.New(
-			i18n.T(i18n.KeyErrorCCIGaitDurationTooSmall, duration, gaitMinDurationSampleCount))
+		return 0, 0, nil, nil, i18n.NewError(
+			i18n.KeyErrorCCIGaitDurationTooSmall, duration, gaitMinDurationSampleCount)
 	}
 
 	// Calculate phase percentages and keep actual times
@@ -355,12 +350,12 @@ func estimateSampleInterval(times []float64, logger *logging.Logger) float64 {
 // 對 emgMin/emgMax (來自 emgData.Time 首末筆) 也做 NaN/Inf 守門 — 雖然
 // upstream parser 通常已過 NaN/Inf scan,defense-in-depth 仍應在這道閘有獨立判斷。
 //
-//nolint:err113 // dynamic error for user-facing output (i18n-backed)
+//nolint:err113 // NaN/Inf 守門的 dynamic error(硬編碼文字,不在 ADR-0048 遷移範圍)
 func validateEMGBounds(
 	emgData *models.PhaseSyncEMGData, gaitStart, gaitEnd float64,
 ) error {
 	if len(emgData.Time) == 0 {
-		return errors.New(i18n.T(i18n.KeyErrorCCIEMGEmpty))
+		return i18n.NewError(i18n.KeyErrorCCIEMGEmpty)
 	}
 
 	// gaitStart/gaitEnd 必須為有限值
@@ -387,11 +382,11 @@ func validateEMGBounds(
 	// (>= 1ms ≈ 1e-3) 仍會被擋下。與 phase_stats / muscle_ratio / phase_sync 同一容差
 	// (ADR-0030、ADR-0043)。
 	if before, _ := synchronizer.OutsideEMG(emgData.Time, gaitStart); before {
-		return errors.New(i18n.T(i18n.KeyErrorCCIGaitStartBelowEMGMin, gaitStart, emgMin))
+		return i18n.NewError(i18n.KeyErrorCCIGaitStartBelowEMGMin, gaitStart, emgMin)
 	}
 
 	if _, after := synchronizer.OutsideEMG(emgData.Time, gaitEnd); after {
-		return errors.New(i18n.T(i18n.KeyErrorCCIGaitEndAboveEMGMax, gaitEnd, emgMax))
+		return i18n.NewError(i18n.KeyErrorCCIGaitEndAboveEMGMax, gaitEnd, emgMax)
 	}
 
 	return nil

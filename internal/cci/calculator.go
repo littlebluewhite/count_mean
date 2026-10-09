@@ -104,12 +104,9 @@ func CalculateCCIRudolph(emg1, emg2 float64) float64 {
 // ctx 在 hot loop 每 cciCancelCheckInterval 點檢查一次 ctx.Done()，caller cancel
 // 時提早回傳 ctx.Err()。pre-cancelled ctx 在第一次進入 loop 前就會被偵測；
 // mid-flight cancel 最壞情況等下一個 4096 邊界。
-//
-//nolint:err113 // dynamic error for user-facing output (i18n-backed)
 func CalculateCCITimeSeries(ctx context.Context, ch1Data, ch2Data []float64) ([]float64, error) {
 	if len(ch1Data) != len(ch2Data) {
-		return nil, errors.New(
-			i18n.T(i18n.KeyErrorCCIChannelLenMismatch, len(ch1Data), len(ch2Data)))
+		return nil, i18n.NewError(i18n.KeyErrorCCIChannelLenMismatch, len(ch1Data), len(ch2Data))
 	}
 
 	// Fast pre-cancel：若 caller 已取消 ctx，避免分配 result slice 與第一次計算。
@@ -137,15 +134,13 @@ func CalculateCCITimeSeries(ctx context.Context, ch1Data, ch2Data []float64) ([]
 
 // BuildChannelMap maps short muscle names to their actual header strings
 // as stored in PhaseSyncEMGData.Channels。規則 (僅右側、重複 fail-fast、缺任一必要肌肉
-// fail-fast) 由 musclemap.RightSideChannels 擁有;本函式只把缺失錯誤轉成 i18n 訊息。
-//
-//nolint:err113 // dynamic error for user-facing output (i18n-backed)
+// fail-fast) 由 musclemap.RightSideChannels 擁有;本函式只把缺失錯誤轉成帶 i18n key 的錯誤。
 func BuildChannelMap(headers []string) (map[string]string, error) {
 	channelMap, err := musclemap.RightSideChannels(headers)
 	if err != nil {
 		var missing *musclemap.MissingMuscleError
 		if errors.As(err, &missing) {
-			return nil, errors.New(i18n.T(i18n.KeyErrorCCIMissingMuscleChannel, missing.Muscle))
+			return nil, i18n.NewError(i18n.KeyErrorCCIMissingMuscleChannel, missing.Muscle)
 		}
 
 		return nil, err

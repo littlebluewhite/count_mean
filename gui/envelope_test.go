@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -96,6 +97,67 @@ func TestInputMessage_LocalizedAndRedacted(t *testing.T) {
 
 			assert.Equal(t, tc.want, inputMessage(tc.err))
 		})
+	}
+}
+
+// writeEnvelopeTestManifest 在 dir 寫一份單列 manifest(Subject 為 subject),回其路徑。
+func writeEnvelopeTestManifest(t *testing.T, dir, subject string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, "manifest.csv")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n"+
+			subject+",motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,0.8",
+	), 0o600))
+
+	return path
+}
+
+// TestEnvelope_LocalizesAnalyzerErrors 釘住 ADR-0048 端到端:[[Domain analyzer]] 回的
+// *i18n.Error 經 handler 的 envelope 依目前 locale 呈現,zh-TW 與 key 化之前逐位元組相同。
+// 每個 analyzer 一列(經真實 handler 觸發)。
+func TestEnvelope_LocalizesAnalyzerErrors(t *testing.T) {
+	prevLocale := i18n.GetLocale()
+	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
+
+	cases := []struct {
+		name string
+		call func(t *testing.T) string
+		zhTW string
+		enUS string
+	}{
+		{
+			name: "AnalyzeCCI_InvalidSubjectIndex",
+			call: func(t *testing.T) string {
+				dir := t.TempDir()
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzeCCI(CCIParams{
+					ManifestFile: writeEnvelopeTestManifest(t, dir, "S1"),
+					DataFolder:   dir,
+					SubjectIndex: 5,
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+			zhTW: "分析失敗: 無效的主題索引: 5 (共有 1 個主題)",
+			enUS: "Analysis failed: Invalid subject index: 5 (1 subjects available)",
+		},
+	}
+
+	for _, tc := range cases {
+		for _, locale := range []i18n.Locale{i18n.LocaleZhTW, i18n.LocaleEnUS} {
+			t.Run(tc.name+"/"+string(locale), func(t *testing.T) {
+				i18n.SetLocale(locale)
+
+				want := tc.zhTW
+				if locale == i18n.LocaleEnUS {
+					want = tc.enUS
+				}
+				assert.Equal(t, want, tc.call(t))
+			})
+		}
 	}
 }
 

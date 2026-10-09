@@ -2,7 +2,6 @@ package cci
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -118,46 +117,6 @@ func TestCalculateGaitCycle_AcceptsNormalDuration(t *testing.T) {
 	require.NoError(t, err, "valid duration should not be rejected: %v", err)
 }
 
-// TestCCIAnalyzer_I18n_InsufficientPhasesEnUSLocale 釘住 修補:
-// CCI errors 改走 i18n.T() catalog,不再 hardcode 中文字面。
-//
-// 切換 en-US locale,確認 error 字串走的是英文 catalog 字面,不是中文 hardcode,
-// 也不是 raw i18n key 字面。
-func TestCCIAnalyzer_I18n_InsufficientPhasesEnUSLocale(t *testing.T) {
-	defer i18n.SetLocale(i18n.LocaleZhTW)
-
-	i18n.SetLocale(i18n.LocaleEnUS)
-
-	emgData := &models.PhaseSyncEMGData{
-		Time: makeBoundsTimeSeq(0.0, 0.001, 301),
-	}
-	a := NewCCIAnalyzer()
-	manifest := newBoundsTestManifest()
-	// 只給 1 個有效 phase point — 觸發「分期點不足」
-	manifest.PhasePoints.P0 = models.MakeOpt(0.05)
-
-	_, _, _, _, err := a.calculateGaitCycle(manifest, emgData)
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "分期點不足", "en-US locale 不應出現中文字面")
-	assert.NotContains(t, err.Error(), "error.cci.insufficient_phase_points",
-		"raw i18n key 不應 leak")
-	assert.Contains(t, strings.ToLower(err.Error()), "phase",
-		"en-US locale 應出現英文 phase keyword")
-}
-
-// TestCalculateCCITimeSeries_I18n_LengthMismatch_EnUS 釘住 calculator.go 的 i18n。
-func TestCalculateCCITimeSeries_I18n_LengthMismatch_EnUS(t *testing.T) {
-	defer i18n.SetLocale(i18n.LocaleZhTW)
-
-	i18n.SetLocale(i18n.LocaleEnUS)
-
-	_, err := CalculateCCITimeSeries(context.Background(), []float64{0.1, 0.2}, []float64{0.3})
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "通道數據長度不一致", "en-US locale 不應出現中文字面")
-	assert.Contains(t, strings.ToLower(err.Error()), "channel",
-		"en-US locale 應出現英文 channel keyword")
-}
-
 // TestBuildChannelMap_MissingChannel_ZhTW 釘住缺失肌肉錯誤被轉成 cci 既有 zh-TW 訊息 (含肌肉名)。
 func TestBuildChannelMap_MissingChannel_ZhTW(t *testing.T) {
 	_, err := BuildChannelMap([]string{"L.RA: EMG 1", "R.RA: EMG 1"})
@@ -165,36 +124,93 @@ func TestBuildChannelMap_MissingChannel_ZhTW(t *testing.T) {
 	assert.Equal(t, "缺少必要的肌肉通道: ES", err.Error())
 }
 
-// TestBuildChannelMap_I18n_MissingChannel_EnUS 釘住 BuildChannelMap 的 i18n。
-func TestBuildChannelMap_I18n_MissingChannel_EnUS(t *testing.T) {
-	defer i18n.SetLocale(i18n.LocaleZhTW)
+// TestCCIErrors_ZhTWTextLocalizedAtHandler 釘住 ADR-0048:cci 回帶 i18n key 的錯誤,
+// 不在建構時決定語言。
+//
+//   - err.Error() 一律是 zh-TW 文字,與 key 化之前逐位元組相同 —— 建構時的 locale 是
+//     zh-TW 或 en-US 都一樣(log / byte-pinned 測試不隨 locale 變)
+//   - i18n.Localize(err)(handler 層的 envelope 用它)依呼叫當下的 locale 渲染:建構時
+//     是 zh-TW、呈現時切到 en-US,得到英文
+//
+// 各列涵蓋兩種形狀:只有訊息(有 / 無 Args,無 Args 時 catalog 字面 % 原樣)與
+// 「前綴: cause」(cause 也是 *i18n.Error 時一併在地化)。
+func TestCCIErrors_ZhTWTextLocalizedAtHandler(t *testing.T) {
+	t.Cleanup(func() { i18n.SetLocale(i18n.LocaleZhTW) })
 
-	i18n.SetLocale(i18n.LocaleEnUS)
-
-	// 缺少所有 R.* channel,headers 只有時間欄
-	_, err := BuildChannelMap([]string{"X []"})
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "缺少必要的肌肉通道", "en-US locale 不應出現中文字面")
-	assert.Contains(t, strings.ToLower(err.Error()), "muscle",
-		"en-US locale 應出現英文 muscle keyword")
-}
-
-// TestCCIAnalyzer_I18n_ZhTW_PreservesChineseStrings 確認 zh-TW locale 下,catalog
-// 解析依然回中文字面 — 既有測試 (含 "步態週期" 子字串比對) 不會被 i18n 化破壞。
-func TestCCIAnalyzer_I18n_ZhTW_PreservesChineseStrings(t *testing.T) {
-	// TestMain 已 set zh-TW,此 test 在 en-US test 後若有未還原情形仍應通過
-	i18n.SetLocale(i18n.LocaleZhTW)
-
-	emgData := &models.PhaseSyncEMGData{
-		Time: makeBoundsTimeSeq(0.0, 0.001, 301),
+	cases := []struct {
+		name  string
+		build func() error
+		zhTW  string
+		enUS  string
+	}{
+		{
+			name: "分期點不足(訊息、無 Args)",
+			build: func() error {
+				m := newBoundsTestManifest()
+				m.PhasePoints.P0 = models.MakeOpt(0.05)
+				_, _, _, _, err := NewCCIAnalyzer().calculateGaitCycle(
+					m, &models.PhaseSyncEMGData{Time: makeBoundsTimeSeq(0.0, 0.001, 301)})
+				return err
+			},
+			zhTW: "分期點不足，至少需要 2 個有效分期點",
+			enUS: "Insufficient phase points; at least 2 valid points are required",
+		},
+		{
+			name: "缺 S / L 錨點(catalog 字面 %)",
+			build: func() error {
+				m := newBoundsTestManifest()
+				m.PhasePoints.C = models.MakeOpt(0.1)
+				m.PhasePoints.T0 = models.MakeOpt(0.2)
+				_, _, _, _, err := NewCCIAnalyzer().calculateGaitCycle(
+					m, &models.PhaseSyncEMGData{Time: makeBoundsTimeSeq(0.0, 0.001, 301)})
+				return err
+			},
+			zhTW: "缺少 S 或 L 分期點，無法錨定步態週期（0%=S、100%=L）",
+			enUS: "Missing S or L phase point; cannot anchor the gait cycle (0%=S, 100%=L)",
+		},
+		{
+			name: "通道長度不符(訊息、有 Args)",
+			build: func() error {
+				_, err := CalculateCCITimeSeries(context.Background(), []float64{0.1, 0.2}, []float64{0.3})
+				return err
+			},
+			zhTW: "通道數據長度不一致: 2 vs 1",
+			enUS: "Channel data length mismatch: 2 vs 1",
+		},
+		{
+			name: "步態起點早於 EMG(%.3f Args)",
+			build: func() error {
+				return validateEMGBounds(&models.PhaseSyncEMGData{Time: []float64{1.0, 2.0}}, 0.5, 1.5)
+			},
+			zhTW: "步態週期開始時間 0.500 小於 EMG 數據最小時間 1.000",
+			enUS: "Gait cycle start time 0.500 is below EMG min time 1.000",
+		},
+		{
+			name: "建立通道映射失敗(前綴: cause,cause 也在地化)",
+			build: func() error {
+				_, err := NewCCIAnalyzer().computeCCI(context.Background(),
+					&models.PhaseSyncEMGData{Headers: []string{"L.RA: EMG 1", "R.RA: EMG 1"}},
+					newBoundsTestManifest())
+				return err
+			},
+			zhTW: "建立通道映射失敗: 缺少必要的肌肉通道: ES",
+			enUS: "Failed to build channel map: Missing required muscle channel: ES",
+		},
 	}
-	a := NewCCIAnalyzer()
-	manifest := newBoundsTestManifest()
-	manifest.PhasePoints.P0 = models.MakeOpt(0.05)
 
-	_, _, _, _, err := a.calculateGaitCycle(manifest, emgData)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "分期點不足", "zh-TW locale 應保留中文字面")
+	for _, tc := range cases {
+		for _, buildLocale := range []i18n.Locale{i18n.LocaleZhTW, i18n.LocaleEnUS} {
+			t.Run(tc.name+"/built_under_"+string(buildLocale), func(t *testing.T) {
+				i18n.SetLocale(buildLocale)
+				err := tc.build()
+				require.Error(t, err)
+
+				i18n.SetLocale(i18n.LocaleEnUS)
+				assert.Equal(t, tc.zhTW, err.Error(), "Error() 固定是 zh-TW")
+				assert.Equal(t, tc.enUS, i18n.Localize(err), "Localize 依目前 locale(en-US)")
+			})
+		}
+	}
 }
 
 // --- helpers ---
