@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/i18n"
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
@@ -88,7 +89,7 @@ type validationStep func(analyzer *PhaseSyncAnalyzer, ctx *validationContext) er
 func validateManifestFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error {
 	manifests, err := manifest.LoadManifests(ctx.manifestFile)
 	if err != nil {
-		return fmt.Errorf("解析分期總檔案失敗: %w", err)
+		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncParseManifestFailed)
 	}
 
 	ctx.manifests = manifests
@@ -99,8 +100,8 @@ func validateManifestFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) e
 // validateSubjectIndex 驗證主題索引.
 func validateSubjectIndex(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 	if ctx.subjectIndex < 0 || ctx.subjectIndex >= len(ctx.manifests) {
-		return fmt.Errorf("無效的主題索引: %d (共有 %d 個主題): %w",
-			ctx.subjectIndex, len(ctx.manifests), ErrInvalidSubjectIndex)
+		return i18n.WrapError(ErrInvalidSubjectIndex, i18n.KeyErrorPhaseSyncInvalidSubjectIndex,
+			ctx.subjectIndex, len(ctx.manifests))
 	}
 
 	ctx.manifest = ctx.manifests[ctx.subjectIndex]
@@ -111,18 +112,21 @@ func validateSubjectIndex(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 // validateManifestData 驗證分期總檔案數據.
 func validateManifestData(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 	if err := parsers.ValidatePhaseManifest(&ctx.manifest); err != nil {
-		return fmt.Errorf("分期總檔案數據驗證失敗: %w", err)
+		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncManifestDataInvalid)
 	}
 
 	// phase_sync 會開 Motion / Force 檔,故在此要求兩欄非空;CCI 不開這兩檔,不要求(ADR-0045)。
+	// Message 仍是硬編碼 zh:與 parsers.ValidatePhaseManifest 同型別,不在 ADR-0048 遷移範圍。
 	if ctx.manifest.MotionFile == "" {
-		return fmt.Errorf("分期總檔案數據驗證失敗: %w",
-			models.PhaseSyncValidationError{Field: "MotionFile", Message: "Motion檔案名不能為空"})
+		return i18n.WrapError(
+			models.PhaseSyncValidationError{Field: "MotionFile", Message: "Motion檔案名不能為空"},
+			i18n.KeyErrorPhaseSyncManifestDataInvalid)
 	}
 
 	if ctx.manifest.ForceFile == "" {
-		return fmt.Errorf("分期總檔案數據驗證失敗: %w",
-			models.PhaseSyncValidationError{Field: "ForceFile", Message: "力板檔案名不能為空"})
+		return i18n.WrapError(
+			models.PhaseSyncValidationError{Field: "ForceFile", Message: "力板檔案名不能為空"},
+			i18n.KeyErrorPhaseSyncManifestDataInvalid)
 	}
 
 	return nil
@@ -133,7 +137,7 @@ func validateManifestData(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 // (ADR-0047),resolvePhaseRange 不再重驗。
 func (analyzer *PhaseSyncAnalyzer) validatePhasePair(startPhase, endPhase models.PhasePoint) error {
 	if err := analyzer.phaseCalculator.ValidatePhaseOrder(startPhase, endPhase); err != nil {
-		return fmt.Errorf("分期點順序驗證失敗: %w", err)
+		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncPhaseOrderInvalid)
 	}
 
 	return nil
@@ -164,11 +168,11 @@ func validateEMGFilePath(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 	baseFolder := ctx.dataFolder
 	if info, err := os.Stat(baseFolder); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("資料夾不存在 (%s): %w", baseFolder, ErrBaseFolderNotFound)
+			return i18n.WrapError(ErrBaseFolderNotFound, i18n.KeyErrorPhaseSyncDataFolderNotFound, baseFolder)
 		}
-		return fmt.Errorf("資料夾狀態檢查失敗 (%s): %w", baseFolder, err)
+		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncDataFolderStatFailed, baseFolder)
 	} else if !info.IsDir() {
-		return fmt.Errorf("資料夾路徑非目錄 (%s): %w", baseFolder, ErrBaseFolderNotFound)
+		return i18n.WrapError(ErrBaseFolderNotFound, i18n.KeyErrorPhaseSyncDataFolderNotDir, baseFolder)
 	}
 
 	if resolvedBase, err := filepath.EvalSymlinks(baseFolder); err == nil {
@@ -197,11 +201,9 @@ func validateEMGFilePath(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 //   - 其餘（路徑驗證失敗 / baseFolder 無法解析）→ "<dataType> 檔案路徑驗證失敗"。
 func mapOpenDataFileErr(dataType, filename string, err error) error {
 	if errors.Is(err, manifest.ErrManifestDataFileMissing) {
-		//nolint:staticcheck // Chinese error message for user display
-		return fmt.Errorf("%s 檔案不存在 (%s): %w", dataType, filename, ErrFileNotFound)
+		return i18n.WrapError(ErrFileNotFound, i18n.KeyErrorPhaseSyncDataFileNotFound, dataType, filename)
 	}
-	//nolint:staticcheck // Chinese error message for user display
-	return fmt.Errorf("%s 檔案路徑驗證失敗: %w", dataType, err)
+	return i18n.WrapError(err, i18n.KeyErrorPhaseSyncDataFilePathInvalid, dataType)
 }
 
 // validateMotionFile 驗證 Motion 檔案.
@@ -220,7 +222,7 @@ func validateMotionFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 
 	motionData, err := analyzer.motionParser.Parse(f, ctx.manifest.MotionFile)
 	if err != nil {
-		return fmt.Errorf("解析 Motion 檔案失敗: %w", err)
+		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncParseMotionFailed)
 	}
 
 	maxMotionIndex := 0
@@ -234,20 +236,18 @@ func validateMotionFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) err
 // validateMotionPhasePoints 驗證 Motion 相關分期點.
 func validateMotionPhasePoints(manifest *models.PhaseManifest, maxMotionIndex int) error {
 	if manifest.PhasePoints.D > 0 && manifest.PhasePoints.D > maxMotionIndex {
-		//nolint:staticcheck // Chinese error message for user display
-		return fmt.Errorf("D 分期點 index %d 超出 Motion 數據範圍 (最大: %d): %w",
-			manifest.PhasePoints.D, maxMotionIndex, ErrPhasePointOutOfRange)
+		return i18n.WrapError(ErrPhasePointOutOfRange, i18n.KeyErrorPhaseSyncMotionPhaseOutOfRange,
+			"D", manifest.PhasePoints.D, maxMotionIndex)
 	}
 
 	if manifest.PhasePoints.O > 0 && manifest.PhasePoints.O > maxMotionIndex {
-		//nolint:staticcheck // Chinese error message for user display
-		return fmt.Errorf("O 分期點 index %d 超出 Motion 數據範圍 (最大: %d): %w",
-			manifest.PhasePoints.O, maxMotionIndex, ErrPhasePointOutOfRange)
+		return i18n.WrapError(ErrPhasePointOutOfRange, i18n.KeyErrorPhaseSyncMotionPhaseOutOfRange,
+			"O", manifest.PhasePoints.O, maxMotionIndex)
 	}
 
 	if manifest.EMGMotionOffset > 0 && manifest.EMGMotionOffset > maxMotionIndex {
-		return fmt.Errorf("EMGMotionOffset %d 超出 Motion 數據範圍 (最大: %d): %w",
-			manifest.EMGMotionOffset, maxMotionIndex, ErrPhasePointOutOfRange)
+		return i18n.WrapError(ErrPhasePointOutOfRange, i18n.KeyErrorPhaseSyncMotionOffsetOutOfRange,
+			manifest.EMGMotionOffset, maxMotionIndex)
 	}
 
 	return nil
@@ -269,7 +269,7 @@ func validateForceFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) erro
 
 	forceData, err := analyzer.ancParser.Parse(f, ctx.manifest.ForceFile)
 	if err != nil {
-		return fmt.Errorf("解析 Force Plate 檔案失敗: %w", err)
+		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncParseForceFailed)
 	}
 
 	maxForceTime := 0.0
@@ -302,8 +302,8 @@ func validateForcePhasePoints(manifest *models.PhaseManifest, maxForceTime float
 			continue
 		}
 		if value > maxForceTime {
-			return fmt.Errorf("%s 分期點時間 %.3f 超出 Force Plate 數據範圍 (最大: %.3f): %w",
-				phase, value, maxForceTime, ErrPhasePointOutOfRange)
+			return i18n.WrapError(ErrPhasePointOutOfRange, i18n.KeyErrorPhaseSyncForcePhaseOutOfRange,
+				phase, value, maxForceTime)
 		}
 	}
 
@@ -354,7 +354,7 @@ func (analyzer *PhaseSyncAnalyzer) load(
 
 	emgData, err := manifest.LoadEMG(ctx.baseFolder, &ctx.manifest)
 	if err != nil {
-		return nil, nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
+		return nil, nil, i18n.WrapError(err, i18n.KeyErrorPhaseSyncParseEMGFailed)
 	}
 
 	row := ctx.manifest
@@ -371,7 +371,9 @@ func (analyzer *PhaseSyncAnalyzer) load(
 // 在 validateMotionIndexOrder 攔下。負時間在 parseFloat 階段是合法的(機械校準前
 // 偏移,見 muscle_ratio TestAnalyze_NegativeTime_Handled),但只能存活到 batch
 // 時間序列 dump(Output 1);phase_sync 真正取 time-range 才必須擋。
-var ErrNegativePhaseTime = errors.New("phase point force-time 為負值,phase_sync 不接受")
+//
+// 帶 i18n key 的 sentinel(ADR-0048):Error() 固定 zh-TW,errors.Is 照常以指標比對。
+var ErrNegativePhaseTime = i18n.NewError(i18n.KeyErrorPhaseSyncNegativePhaseTime)
 
 // resolvePhaseRange 把 manifest row m 的一對分期點解析為 EMG 時間範圍,並驗證該範圍
 // 落在 emgData 時間範圍內。前提:分期點順序已由入口的 validatePhasePair 驗過(名稱
@@ -401,15 +403,22 @@ func resolvePhaseRange(
 	timeline := synchronizer.NewPhaseTimeline(m)
 	startTime, ok := timeline.At(startPhase)
 	if !ok {
-		return nil, fmt.Errorf("計算分期時間範圍失敗: 開始分期點 %s: %w", startPhase, ErrPhaseValueZero)
+		return nil, i18n.WrapError(
+			i18n.WrapError(ErrPhaseValueZero, i18n.KeyErrorPhaseSyncStartPhaseNotSet, startPhase),
+			i18n.KeyErrorPhaseSyncPhaseRangeFailed)
 	}
 	endTime, ok := timeline.At(endPhase)
 	if !ok {
-		return nil, fmt.Errorf("計算分期時間範圍失敗: 結束分期點 %s: %w", endPhase, ErrPhaseValueZero)
+		return nil, i18n.WrapError(
+			i18n.WrapError(ErrPhaseValueZero, i18n.KeyErrorPhaseSyncEndPhaseNotSet, endPhase),
+			i18n.KeyErrorPhaseSyncPhaseRangeFailed)
 	}
 	if startTime > endTime {
-		return nil, fmt.Errorf("計算分期時間範圍失敗: 計算同步時間範圍失敗: 開始時間 (%.3f) 大於結束時間 (%.3f): %w",
-			startTime, endTime, ErrStartTimeAfterEnd)
+		return nil, i18n.WrapError(
+			i18n.WrapError(
+				i18n.WrapError(ErrStartTimeAfterEnd, i18n.KeyErrorPhaseSyncStartAfterEnd, startTime, endTime),
+				i18n.KeyErrorPhaseSyncSyncRangeFailed),
+			i18n.KeyErrorPhaseSyncPhaseRangeFailed)
 	}
 
 	phaseTimeRange := &models.PhaseTimeRange{StartTime: startTime, EndTime: endTime}
@@ -428,7 +437,7 @@ func resolvePhaseRange(
 func rejectNegativeForceTime(points *models.PhasePoints, phase models.PhasePoint) error {
 	opt, isMotionIndex, err := parsers.GetPhaseValue(points, phase)
 	if err != nil {
-		return fmt.Errorf("解析分期點 %s 失敗: %w", phase, err)
+		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncParsePhaseValueFailed, phase)
 	}
 	if isMotionIndex {
 		return nil
@@ -485,9 +494,9 @@ func phaseSyncComputeError(err error) error {
 
 	switch stageErr.Stage {
 	case StageStatsSlice:
-		return fmt.Errorf("提取 EMG 時間範圍數據失敗: %w", stageErr.Err)
+		return i18n.WrapError(stageErr.Err, i18n.KeyErrorPhaseSyncExtractRangeFailed)
 	case StageStatistics:
-		return fmt.Errorf("計算統計信息失敗: %w", stageErr.Err)
+		return i18n.WrapError(stageErr.Err, i18n.KeyErrorPhaseSyncCalcStatsFailed)
 	default:
 		return stageErr.Err
 	}
@@ -554,7 +563,7 @@ func validateEMGTimeRange(
 	// 空 Time 時原本 emgMinTime=emgMaxTime=0.0,任何 StartTime<0 都通過,
 	// 反而默許了錯位結果 — fail-fast 比 silent miscompute 安全。
 	if emgData == nil || len(emgData.Time) == 0 {
-		return fmt.Errorf("EMG 數據為空: %w", parsers.ErrNilData)
+		return i18n.WrapError(parsers.ErrNilData, i18n.KeyErrorPhaseSyncEMGEmpty)
 	}
 
 	emgMinTime := emgData.Time[0]
@@ -564,15 +573,13 @@ func validateEMGTimeRange(
 	// [[Phase timeline]] 經 ForceTimeToEMGTime 同步後的 ULP 飄移不誤拒,與 CCI /
 	// muscle_ratio 同一容差(ADR-0043)。
 	if before, _ := synchronizer.OutsideEMG(emgData.Time, phaseTimeRange.StartTime); before {
-		return fmt.Errorf(
-			"計算出的 EMG 開始時間 %.3f 小於 EMG 數據最小時間 %.3f (offset: %d): %w",
-			phaseTimeRange.StartTime, emgMinTime, emgMotionOffset, ErrEMGTimeOutOfRange)
+		return i18n.WrapError(ErrEMGTimeOutOfRange, i18n.KeyErrorPhaseSyncEMGStartBeforeMin,
+			phaseTimeRange.StartTime, emgMinTime, emgMotionOffset)
 	}
 
 	if _, after := synchronizer.OutsideEMG(emgData.Time, phaseTimeRange.EndTime); after {
-		return fmt.Errorf(
-			"計算出的 EMG 結束時間 %.3f 超出 EMG 數據範圍 (最大: %.3f, offset: %d): %w",
-			phaseTimeRange.EndTime, emgMaxTime, emgMotionOffset, ErrEMGTimeOutOfRange)
+		return i18n.WrapError(ErrEMGTimeOutOfRange, i18n.KeyErrorPhaseSyncEMGEndAfterMax,
+			phaseTimeRange.EndTime, emgMaxTime, emgMotionOffset)
 	}
 
 	return nil
@@ -582,7 +589,7 @@ func validateEMGTimeRange(
 func (analyzer *PhaseSyncAnalyzer) LoadManifestSubjects(manifestPath string) ([]string, error) {
 	manifests, err := manifest.LoadManifests(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("解析分期總檔案失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorPhaseSyncParseManifestFailed)
 	}
 
 	subjects := make([]string, len(manifests))

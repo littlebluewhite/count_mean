@@ -164,6 +164,46 @@ func TestEnvelope_LocalizesAnalyzerErrors(t *testing.T) {
 			zhTW: "Subject 名稱為空",
 			enUS: "Subject name is empty",
 		},
+		{
+			// DataFolder 不存在:phase_sync 的「資料夾不存在 (%s)」帶路徑 Arg,植入目錄段被 redact。
+			name: "AnalyzePhaseSync_DataFolderMissing",
+			call: func(t *testing.T) string {
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzePhaseSync(PhaseSyncParams{
+					ManifestFile: writeEnvelopeTestManifest(t, t.TempDir(), "S1"),
+					DataFolder:   filepath.Join(plantDir(t), "missing"),
+					StartPhase:   "P0",
+					EndPhase:     "P2",
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+			zhTW: "分析失敗: 資料夾不存在 (<redacted-path>/missing): base folder not found",
+			enUS: "Analysis failed: Data folder does not exist (<redacted-path>/missing): base folder not found",
+		},
+		{
+			// 同上,經 NPS 的 *phase_sync.AnalysisError(StageLoad → 載入資料失敗前綴)。
+			name: "AnalyzeNormalizedPhaseSync_DataFolderMissing",
+			call: func(t *testing.T) string {
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
+					ManifestFile:    writeEnvelopeTestManifest(t, t.TempDir(), "S1"),
+					DataFolder:      filepath.Join(plantDir(t), "missing"),
+					NormStartPhase:  "P0",
+					NormEndPhase:    "P2",
+					StatsStartPhase: "P0",
+					StatsEndPhase:   "P2",
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+			zhTW: "載入資料失敗: 資料夾不存在 (<redacted-path>/missing): base folder not found",
+			enUS: "Failed to load data: Data folder does not exist (<redacted-path>/missing): base folder not found",
+		},
 	}
 
 	for _, tc := range cases {

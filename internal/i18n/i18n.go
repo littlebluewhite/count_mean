@@ -216,6 +216,37 @@ const (
 	KeyErrorCCIMissingMuscleChannel    = "error.cci.missing_muscle_channel"
 	KeyErrorCCIRenderChartFailed       = "error.cci.render_chart_failed"
 
+	// PhaseSync Analysis Messages — phase_sync 以 i18n.NewError / WrapError 回帶 key 的
+	// 錯誤,handler 層 Localize(ADR-0048)。zh-TW 與遷移前硬編碼文字逐位元組相同;
+	// 值只是訊息本身,「: cause」(sentinel 或下游錯誤)由 WrapError 接上。
+	KeyErrorPhaseSyncParseManifestFailed    = "error.phase_sync.parse_manifest_failed"
+	KeyErrorPhaseSyncInvalidSubjectIndex    = "error.phase_sync.invalid_subject_index"
+	KeyErrorPhaseSyncManifestDataInvalid    = "error.phase_sync.manifest_data_invalid"
+	KeyErrorPhaseSyncPhaseOrderInvalid      = "error.phase_sync.phase_order_invalid"
+	KeyErrorPhaseSyncDataFolderNotFound     = "error.phase_sync.data_folder_not_found"
+	KeyErrorPhaseSyncDataFolderStatFailed   = "error.phase_sync.data_folder_stat_failed"
+	KeyErrorPhaseSyncDataFolderNotDir       = "error.phase_sync.data_folder_not_dir"
+	KeyErrorPhaseSyncDataFileNotFound       = "error.phase_sync.data_file_not_found"
+	KeyErrorPhaseSyncDataFilePathInvalid    = "error.phase_sync.data_file_path_invalid"
+	KeyErrorPhaseSyncParseMotionFailed      = "error.phase_sync.parse_motion_failed"
+	KeyErrorPhaseSyncMotionPhaseOutOfRange  = "error.phase_sync.motion_phase_out_of_range"
+	KeyErrorPhaseSyncMotionOffsetOutOfRange = "error.phase_sync.motion_offset_out_of_range"
+	KeyErrorPhaseSyncParseForceFailed       = "error.phase_sync.parse_force_failed"
+	KeyErrorPhaseSyncForcePhaseOutOfRange   = "error.phase_sync.force_phase_out_of_range"
+	KeyErrorPhaseSyncParseEMGFailed         = "error.phase_sync.parse_emg_failed"
+	KeyErrorPhaseSyncNegativePhaseTime      = "error.phase_sync.negative_phase_time"
+	KeyErrorPhaseSyncPhaseRangeFailed       = "error.phase_sync.phase_range_failed"
+	KeyErrorPhaseSyncStartPhaseNotSet       = "error.phase_sync.start_phase_not_set"
+	KeyErrorPhaseSyncEndPhaseNotSet         = "error.phase_sync.end_phase_not_set"
+	KeyErrorPhaseSyncSyncRangeFailed        = "error.phase_sync.sync_range_failed"
+	KeyErrorPhaseSyncStartAfterEnd          = "error.phase_sync.start_after_end"
+	KeyErrorPhaseSyncParsePhaseValueFailed  = "error.phase_sync.parse_phase_value_failed"
+	KeyErrorPhaseSyncExtractRangeFailed     = "error.phase_sync.extract_range_failed"
+	KeyErrorPhaseSyncCalcStatsFailed        = "error.phase_sync.calc_stats_failed"
+	KeyErrorPhaseSyncEMGEmpty               = "error.phase_sync.emg_empty"
+	KeyErrorPhaseSyncEMGStartBeforeMin      = "error.phase_sync.emg_start_before_min"
+	KeyErrorPhaseSyncEMGEndAfterMax         = "error.phase_sync.emg_end_after_max"
+
 	// GUI handler 失敗前綴 — gui.failMessage 的 key(ADR-0036 Webview envelope):
 	// handler 層 localize,analyzer 只回 error / sentinel。值只是前綴(無 verb、
 	// 無冒號),failMessage 接上 ": " + redact 後的 err 文字;多個 handler 的同義
