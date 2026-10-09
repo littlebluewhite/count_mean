@@ -55,7 +55,7 @@ _Avoid_: structured write, typed write, formatted output.
 _Avoid_: write options, write spec, csv request.
 
 **Domain analyzer**
-`internal/{cci, muscle_ratio, phase_sync}` 三個以 [[Manifest]] + dataFolder 為入口的領域計算 orchestrator。每個 analyzer 載入 manifest → 解析 [[Subject]] → parse EMG → 計算該分析種類的領域結果，math 細節下放給 calculator kernel（[[ADR-0005]] calculator family）/ synchronizer / parsers。位於 GUI handler 層（唯一 caller：`AnalyzeCCI` / `AnalyzePhaseSync` / `AnalyzeMuscleRatio`）之下、calculator kernel 之上。
+`internal/{cci, muscle_ratio, phase_sync}` 三個以 [[Manifest]] + dataFolder 為入口的領域計算 orchestrator。每個 analyzer 載入 manifest → 解析 [[Subject]] → parse EMG → 計算該分析種類的領域結果，math 細節下放給 calculator kernel（[[ADR-0005]] calculator family）/ synchronizer / parsers。位於 GUI handler 層之下、calculator kernel 之上；caller 只在 GUI handler 層 —— 各 analyzer 的完整分析入口由 `AnalyzeCCI` / `AnalyzePhaseSync` / `AnalyzeMuscleRatio` 呼叫，另有 `AnalyzeNormalizedPhaseSync` 借用 phase_sync 的 `Load` / `ResolvePhaseRange`、`LoadPhaseManifest` 呼叫 phase_sync 的 `LoadManifestSubjects`。
 三者形狀**刻意分歧**，沿兩條正交軸：
 - **Subject cardinality**：`single-subject`（`cci.AnalyzeCCI` / `phase_sync.AnalyzePhaseSync` 吃 [[Subject]] index、回單一 result struct）｜ `batch`（`muscle_ratio.Analyze` 迴圈整份 manifest、回 `[]SubjectResult` partial-success slice）。
 - **Output ownership**：`compute-only`（cci / phase_sync 只回 compute struct，CSV 由 GUI handler 經 CSVHandler 寫）｜ `compute+write`（muscle_ratio 在 analyzer 內部寫 CSV 並回填 path — 見 [[ADR-0004]]）。

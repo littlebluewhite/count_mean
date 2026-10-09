@@ -1,12 +1,16 @@
 package gui
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/fs"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
@@ -48,4 +52,65 @@ func TestFailMessage_LocalizedAndRedacted(t *testing.T) {
 			assert.Equal(t, tc.want, app.failMessage(tc.key, pathErr))
 		})
 	}
+}
+
+// TestHandlerLogs_ExpectedFailureShape 釘住 failMessage 收斂後 handler 可預期失敗的
+// log 形狀(ADR-0036;entry / exit 規則見 ADR-0035 Decision 5):
+//
+//   - 原 Tier-1(AnalyzeCCI)下游失敗:entry Info + 恰一筆 Error(由 failMessage 記,
+//     訊息為 i18n key)+ exit Info
+//   - 原 Tier-2(AnalyzeMuscleRatio)驗證失敗:entry Info、無 exit Info、無 Error
+//     (inputMessage 不 log)
+func TestHandlerLogs_ExpectedFailureShape(t *testing.T) {
+	newBufApp := func(t *testing.T) (*App, *bytes.Buffer) {
+		t.Helper()
+
+		var buf bytes.Buffer
+		app := newRPCRedactTestApp(t, t.TempDir(), "")
+		app.logger = logging.NewLogger(logging.LevelInfo, &buf, false)
+
+		return app, &buf
+	}
+
+	t.Run("AnalyzeCCI_AnalyzerFailure", func(t *testing.T) {
+		app, buf := newBufApp(t)
+
+		result, err := app.AnalyzeCCI(CCIParams{
+			ManifestFile: filepath.Join(t.TempDir(), "missing_manifest.csv"),
+			DataFolder:   t.TempDir(),
+		})
+		require.NoError(t, err)
+		require.False(t, result.Success)
+
+		logs := buf.String()
+		assert.Equal(t, 1, countLogLines(logs, "[INFO]", "開始CCI 分析"), logs)
+		assert.Equal(t, 1, countLogLines(logs, "[ERROR]", ""), logs)
+		assert.Equal(t, 1, countLogLines(logs, "[ERROR]", i18n.KeyErrorHandlerAnalysisFailed), logs)
+		assert.Equal(t, 1, countLogLines(logs, "[INFO]", "CCI 分析完成"), logs)
+	})
+
+	t.Run("AnalyzeMuscleRatio_ValidateFailure", func(t *testing.T) {
+		app, buf := newBufApp(t)
+
+		result, err := app.AnalyzeMuscleRatio(MuscleRatioParams{DataFolder: t.TempDir()})
+		require.NoError(t, err)
+		require.False(t, result.Success)
+
+		logs := buf.String()
+		assert.Equal(t, 1, countLogLines(logs, "[INFO]", "開始肌肉比值分析"), logs)
+		assert.Equal(t, 0, countLogLines(logs, "", "肌肉比值分析完成"), logs)
+		assert.Equal(t, 0, countLogLines(logs, "[ERROR]", ""), logs)
+	})
+}
+
+// countLogLines 數 text log 中同時含 level 與 msg 的非空行數(空字串代表該條件不限)。
+func countLogLines(logs, level, msg string) int {
+	n := 0
+	for _, line := range strings.Split(logs, "\n") {
+		if line != "" && strings.Contains(line, level) && strings.Contains(line, msg) {
+			n++
+		}
+	}
+
+	return n
 }

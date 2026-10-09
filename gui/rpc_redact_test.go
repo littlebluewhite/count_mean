@@ -66,7 +66,8 @@ func requireNoDirLeak(t *testing.T, text, planted string) {
 }
 
 // newRPCRedactTestApp 走 NewAppWithConfigPath 建完整 App(buildAppState 全套依賴),
-// config 三個目錄與 configPath 都由 caller 指定,避免測試寫進 CWD。
+// OutputDir 與 configPath 由 caller 指定,InputDir / OperateDir 各用一個 t.TempDir(),
+// 避免測試寫進 CWD。
 func newRPCRedactTestApp(t *testing.T, outputDir, configPath string) *App {
 	t.Helper()
 

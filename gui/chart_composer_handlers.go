@@ -1,13 +1,14 @@
 // Package gui — Chart Composer handler family.
 //
-// Slice C of the Chart Composer PRD (#15) — 4 個 Wails RPC handler，串接前端
+// Slice C of the Chart Composer PRD (#15) — 3 個 Wails RPC handler（依序為
+// LoadChartComposerSubjects / GenerateChartComposer / DownloadChartComposerImage），串接前端
 // Composer panel 與 backend `internal/chart` composer engine。
 //
 // 設計取捨摘要：
 //   - 每個 handler 與其他 Wails bound method 同形（ADR-0035）：首句
 //     `defer recoverHandlerPanic`，其餘直列在 body。Chart Composer 不寫 CSV、
 //     無多步驟 pipeline（ADR-0002），只做 manifest load / EMG load / chart render。
-//   - Handler 4（DownloadChartComposerImage）鏡像既有 `DownloadCCIChart` 模式
+//   - Handler 3（DownloadChartComposerImage）鏡像既有 `DownloadCCIChart` 模式
 //     — adapter 端從 params.Subject 經 filename.SubjectOutputName 推導 config.OutputDir
 //     內的 `{subject}_chart_composer.png`,再把
 //     共用 PNG 安全管線（base64 → DecodeAndValidatePNG → validateExternalPathInputs
@@ -15,11 +16,11 @@
 //
 // 錯誤通道契約：
 //
-//   - Handler 1-3 永遠回 non-nil `*XxxResult`，所有可預期失敗都包成
+//   - Handler 1-2 永遠回 non-nil `*XxxResult`，所有可預期失敗都包成
 //     result.Success=false + result.Message；Go err 只在 panic 經由
 //     recoverHandlerPanic 灌入 named return 時才為 non-nil。前端可單一路徑
 //     檢查 result.success / result.message。
-//   - Handler 4 鏡像 DownloadCCIChart 的 dual-channel 契約（path validation
+//   - Handler 3 鏡像 DownloadCCIChart 的 dual-channel 契約（path validation
 //     failure / PNG decode 失敗都走 err channel）— frontend 對 download
 //     按鈕 binding 已假設此契約，不可變更。
 
@@ -167,8 +168,8 @@ func (a *App) LoadChartComposerSubjects(
 		return failedChartComposerSubjectsResult("參數為空"), nil
 	}
 
-	if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
-		return failedChartComposerSubjectsResult(inputMessage(err)), nil
+	if vErr := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); vErr != nil {
+		return failedChartComposerSubjectsResult(inputMessage(vErr)), nil
 	}
 
 	manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
@@ -243,8 +244,8 @@ func (a *App) GenerateChartComposer(
 		return failedChartComposerResult("參數為空"), nil
 	}
 
-	if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
-		return failedChartComposerResult(inputMessage(err)), nil
+	if vErr := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); vErr != nil {
+		return failedChartComposerResult(inputMessage(vErr)), nil
 	}
 
 	if params.Subject == "" {

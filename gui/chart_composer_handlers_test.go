@@ -445,7 +445,7 @@ func TestDownloadChartComposerImage_EmptySubjectFallsBackToUntitled(t *testing.T
 }
 
 // ---------------------------------------------------------------------------
-// Panic recovery — 跨 4 個 handler 共用 contract
+// Panic recovery — 跨 3 個 handler 共用 contract
 // ---------------------------------------------------------------------------
 
 // TestChartComposerHandlers_PanicRecovery 釘住 panic safety:
