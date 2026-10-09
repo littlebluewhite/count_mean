@@ -57,8 +57,10 @@ func TestFailMessage_LocalizedAndRedacted(t *testing.T) {
 // TestHandlerLogs_ExpectedFailureShape 釘住 failMessage 收斂後 handler 可預期失敗的
 // log 形狀(ADR-0036;entry / exit 規則見 ADR-0035 Decision 5):
 //
-//   - 原 Tier-1(AnalyzeCCI)下游失敗:entry Info + 恰一筆 Error(由 failMessage 記,
-//     訊息為 i18n key)+ exit Info
+//   - 原 Tier-1(AnalyzeCCI)下游失敗:entry Info + 恰一筆 Error + exit Info。Error 由
+//     failMessage 記:訊息為 localized 前綴(文字,不是 bare key),context 指名失敗的
+//     handler 與 call site(key 跨 handler 共用、log 的 file:line 固定指向 envelope.go,
+//     併發 Wails 呼叫下 entry log 也無法對應),另帶 i18n key 供跨 locale grep
 //   - 原 Tier-2(AnalyzeMuscleRatio)驗證失敗:entry Info、無 exit Info、無 Error
 //     (inputMessage 不 log)
 func TestHandlerLogs_ExpectedFailureShape(t *testing.T) {
@@ -85,8 +87,14 @@ func TestHandlerLogs_ExpectedFailureShape(t *testing.T) {
 		logs := buf.String()
 		assert.Equal(t, 1, countLogLines(logs, "[INFO]", "開始CCI 分析"), logs)
 		assert.Equal(t, 1, countLogLines(logs, "[ERROR]", ""), logs)
-		assert.Equal(t, 1, countLogLines(logs, "[ERROR]", i18n.KeyErrorHandlerAnalysisFailed), logs)
 		assert.Equal(t, 1, countLogLines(logs, "[INFO]", "CCI 分析完成"), logs)
+
+		key := i18n.KeyErrorHandlerAnalysisFailed
+		assert.Equal(t, 1, countLogLines(logs, "[ERROR] "+i18n.T(key)+" (", ""), "Error 訊息應為 localized 前綴\n"+logs)
+		assert.Equal(t, 0, countLogLines(logs, "[ERROR] "+key, ""), "Error 訊息不可是 bare key\n"+logs)
+		assert.Equal(t, 1, countLogLines(logs, "[ERROR]", "handler=gui.(*App).AnalyzeCCI"), "Error 應指名失敗的 handler\n"+logs)
+		assert.Equal(t, 1, countLogLines(logs, "[ERROR]", "caller=cci_handlers.go:"), "Error 應帶 handler 的 call site\n"+logs)
+		assert.Equal(t, 1, countLogLines(logs, "[ERROR]", "i18n="+key), "Error 應帶 i18n key\n"+logs)
 	})
 
 	t.Run("AnalyzeMuscleRatio_ValidateFailure", func(t *testing.T) {

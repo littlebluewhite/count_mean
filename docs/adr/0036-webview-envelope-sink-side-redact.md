@@ -13,7 +13,7 @@ Go 端文字有兩條路進 Wails webview：**err 通道** —— bound method �
    - 文字沒變（不含路徑或 nil）就原樣回傳原 err，保留 identity。panic 分支不變。
    - [[ADR-0035]] 的「首句 defer」AST 規則保證每個回 error 的 bound method 都經過這裡 —— 這是所有 Go err 進 webview 前的唯一出口，handler 不必各自 redact err。
 2. **Message 通道：只能經 `gui/envelope.go` 三個 helper 建構**：
-   - `(a *App) failMessage(key, err)`：可預期失敗（下游 analyzer / IO / 計算錯誤）。回 `i18n.T(key) + ": " + redact 後的 err 文字`，並以 `a.logger.Error` 記一次（訊息為 key，不隨 locale 變動）；handler 分支不另打 Error log。
+   - `(a *App) failMessage(key, err)`：可預期失敗（下游 analyzer / IO / 計算錯誤）。回 `i18n.T(key) + ": " + redact 後的 err 文字`，並以 `a.logger.Error` 記一次；handler 分支不另打 Error log。log 訊息是 localized 前綴，context 帶 `handler`（呼叫端函式名，`runtime.Callers`）、`caller`（呼叫端 file:line）與 `i18n`（key，供跨 locale grep）—— 欄位不叫 `key`，因 logger 的 sensitive pattern 會遮蔽 `key=` 形狀的值。
    - `inputMessage(err)`：驗證 sentinel（`ErrNoManifestFile`、路徑驗證失敗、Composer 找不到 Subject）。只 redact，不加前綴、不 log —— 使用者輸入問題不是系統錯誤。
    - `redactText(s)`：Message 以外的字串欄位（MR `SubjectDTO.Error`、Composer `MissingFileDTO.ErrMessage`），只 redact、不 log。
    - `failed*Result(...)` 的引數只能是字串字面值、`failMessage(...)` 或 `inputMessage(...)`。`AnalyzePhaseSync` 的分析 / 寫檔分支改用新 `failedPhaseSyncResult`。
@@ -60,7 +60,7 @@ single-channel handler 的 result 型別各異，wrapper 需要每型別的 fail
 
 ## Consequences
 
-- **log 可見差異**：`failMessage` 的 Error log 訊息是 i18n key（如 `error.handler.load_manifest_failed`），caller 位置指向 `envelope.go` 而非 handler 檔；共用 key（如 `analysis_failed`）本身不區分 handler，需搭配前一筆 handler entry log（「開始<name>」）判讀。
+- **log 可見差異**：`failMessage` 的 Error log 訊息是 localized 前綴（隨 locale 變動，例如「分析失敗」），logger 自動記的 `(file:line)` 固定指向 `envelope.go`；指認失敗分支靠 context —— 例：`[ERROR] 分析失敗 (envelope.go:…) error=… context=[handler=gui.(*App).AnalyzeCCI caller=cci_handlers.go:… i18n=error.handler.analysis_failed]`。共用 key（如 `analysis_failed`）不區分 handler，併發 Wails 呼叫下也不能靠前一筆 entry log 對應，所以 `handler` / `caller` 是必要欄位，由 `TestHandlerLogs_ExpectedFailureShape` 釘住。
 - **i18n 初始化失敗的曝露面變大**：`InitI18n` 失敗（例如外部翻譯 JSON 無效）時 `i18n.T` 回 key 本身，所有 handler 的失敗前綴會變成 `error.handler.*`（原本只有 MR 有此曝露）。刪除的 3 個 key 若仍出現在外部翻譯 JSON，`LoadTranslations` 會以 `ErrTranslationKeyUnknown` 拒絕整批載入；production 不產生該 JSON（只有 demo 會 `SaveTranslations`）。
 - `redact.RedactForMessage` 在 gui 的唯一 caller 是 `envelope.go`。
 - 刪除的測試：`TestCCIHandler_ErrorMessage_NoAbsolutePath`、`TestPhaseSyncHandler_ErrorMessage_NoAbsolutePath`（由 `TestRPCMessage_NoAbsolutePath` 涵蓋）；3 份 `leakyPrefixes` 合併為 `requireNoDirLeak`。
