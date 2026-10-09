@@ -26,8 +26,8 @@ type placementCase struct {
 func placementCases() []placementCase {
 	stats := &models.EMGStatistics{
 		Subject:      "subj_01",
-		StartPhase:   models.PhaseP0,
-		EndPhase:     models.PhaseL,
+		StartPhase:   models.PhaseP1,
+		EndPhase:     models.PhaseC,
 		StartTime:    0,
 		EndTime:      1,
 		ChannelNames: []string{"Ch1"},
@@ -53,13 +53,13 @@ func placementCases() []placementCase {
 
 	return []placementCase{
 		{
-			name: "PhaseSyncResult", wantName: "subj_01_P0-L_statistics.csv",
+			name: "PhaseSyncResult", wantName: "subj_01_P1-C_statistics.csv",
 			write: func(h *CSVHandler, sub string) (string, error) {
 				return h.WritePhaseSyncResult(WriteRequest{SubDir: sub}, stats)
 			},
 		},
 		{
-			name: "NormalizedPhaseSyncResult", wantName: "subj_01_normalized_norm-P0-L_stats-P0-L.csv",
+			name: "NormalizedPhaseSyncResult", wantName: "subj_01_normalized_norm-P0-L_stats-P1-C.csv",
 			write: func(h *CSVHandler, sub string) (string, error) {
 				return h.WriteNormalizedPhaseSyncResult(WriteRequest{SubDir: sub}, stats,
 					models.PhaseP0, models.PhaseL)
@@ -135,7 +135,7 @@ func TestSubjectWriters_Placement(t *testing.T) {
 
 			t.Run("SubDirEscapeRejected", func(t *testing.T) {
 				t.Parallel()
-				for _, sub := range []string{"../evil", "../../etc", "/etc"} {
+				for _, sub := range []string{"../evil", "../../etc", "../x"} {
 					h, dir := newFormatAwareTestHandler(t)
 					got, err := tc.write(h, sub)
 					require.Error(t, err, sub)
@@ -153,14 +153,20 @@ func TestSubjectWriters_Placement(t *testing.T) {
 				if runtime.GOOS == "windows" {
 					t.Skip("敏感位置字面值以 POSIX 路徑表示")
 				}
-				cfg := config.DefaultConfig()
-				cfg.InputDir, cfg.OperateDir, cfg.OutputDir = "/etc", "/etc", "/etc"
-				h := NewCSVHandler(cfg)
+				// 目錄根本身(/etc、<tmp>/.ssh)與其子孫等價命中敏感位置(ADR-0038)。
+				for _, outDir := range []string{"/etc", filepath.Join(t.TempDir(), ".ssh")} {
+					cfg := config.DefaultConfig()
+					cfg.InputDir, cfg.OperateDir, cfg.OutputDir = outDir, outDir, outDir
+					h := NewCSVHandler(cfg)
 
-				got, err := tc.write(h, "")
-				require.Error(t, err)
-				require.Empty(t, got)
-				require.Contains(t, err.Error(), "輸出路徑無效")
+					got, err := tc.write(h, "")
+					require.Error(t, err, outDir)
+					require.Empty(t, got, outDir)
+					require.Contains(t, err.Error(), "輸出路徑無效", outDir)
+					if outDir != "/etc" {
+						require.NoDirExists(t, outDir, "拒絕時不得建立敏感目錄")
+					}
+				}
 			})
 
 			t.Run("NoStrayTmp", func(t *testing.T) {

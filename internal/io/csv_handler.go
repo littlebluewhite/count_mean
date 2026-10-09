@@ -704,7 +704,7 @@ func (h *CSVHandler) writeFileOutput(req WriteRequest, data [][]string) (string,
 // SubjectOutputName → safeJoinOutput(containment)→ ValidateExternalPath → MkdirAll →
 // WriteCSVAtomic{Header, BasePaths, Emit}。回傳「實際寫入的路徑」。
 //
-// ADR-0016 invariant「Subject-based write ⟹ WriteCSVAtomic + BasePaths」在此結構化:
+// ADR-0016 invariant「Subject-based write ⟹ WriteCSVAtomic + BasePaths」(ADR-0040)在此結構化:
 // 7 個 Subject-based writer 只持有 row layout,沒有任何一個能繞過本步驟。
 // 輸出檔名 = filename.SubjectOutputName(subject, suffix) + ".csv"(subject 內部強制 Sanitize)。
 //
@@ -762,7 +762,7 @@ func (h *CSVHandler) placeSubjectRows(subDir, subject, suffix string, data [][]s
 // row layout (8-row: header / 開始分期點 / 開始時間 / 結束分期點 / 結束時間 /
 // 時間差值 / 平均值 / 最大值)、precision (phaseSyncPrecision=6) 由 implementation 持有。
 // 路徑由 placeSubjectOutput 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
-// ADR-0001 invariant: Subject-based write ⟹ WriteCSVAtomic。
+// ADR-0016 invariant: Subject-based write ⟹ WriteCSVAtomic。
 func (h *CSVHandler) WritePhaseSyncResult(
 	req WriteRequest,
 	stats *models.EMGStatistics,
@@ -785,7 +785,7 @@ func (h *CSVHandler) WritePhaseSyncResult(
 //
 // row layout 與 WritePhaseSyncResult 相同 (8-row,由 ConvertPhaseSyncResult 持有)。
 // 路徑由 placeSubjectOutput 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
-// ADR-0001 invariant: Subject-based write ⟹ WriteCSVAtomic。
+// ADR-0016 invariant: Subject-based write ⟹ WriteCSVAtomic。
 func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
 	req WriteRequest,
 	stats *models.EMGStatistics,
@@ -1028,7 +1028,8 @@ func formatMuscleRatioCell(values []float64, idx int) string {
 }
 
 // safeJoinOutput 把 subDir + filename 安全 join 在 OutputDir 之下,拒絕逸出 OutputDir
-// 的 SubDir(含 traversal 如 "../evil" 或絕對路徑如 "/etc")。
+// 的 SubDir(如 traversal "../evil")。絕對 SubDir(如 "/etc")經 filepath.Join 被當成相對片段,
+// 結果落在 OutputDir/etc 之內,並非逸出;其敏感位置由 ValidateExternalPath 把關。
 //
 // ADR-0001 invariant:writeFileOutput 與直接走 csvutil.WriteCSVAtomic 的 writer
 // (placeSubjectOutput)共用本 helper 守住 OutputDir 邊界,
@@ -1103,7 +1104,7 @@ func (h *CSVHandler) WriteCCIPhasesResult(
 // precision = phaseSyncPrecision = 6 (常數,無 precision 參數 — 與 Output 2 共享常數,不共享 formatter)。
 //
 // 路徑由 placeSubjectOutput 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
-// ADR-0001 invariant: Subject-based write ⟹ WriteCSVAtomic。
+// ADR-0016 invariant: Subject-based write ⟹ WriteCSVAtomic。
 func (h *CSVHandler) WriteNormalizedPhaseSyncEMG(
 	req WriteRequest,
 	data *models.PhaseSyncEMGData,
