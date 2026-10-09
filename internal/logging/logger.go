@@ -327,10 +327,17 @@ func newControlCharEscaper() *strings.Replacer {
 // 順序:redact.Paths → control-char escape → keyword mask。Paths 要看到原始換行
 // (空白,會斷開目錄段);先 escape 的話它看到字面 `\n` / `\t`,而 POSIX 目錄段接受
 // `\` 與詞中 `:`,多行 stack 會被黏成一個段而只剩最後一個 frame。Paths 只會插入
-// `<redacted-path>/`,不會產生控制字元,escape 放在它之後仍涵蓋整個輸出。
+// `<redacted-path>/`,不會產生控制字元,escape 放在它之後仍涵蓋整個輸出。同理,
+// 已 sanitize 過(已跳脫)的文字不可再跑 Paths —— 只能再套 escapeAndMask(writeText
+// 組 `k=v` 時即是如此)。
 func (l *Logger) sanitizeMessage(message string) string {
-	sanitized := redact.Paths(message)
-	sanitized = controlCharEscaper.Replace(sanitized)
+	return l.escapeAndMask(redact.Paths(message))
+}
+
+// escapeAndMask 是 sanitizeMessage 去掉 redact.Paths 的後半段:control-char escape +
+// keyword mask。escape 對已跳脫的文字是 no-op(輸入已無控制字元),可安全重套。
+func (l *Logger) escapeAndMask(s string) string {
+	sanitized := controlCharEscaper.Replace(s)
 
 	if l.sensitivePatterns == nil {
 		return sanitized
@@ -611,10 +618,12 @@ func (l *Logger) writeText(entry *LogEntry) {
 				b.WriteByte(' ')
 			}
 			first = false
-			// fmt.Sprintf 仍是 K-loop 內最 readable 的 path;若 v 是 string 等
-			// 簡單型別未來可進一步 fast-path。sanitize 必須走 — context value
-			// 可能含 raw \r\n。
-			b.WriteString(l.sanitizeMessage(fmt.Sprintf("%s=%v", k, v)))
+			// v 已在 logImpl 經 sanitizeContextValue(Paths + escape + mask)處理
+			// (error_code / recoverable 是程式常數)。不可對 v 再跑 redact.Paths:
+			// 它的換行已跳脫成字面 `\n` / `\t`,第二次 Paths 會把多行 stack 黏成一個
+			// 目錄段而只剩最後一個 frame。key 補 Paths;escape 對已跳脫文字是 no-op、
+			// 仍涵蓋 key;keyword mask 要看 `k=v` 組合(password=… 以 key 為線索)。
+			b.WriteString(l.escapeAndMask(redact.Paths(k) + "=" + fmt.Sprintf("%v", v)))
 		}
 		b.WriteByte(']')
 	}

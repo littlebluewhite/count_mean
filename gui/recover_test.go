@@ -286,6 +286,50 @@ func TestRecoverHandlerPanic_StackRedactedAtDebugLevel(t *testing.T) {
 	}
 }
 
+// panicsInNamedFrameForStackTest 給 Debug stack 一個可辨識的 handler frame。
+func panicsInNamedFrameForStackTest(logger *logging.Logger) (err error) {
+	defer recoverHandlerPanic("NamedFrameHandler", logger, &err)
+	panic("simulated panic for text stack test")
+}
+
+// TestRecoverHandlerPanic_TextLogKeepsStackFrames 釘住 text 格式(config 預設)的
+// Debug stack 逐 frame 保留:stack 走 context 欄位,logImpl 的 sanitizeContextValue
+// 已 redact + 跳脫過一次;writeText 若對 `k=v` 再跑一次 redact.Paths,第二次看到的
+// 是字面 `\n` / `\t`,整串 stack 會被黏成一個目錄段、只剩最後一個 frame。
+// 斷言 handler 自己的 frame、runtime panic frame 都還在,且每個 frame 的檔案行都
+// 以 `<redacted-path>/` 開頭(沒有 `\t/` 開頭的絕對路徑)。
+func TestRecoverHandlerPanic_TextLogKeepsStackFrames(t *testing.T) {
+	var buf bytes.Buffer
+	testLogger := logging.NewLogger(logging.LevelDebug, &buf, false)
+
+	if err := panicsInNamedFrameForStackTest(testLogger); !errors.Is(err, ErrInternalPanic) {
+		t.Fatalf("expected ErrInternalPanic, got %v", err)
+	}
+
+	logOutput := buf.String()
+	_, stack, found := strings.Cut(logOutput, "stack=")
+	if !found {
+		t.Fatalf("Debug text log 應含 stack 欄位:\n%s", logOutput)
+	}
+
+	for _, want := range []string{
+		"gui.panicsInNamedFrameForStackTest(", // handler 自己的 frame
+		"recover_test.go:",                    // handler frame 的檔案行
+		"panic(",                              // runtime panic frame
+		"gui.recoverHandlerPanic(",
+	} {
+		if !strings.Contains(stack, want) {
+			t.Errorf("text log 的 stack 應保留 %q:\n%s", want, stack)
+		}
+	}
+
+	if strings.Contains(stack, `\t/`) {
+		t.Errorf("stack 的檔案行應以 <redacted-path>/ 開頭,不得留絕對路徑:\n%s", stack)
+	}
+
+	requireNoDirLeak(t, logOutput, "")
+}
+
 // 釘住 redact 正則對常見 system path prefix 的覆蓋範圍,確認新加平台/路徑
 // prefix 時不會被誤判。
 func TestRedactPathsInStack_HandlesSystemPathVariants(t *testing.T) {

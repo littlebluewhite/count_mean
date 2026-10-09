@@ -984,6 +984,13 @@ func TestPaths_DocumentedOverRedaction(t *testing.T) {
 			input: `'\\nas\a\b.csv' and '\\nas\c\d.csv'`,
 			want:  `'<redacted-path>/d.csv'`,
 		},
+		{
+			// 行首 fallback 逐行作用:多行文字裡以 `/` 開頭、regex 沒抓到的行也被改寫
+			// (logger 先 Paths 再跳脫後,log 訊息的每一行都會經過這裡)
+			name:  "per_line_fallback_in_multiline_text",
+			input: "usage:\n/help for more",
+			want:  "usage:\n<redacted-path>/help for more",
+		},
 	}
 
 	for _, tc := range cases {

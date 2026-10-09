@@ -27,7 +27,7 @@ Go 端文字有兩條路進 Wails webview：**err 通道** —— bound method �
    - **目錄段文法**：段 = 以一或多個半形空白分隔的詞，不以空白開頭或結尾。
      - POSIX（`/…/`）：詞不含空白、`/`、`"`；`\` 是一般字元（段尾的 `\`、`%q` 的 `\\`、`Doe\nancy` 都算詞的一部分）；`'` 與 `:` 只能在詞中間（`O'Neil`；macOS Finder 名稱裡的 `/` 在 POSIX 層是 `:`，如 `2026:05:18`）。
      - drive-letter（`C:\…\`、`C:/…/`）/ UNC（`\\server\share\…\`）：詞不含空白、`\`、`/`、`:`、`"`（後兩者在 Windows 名稱不合法），`'` 可在任何位置；分隔字元是 `\`、`/` 或 `%q` 格式化後成對的 `\\`（UNC 開頭可為 `\\\\`）。
-     - 換行是空白，所以 `Paths` 必須吃原始文字：`Logger.sanitizeMessage` 先 `Paths` 再跳脫控制字元。反過來的話字面 `\n` / `\t` 會把多行 stack 黏成一個段、只剩最後一個 frame（`TestSanitizeMessage_MultiLineStackRedactedPerLine`）。
+     - 換行是空白，所以 `Paths` 必須吃原始文字、且每段文字只吃一次：`Logger.sanitizeMessage` 先 `Paths` 再跳脫控制字元；text 格式的 `writeText` 組 `k=v` 時，value 已在 `sanitizeContextValue` 處理過（已跳脫），只再套跳脫與 keyword mask（`escapeAndMask`），`Paths` 只補在 key 上。對已跳脫文字再跑 `Paths` 的話，字面 `\n` / `\t` 會把多行 stack 黏成一個段、只剩最後一個 frame —— panic 的 Debug stack 正是走 context 欄位（`TestSanitizeMessage_MultiLineStackRedactedPerLine`、`TestWriteText_MultiLineContextValueRedactedPerLine`、gui `TestRecoverHandlerPanic_TextLogKeepsStackFrames`）。
      - 涵蓋 `Jane Doe`、`OneDrive - Hospital`、`EMG Data`、`O'Neil`、Windows 的 `'Jane'`、雙空白、`2026:05:18`、`resolved=%q` 形狀的 POSIX / Windows / UNC 路徑。歷史：`0c320ed` 時 drive-letter / UNC 段不接受空白，drive-letter / POSIX 段不接受 `'`（UNC 段則接受空白與 `\` 以外的任何字元），POSIX 段不接受雙空白與 `:`，`%q` 的 `\\` 分隔完全不匹配 —— 這些段原文留存。
    - **不符文法的目錄段原文留存**，其後的目錄段是否脫敏取決於分隔字元：
      - POSIX：段含 `"`、tab 等非半形空白、詞頭尾的 `'` 或 `:`（`'Jane'`、`Study: Phase 1`），或以空白開頭 / 結尾 —— 只有該段留存，POSIX 分支在下一個 `/` 重新起始。例：`/Users/x/Study: Phase 1/S01/emg.csv` → `<redacted-path>/Study: Phase 1<redacted-path>/emg.csv`。

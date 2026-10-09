@@ -917,6 +917,30 @@ func TestSanitizeMessage_MultiLineStackRedactedPerLine(t *testing.T) {
 	}
 }
 
+// TestWriteText_MultiLineContextValueRedactedPerLine 釘住 text 格式的 context 欄位:
+// value 已在 logImpl 經 sanitizeContextValue redact + 跳脫,writeText 不得再對它跑
+// 一次 redact.Paths(第二次看到字面 `\n` / `\t`,會把多行 value 黏成一個目錄段);
+// 但 `k=v` 組合才成形的 keyword mask(password=…)仍要生效。
+func TestWriteText_MultiLineContextValueRedactedPerLine(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(LevelInfo, &buf, false)
+
+	logger.Info("batch", map[string]any{
+		"files":    "\t/Users/alice/Jane Doe/a.csv\n/Users/alice/O'Neil/b.csv",
+		"password": "hunter2secret",
+	})
+
+	out := buf.String()
+	if want := `files=\t<redacted-path>/a.csv\n<redacted-path>/b.csv`; !strings.Contains(out, want) {
+		t.Errorf("多行 context value 應逐行脫敏,want 子字串 %q:\n%s", want, out)
+	}
+	for _, leak := range []string{"/Users/", "Jane Doe", "O'Neil", "hunter2secret"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("text log 洩漏 %q:\n%s", leak, out)
+		}
+	}
+}
+
 // TestInitLogger_Reinit_ClosesOldHandle 守護
 //
 // **Scenario**: caller 連續呼叫兩次 InitLogger (eg GUI 內 settings 改 logDir

@@ -58,9 +58,10 @@ import (
 //   - drive-letter / UNC 詞:不含空白、`\`、`/`、`:`、`"`(後兩者在 Windows 名稱不合法),
 //     `'` 可在任何位置。分隔字元是 `\`、`/` 或 %q 跳脫後成對的 `\\`。
 //
-// 換行是空白:Paths 要吃原始文字。先把換行跳脫成字面 `\n` / `\t` 再呼叫的話,多行
-// stack 會被黏成一個「目錄段」而只剩最後一個 frame —— logger.sanitizeMessage 因此先
-// Paths 再跳脫控制字元。
+// 換行是空白:Paths 要吃原始文字,且同一段文字不可在跳脫後再吃一次。換行已跳脫成
+// 字面 `\n` / `\t` 的文字再呼叫的話,多行 stack 會被黏成一個「目錄段」而只剩最後一個
+// frame —— logger.sanitizeMessage 因此先 Paths 再跳脫控制字元,writeText 組 `k=v` 時
+// 也不對已 sanitize 的 value 重跑 Paths。
 //
 // 不符文法的目錄段會中斷匹配、該段原文留存;其後的目錄段要看分隔字元(ADR-0036
 // Decision 5):`/` 會讓 POSIX 分支重新起始,只有該段留存;單一 `\` 不會重新起始任何
