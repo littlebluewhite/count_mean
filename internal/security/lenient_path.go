@@ -76,10 +76,14 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 	// Cross-platform 場景：manifest 在 Windows 端產生，用於 macOS/Linux 端執行。
 	normalized := strings.ReplaceAll(filename, `\`, "/")
 
+	// 錯誤訊息只帶 basename:manifest filename 可能是相對路徑且含 subject / patient 資料夾名,
+	// webview sink 的 redact.Paths 無法遮蔽相對路徑、對絕對路徑也保留最後一段,必須在來源端就去掉目錄。
+	shown := lenientShownName(filename)
+
 	// Null byte：os.OpenFile 會拒，但 error path 會把未清理的 byte 寫進 log（observability
 	// 污染風險）。提前擋。
 	if strings.ContainsRune(normalized, 0) {
-		return "", fmt.Errorf("檔名包含 null byte: %q", filename)
+		return "", fmt.Errorf("檔名包含 null byte: %q", shown)
 	}
 
 	// Whitespace-only / dot-only：filepath.Clean(".") 與 Clean(strings.TrimSpace("  ")) 都
@@ -87,7 +91,7 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 	// 行為未定）。明確拒絕。
 	cleaned := filepath.Clean(strings.TrimSpace(normalized))
 	if cleaned == "" || cleaned == "." {
-		return "", fmt.Errorf("檔名無效（空 / 純 whitespace / dot-only）: %q", filename)
+		return "", fmt.Errorf("檔名無效（空 / 純 whitespace / dot-only）: %q", shown)
 	}
 
 	// 長度上限：strict 路徑（PathValidator）對 absPath/filename 有 4096/255 守門；
@@ -105,7 +109,7 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 	//   - macOS / Linux 上 `filepath.IsAbs("/etc/passwd")` = true,HasPrefix 是 redundant
 	//     defense-in-depth,沒有 regress。
 	if filepath.IsAbs(normalized) || strings.HasPrefix(normalized, "/") {
-		return "", fmt.Errorf("檔名不可為絕對路徑: %s", filename)
+		return "", fmt.Errorf("檔名不可為絕對路徑: %s", shown)
 	}
 
 	// 複用 security.HasTraversalElement：split on / and \，比對 ".." element（非 substring），
@@ -122,7 +126,7 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 	if HasTraversalElement(normalized) || HasTraversalElement(cleaned) ||
 		hasTraversalElementTrimmed(normalized) ||
 		hasTraversalElementZeroWidthStripped(normalized) {
-		return "", fmt.Errorf("檔名包含 \"..\" 路徑元素: %s", filename)
+		return "", fmt.Errorf("檔名包含 \"..\" 路徑元素: %s", shown)
 	}
 
 	joined := filepath.Clean(filepath.Join(baseFolder, normalized))
@@ -138,18 +142,23 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 	// 其中 link → /etc 會在 lexical Rel 通過後仍實際讀 /etc/emg.csv。
 	resolvedJoined, err := fsperm.EvalSymlinksWithFallback(joined, evalSymlinksLenientMaxDepth)
 	if err != nil {
-		return "", fmt.Errorf("無法解析路徑 %s: %w", filename, err)
+		return "", fmt.Errorf("無法解析路徑 %s: %w", shown, err)
 	}
 
 	// 包含關係(含 Windows cross-volume 的 IsAbs(rel) defense-in-depth)統一由
 	// fsperm.IsWithinResolved 判定;resolvedJoined 已解析過,再解析為 idempotent。
 	if _, ok := fsperm.IsWithinResolved(cleanBase, resolvedJoined); !ok {
-		return "", fmt.Errorf("檔案路徑落在資料夾外 (含 symlink 解析): %s", filename)
+		return "", fmt.Errorf("檔案路徑落在資料夾外 (含 symlink 解析): %s", shown)
 	}
 
 	// 回傳原 lexical joined：caller 仍透過 fsperm.ReadFlags 含 O_NOFOLLOW 開最終 component；
 	// 安全 boundary 已由上面 resolved Rel 檢查保證。
 	return joined, nil
+}
+
+// lenientShownName 回傳可放進錯誤訊息的檔名:只留 basename(同樣把 "\\" 視為分隔符)。
+func lenientShownName(filename string) string {
+	return filepath.Base(strings.ReplaceAll(filename, `\`, "/"))
 }
 
 // OpenLenientValidated 是 manifest-driven EMG 讀檔的**單一 fused 安全入口**：
@@ -190,7 +199,7 @@ func OpenLenientValidated(baseFolder, filename string) (*os.File, error) {
 	}
 	f, err := fsperm.OpenReadValidated(joined, []string{baseFolder})
 	if err != nil {
-		return nil, fmt.Errorf("OpenLenientValidated: 開啟 %s 失敗: %w", filename, err)
+		return nil, fmt.Errorf("OpenLenientValidated: 開啟 %s 失敗: %w", lenientShownName(filename), err)
 	}
 	return f, nil
 }
