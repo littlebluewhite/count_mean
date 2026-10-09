@@ -2,6 +2,7 @@ package gui
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -158,4 +159,33 @@ func TestValidatePhaseParams_AcceptsValidNumericStrings(t *testing.T) {
 	assert.InDelta(t, 0.0, ranges[0].Start, 1e-9)
 	assert.InDelta(t, 0.5, ranges[0].End, 1e-9)
 	assert.InDelta(t, 1.0, ranges[1].End, 1e-9)
+}
+
+// TestAnalyzePhases_MissingInput_ErrChannel 釘住 AnalyzePhases 的 dual 錯誤通道:
+// 驗證失敗與讀檔失敗都走 (nil, err),不包成 failed-result。
+func TestAnalyzePhases_MissingInput_ErrChannel(t *testing.T) {
+	inDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.InputDir = inDir
+	cfg.OutputDir = t.TempDir()
+	app := NewApp(cfg, "test")
+
+	phases := []PhaseSpec{{Name: "站立期", StartTime: "0.0", EndTime: "0.05"}}
+
+	t.Run("empty_input_file", func(t *testing.T) {
+		result, err := app.AnalyzePhases(PhaseParams{InputFile: "", Phases: phases})
+		require.ErrorIs(t, err, ErrNoInputFile)
+		assert.Nil(t, result)
+	})
+
+	t.Run("nonexistent_input_file", func(t *testing.T) {
+		result, err := app.AnalyzePhases(PhaseParams{
+			InputFile: filepath.Join(inDir, "missing.csv"),
+			Phases:    phases,
+		})
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "讀取資料檔案失敗: "),
+			"讀檔失敗應以「讀取資料檔案失敗: 」包裝,got %q", err.Error())
+		assert.Nil(t, result)
+	})
 }
