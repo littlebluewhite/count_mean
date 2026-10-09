@@ -3,12 +3,12 @@ package gui
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"count_mean/internal/errors"
 	"count_mean/internal/io"
 	"count_mean/internal/maxmean"
 	"count_mean/internal/models"
+	"count_mean/internal/security/fsperm"
 )
 
 // calculateMaxMeanBatch 批次處理資料夾中的所有CSV檔案.
@@ -49,7 +49,7 @@ func (a *App) buildMaxMeanFileSource(s *appState, inputPath string) (maxmean.Fil
 	}
 
 	relPath, err := filepath.Rel(s.config.InputDir, inputPath)
-	if err != nil || strings.HasPrefix(relPath, "..") {
+	if err != nil || !fsperm.IsWithin(s.config.InputDir, inputPath) {
 		// 外部絕對路徑
 		return &externalFileSource{csvHandler: s.csvHandler, dirPath: inputPath}, filepath.Base(inputPath), nil
 	}

@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"count_mean/internal/security/redact"
 )
@@ -157,7 +156,7 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 			redactDir(hitBase), redactDir(resolvedParent), relErr)
 	}
 	// belt-and-suspenders: the leaf must stay within hitBase.
-	if relParent == ".." || strings.HasPrefix(relParent, ".."+string(filepath.Separator)) {
+	if !IsWithin(hitBase, resolvedParent) {
 		return nil, fmt.Errorf("%w: leaf %s escapes base %s",
 			ErrPathEscapesBase, redactDir(resolvedParent), redactDir(hitBase))
 	}

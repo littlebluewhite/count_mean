@@ -21,7 +21,7 @@ import (
 
 // TestValidateEMGFilePath_NonExistentBaseFolder 釘住 當 baseFolder 不
 // 存在時，EvalSymlinks 會回傳 *PathError；舊版只 silently 落回原始字串（baseFolder
-// 不變），然後 PathValidator 才用一個不存在的 base 做 isPathWithinBase 比較，得到
+// 不變），然後 PathValidator 才用一個不存在的 base 做 fsperm.IsWithin 比較，得到
 // 含糊的 "EMG 檔案路徑驗證失敗"。修復後需在 EvalSymlinks 失敗且原因非 ENOENT 之外的
 // 情況下顯式 return 「資料夾不存在」class 錯誤，方便使用者快速定位設定錯誤。
 func TestValidateEMGFilePath_NonExistentBaseFolder(t *testing.T) {

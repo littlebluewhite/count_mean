@@ -139,21 +139,9 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 		return "", fmt.Errorf("無法解析路徑 %s: %w", filename, err)
 	}
 
-	resolvedBase, err := filepath.EvalSymlinks(cleanBase)
-	if err != nil {
-		return "", fmt.Errorf("無法解析 baseFolder %s: %w", baseFolder, err)
-	}
-
-	rel, err := filepath.Rel(resolvedBase, resolvedJoined)
-	// defense-in-depth:除 `..` prefix 之外,加 `!filepath.IsAbs(rel)` 擋
-	// cross-volume Windows edge case。`filepath.Rel` 對跨 volume / UNC vs drive-letter
-	// 等情境多會回 error,但極端 case 下可能 silently 回絕對路徑樣式 — 與
-	// pathvalidator.go:540 的 `!strings.HasPrefix(rel, string(filepath.Separator))`
-	// 對齊;IsAbs 還能擋 Windows `C:\` 形式 (HasPrefix("\") 漏)。
-	if err != nil ||
-		rel == ".." ||
-		strings.HasPrefix(rel, ".."+string(filepath.Separator)) ||
-		filepath.IsAbs(rel) {
+	// 包含關係(含 Windows cross-volume 的 IsAbs(rel) defense-in-depth)統一由
+	// fsperm.IsWithinResolved 判定;resolvedJoined 已解析過,再解析為 idempotent。
+	if _, ok := fsperm.IsWithinResolved(cleanBase, resolvedJoined); !ok {
 		return "", fmt.Errorf("檔案路徑落在資料夾外 (含 symlink 解析): %s", filename)
 	}
 

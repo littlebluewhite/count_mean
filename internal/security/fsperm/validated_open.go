@@ -46,7 +46,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"count_mean/internal/security/redact"
@@ -166,7 +165,7 @@ func OpenReadValidated(path string, basePaths []string) (*os.File, error) {
 }
 
 // matchAnyBase 對 resolvedPath 比對每個 base：先 EvalSymlinks(base)
-// 解析 base 本身的 symlink，再 filepath.Rel 看是否落在 base 之下。
+// 解析 base 本身的 symlink，再以 IsWithinResolved 看是否落在 base 之下。
 //
 // 回傳:命中的 resolved base path(供 Linux openat2 用作 dirfd anchor)以及命中旗標。
 func matchAnyBase(resolvedPath string, basePaths []string) (string, bool) {
@@ -175,23 +174,10 @@ func matchAnyBase(resolvedPath string, basePaths []string) (string, bool) {
 		if base == "" {
 			continue
 		}
-		resolvedBase, err := filepath.EvalSymlinks(base)
-		if err != nil {
-			// base 不存在 — 嘗試用 cleaned/abs 比對（caller 可能傳「即將建立」的 dir）
-			absBase, absErr := filepath.Abs(base)
-			if absErr != nil {
-				continue
-			}
-			resolvedBase = filepath.Clean(absBase)
+		// base 不存在(caller 可能傳「即將建立」的 dir)由 IsWithinResolved 沿 parent 解析。
+		if resolvedBase, ok := IsWithinResolved(base, resolvedPath); ok {
+			return resolvedBase, true
 		}
-		rel, err := filepath.Rel(resolvedBase, resolvedPath)
-		if err != nil {
-			continue
-		}
-		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
-		}
-		return resolvedBase, true
 	}
 	return "", false
 }

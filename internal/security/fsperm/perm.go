@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // FilePerm 為 0o600 — 應用程式建立檔案的標準權限（僅 owner 可讀寫）。
@@ -67,4 +68,59 @@ func evalSymlinksWithFallbackDepth(path string, depth, maxDepth int, bounded boo
 		return "", err
 	}
 	return filepath.Join(resolvedParent, filepath.Base(path)), nil
+}
+
+// IsWithin 回報 target 是否落在 base 之內(含 target 等於 base)。**純詞法比對**:不碰
+// 檔系統、不解析 symlink、不做 Abs,兩者需同為絕對或同為相對,否則(filepath.Rel 報錯)
+// 回 false。要擋 symlink 逸出請用 IsWithinResolved。
+//
+// 判定以 filepath.Rel(base, target) 的結果為準,逐 element 而非字串前綴:
+//   - rel == "." (target == base) → within
+//   - rel 為 ".." 或以 ".."+Separator 開頭 → 不在內(`base/../x`、`base2` 皆在此列)
+//   - rel 為絕對路徑(Windows 跨 volume / UNC 的 defense-in-depth)→ 不在內
+//   - `base/..foo`、`base/foo..bar` 的第一個 element 不是 ".." → within
+//
+// 大小寫與 Windows drive/volume 處理完全沿用 filepath.Rel 在執行 OS 上的行為。
+func IsWithin(base, target string) bool {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return !filepath.IsAbs(rel)
+}
+
+// IsWithinResolved 是 IsWithin 的 symlink-aware 版:base 與 target 先各自絕對化,再以
+// EvalSymlinksWithFallback(ADR-0028,不限深度)解析,於解析後的路徑比對。不存在的
+// 尾段(「即將建立」的 dir / 檔)沿 parent 解析後接回,故 base 或 target 尚未存在也可判定。
+//
+// 回傳解析後的 base,讓需要它的 caller(如 atomic write 的 dirfd anchor)不必再解析一次。
+// 任一路徑為空、無法絕對化或解析失敗 → ("", false)(fail-closed);ok 為 false 時
+// resolvedBase 一律為 ""。
+func IsWithinResolved(base, target string) (resolvedBase string, ok bool) {
+	if base == "" || target == "" {
+		return "", false
+	}
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return "", false
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", false
+	}
+	resolvedBase, err = EvalSymlinksWithFallback(absBase, 0)
+	if err != nil {
+		return "", false
+	}
+	resolvedTarget, err := EvalSymlinksWithFallback(absTarget, 0)
+	if err != nil {
+		return "", false
+	}
+	if !IsWithin(resolvedBase, resolvedTarget) {
+		return "", false
+	}
+	return resolvedBase, true
 }

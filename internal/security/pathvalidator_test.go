@@ -1061,3 +1061,21 @@ func TestPerformBasicSecurityChecks_AppDataPolicy_CrossPlatform(t *testing.T) {
 		})
 	}
 }
+
+// 名稱以 `..` 開頭但不是 traversal element 的子項(`..foo`、`foo..bar`)是 base 內的合法
+// 子路徑。舊 isPathWithinBase 用 HasPrefix(rel, "..") 比對,把 `..foo` 誤拒。
+func TestValidateFilePath_AcceptsChildNamedDotDotPrefix(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	validator := NewPathValidator([]string{base})
+
+	for _, name := range []string{"..foo", "..foo/data.csv", "foo..bar"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := validator.ValidateFilePath(filepath.Join(base, name)); err != nil {
+				t.Fatalf("ValidateFilePath(base/%s) 應通過,got %v", name, err)
+			}
+		})
+	}
+}

@@ -125,7 +125,12 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 
 	// 檢查路徑是否在允許的基礎路徑內
 	for _, basePath := range allowed {
-		if isPathWithinBase(absPath, basePath) {
+		// 白名單本應已絕對化(NewPathValidator);再 Abs 一次支援長絕對路徑、容忍手建的 validator。
+		absBase, absErr := filepath.Abs(basePath)
+		if absErr != nil {
+			continue
+		}
+		if fsperm.IsWithin(absBase, absPath) {
 			return nil
 		}
 	}
@@ -435,28 +440,6 @@ func (pv *PathValidator) GetSafePath(basePath, filename string) (string, error) 
 	}
 
 	return fullPath, nil
-}
-
-// isPathWithinBase 檢查目標路徑是否在基礎路徑內，支援長絕對路徑.
-func isPathWithinBase(targetPath, basePath string) bool {
-	// 獲取基礎路徑的絕對路徑
-	absBasePath, err := filepath.Abs(basePath)
-	if err != nil {
-		return false
-	}
-
-	// 標準化路徑分隔符
-	absBasePath = filepath.Clean(absBasePath)
-	targetPath = filepath.Clean(targetPath)
-
-	// 使用 filepath.Rel 檢查相對關係
-	rel, err := filepath.Rel(absBasePath, targetPath)
-	if err != nil {
-		return false
-	}
-
-	// 檢查相對路徑是否有效（不包含 .. 且不是絕對路徑）
-	return !strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, string(filepath.Separator))
 }
 
 // performBasicSecurityChecks 執行基本安全檢查,適用於無白名單限制的情況。

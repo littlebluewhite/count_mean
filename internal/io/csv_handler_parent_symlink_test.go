@@ -17,7 +17,7 @@ import (
 // 把檔案寫到 outsideDir/out.csv。
 //
 // V1 verify report (.review_reports/verify_01_parent_symlink_toctou.md) 的
-// Exploit 1：lexical isPathWithinBase + O_NOFOLLOW 只擋 leaf,留下 parent component
+// Exploit 1：lexical fsperm.IsWithin + O_NOFOLLOW 只擋 leaf,留下 parent component
 // 為 symlink 的攻擊面。WriteCSV 過去走 lexical-only,本 test 過去會 false-pass,
 // 修法後切到 fsperm.OpenWriteValidated 並 EvalSymlinks resolve 後再 boundary
 // check,parent-symlink 解析後落在 outsideDir 外於 allowedDir,reject。
