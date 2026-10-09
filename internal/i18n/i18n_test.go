@@ -274,8 +274,7 @@ func TestT_MuscleRatioKeysVerbCompat(t *testing.T) {
 // TestI18n_NoCatalogPercentWVerb 守門：translationData 中任何 entry 含 %w verb 都 fail。
 //
 // i18n.T 內部用 fmt.Sprintf，而 %w 只有 fmt.Errorf 認得；放進 catalog 會輸出 "%!w(...)"
-// 破壞 user-facing 訊息。Error wrap 必須由 caller 用
-// `fmt.Errorf("%s: %w", i18n.T(key), innerErr)` pattern 處理。
+// 破壞 user-facing 訊息。Error wrap 由 i18n.WrapError(cause, key) 處理。
 //
 // 實作策略：用既有 SaveTranslations 把 catalog 寫成 JSON 後 ReadFile + 掃字面，
 // 避開為了 test 新增 catalog iteration API surface。
@@ -303,7 +302,7 @@ func TestI18n_NoCatalogPercentWVerb(t *testing.T) {
 
 		for k, v := range trs {
 			if strings.Contains(v, "%w") {
-				t.Errorf("locale %s key %q 含 %%w verb: %q\nfmt.Sprintf 不認 %%w；error wrap 須由 caller 用 fmt.Errorf(\"%%s: %%w\", i18n.T(key), err) pattern", loc, k, v)
+				t.Errorf("locale %s key %q 含 %%w verb: %q\nfmt.Sprintf 不認 %%w；error wrap 用 i18n.WrapError(cause, key)", loc, k, v)
 			}
 		}
 	}
@@ -330,32 +329,6 @@ func TestI18n_AllMuscleRatioKeysCovered(t *testing.T) {
 				t.Errorf("locale %s key %q fallback 到 key 本身（catalog 缺 entry）", loc, k)
 			}
 		}
-	}
-}
-
-// TestI18n_CallerWrapPatternPreservesErrorsIs 預先驗 Phase 3 核心 wrap pattern：
-// `fmt.Errorf("%s: %w", i18n.T(key), inner)` 仍能讓 errors.Is 穿透 wrap chain。
-// Phase 3 analyzer.go 的 3 處 %w 改造（OutputDir / ParseManifest / Mkdir）都依賴此 contract。
-func TestI18n_CallerWrapPatternPreservesErrorsIs(t *testing.T) {
-	inst := NewI18n()
-	if err := inst.LoadTranslations("./nonexistent"); err != nil {
-		t.Fatalf("載入內建翻譯失敗: %v", err)
-	}
-	inst.SetLocale(LocaleZhTW)
-
-	inner := errors.New("inner sentinel")
-	wrapped := fmt.Errorf("%s: %w", inst.T(KeyErrorMuscleRatioOutputDirInvalid), inner)
-
-	if !errors.Is(wrapped, inner) {
-		t.Errorf("errors.Is 應穿透 wrap chain；got false")
-	}
-
-	msg := wrapped.Error()
-	if !strings.Contains(msg, "OutputDir 驗證失敗") {
-		t.Errorf("wrapped error 應含 i18n 翻譯訊息；got %q", msg)
-	}
-	if !strings.Contains(msg, "inner sentinel") {
-		t.Errorf("wrapped error 應含 inner error；got %q", msg)
 	}
 }
 

@@ -59,7 +59,7 @@ import (
 //   - 11 條 × 4 locales = 44 entries 純粹膨脹 catalog 與 binary
 //
 // User-facing message 由上層 wrapper 提供，例如 muscle_ratio/analyzer.go 的
-// `result.Error = i18n.T(KeyErrorMuscleRatioSubjectParseEMGFailed, err)` — user
+// `result.Err = i18n.NewError(KeyErrorMuscleRatioSubjectParseEMGFailed, err)` — user
 // 主要看到的就是 wrapper 提供的 abstracted message，底層 detail 進 log 即可。
 //
 // 新增 validation rule 時若需 i18n message，於上層 wrap，不在此檔加 catalog 依賴。

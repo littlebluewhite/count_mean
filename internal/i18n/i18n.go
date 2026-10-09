@@ -175,10 +175,10 @@ const (
 	KeyHelpScalingFactor = "help.scaling_factor"
 	KeyHelpPhaseLabels   = "help.phase_labels"
 
-	// Muscle Ratio Analysis Messages — surfaced through SubjectResult.Error or
-	// MuscleRatioResult.Message。%w verb 禁止:catalog 字串只能含 fmt.Sprintf-
-	// compatible verbs (%s %v %d %q);error wrap 由 caller 用
-	// `fmt.Errorf("%s: %w", i18n.T(key), innerErr)` pattern 處理。
+	// Muscle Ratio Analysis Messages — muscle_ratio 以 i18n.NewError / WrapError 回帶 key
+	// 的錯誤(Analyze 的 err、SubjectResult.Err),gui 以 i18n.Localize 渲染(ADR-0048);
+	// status.* 兩個 key 由 gui 直接 T。%w verb 禁止:catalog 字串只能含 fmt.Sprintf-
+	// compatible verbs (%s %v %d %q);「: cause」由 WrapError 接上。
 	KeyErrorMuscleRatioOutputDirInvalid          = "error.muscle_ratio.output_dir_invalid"
 	KeyErrorMuscleRatioParseManifestFailed       = "error.muscle_ratio.parse_manifest_failed"
 	KeyErrorMuscleRatioEmptyManifest             = "error.muscle_ratio.empty_manifest"

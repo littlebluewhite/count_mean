@@ -110,7 +110,7 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 			OutputAllPath:   sr.OutputAllPath,
 			OutputPhasePath: sr.OutputPhasePath,
 			Success:         sr.Success,
-			Error:           redactText(sr.Error), // analyzer 的逐 subject 錯誤字串常帶 EMG 檔絕對路徑
+			Error:           redactText(sr.Err), // 依目前 locale 渲染;開檔錯誤常帶 EMG 檔絕對路徑
 			DurationMs:      sr.DurationMs,
 		})
 	}

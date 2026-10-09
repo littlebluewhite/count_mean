@@ -11,7 +11,7 @@ import (
 
 // [[Webview envelope]] 的 Message 通道(ADR-0036):handler 把可預期失敗包進
 // result 字串欄位(Message、MuscleRatioSubjectDTO.Error、Composer MissingFileDTO.ErrMessage)
-// 時,只能經這三個 helper 產生文字。err 通道的出口在 recover.go
+// 時,只能經這三個 helper 從 err 產生文字。err 通道的出口在 recover.go
 // (recoverHandlerPanic → redactForWebview)。
 //
 // 兩條通道都只做 sink-side redact.Paths:目錄段換成 `<redacted-path>/`,**末段
@@ -60,9 +60,9 @@ func inputMessage(err error) string {
 	return redact.Paths(i18n.Localize(err))
 }
 
-// redactText 給 Message 以外的 webview 文字欄位過 redact、不 log:muscle_ratio
-// SubjectResult.Error(analyzer 回的字串)、Composer MissingFileDTO.ErrMessage
-// (non-blocking 的缺檔清單,不是失敗)。
-func redactText(s string) string {
-	return redact.Paths(s)
+// redactText 給 Message 以外的 webview 文字欄位:redact 後的 i18n.Localize(err)、不 log,
+// nil 回空字串 —— muscle_ratio SubjectResult.Err(逐 subject 的失敗或 Output 2 warning)、
+// Composer MissingFileDTO.ErrMessage(non-blocking 的缺檔清單,不是失敗)。
+func redactText(err error) string {
+	return redact.Paths(i18n.Localize(err))
 }

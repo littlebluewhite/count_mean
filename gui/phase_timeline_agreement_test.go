@@ -155,8 +155,8 @@ func TestPhaseTimelineAgreement_AllCallers(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Len(t, results, 1)
-		require.True(t, results[0].Success, "Error=%s", results[0].Error)
-		require.Empty(t, results[0].Error, "Output 2 不得被跳過")
+		require.True(t, results[0].Success, "Err=%v", results[0].Err)
+		require.NoError(t, results[0].Err, "Output 2 不得被跳過")
 
 		f, err := os.Open(results[0].OutputPhasePath)
 		require.NoError(t, err)

@@ -72,9 +72,10 @@ func TestFailMessage_LocalizedAndRedacted(t *testing.T) {
 	}
 }
 
-// TestInputMessage_LocalizedAndRedacted 釘住 inputMessage:無前綴、redact 後的
-// i18n.Localize(err),nil 回空字串。
-func TestInputMessage_LocalizedAndRedacted(t *testing.T) {
+// TestInputMessageAndRedactText_LocalizedAndRedacted 釘住 inputMessage 與 redactText
+// (MuscleRatioSubjectDTO.Error 等字串欄位):無前綴、redact 後的 i18n.Localize(err),
+// nil 回空字串。
+func TestInputMessageAndRedactText_LocalizedAndRedacted(t *testing.T) {
 	prevLocale := i18n.GetLocale()
 	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
 
@@ -96,6 +97,7 @@ func TestInputMessage_LocalizedAndRedacted(t *testing.T) {
 			i18n.SetLocale(tc.locale)
 
 			assert.Equal(t, tc.want, inputMessage(tc.err))
+			assert.Equal(t, tc.want, redactText(tc.err))
 		})
 	}
 }
@@ -143,6 +145,24 @@ func TestEnvelope_LocalizesAnalyzerErrors(t *testing.T) {
 			},
 			zhTW: "分析失敗: 無效的主題索引: 5 (共有 1 個主題)",
 			enUS: "Analysis failed: Invalid subject index: 5 (1 subjects available)",
+		},
+		{
+			name: "AnalyzeMuscleRatio_SubjectError",
+			call: func(t *testing.T) string {
+				dir := t.TempDir()
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzeMuscleRatio(MuscleRatioParams{
+					ManifestFile: writeEnvelopeTestManifest(t, dir, "   "),
+					DataFolder:   dir,
+				})
+				require.NoError(t, err)
+				require.Len(t, result.Subjects, 1)
+				require.False(t, result.Subjects[0].Success)
+
+				return result.Subjects[0].Error
+			},
+			zhTW: "Subject 名稱為空",
+			enUS: "Subject name is empty",
 		},
 	}
 

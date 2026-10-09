@@ -34,10 +34,13 @@ type Params struct {
 
 // SubjectResult records one subject's outcome in the batch.
 //
-// Success 與 Error 的語意：
-//   - Success=true + Error="" → 兩個 CSV 都產出
-//   - Success=true + Error 非空 → Output 1 產出、Output 2 跳過（warning），Error 解釋原因
-//   - Success=false → Output 1 也沒產出（檔案不存在、解析失敗、缺通道等），Error 必填
+// Success 與 Err 的語意：
+//   - Success=true + Err=nil → 兩個 CSV 都產出
+//   - Success=true + Err 非 nil → Output 1 產出、Output 2 跳過（warning），Err 解釋原因
+//   - Success=false → Output 1 也沒產出（檔案不存在、解析失敗、缺通道等），Err 必填
+//
+// Err 多為帶 i18n key 的 i18n.Error(Error() 是 zh-TW),呈現給使用者時由 gui 以
+// i18n.Localize 依目前 locale 渲染(ADR-0048);下游套件的錯誤(開檔、缺通道)原樣保留。
 //
 // DurationMs：per-subject 從 analyzeSubject 入口到結束的耗時（millisecond），用於
 // partial-success batch 的 diagnostic（哪個 subject 拖慢整批、哪個 subject 提早 fail）。
@@ -46,7 +49,7 @@ type SubjectResult struct {
 	OutputAllPath   string
 	OutputPhasePath string
 	Success         bool
-	Error           string
+	Err             error
 	DurationMs      int64
 }
 
@@ -75,7 +78,7 @@ func NewAnalyzer() *Analyzer {
 // ctx 帶 Wails Shutdown / 使用者中止訊號。subject 迴圈間檢查 ctx.Done(),
 // 收到取消立即停止 — 已完成的 subject 結果保留,未開始的不處理。caller 可以
 // 從 returned []SubjectResult 看到 partial 進度,但 returned error 為
-// ctx.Err()(包 i18n 後),caller(gui handler)可區分「整批失敗」vs「部分取消」。
+// ctx.Err()(包成帶 i18n key 的錯誤),caller(gui handler)可區分「整批失敗」vs「部分取消」。
 //
 //nolint:err113 // dynamic errors for user-facing output
 func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult, error) {
@@ -96,16 +99,16 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 	// config 的 caller 仍可能傳壞值。ValidateExternalDir 擋
 	// traversal / system-dir prefix，避免後續 os.MkdirAll 走到 /etc 等敏感目錄。
 	if err := security.DefaultValidator().ValidateExternalDir(params.OutputDir); err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorMuscleRatioOutputDirInvalid), err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorMuscleRatioOutputDirInvalid)
 	}
 
 	manifests, err := manifest.LoadManifests(params.ManifestFile)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorMuscleRatioParseManifestFailed), err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorMuscleRatioParseManifestFailed)
 	}
 
 	if len(manifests) == 0 {
-		return nil, errors.New(i18n.T(i18n.KeyErrorMuscleRatioEmptyManifest))
+		return nil, i18n.NewError(i18n.KeyErrorMuscleRatioEmptyManifest)
 	}
 
 	if err := assertUniqueSanitizedSubjects(manifests); err != nil {
@@ -113,14 +116,14 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 	}
 
 	if err := os.MkdirAll(params.OutputDir, fsperm.DirPerm); err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorMuscleRatioMkdirFailed), err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorMuscleRatioMkdirFailed)
 	}
 
 	// EMG 開檔走 manifest.OpenDataFile（內部走 security.OpenLenientValidated，
 	// 允許含 literal "%" 的 BTS 匯出檔名 — 見 internal/manifest 套件 doc）。
 	//
 	// 每個 subject 處理完後檢查 ctx.Done() — Wails Shutdown 或使用者中止會
-	// cancel ctx,迴圈立刻 break。返回 partial results + ctx.Err()(由 caller 包 i18n)。
+	// cancel ctx,迴圈立刻 break。返回 partial results + 包成帶 i18n key 的 ctx.Err()。
 	// 不在 analyzeSubject 內部頻繁 poll,subject-level granularity 對 batch UX 已夠 —
 	// 每個 subject 平均 ~100ms-2s,使用者按 cancel 後最多等一個 subject 結束。
 	results := make([]SubjectResult, 0, len(manifests))
@@ -132,7 +135,7 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 				"total":     len(manifests),
 				"reason":    ctx.Err(),
 			})
-			return results, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorMuscleRatioCancelled), ctx.Err())
+			return results, i18n.WrapError(ctx.Err(), i18n.KeyErrorMuscleRatioCancelled)
 		default:
 		}
 		m := &manifests[i]
@@ -147,7 +150,7 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 	return results, nil
 }
 
-// analyzeSubject processes one subject. Errors are captured in SubjectResult.Error and never abort the batch.
+// analyzeSubject processes one subject. Errors are captured in SubjectResult.Err and never abort the batch.
 //
 // 計時：用 named return + defer 在所有 return 路徑（含 error fast-path）統一寫入 DurationMs，
 // 避免 11 個 return point 各自重複呼叫 time.Since。
@@ -167,7 +170,7 @@ func (a *Analyzer) analyzeSubject(
 	//   - 單筆空 Subject 能通過批次唯一性檢查，但 "untitled_muscle_ratio.csv" 是
 	//     非預期且易與真實命名碰撞的檔名。故在此 per-subject 再 fail-fast，要求顯式 Subject。
 	if strings.TrimSpace(m.Subject) == "" {
-		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectEmptyName)
+		result.Err = i18n.NewError(i18n.KeyErrorMuscleRatioSubjectEmptyName)
 		return result
 	}
 
@@ -175,21 +178,21 @@ func (a *Analyzer) analyzeSubject(
 	if err != nil {
 		var parseErr *manifest.EMGParseError
 		if errors.As(err, &parseErr) {
-			result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectParseEMGFailed, err)
+			result.Err = i18n.NewError(i18n.KeyErrorMuscleRatioSubjectParseEMGFailed, err)
 		} else {
-			result.Error = err.Error()
+			result.Err = err
 		}
 		return result
 	}
 
 	if len(emg.Time) == 0 {
-		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectEmptyEMG)
+		result.Err = i18n.NewError(i18n.KeyErrorMuscleRatioSubjectEmptyEMG)
 		return result
 	}
 
 	channelMap, err := musclemap.RightSideChannels(emg.Headers)
 	if err != nil {
-		result.Error = err.Error()
+		result.Err = err
 		return result
 	}
 
@@ -206,7 +209,7 @@ func (a *Analyzer) analyzeSubject(
 		},
 	)
 	if writeAllErr != nil {
-		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectWriteOutput1Failed, writeAllErr)
+		result.Err = i18n.NewError(i18n.KeyErrorMuscleRatioSubjectWriteOutput1Failed, writeAllErr)
 		return result
 	}
 
@@ -216,9 +219,9 @@ func (a *Analyzer) analyzeSubject(
 	// 留在 Analyzer。collectPhasePoints warn-path 與 Output 2 寫檔失敗都讓
 	// Output 1 視為 sticky-success)。
 	points, warn := a.collectPhasePoints(m, emg)
-	if warn != "" {
+	if warn != nil {
 		result.Success = true
-		result.Error = warn
+		result.Err = warn
 		return result
 	}
 
@@ -239,9 +242,9 @@ func (a *Analyzer) analyzeSubject(
 	)
 	if writePhaseErr != nil {
 		// Output 1 已寫入磁碟，依 SubjectResult 文件契約 Output 1 success 為 sticky：
-		// 與 collectPhasePoints warn-path 對稱（Success=true + Error 解釋為何 Output 2 跳過）。
+		// 與 collectPhasePoints warn-path 對稱（Success=true + Err 解釋為何 Output 2 跳過）。
 		result.Success = true
-		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectWriteOutput2Failed, writePhaseErr)
+		result.Err = i18n.NewError(i18n.KeyErrorMuscleRatioSubjectWriteOutput2Failed, writePhaseErr)
 		return result
 	}
 
@@ -304,12 +307,10 @@ var biomechanicalIntervalMidpoints = []struct {
 //
 // Output length is up to 2N-1+K rows where K = len(biomechanicalIntervalMidpoints).
 //
-// 第二個回傳值是 warning message — 非空表示 Output 2 該跳過（Output 1 已成功）。
-//
-//nolint:err113 // strings, not errors, for the warning channel
+// 第二個回傳值是 warning — 非 nil 表示 Output 2 該跳過（Output 1 已成功）。
 func (*Analyzer) collectPhasePoints(
 	m *models.PhaseManifest, emg *models.PhaseSyncEMGData,
-) ([]phasePoint, string) {
+) ([]phasePoint, error) {
 	timeline := synchronizer.NewPhaseTimeline(m)
 	phases := make([]phasePoint, 0, len(timeline))
 	for _, pt := range timeline {
@@ -317,7 +318,7 @@ func (*Analyzer) collectPhasePoints(
 	}
 
 	if len(phases) < 2 {
-		return nil, i18n.T(i18n.KeyErrorMuscleRatioSubjectInsufficientPhases)
+		return nil, i18n.NewError(i18n.KeyErrorMuscleRatioSubjectInsufficientPhases)
 	}
 
 	// ResolveTimeIndex 對 out-of-range target 會靜默 clamp 到首/末 sample，產生「看似成功但
@@ -327,7 +328,7 @@ func (*Analyzer) collectPhasePoints(
 	emgStart, emgEnd := emg.Time[0], emg.Time[len(emg.Time)-1]
 	for _, p := range phases {
 		if _, inRange := synchronizer.ResolveTimeIndex(emg.Time, p.time); !inRange {
-			return nil, i18n.T(
+			return nil, i18n.NewError(
 				i18n.KeyErrorMuscleRatioSubjectPhaseOutOfEMGRange,
 				p.name, p.time, emgStart, emgEnd,
 			)
@@ -359,7 +360,7 @@ func (*Analyzer) collectPhasePoints(
 	// 用 SliceStable 而非 Slice 防止 D == T0 等罕見等時邊界讓 test snapshot 不穩。
 	sort.SliceStable(points, func(i, j int) bool { return points[i].time < points[j].time })
 
-	return points, ""
+	return points, nil
 }
 
 // appendIntervalMidpoints adds biomechanical-interval midpoints (defined in
@@ -425,8 +426,6 @@ func appendIntervalMidpoints(
 //   - NFC normalization：macOS APFS/HFS+ 對 "café" (NFC, U+00E9) 與 "café" (NFD, e+U+0301)
 //     hash 同 on-disk name，但 strings.ToLower 視為相異 — 若不 NFC normalize，會放行兩筆
 //     manifest 然後第二筆覆寫第一筆。
-//
-//nolint:err113 // dynamic errors for user-facing output
 func assertUniqueSanitizedSubjects(manifests []models.PhaseManifest) error {
 	seen := make(map[string]string, len(manifests))
 
@@ -435,10 +434,10 @@ func assertUniqueSanitizedSubjects(manifests []models.PhaseManifest) error {
 		key := norm.NFC.String(strings.ToLower(safe))
 
 		if prev, exists := seen[key]; exists {
-			return errors.New(i18n.T(
+			return i18n.NewError(
 				i18n.KeyErrorMuscleRatioSubjectCollision,
 				prev, m.Subject, safe,
-			))
+			)
 		}
 
 		seen[key] = m.Subject

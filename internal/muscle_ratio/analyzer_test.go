@@ -18,14 +18,12 @@ import (
 	"count_mean/internal/io"
 )
 
-// TestMain 初始化 i18n global singleton，使本 package 所有 test 都能透過 i18n.T()
-// 拿到 catalog 翻譯 — 否則 globalI18n==nil 時 T() 走 fallback 回 key 本身
-// （如 "error.muscle_ratio.output_dir_invalid"），破壞既有 test 對中文字面與英文
-// marker（如 "OutputDir"）的子字串比對。
+// TestMain 初始化 i18n global singleton,locale 釘 zh-TW。
 //
-// 注意：InitI18n 內部會 DetectSystemLocale 後 SetLocale，會被 CI runner 的
-// LANG=en_US.UTF-8 蓋成 LocaleEnUS — 所以這裡必須再顯式 SetLocale(LocaleZhTW)
-// 把 locale 釘死成繁中，使 catalog 解析到中文字串、test substring 比對才會通過。
+// muscle_ratio 的錯誤是帶 key 的 i18n.Error,Error() 固定以內建 zh-TW catalog 渲染、
+// 不依賴 global(ADR-0048);global 供測試切 locale 驗證 i18n.Localize ——
+// globalI18n==nil 時 SetLocale 是 no-op。InitI18n 內部會 DetectSystemLocale 後
+// SetLocale,CI runner 的 LANG=en_US.UTF-8 會蓋成 LocaleEnUS,故再顯式 SetLocale(LocaleZhTW)。
 func TestMain(m *testing.M) {
 	_ = i18n.InitI18n("./nonexistent") // 不存在路徑 → fallback 走內建 translationData
 	i18n.SetLocale(i18n.LocaleZhTW)    // 覆寫 InitI18n 內部的 system-locale detection
@@ -152,7 +150,7 @@ func TestAnalyze_MissingChannelFailFast(t *testing.T) {
 
 	sr := result[0]
 	assert.False(t, sr.Success, "缺通道時 Subject 應失敗")
-	assert.Contains(t, sr.Error, "缺少必要的肌肉通道")
+	assert.ErrorContains(t, sr.Err, "缺少必要的肌肉通道")
 }
 
 func TestAnalyze_PhasePoints_FullPhasesYieldRows(t *testing.T) {
@@ -189,8 +187,8 @@ func TestAnalyze_PhasePoints_FullPhasesYieldRows(t *testing.T) {
 	require.Len(t, result, 1)
 
 	sr := result[0]
-	assert.True(t, sr.Success, "Error=%s", sr.Error)
-	assert.Empty(t, sr.Error)
+	assert.True(t, sr.Success, "Err=%v", sr.Err)
+	assert.NoError(t, sr.Err)
 	assert.NotEmpty(t, sr.OutputPhasePath)
 
 	rows := readCSV(t, sr.OutputPhasePath)
@@ -263,7 +261,7 @@ func TestAnalyze_PhasePoints_NoIntervalMidpointsWhenSDTAbsent(t *testing.T) {
 	require.NoError(t, err)
 
 	sr := result[0]
-	require.True(t, sr.Success, "Error=%s", sr.Error)
+	require.True(t, sr.Success, "Err=%v", sr.Err)
 	rows := readCSV(t, sr.OutputPhasePath)
 	assert.Equal(t, 1+9, len(rows), "5 phases without S/D/T → 9 data rows (2N-1, no interval midpoints)")
 
@@ -324,7 +322,7 @@ func TestAnalyze_PhasePoints_MissingS_OnlyMidDT(t *testing.T) {
 	require.NoError(t, err)
 
 	sr := result[0]
-	require.True(t, sr.Success, "Error=%s", sr.Error)
+	require.True(t, sr.Success, "Err=%v", sr.Err)
 	rows := readCSV(t, sr.OutputPhasePath)
 	assert.Equal(t, 1+18, len(rows), "9 phases (no S) → 17 adjacent + 1 interval (mid_D_T) = 18 data rows")
 
@@ -359,7 +357,7 @@ func TestAnalyze_PhasePoints_MissingD_NoIntervalMidpoints(t *testing.T) {
 	require.NoError(t, err)
 
 	sr := result[0]
-	require.True(t, sr.Success, "Error=%s", sr.Error)
+	require.True(t, sr.Success, "Err=%v", sr.Err)
 	rows := readCSV(t, sr.OutputPhasePath)
 	assert.Equal(t, 1+17, len(rows), "9 phases (no D) → 17 adjacent + 0 interval = 17 data rows")
 
@@ -394,7 +392,7 @@ func TestAnalyze_PhasePoints_MissingT_OnlyMidSD(t *testing.T) {
 	require.NoError(t, err)
 
 	sr := result[0]
-	require.True(t, sr.Success, "Error=%s", sr.Error)
+	require.True(t, sr.Success, "Err=%v", sr.Err)
 	rows := readCSV(t, sr.OutputPhasePath)
 	assert.Equal(t, 1+18, len(rows), "9 phases (no T) → 17 adjacent + 1 interval (mid_S_D) = 18 data rows")
 
@@ -433,7 +431,7 @@ func TestAnalyze_PhasePoints_MissingC_NoDuplicateMidSD(t *testing.T) {
 	require.NoError(t, err)
 
 	sr := result[0]
-	require.True(t, sr.Success, "Error=%s", sr.Error)
+	require.True(t, sr.Success, "Err=%v", sr.Err)
 	rows := readCSV(t, sr.OutputPhasePath)
 	// 9 phases + 8 adjacent midpoints (含 mid_S_D 由 adjacent loop 產生) + 1 interval (mid_D_T)
 	// = 18 rows;若 mid_S_D 重複生成則會是 19。
@@ -471,7 +469,7 @@ func TestAnalyze_PhasePoints_MissingT0_NoDuplicateMidDT(t *testing.T) {
 	require.NoError(t, err)
 
 	sr := result[0]
-	require.True(t, sr.Success, "Error=%s", sr.Error)
+	require.True(t, sr.Success, "Err=%v", sr.Err)
 	rows := readCSV(t, sr.OutputPhasePath)
 	// 9 phases + 8 adjacent midpoints (含 mid_D_T 由 adjacent loop 產生) + 1 interval (mid_S_D)
 	// = 18 rows;若 mid_D_T 重複生成則會是 19。
@@ -515,7 +513,7 @@ func TestAnalyze_PhasePoints_MissingC_ReversedSDOrder_NoDuplicate(t *testing.T) 
 	require.NoError(t, err)
 
 	sr := result[0]
-	require.True(t, sr.Success, "Error=%s", sr.Error)
+	require.True(t, sr.Success, "Err=%v", sr.Err)
 	rows := readCSV(t, sr.OutputPhasePath)
 	// 9 phases + 8 adjacent midpoints (含 mid_D_S 反序產生) + 1 interval (mid_D_T)
 	// = 18 rows。若反向 dedup 失效,mid_S_D 也會被加 → 19 rows。
@@ -558,7 +556,7 @@ func TestAnalyze_PhasePoints_MissingT0_ReversedDTOrder_NoDuplicate(t *testing.T)
 	require.NoError(t, err)
 
 	sr := result[0]
-	require.True(t, sr.Success, "Error=%s", sr.Error)
+	require.True(t, sr.Success, "Err=%v", sr.Err)
 	rows := readCSV(t, sr.OutputPhasePath)
 	// 9 phases + 8 adjacent midpoints (含 mid_T_D 反序產生) + 1 interval (mid_S_D)
 	// = 18 rows。若反向 dedup 失效,mid_D_T 也會被加 → 19 rows。
@@ -598,8 +596,8 @@ func TestAnalyze_PhaseTimeOutOfRange(t *testing.T) {
 	assert.True(t, sr.Success, "Output 1 should still succeed even if Output 2 is skipped")
 	assert.NotEmpty(t, sr.OutputAllPath, "Output 1 應該已產生")
 	assert.Empty(t, sr.OutputPhasePath, "Output 2 應該被跳過")
-	assert.Contains(t, sr.Error, "落在 EMG 範圍")
-	assert.Contains(t, sr.Error, "外")
+	assert.ErrorContains(t, sr.Err, "落在 EMG 範圍")
+	assert.ErrorContains(t, sr.Err, "外")
 }
 
 // TestAnalyze_ConcurrentCallsNoRace 釘住「並行 Analyze 不應觸發 race」這個 invariant。
@@ -685,7 +683,7 @@ func TestAnalyze_EMGFileWithLiteralPercent(t *testing.T) {
 	require.Len(t, result, 1)
 
 	sr := result[0]
-	assert.True(t, sr.Success, "含 '%%' 的 EMG 檔名應該被接受；Error=%s", sr.Error)
+	assert.True(t, sr.Success, "含 '%%' 的 EMG 檔名應該被接受；Err=%v", sr.Err)
 	assert.FileExists(t, sr.OutputAllPath)
 	assert.FileExists(t, sr.OutputPhasePath)
 }
@@ -715,7 +713,7 @@ func TestAnalyze_EMGFileTraversalRejected(t *testing.T) {
 
 	sr := result[0]
 	assert.False(t, sr.Success, "含 '../' 的 EMG 路徑應被拒")
-	assert.NotEmpty(t, sr.Error)
+	assert.Error(t, sr.Err)
 }
 
 // TestAnalyze_CaseOnlySubjectCollision_FailFast 釘住 codex review P2 (post-impl)：
@@ -813,7 +811,7 @@ func TestAnalyze_FormulaInjectionSubject_Sanitized(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
-	require.True(t, result[0].Success, "Subject 含公式不該讓 pipeline fail：%s", result[0].Error)
+	require.True(t, result[0].Success, "Subject 含公式不該讓 pipeline fail：%v", result[0].Err)
 
 	outName := filepath.Base(result[0].OutputAllPath)
 	assert.NotContains(t, outName, ":", "output 檔名不該含 `:` (路徑分隔字元)")
@@ -858,7 +856,7 @@ func TestAnalyze_NegativeTime_Handled(t *testing.T) {
 	require.Len(t, result, 1)
 	// Output 1 應產出（時間序列 dump 不依賴 phase 範圍）
 	assert.True(t, result[0].Success || result[0].OutputAllPath != "",
-		"負時間 EMG 至少應有 Output 1 產出，實際：success=%v err=%q", result[0].Success, result[0].Error)
+		"負時間 EMG 至少應有 Output 1 產出，實際：success=%v err=%v", result[0].Success, result[0].Err)
 }
 
 func TestAnalyze_DuplicateSanitizedSubjects_FailFast(t *testing.T) {
@@ -914,7 +912,7 @@ func TestAnalyze_TwoSubjects_BothExported(t *testing.T) {
 	require.Len(t, result, 2)
 
 	for _, sr := range result {
-		assert.True(t, sr.Success, "subject %s failed: %s", sr.Subject, sr.Error)
+		assert.True(t, sr.Success, "subject %s failed: %v", sr.Subject, sr.Err)
 		assert.FileExists(t, sr.OutputAllPath)
 		assert.FileExists(t, sr.OutputPhasePath)
 	}
@@ -969,7 +967,7 @@ func TestAnalyze_NaNCellWrittenAsEmpty(t *testing.T) {
 	})
 	require.NoError(t, err)
 	sr := result[0]
-	require.True(t, sr.Success, "Error=%s", sr.Error)
+	require.True(t, sr.Success, "Err=%v", sr.Err)
 
 	rows := readCSV(t, sr.OutputAllPath)
 	require.Greater(t, len(rows), 1)
@@ -1014,7 +1012,7 @@ func TestAnalyze_EMGUpstreamNaN_OutputCellEmpty(t *testing.T) {
 	})
 	require.NoError(t, err)
 	sr := result[0]
-	require.True(t, sr.Success, "Error=%s", sr.Error)
+	require.True(t, sr.Success, "Err=%v", sr.Err)
 
 	rows := readCSV(t, sr.OutputAllPath)
 	require.Greater(t, len(rows), 2, "expected header + at least 2 data rows")
@@ -1088,7 +1086,7 @@ func TestAnalyze_EmptySubject_Rejected(t *testing.T) {
 
 	sr := result[0]
 	assert.False(t, sr.Success, "Subject 為空時應失敗")
-	assert.Contains(t, sr.Error, "Subject 名稱為空")
+	assert.ErrorContains(t, sr.Err, "Subject 名稱為空")
 
 	entries, err := os.ReadDir(outDir)
 	require.NoError(t, err)
@@ -1124,7 +1122,7 @@ func TestAnalyze_EMGFileNotFound(t *testing.T) {
 
 	sr := result[0]
 	assert.False(t, sr.Success)
-	assert.Contains(t, sr.Error, "資料檔案不存在")
+	assert.ErrorContains(t, sr.Err, "資料檔案不存在")
 }
 
 // TestAnalyze_PhaseTimeAtBoundary 釘住 collectPhasePoints bounds check 為 inclusive：
@@ -1157,7 +1155,7 @@ func TestAnalyze_PhaseTimeAtBoundary(t *testing.T) {
 	require.NoError(t, err)
 
 	sr := result[0]
-	assert.True(t, sr.Success, "邊界 phase 不該被拒絕，Error=%s", sr.Error)
+	assert.True(t, sr.Success, "邊界 phase 不該被拒絕，Err=%v", sr.Err)
 	assert.NotEmpty(t, sr.OutputPhasePath, "Output 2 應該產出")
 }
 
@@ -1199,7 +1197,7 @@ func TestAnalyze_PhaseTimeWithinEpsilon(t *testing.T) {
 	require.NoError(t, err)
 
 	sr := result[0]
-	assert.True(t, sr.Success, "容差內 phase 不該被拒,Error=%s", sr.Error)
+	assert.True(t, sr.Success, "容差內 phase 不該被拒,Err=%v", sr.Err)
 	assert.NotEmpty(t, sr.OutputPhasePath, "Output 2 應產出(舊 strict-0 會跳過→此處空)")
 }
 
@@ -1241,7 +1239,7 @@ func TestAnalyze_Output2WriteFailure_StickyOutput1Success(t *testing.T) {
 	assert.NotEmpty(t, sr.OutputAllPath, "Output 1 路徑應已設定")
 	assert.FileExists(t, sr.OutputAllPath, "Output 1 檔案應存在")
 	assert.Empty(t, sr.OutputPhasePath, "Output 2 失敗時 OutputPhasePath 應為空")
-	assert.Contains(t, sr.Error, "寫入 Output 2 失敗", "Error 應解釋 Output 2 跳過原因")
+	assert.ErrorContains(t, sr.Err, "寫入 Output 2 失敗", "Err 應解釋 Output 2 跳過原因")
 }
 
 // TestAnalyze_ConcurrentCallsNoRace_IsolatedFiles 強化原 race 測試：原版 8 goroutine 共寫

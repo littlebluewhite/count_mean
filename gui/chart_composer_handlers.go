@@ -189,7 +189,7 @@ func (a *App) LoadChartComposerSubjects(
 			Subject: m.Subject,
 			EMGFile: m.EMGFile,
 			// OpenDataFile error 含期待路徑 → 過 redact 防 PHI 洩漏(保留 basename)。
-			ErrMessage: redactText(m.Err.Error()),
+			ErrMessage: redactText(m.Err),
 		}
 	}
 
