@@ -3,6 +3,7 @@ package gui
 import (
 	"encoding/base64"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/config"
+	"count_mean/internal/io"
 	"count_mean/internal/logging"
 )
 
@@ -82,17 +84,42 @@ func writeChartComposerMinimalForce(t *testing.T, path string, durationSec float
 	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o644))
 }
 
-// writeChartComposerMinimalMuscleRatio 建立最小 muscle_ratio CSV(對齊
-// CSVHandler.WriteMuscleRatioOutputAll 的 layout — Time + 4 ratio columns)。
+// writeChartComposerMuscleRatioFile 以 CSVHandler.WriteMuscleRatioOutputAll(真 writer,
+// 非手寫 CSV 字串)產出 muscle_ratio fixture 並搬到 path。times 為 EMG 時間軸,
+// ratios 為 4 個 pair(RA/ES, IL/GMax, RF/BF, TAIO/MF)的值,NaN 由 writer 寫成空 cell。
+func writeChartComposerMuscleRatioFile(t *testing.T, path string, times []float64, ratios [][]float64) {
+	t.Helper()
+
+	dir := filepath.Dir(path)
+	cfg := config.DefaultConfig()
+	cfg.InputDir, cfg.OutputDir, cfg.OperateDir = dir, dir, dir
+	written, err := io.NewCSVHandler(cfg).WriteMuscleRatioOutputAll(io.WriteRequest{}, io.MuscleRatioOutputAllPayload{
+		Subject:    "fixture",
+		PairLabels: []string{"RA/ES", "IL/GMax", "RF/BF", "TAIO/MF"},
+		Times:      times,
+		Ratios:     ratios,
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(written, path))
+}
+
+// writeChartComposerMinimalMuscleRatio 建立最小 muscle_ratio CSV(0..1s、101 點,
+// 4 個 ratio 欄為常數)。
 func writeChartComposerMinimalMuscleRatio(t *testing.T, path string) {
 	t.Helper()
 
-	var b strings.Builder
-	b.WriteString("Time (s),RA/ES,IL/GMax,RF/BF,TAIO/MF\n")
+	times := make([]float64, 0, 101)
 	for i := 0; i <= 100; i++ {
-		fmt.Fprintf(&b, "%.4f,1.2,0.8,1.5,0.5\n", float64(i)/100.0)
+		times = append(times, float64(i)/100.0)
 	}
-	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o644))
+	ratios := make([][]float64, 4)
+	for k, v := range []float64{1.2, 0.8, 1.5, 0.5} {
+		ratios[k] = make([]float64, len(times))
+		for i := range times {
+			ratios[k][i] = v
+		}
+	}
+	writeChartComposerMuscleRatioFile(t, path, times, ratios)
 }
 
 // setupChartComposerV10Fixture 建 V.10 manifest fixture(15 欄,無 MuscleRatioFile)。
@@ -479,15 +506,20 @@ func writeChartComposerSingleChannelMotion(t *testing.T, path string, rows int) 
 func writeChartComposerMuscleRatioWithBlank(t *testing.T, path string) {
 	t.Helper()
 
-	var b strings.Builder
-	b.WriteString("Time (s),RA/ES,IL/GMax,RF/BF,TAIO/MF\n")
-	b.WriteString("0.0000,1.2,0.8,1.5,0.5\n")
-	// 第 2 列 ratio 欄全空 — 模擬 muscle_ratio writer 對 NaN/Inf 寫成空 cell 的行為
-	b.WriteString("0.0123,,,,\n")
+	times := []float64{0.0, 0.0123}
 	for i := 2; i <= 100; i++ {
-		fmt.Fprintf(&b, "%.4f,1.2,0.8,1.5,0.5\n", float64(i)/100.0)
+		times = append(times, float64(i)/100.0)
 	}
-	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o644))
+	ratios := make([][]float64, 4)
+	for k, v := range []float64{1.2, 0.8, 1.5, 0.5} {
+		ratios[k] = make([]float64, len(times))
+		for i := range times {
+			ratios[k][i] = v
+		}
+		// 第 2 列 ratio 欄全 NaN — writer 把 NaN/Inf 寫成空 cell
+		ratios[k][1] = math.NaN()
+	}
+	writeChartComposerMuscleRatioFile(t, path, times, ratios)
 }
 
 // TestGenerateChartComposer_PhaseMarkersConvertedToEMGTime 釘住 P1 finding:

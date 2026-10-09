@@ -30,13 +30,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"count_mean/internal/chart"
 	"count_mean/internal/i18n"
+	"count_mean/internal/io"
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
@@ -47,12 +46,9 @@ import (
 // err113 sentinel — 純承載 user-facing 訊息(caller 把 err.Error() 灌入
 // result.Message,不做 errors.Is 比對;test 走 substring assertion)。
 var (
-	ErrChartComposerNilParams              = errors.New("參數為空")
-	ErrChartComposerMotionFileEmpty        = errors.New("manifest 內 MotionFile 為空")
-	ErrChartComposerMuscleRatioFileEmpty   = errors.New("manifest 內 MuscleRatioFile 為空")
-	ErrChartComposerMuscleRatioCSVEmpty    = errors.New("muscle_ratio CSV 為空或缺少資料行")
-	ErrChartComposerMuscleRatioCSVNoHeader = errors.New("muscle_ratio CSV 標題不足: 至少需要時間欄與一個 ratio 欄")
-	ErrChartComposerSubjectNotFound        = errors.New("不存在於分期總檔案")
+	ErrChartComposerNilParams       = errors.New("參數為空")
+	ErrChartComposerMotionFileEmpty = errors.New("manifest 內 MotionFile 為空")
+	ErrChartComposerSubjectNotFound = errors.New("不存在於分期總檔案")
 )
 
 // LoadChartComposerSubjectsParams Wails RPC params for subject list lookup.
@@ -286,11 +282,31 @@ func (a *App) GenerateChartComposer(
 	// 載入 muscle_ratio(可選 — 僅 V.14 manifest 帶 MuscleRatioFile)
 	var muscleRatioData *chart.MuscleRatioData
 	if strings.TrimSpace(row.MuscleRatioFile) != "" {
-		mr, mrErr := loadComposerMuscleRatio(params.DataFolder, row.MuscleRatioFile)
+		// 開檔走 manifest.OpenDataFile 硬化讀檔門(內部 lenient resolve + atomic
+		// validated-open),支援 BTS 匯出含字面 "%" 的檔名;CSV 解析委派
+		// io.ReadMuscleRatioOutputAll(WriteMuscleRatioOutputAll 的反函式)。
+		mrFile, mrErr := manifest.OpenDataFile(params.DataFolder, row.MuscleRatioFile)
 		if mrErr != nil {
+			return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseMuscleRatioFailed,
+				fmt.Errorf("muscle_ratio 路徑解析失敗: %w", mrErr))), nil
+		}
+		mrPayload, mrErr := io.ReadMuscleRatioOutputAll(mrFile)
+		_ = mrFile.Close() //nolint:errcheck // read-only fd; close error not actionable
+		if mrErr != nil {
+			if !errors.Is(mrErr, io.ErrMuscleRatioCSVEmpty) && !errors.Is(mrErr, io.ErrMuscleRatioCSVNoHeader) {
+				mrErr = fmt.Errorf("讀取 muscle_ratio CSV 失敗: %w", mrErr)
+			}
 			return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseMuscleRatioFailed, mrErr)), nil
 		}
-		muscleRatioData = mr
+		mrSeries := make(map[string][]float64, len(mrPayload.PairLabels))
+		for k, name := range mrPayload.PairLabels {
+			mrSeries[name] = mrPayload.Ratios[k]
+		}
+		muscleRatioData = &chart.MuscleRatioData{
+			Time:   mrPayload.Times,
+			Series: mrSeries,
+			Order:  mrPayload.PairLabels,
+		}
 	}
 
 	// manifest row 的 [[Phase timeline]] 轉成「phase 名 → EMG 秒數」單一份 map。
@@ -481,94 +497,6 @@ func loadComposerMotion(
 	}, nil
 }
 
-// loadComposerMuscleRatio 從 muscle_ratio CSV 載入並轉成 chart.MuscleRatioData。
-//
-// CSV layout(由 CSVHandler.WriteMuscleRatioOutputAll 產出):
-//
-//	Time (s), RA/ES, IL/GMax, RF/BF, TAIO/MF
-//	0.000000, 0.123456, ..., ...
-//
-// header 第一欄為時間,其餘為 ratio pair 名稱。caller 把這四欄 series 餵進
-// `chart.MuscleRatioData` 即可在 muscle_ratio grid 顯示。
-//
-// 開檔走 manifest.OpenDataFile 硬化讀檔門(內部 lenient resolve + atomic
-// validated-open),同樣支援 BTS 匯出含字面 "%" 的檔名。
-func loadComposerMuscleRatio(dataFolder, muscleRatioFile string) (*chart.MuscleRatioData, error) {
-	if strings.TrimSpace(muscleRatioFile) == "" {
-		// caller 應在呼叫前已檢查;這裡是 defense-in-depth。
-		return nil, ErrChartComposerMuscleRatioFileEmpty
-	}
-
-	// 開檔走 manifest.OpenDataFile 硬化讀檔門(內部 lenient resolve + atomic
-	// validated-open),交出已驗證 *os.File。caller defer Close。
-	mrFile, err := manifest.OpenDataFile(dataFolder, muscleRatioFile)
-	if err != nil {
-		return nil, fmt.Errorf("muscle_ratio 路徑解析失敗: %w", err)
-	}
-	defer func() { _ = mrFile.Close() }() //nolint:errcheck // read-only fd; close error not actionable
-
-	records, err := parsers.ReadCSVRecords(mrFile)
-	if err != nil {
-		return nil, fmt.Errorf("讀取 muscle_ratio CSV 失敗: %w", err)
-	}
-	if len(records) < 2 {
-		return nil, ErrChartComposerMuscleRatioCSVEmpty
-	}
-
-	header := records[0]
-	if len(header) < 2 {
-		return nil, ErrChartComposerMuscleRatioCSVNoHeader
-	}
-
-	dataRows := records[1:]
-	times := make([]float64, 0, len(dataRows))
-	order := make([]string, 0, len(header)-1)
-	series := make(map[string][]float64, len(header)-1)
-	for j := 1; j < len(header); j++ {
-		name := strings.TrimSpace(header[j])
-		if name == "" {
-			continue
-		}
-		order = append(order, name)
-		series[name] = make([]float64, 0, len(dataRows))
-	}
-
-	for _, row := range dataRows {
-		if len(row) < len(header) {
-			// jagged row 直接 skip(對齊 EMG parser 風格)
-			continue
-		}
-		t, ok := parseFloatCell(row[0])
-		if !ok {
-			continue
-		}
-		times = append(times, t)
-		for j := 1; j < len(header); j++ {
-			name := strings.TrimSpace(header[j])
-			if name == "" {
-				continue
-			}
-			// 空 / 不可解析 cell → NaN(不是 0)。muscle_ratio writer 對 NaN/Inf
-			// 寫成空 cell;若 parse 失敗 silent 給 0,等於把缺值「畫成真實 0」,
-			// 對共收縮比值研究是嚴重誤導。NaN 走 composer
-			// buildComposerLineData line 692-695:`LineData{Value: nil}`,
-			// 序列化(opts.LineData.Value `json:"value,omitempty"`)整個 value
-			// 欄位 omit;echarts 渲染為 line gap,正確反映缺值。
-			v, ok := parseFloatCell(row[j])
-			if !ok {
-				v = math.NaN()
-			}
-			series[name] = append(series[name], v)
-		}
-	}
-
-	return &chart.MuscleRatioData{
-		Time:   times,
-		Series: series,
-		Order:  order,
-	}, nil
-}
-
 // composerPhaseTimesEMG 把 manifest row 的 [[Phase timeline]] 轉成「phase 名 → EMG 秒數」
 // map(ADR-0042),供 Chart Composer 後端預設 markLine 與前端 phaseTimes RPC return
 // 共用同一份來源。未提供的分期點不在 map 內 — 不會 inject 偽 markLine,前端也不渲染 checkbox。
@@ -579,23 +507,4 @@ func composerPhaseTimesEMG(m *models.PhaseManifest) map[string]float64 {
 		out[string(pt.Phase)] = pt.EMGTime
 	}
 	return out
-}
-
-// parseFloatCell parses a CSV cell as float64. Empty / unparseable cells become
-// NaN-sentinel via `_, ok := false`. We accept "NaN" as NaN-sentinel(對齊
-// muscle_ratio CSV writer 對 NaN/Inf 寫空字串的行為)。
-//
-// 不直接借用 parsers.ParseFloatCell 是因為其位於 parsers 套件 — gui 已對
-// parsers 依賴一條;這個 thin wrapper 把 strconv.ParseFloat error 收成 bool,
-// 與 ParseFloatCell signature 對齊,避免 caller 端散落 ParseFloat 樣板。
-func parseFloatCell(cell string) (float64, bool) {
-	s := strings.TrimSpace(cell)
-	if s == "" {
-		return 0, false
-	}
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return 0, false
-	}
-	return v, true
 }
