@@ -175,7 +175,7 @@ func (p *EMGParser) parseEMGRecords(records [][]string) (*models.PhaseSyncEMGDat
 	// acknowledgement：ReadCSVRecords 走 jagged-row 容忍模式
 	// （FieldsPerRecord=-1, LazyQuotes=true），無法靠 csv.Reader 本身擋 formula
 	// injection / script / SQL / command injection。理想是進入 EMG 語意層前用
-	// ValidateCSVRow 對每筆 cell 過 cell-level injection 守門。
+	// csv Validator.ValidateRow 對每筆 cell 過 cell-level injection 守門。
 	//
 	// 既定限制：目前 validation/patterns.go 對 CommandInjection 用 substring 比對，
 	// "invalid_time" 之類的合法 EMG row（含子字串 "id"）會被誤判為 command injection
@@ -184,10 +184,9 @@ func (p *EMGParser) parseEMGRecords(records [][]string) (*models.PhaseSyncEMGDat
 	// 下游 util.Str2Number（嚴格 strconv.ParseFloat）作為 numeric cell 的隱式守門：
 	// formula `=cmd|/c calc!A1` 等惡意 cell 解析必失敗、被 skip。
 	//
-	// streaming 大檔路徑（large_file_handler.executeStreamingLoop）有實裝 cell-level
-	// 守門 — 該路徑無「missing-data row tolerated」契約，文件規模也更大、injection 風險
-	// 更高。EMG phase-sync / muscle ratio path 因 false-positive 包袱待 patterns
-	// substring-match 收緊（後續 Wave）後再加上 ValidateCSVRow。
+	// 目前 cell-level 守門只在 CSVHandler 讀取路徑（csv Validator.ValidateCSVData）；
+	// EMG phase-sync / muscle ratio path 因 false-positive 包袱，待 patterns
+	// substring-match 收緊（後續 Wave）後再加上 ValidateRow。
 
 	headers, err := p.validateEMGRecords(records)
 	if err != nil {

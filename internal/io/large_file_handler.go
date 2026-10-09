@@ -15,7 +15,6 @@ import (
 	"count_mean/internal/logging"
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
-	csvvalidator "count_mean/internal/validation/csv"
 )
 
 // Buffer size constants.
@@ -53,7 +52,6 @@ const scanWarnSampleLimit = 10
 type LargeFileHandler struct {
 	config        *config.AppConfig
 	pathValidator *security.PathValidator
-	csvValidator  *csvvalidator.Validator
 	logger        *logging.Logger
 
 	// 大文件處理配置
@@ -72,7 +70,6 @@ func NewLargeFileHandler(config *config.AppConfig) *LargeFileHandler {
 	h := &LargeFileHandler{
 		config:        config,
 		pathValidator: security.NewPathValidator(allowedPaths),
-		csvValidator:  csvvalidator.NewValidator(),
 		logger:        logging.GetLogger("large_file_handler"),
 
 		// 預設配置
@@ -133,7 +130,7 @@ func (h *LargeFileHandler) GetFileInfo(filename string) (*FileInfo, error) {
 		// 從 maxFileSize/10 (= 200MB) 降到 isLargeFileThreshold (100MB)。
 		// ReadAll path 在 100MB 已是 GUI process OOM 邊界 (memory peak 4-10x source),
 		// 200MB ReadAll 對典型 8-16GB RAM Mac 仍有 crash 風險。100MB+ 的真實 dataset
-		// 目前一律拒絕(streaming 路徑已刪)。
+		// 目前一律拒絕:GetFileInfo 只標記 IsLarge,實際拒絕由 CSVHandler.checkFileSizeAndFormat 執行(streaming 路徑已刪)。
 		IsLarge: fileInfo.Size() > isLargeFileThreshold,
 	}
 

@@ -77,7 +77,7 @@ func (p *PhaseManifestParser) ParseFile(filepath string) ([]models.PhaseManifest
 
 	// BOM 處理: Excel 匯出的 UTF-8 manifest CSV 帶 0xEF 0xBB 0xBF 前綴若不剝除,
 	// records[startRow][0] 會帶 U+FEFF,Subject 比對失敗。
-	// 與 internal/io/csv_handler.go:230 / large_file_handler.go 對稱: bufio + PeekBOM。
+	// 與 internal/io/csv_handler.go:230 / large_file_handler.go（scanFileStructure）對稱: bufio + PeekBOM。
 	bufReader := bufio.NewReaderSize(file, phaseManifestReaderBufSize)
 	if _, err := csvutil.PeekBOM(bufReader); err != nil {
 		return nil, fmt.Errorf("BOM 偵測失敗: %w", err)

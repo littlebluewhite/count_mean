@@ -116,13 +116,11 @@ func (v *Validator) validateRow(record []string, row, expectedColumns int, filen
 	return v.ValidateRow(record, row, expectedColumns, filename)
 }
 
-// ValidateRow exposes per-row cell-level validation for streaming callers.
+// ValidateRow exposes per-row cell-level validation for body rows.
 //
-// Large-file streaming 路徑（large_file_handler.processStreamingFile）
-// 不能把整檔 materialize 進 [][]string 再呼 ValidateCSVData，記憶體會爆炸；改成
-// row-by-row 在 executeStreamingLoop 內呼這支 helper，把 cell-level injection /
-// DoS 守門延伸進大檔流式分支。expectedColumns < 0 表示「不檢查欄位數」，由 caller
-// 自行處理 jagged row 容忍度（large_file_handler 自己有 len(record) != len(headers) 檢查）。
+// 目前由 ValidateCSVData（經 validateRow）逐 row 呼叫；亦可由需要 row-by-row
+// 驗證、不想把整檔 materialize 進 [][]string 的 caller 直接使用。
+// expectedColumns < 0 表示「不檢查欄位數」，由 caller 自行處理 jagged row 容忍度。
 //
 // 本 API 對 body row 跑「全部」cell-level 守門；header row 請改呼
 // ValidateHeaderRow 以避免 EMG header（含 `Subject ID`、`=Channel1`）被誤判。
@@ -132,8 +130,8 @@ func (v *Validator) ValidateRow(record []string, row, expectedColumns int, filen
 
 // ValidateHeaderRow exposes per-row cell-level validation specifically for header rows.
 //
-// streaming 路徑（large_file_handler.processStreamingFile）跑 header row
-// 時必須呼此 API 而非 ValidateRow，否則 EMG header 的 `Subject ID` / `Frame ID`
+// ValidateCSVData（經 validateRow）處理 header row 時呼此 API 而非
+// ValidateRow；直接逐 row 驗證的 caller 亦同，否則 EMG header 的 `Subject ID` / `Frame ID`
 // 等合法欄位名會被 SQL/Command injection substring 比對誤判。formula starter（`=`）
 // / script injection / control char / UTF-8 / suspicious extension 仍對 header
 // 守門（CellValidator.ValidateCell 內部根據 ctx.IsHeader scoped）。

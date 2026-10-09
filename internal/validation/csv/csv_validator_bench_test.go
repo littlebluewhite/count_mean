@@ -66,8 +66,8 @@ func BenchmarkValidateCSVData_TypicalEMG(b *testing.B) {
 }
 
 // BenchmarkValidateCell_TypicalEMGCell 量測單一 cell 守門 cost。對齊
-// processStreamingFile 的 hot path 行為:streaming 是 per-row 跑 ValidateCSVRow
-// 而 ValidateCSVRow 內逐 cell 跑 ValidateCell。此 benchmark 直接量到每 cell 成本,
+// ValidateCSVData 的 hot path 行為:逐 row 跑 validateRow,
+// 而 validateRow 內逐 cell 跑 ValidateCell。此 benchmark 直接量到每 cell 成本,
 // 讓 估算的「每 cell O(len(cell))」可被量化驗證。
 func BenchmarkValidateCell_TypicalEMGCell(b *testing.B) {
 	v := NewCellValidator()

@@ -94,8 +94,6 @@ flowchart TB
         W3[Worker N<br/>goroutine]
     end
 
-    BPC[BackpressureController<br/>記憶體監控] -.-> |背壓控制| Orch
-
     W1 --> RC[Result Collector<br/>結果收集]
     W2 --> RC
     W3 --> RC

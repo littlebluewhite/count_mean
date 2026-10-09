@@ -15,7 +15,7 @@
 ## 目錄
 
 - [基本數據處理流程](#基本數據處理流程)
-- [大文件處理模式](#大文件處理模式)
+- [檔案大小限制](#檔案大小限制)
 - [批量處理模式](#批量處理模式)
 - [實時數據分析](#實時數據分析)
 - [錯誤處理與恢復](#錯誤處理與恢復)
@@ -100,7 +100,7 @@ func StandardEMGAnalysis() {
 
 ---
 
-## 大文件處理模式
+## 檔案大小限制
 
 目前**沒有**串流處理大檔的 API。`LargeFileHandler` 的串流 Max-mean 路徑已刪除（見
 [ADR-0033](adr/0033-remove-streaming-maxmean.md)）；`CSVHandler.ReadCSV` 對超過 100 MB
@@ -689,8 +689,8 @@ func (p *ErrorHandlingProcessor) fallbackProcess(ctx context.Context, cfg *confi
 
 > **教學範例 caveat：** 以下 worker-pool + chunk channel 設計為**教學用 pattern**，
 > 展示 backpressure / sync.Pool / 多 worker 協調等概念。
-> 現行 `MaxMeanCalculator` 已內建 worker pool 與 backpressure，外部 caller
-> 通常無需自行 wrap layer。
+> 現行 `MaxMeanCalculator` 內建記憶體 admission gate（`internal/calculator/memory_admission.go`），
+> 外部 caller 通常無需自行 wrap layer。
 
 ```go
 func OptimizedPerformanceProcessing() {

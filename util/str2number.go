@@ -10,7 +10,7 @@ import (
 
 // ErrNaNInput indicates the input string parsed to NaN (e.g. literal "NaN").
 //
-// 雖然多數 caller (data_parser.parseChannels / large_file_handler /
+// 雖然多數 caller (data_parser.parseChannels /
 // normalizer / phase_analyzer) 都在拿到 val 後對 NaN/Inf 做進一步驗證,但
 // 中央 entry 應 fail-fast,避免「caller 忘檢查 → NaN 進 sliding window →
 // silent miscompute」這條長尾。errors.Is 可辨識 → caller 可選擇性放寬

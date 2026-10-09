@@ -1,5 +1,5 @@
 // Package io provides file input/output operations for the EMG data analysis
-// application, including CSV reading, writing, and streaming support for large files.
+// application, including CSV reading and writing.
 package io
 
 import (

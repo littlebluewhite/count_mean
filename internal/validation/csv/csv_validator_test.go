@@ -320,8 +320,8 @@ func TestValidateCSVData_BodyStillBlocksSQLAndCommand(t *testing.T) {
 	}
 }
 
-// TestValidateHeaderRow_SmokeForStreamingCaller 釘住 streaming 路徑契約：
-// large_file_handler 跑 header 時呼 ValidateHeaderRow，必須對 EMG header 放行
+// TestValidateHeaderRow_SmokeForStreamingCaller 釘住 header row 契約：
+// 直接逐 row 驗證的 caller 跑 header 時呼 ValidateHeaderRow，必須對 EMG header 放行
 // 但對 formula injection header 擋下。
 func TestValidateHeaderRow_SmokeForStreamingCaller(t *testing.T) {
 	v := NewValidator()

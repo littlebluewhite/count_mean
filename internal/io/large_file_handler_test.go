@@ -78,7 +78,7 @@ func TestLargeFileHandler_ErrorHandling(t *testing.T) {
 // 但 large_file_handler.go:180 (scanFileStructure) 沒同步修。Excel 匯出的 UTF-8
 // CSV 帶 0xEF 0xBB 0xBF 前綴,若不剝除 firstRow[0] 會帶 U+FEFF — line count / column
 // count 數值還會對(因為只算長度),但 headers[0] 進入 GetFileInfo 之後的下游路徑
-// (例如 streaming pipeline 取 headers) 就會看到怪字元。
+// (例如 CSVHandler 讀取路徑取 headers) 就會看到怪字元。
 //
 // 此 test 透過寫入含 BOM 的 CSV 後呼叫 GetFileInfo(內部會 scanFileStructure),
 // 確認 LineCount 與 ColumnCount 計算正確(BOM 不被當成額外欄位/列)。
