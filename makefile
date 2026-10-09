@@ -131,7 +131,7 @@ coverage-check:
 # 只 pin major.minor 而非 full semver:patch release 不改變 linter 啟用集合。
 # Bump 時同步更新 .github/workflows/ 內 setup-golangci-lint step 的 version —
 # 兩處 drift 是 lint 結果不一致的 root cause。
-GOLANGCI_LINT_VERSION ?= 2.12
+GOLANGCI_LINT_VERSION ?= 2.14
 
 # Linting targets
 lint:
@@ -217,8 +217,8 @@ build-cross:
 install:
 	@echo "Installing development dependencies..."
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION).0
-	go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
-	go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+	go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+	go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
 
 install-tools:
 	@echo "Installing additional tools..."

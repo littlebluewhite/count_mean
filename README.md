@@ -1,6 +1,6 @@
 # count_mean — EMG 生物訊號分析工具
 
-[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.27+-00ADD8?style=for-the-badge&logo=go)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Cross--Platform-brightgreen?style=for-the-badge)](https://github.com/littlebluewhite/count_mean)
 
@@ -10,9 +10,9 @@
 
 | 層級 | 技術 |
 |------|------|
-| 語言 | Go 1.25 |
+| 語言 | Go 1.27 |
 | 桌面框架 | Wails v2（嵌入式 Chromium） |
-| 前端 | Vite 7 + Vanilla JS |
+| 前端 | Vite 8 + Vanilla JS |
 | 圖表 | go-echarts v2（ECharts） |
 | Excel | excelize v2 |
 | 測試 | testify + Go benchmark |

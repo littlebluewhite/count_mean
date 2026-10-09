@@ -6,7 +6,7 @@ version: "2"
 # 此 config 聚焦 ~67 個有 bug 嫌疑的 finding，先解掉再考慮全套 enforcement。
 
 run:
-  go: "1.26"
+  go: "1.27"
   tests: true
 
 linters:

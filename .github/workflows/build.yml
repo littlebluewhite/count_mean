@@ -37,7 +37,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         # P0-14: actions/setup-go@v5 內建 module + build cache (key from go.sum)
         cache: true
 
@@ -56,14 +56,14 @@ jobs:
     # branch 拉 install script,屬於 supply-chain attack vector
     # (任何 push 到 master 都會被 CI 立即執行)。改成:
     #   1. golangci-lint 用官方 action 並 pin commit SHA(v9.2.0 的 tag commit)
-    #   2. gosec 走 `go install ...@v2.26.1`(走 module proxy + GOSUMDB
+    #   2. gosec 走 `go install ...@v2.29.0`(走 module proxy + GOSUMDB
     #      checksum 驗證,等同 pinned release)
     # SHA 來源:`gh api repos/golangci/golangci-lint-action/git/refs/tags/v9.2.0`
     #          `gh api repos/securego/gosec/tags`
     - name: Run lint (pinned golangci-lint-action v9.2.0)
       uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
       with:
-        version: v2.12.0
+        version: v2.14.0
         args: --timeout=5m
 
     # L1(P2):cross-platform build tag lint 矩陣 — lint 預設只跑 ubuntu/linux
@@ -83,7 +83,7 @@ jobs:
     - name: Run lint (GOOS=windows cross-platform tags, advisory)
       uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
       with:
-        version: v2.12.0
+        version: v2.14.0
         args: --timeout=5m
       env:
         GOOS: windows
@@ -102,11 +102,11 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         cache: true
 
-    - name: Install gosec (pinned v2.26.1 via go install)
-      run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
+    - name: Install gosec (pinned v2.29.0 via go install)
+      run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
 
     # main.go:42 `//go:embed all:frontend/dist` 要求目錄存在且至少一個檔案,
     # 否則 gosec 在解析 root package 時就會 "pattern all:frontend/dist: no matching files found"
@@ -147,7 +147,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         cache: true
 
     - name: Stub frontend/dist
@@ -178,7 +178,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         cache: true
 
     - name: Stub frontend/dist
@@ -339,7 +339,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         # P0-14: cache 啟用後 PR build cold cache 從 8+ 分鐘降至 2-3 分鐘
         cache: true
 
@@ -363,10 +363,10 @@ jobs:
         echo "WebView2 should be available on Windows runners"
 
     - name: Install Wails
-      # P0-9: pin CLI version to match go.mod library dep (wails v2.12.0).
+      # P0-9: pin CLI version to match go.mod library dep (wails v2.16.0).
       # 過去 `@latest` 會在任何 future wails 釋出後改變 build artifact,
       # 違反 reproducible build invariant 且與 module dep 容易 drift。
-      run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+      run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
 
     - name: Install frontend dependencies
       run: |
