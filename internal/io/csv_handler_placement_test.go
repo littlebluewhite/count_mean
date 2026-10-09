@@ -197,3 +197,37 @@ func TestSubjectWriters_Placement(t *testing.T) {
 		})
 	}
 }
+
+// subject 帶分隔符 → Sanitize 收斂成單一 segment(原 calculator.GenerateOutputFileName 的逐字特徵)。
+func TestWritePhaseSyncResult_SubjectWithSeparatorStaysOneSegment(t *testing.T) {
+	t.Parallel()
+
+	h, dir := newFormatAwareTestHandler(t)
+	stats := &models.EMGStatistics{
+		Subject: "a/b", StartPhase: models.PhaseS, EndPhase: models.PhaseT,
+		ChannelNames: []string{"Ch1"},
+		ChannelMeans: map[string]float64{"Ch1": 1}, ChannelMaxes: map[string]float64{"Ch1": 2},
+	}
+
+	got, err := h.WritePhaseSyncResult(WriteRequest{}, stats)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, "a_b_S-T_statistics.csv"), got)
+}
+
+// 逸出被拒時,錯誤文字不得帶出 SubDir(可能是病患資料夾名)—— 只留固定訊息 + 哨兵 error。
+func TestSubjectWriters_EscapeErrorCarriesNoSubDir(t *testing.T) {
+	t.Parallel()
+
+	const secret = "PatientX_escape"
+
+	for _, tc := range placementCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h, _ := newFormatAwareTestHandler(t)
+
+			_, err := tc.write(h, "../"+secret)
+			require.ErrorIs(t, err, errOutputPathEscapesOutputDir)
+			require.NotContains(t, err.Error(), secret)
+		})
+	}
+}

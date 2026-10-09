@@ -56,6 +56,11 @@ _Avoid_: structured write, typed write, formatted output.
 與 manifest-driven 的 lenient 讀取（`OpenLenientValidated`）不同：後者的檔名來自 manifest、相對於 baseFolder。
 _Avoid_: raw read, direct open.
 
+**Subject output placement**
+Subject-based write 把輸出落檔的唯一步驟 `placeSubjectOutput`：`SubjectOutputName` 推導檔名 → containment join → `ValidateExternalPath` → `MkdirAll` → `WriteCSVAtomic`（帶 `BasePaths`），回傳實際寫入路徑。7 個 Subject-based writer 只持有 row layout。錯誤文字固定為「輸出路徑無效」「輸出目錄建立失敗」，不帶 SubDir / 目錄路徑。見 [[ADR-0040]]。
+與 File-based write 的單一寫門 `writeFileOutput`（非 atomic、檔名由 caller 傳入）是兩條不同的路。
+_Avoid_: phase-sync atomic write, output dir validation.
+
 **WriteRequest**
 所有 format-aware write 共用的請求外殼，欄位有 Filename（檔名）、SubDir（可選的 OutputDir 子目錄，空字串 = 寫到 OutputDir 根）、Headers、Data（generic payload）。
 _Avoid_: write options, write spec, csv request.

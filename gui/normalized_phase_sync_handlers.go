@@ -182,7 +182,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 	)
 	if statsWriteErr != nil {
 		// 對齊 CCI/muscle_ratio sibling:atomic 寫入失敗時不另記 path 欄位
-		// (writePhaseSyncAtomic 失敗回空 path);statsWriteErr 已 wrap「PhaseSync
+		// (placeSubjectOutput 失敗回空 path);statsWriteErr 已 wrap「PhaseSync
 		// 輸出...」帶 context,redact 後進 result.Message。
 		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerWriteStatsFailed, statsWriteErr)), nil
 	}

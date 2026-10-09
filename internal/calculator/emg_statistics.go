@@ -6,7 +6,6 @@ import (
 
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
-	"count_mean/internal/validation/filename"
 )
 
 // Report formatting constants.
@@ -46,13 +45,6 @@ func (*EMGStatisticsCalculator) CalculateStatistics(
 	}
 
 	return stats, nil
-}
-
-// GenerateOutputFileName 生成輸出檔案名.
-func GenerateOutputFileName(subject string, startPhase, endPhase models.PhasePoint) string {
-	suffix := fmt.Sprintf("%s-%s_statistics", startPhase, endPhase)
-
-	return filename.SubjectOutputName(subject, suffix) + ".csv"
 }
 
 // StatisticsParams 統計參數.

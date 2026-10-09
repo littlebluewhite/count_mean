@@ -700,28 +700,35 @@ func (h *CSVHandler) writeFileOutput(req WriteRequest, data [][]string) (string,
 	return path, nil
 }
 
-// phaseSyncAtomicWrite 是所有 PhaseSync / normalized-EMG 原子寫檔的共用 seam:
-// path join → validate → mkdir → WriteCSVAtomic{Header, BasePaths, Emit}。
-// error-wrap 字串「PhaseSync 輸出路徑無效/輸出目錄建立失敗」逐字保留供呼叫端識別。
-func (h *CSVHandler) phaseSyncAtomicWrite(
-	subDir, filename string,
+// placeSubjectOutput 是所有 Subject-based 寫檔的單一 placement 步驟([[Subject output placement]]):
+// SubjectOutputName → safeJoinOutput(containment)→ ValidateExternalPath → MkdirAll →
+// WriteCSVAtomic{Header, BasePaths, Emit}。回傳「實際寫入的路徑」。
+//
+// ADR-0016 invariant「Subject-based write ⟹ WriteCSVAtomic + BasePaths」在此結構化:
+// 7 個 Subject-based writer 只持有 row layout,沒有任何一個能繞過本步驟。
+// 輸出檔名 = filename.SubjectOutputName(subject, suffix) + ".csv"(subject 內部強制 Sanitize)。
+//
+// 錯誤文字統一為「輸出路徑無效」「輸出目錄建立失敗」並以 %w 包底層 error,不帶 SubDir /
+// 目錄路徑(目錄末段可能是病患資料夾名)。
+func (h *CSVHandler) placeSubjectOutput(
+	subDir, subject, suffix string,
 	header []string,
 	emit csvutil.RowEmitter,
 ) (string, error) {
-	outputPath, joinErr := h.safeJoinOutput(subDir, filename)
-	if joinErr != nil {
-		return "", fmt.Errorf("PhaseSync 輸出路徑無效: %w", joinErr)
+	outputPath, err := h.safeJoinOutput(subDir, filename.SubjectOutputName(subject, suffix)+".csv")
+	if err != nil {
+		return "", fmt.Errorf("輸出路徑無效: %w", err)
 	}
 
 	if err := h.pathValidator.ValidateExternalPath(outputPath); err != nil {
-		return "", fmt.Errorf("PhaseSync 輸出路徑無效: %w", err)
+		return "", fmt.Errorf("輸出路徑無效: %w", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outputPath), fsperm.DirPerm); err != nil {
-		return "", fmt.Errorf("PhaseSync 輸出目錄建立失敗: %w", err)
+		return "", fmt.Errorf("輸出目錄建立失敗: %w", err)
 	}
 
-	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
+	err = csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
 		Header:    header,
 		BasePaths: h.pathValidator.GetAllowedBasePaths(),
 		Emit:      emit,
@@ -733,12 +740,10 @@ func (h *CSVHandler) phaseSyncAtomicWrite(
 	return outputPath, nil
 }
 
-// writePhaseSyncAtomic 是 WritePhaseSyncResult / WriteNormalizedPhaseSyncResult
-// 的薄包裝:委派給 phaseSyncAtomicWrite,並把 data[][]string 轉換為 streaming emit。
-// data[0] 是 header,data[1:] 是 body rows(由 converter.ConvertPhaseSyncResult 產生)。
+// placeSubjectRows 把 data[][]string(data[0] 為 header)交給 placeSubjectOutput 串流寫出。
 // ConvertPhaseSyncResult 恆回固定 8-row layout,故 data 至少 1 row,data[0] 不會 panic。
-func (h *CSVHandler) writePhaseSyncAtomic(subDir, filename string, data [][]string) (string, error) {
-	return h.phaseSyncAtomicWrite(subDir, filename, data[0], func(emit func([]string) error) error {
+func (h *CSVHandler) placeSubjectRows(subDir, subject, suffix string, data [][]string) (string, error) {
+	return h.placeSubjectOutput(subDir, subject, suffix, data[0], func(emit func([]string) error) error {
 		for _, row := range data[1:] {
 			if err := emit(row); err != nil {
 				return err
@@ -750,13 +755,13 @@ func (h *CSVHandler) writePhaseSyncAtomic(subDir, filename string, data [][]stri
 
 // WritePhaseSyncResult 把 PhaseSync 分析結果 (EMGStatistics) 寫成 CSV。
 //
-// Filename 由 calculator.GenerateOutputFileName(Subject, StartPhase, EndPhase)
+// Filename 由 filename.SubjectOutputName(Subject, "{StartPhase}-{EndPhase}_statistics")
 // 自動生成 — req.Filename 被忽略, 僅 req.SubDir 生效 (空字串 → OutputDir 根)。
 // 回傳實際 outputPath (絕對路徑, 形如 OutputDir/[SubDir/]<filename>) 與錯誤。
 //
 // row layout (8-row: header / 開始分期點 / 開始時間 / 結束分期點 / 結束時間 /
 // 時間差值 / 平均值 / 最大值)、precision (phaseSyncPrecision=6) 由 implementation 持有。
-// 路徑由 writePhaseSyncAtomic 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
+// 路徑由 placeSubjectOutput 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
 // ADR-0001 invariant: Subject-based write ⟹ WriteCSVAtomic。
 func (h *CSVHandler) WritePhaseSyncResult(
 	req WriteRequest,
@@ -766,13 +771,9 @@ func (h *CSVHandler) WritePhaseSyncResult(
 		return "", errEmptyPhaseSyncResult
 	}
 
-	filename := calculator.GenerateOutputFileName(
-		stats.Subject, stats.StartPhase, stats.EndPhase,
-	)
+	suffix := fmt.Sprintf("%s-%s_statistics", stats.StartPhase, stats.EndPhase)
 
-	data := h.converter.ConvertPhaseSyncResult(stats)
-
-	return h.writePhaseSyncAtomic(req.SubDir, filename, data)
+	return h.placeSubjectRows(req.SubDir, stats.Subject, suffix, h.converter.ConvertPhaseSyncResult(stats))
 }
 
 // WriteNormalizedPhaseSyncResult 把 normalized PhaseSync 分析結果寫成 CSV。
@@ -783,7 +784,7 @@ func (h *CSVHandler) WritePhaseSyncResult(
 // (對齊 GUI 現行 template)。
 //
 // row layout 與 WritePhaseSyncResult 相同 (8-row,由 ConvertPhaseSyncResult 持有)。
-// 路徑由 writePhaseSyncAtomic 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
+// 路徑由 placeSubjectOutput 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
 // ADR-0001 invariant: Subject-based write ⟹ WriteCSVAtomic。
 func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
 	req WriteRequest,
@@ -796,11 +797,8 @@ func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
 
 	suffix := fmt.Sprintf("normalized_norm-%s-%s_stats-%s-%s",
 		normStart, normEnd, stats.StartPhase, stats.EndPhase)
-	fname := filename.SubjectOutputName(stats.Subject, suffix) + ".csv"
 
-	data := h.converter.ConvertPhaseSyncResult(stats)
-
-	return h.writePhaseSyncAtomic(req.SubDir, fname, data)
+	return h.placeSubjectRows(req.SubDir, stats.Subject, suffix, h.converter.ConvertPhaseSyncResult(stats))
 }
 
 // WriteCCIResult 把 CCI 分析結果寫成 CSV。
@@ -838,21 +836,6 @@ func (h *CSVHandler) WriteCCIResult(
 			cci.ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
 	}
 
-	fname := filename.SubjectOutputName(result.Subject, "CCI_Rudolph") + ".csv"
-	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
-	if joinErr != nil {
-		return "", fmt.Errorf("CCI 輸出路徑無效: %w", joinErr)
-	}
-
-	// Defense-in-depth: system-dir prefix check via pathValidator(對齊 ADR-0001 守門)。
-	if err := h.pathValidator.ValidateExternalPath(outputPath); err != nil {
-		return "", fmt.Errorf("CCI 輸出路徑無效: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(outputPath), fsperm.DirPerm); err != nil {
-		return "", fmt.Errorf("CCI 輸出目錄建立失敗: %w", err)
-	}
-
 	header := []string{"Time (s)", "Gait Cycle (%)"}
 	for _, pr := range result.PairResults {
 		header = append(header, pr.PairName)
@@ -861,10 +844,8 @@ func (h *CSVHandler) WriteCCIResult(
 	var droppedRowCount int
 	numPoints := len(result.TimeValues)
 
-	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header:    header,
-		BasePaths: h.pathValidator.GetAllowedBasePaths(),
-		Emit: func(emit func([]string) error) error {
+	outputPath, err := h.placeSubjectOutput(req.SubDir, result.Subject, "CCI_Rudolph", header,
+		func(emit func([]string) error) error {
 			for i := 0; i < numPoints; i++ {
 				if i > 0 && i%cciStreamCtxCheckInterval == 0 {
 					select {
@@ -910,8 +891,7 @@ func (h *CSVHandler) WriteCCIResult(
 				}
 			}
 			return nil
-		},
-	})
+		})
 	if err != nil {
 		return "", err
 	}
@@ -977,24 +957,12 @@ func (h *CSVHandler) WriteMuscleRatioOutputAll(
 		return "", errEmptyMuscleRatioPayload
 	}
 
-	fname := filename.SubjectOutputName(p.Subject, "muscle_ratio") + ".csv"
-	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
-	if joinErr != nil {
-		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
-	}
-
-	if err := h.validateMuscleRatioOutputDir(req.SubDir); err != nil {
-		return "", err
-	}
-
 	header := make([]string, 0, 1+len(p.PairLabels))
 	header = append(header, "Time (s)")
 	header = append(header, p.PairLabels...)
 
-	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header:    header,
-		BasePaths: h.pathValidator.GetAllowedBasePaths(),
-		Emit: func(emit func([]string) error) error {
+	return h.placeSubjectOutput(req.SubDir, p.Subject, "muscle_ratio", header,
+		func(emit func([]string) error) error {
 			for i, t := range p.Times {
 				row := make([]string, 0, 1+len(p.Ratios))
 				row = append(row, fmt.Sprintf("%.4f", t))
@@ -1006,12 +974,7 @@ func (h *CSVHandler) WriteMuscleRatioOutputAll(
 				}
 			}
 			return nil
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-	return outputPath, nil
+		})
 }
 
 // WriteMuscleRatioOutputPhases 寫 per-subject Output 2 — phase+midpoint slice CSV。
@@ -1026,24 +989,12 @@ func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 		return "", errEmptyMuscleRatioPayload
 	}
 
-	fname := filename.SubjectOutputName(p.Subject, "muscle_ratio_phases_avg11") + ".csv"
-	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
-	if joinErr != nil {
-		return "", fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
-	}
-
-	if err := h.validateMuscleRatioOutputDir(req.SubDir); err != nil {
-		return "", err
-	}
-
 	header := make([]string, 0, 2+len(p.PairLabels))
 	header = append(header, "Phase", "Time (s)")
 	header = append(header, p.PairLabels...)
 
-	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header:    header,
-		BasePaths: h.pathValidator.GetAllowedBasePaths(),
-		Emit: func(emit func([]string) error) error {
+	return h.placeSubjectOutput(req.SubDir, p.Subject, "muscle_ratio_phases_avg11", header,
+		func(emit func([]string) error) error {
 			for _, point := range p.Points {
 				row := make([]string, 0, 2+len(point.Values))
 				row = append(row, point.Name, fmt.Sprintf("%.4f", point.Time))
@@ -1055,12 +1006,7 @@ func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 				}
 			}
 			return nil
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-	return outputPath, nil
+		})
 }
 
 // formatRatioValue formats a single ratio float (NaN/Inf → 空字串,否則 %.6f)。
@@ -1081,35 +1027,16 @@ func formatMuscleRatioCell(values []float64, idx int) string {
 	return formatRatioValue(values[idx])
 }
 
-// validateMuscleRatioOutputDir 是 muscle_ratio write path 共用的 defense-in-depth
-// 守門 — 對齊既有 muscle_ratio.Analyzer 內 ValidateExternalPath 的位置。
-// SubDir 的 traversal 檢查已由 safeJoinOutput 在 caller 端完成;本 helper 只負責
-// system-dir prefix 檢查(/etc 等) + 確保目錄存在。
-func (h *CSVHandler) validateMuscleRatioOutputDir(subDir string) error {
-	checkPath, joinErr := h.safeJoinOutput(subDir, "_validation_marker")
-	if joinErr != nil {
-		return fmt.Errorf("muscle_ratio 輸出路徑無效: %w", joinErr)
-	}
-	if err := h.pathValidator.ValidateExternalPath(checkPath); err != nil {
-		return fmt.Errorf("muscle_ratio 輸出路徑無效: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(checkPath), fsperm.DirPerm); err != nil {
-		return fmt.Errorf("muscle_ratio 輸出目錄建立失敗: %w", err)
-	}
-	return nil
-}
-
 // safeJoinOutput 把 subDir + filename 安全 join 在 OutputDir 之下,拒絕逸出 OutputDir
 // 的 SubDir(含 traversal 如 "../evil" 或絕對路徑如 "/etc")。
 //
 // ADR-0001 invariant:writeFileOutput 與直接走 csvutil.WriteCSVAtomic 的 writer
-// (WriteCCIResult / WriteMuscleRatioOutput*)共用本 helper 守住 OutputDir 邊界,
+// (placeSubjectOutput)共用本 helper 守住 OutputDir 邊界,
 // 確保 SubDir traversal 不會把 *.csv 寫到 OutputDir 外面。
 func (h *CSVHandler) safeJoinOutput(subDir, filename string) (string, error) {
 	joined := filepath.Join(h.config.OutputDir, subDir, filename)
 	if !fsperm.IsWithin(h.config.OutputDir, joined) {
-		return "", fmt.Errorf("%w: SubDir=%q filename=%q (resolved=%q)",
-			errOutputPathEscapesOutputDir, subDir, filename, joined)
+		return "", errOutputPathEscapesOutputDir
 	}
 	return joined, nil
 }
@@ -1119,7 +1046,7 @@ var errEmptyMuscleRatioPayload = stderrors.New("WriteMuscleRatio*: payload 缺 T
 var errEmptyCCIPhasesPayload = stderrors.New("WriteCCIPhasesResult: payload has no rows")
 
 // errOutputPathEscapesOutputDir 標示 SubDir 含 traversal 或絕對路徑導致 join
-// 後的路徑逸出 OutputDir;供 safeJoinOutput / WriteCCIResult / WriteMuscleRatio* wrap。
+// 後的路徑逸出 OutputDir;供 safeJoinOutput 回傳、placeSubjectOutput wrap。
 var errOutputPathEscapesOutputDir = stderrors.New("輸出路徑逸出 OutputDir")
 
 // WriteCCIPhasesResult 寫 per-subject Output 2 — CCI 分期視窗統計 CSV (ADR-0018)。
@@ -1139,29 +1066,13 @@ func (h *CSVHandler) WriteCCIPhasesResult(
 		return "", errEmptyCCIPhasesPayload
 	}
 
-	fname := filename.SubjectOutputName(result.Subject, "CCI_Rudolph_phases") + ".csv"
-	outputPath, joinErr := h.safeJoinOutput(req.SubDir, fname)
-	if joinErr != nil {
-		return "", fmt.Errorf("CCI 輸出路徑無效: %w", joinErr)
-	}
-
-	if err := h.pathValidator.ValidateExternalPath(outputPath); err != nil {
-		return "", fmt.Errorf("CCI 輸出路徑無效: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(outputPath), fsperm.DirPerm); err != nil {
-		return "", fmt.Errorf("CCI 輸出目錄建立失敗: %w", err)
-	}
-
 	header := []string{"項目", "指標", "Time (s)"}
 	for _, pr := range result.PairResults {
 		header = append(header, pr.PairName)
 	}
 
-	err := csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header:    header,
-		BasePaths: h.pathValidator.GetAllowedBasePaths(),
-		Emit: func(emit func([]string) error) error {
+	return h.placeSubjectOutput(req.SubDir, result.Subject, "CCI_Rudolph_phases", header,
+		func(emit func([]string) error) error {
 			for _, row := range result.PhaseStats {
 				timeCell := ""
 				if row.HasTime {
@@ -1177,12 +1088,7 @@ func (h *CSVHandler) WriteCCIPhasesResult(
 				}
 			}
 			return nil
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-	return outputPath, nil
+		})
 }
 
 // WriteNormalizedPhaseSyncEMG 把 normalized phase-sync EMG 時序資料寫成 CSV
@@ -1196,7 +1102,7 @@ func (h *CSVHandler) WriteCCIPhasesResult(
 // 的 fmt.Sprintf("%.6f") 合併 — 後者寫出 "NaN" 字面)。
 // precision = phaseSyncPrecision = 6 (常數,無 precision 參數 — 與 Output 2 共享常數,不共享 formatter)。
 //
-// 路徑由 phaseSyncAtomicWrite 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
+// 路徑由 placeSubjectOutput 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
 // ADR-0001 invariant: Subject-based write ⟹ WriteCSVAtomic。
 func (h *CSVHandler) WriteNormalizedPhaseSyncEMG(
 	req WriteRequest,
@@ -1206,8 +1112,6 @@ func (h *CSVHandler) WriteNormalizedPhaseSyncEMG(
 	if data == nil {
 		return "", errEmptyPhaseSyncEMGData
 	}
-
-	fname := filename.SubjectOutputName(subject, "normalized") + ".csv"
 
 	emit := func(write func(row []string) error) error {
 		for i := range data.Time {
@@ -1232,7 +1136,7 @@ func (h *CSVHandler) WriteNormalizedPhaseSyncEMG(
 		return nil
 	}
 
-	return h.phaseSyncAtomicWrite(req.SubDir, fname, buildEMGCSVHeader(data.Headers), emit)
+	return h.placeSubjectOutput(req.SubDir, subject, "normalized", buildEMGCSVHeader(data.Headers), emit)
 }
 
 // buildEMGCSVHeader 組合 EMG CSV 標頭：`Time` + 各肌肉名稱。

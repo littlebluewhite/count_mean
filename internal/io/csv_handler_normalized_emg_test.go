@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -25,25 +24,6 @@ func newNormalizedEMGTestData() *models.PhaseSyncEMGData {
 		},
 		Headers: []string{"MuscleA", "MuscleB"},
 	}
-}
-
-// TestWriteNormalizedPhaseSyncEMG_WritesBOM 驗證輸出以 UTF-8 BOM 開頭。
-func TestWriteNormalizedPhaseSyncEMG_WritesBOM(t *testing.T) {
-	t.Parallel()
-
-	handler, tempDir := newFormatAwareTestHandler(t)
-	data := newNormalizedEMGTestData()
-
-	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(WriteRequest{}, data, "subject_01")
-	require.NoError(t, err)
-	require.Equal(t, filepath.Join(tempDir, "subject_01_normalized.csv"), outputPath)
-
-	content, err := os.ReadFile(outputPath) //nolint:gosec // test file in t.TempDir
-	require.NoError(t, err)
-
-	require.True(t, len(content) >= 3 &&
-		content[0] == 0xEF && content[1] == 0xBB && content[2] == 0xBF,
-		"output must start with UTF-8 BOM")
 }
 
 // TestWriteNormalizedPhaseSyncEMG_HeaderOrderPreserved 驗證 header 為 Time,MuscleA,MuscleB。
@@ -73,33 +53,6 @@ func TestWriteNormalizedPhaseSyncEMG_NilDataReturnsError(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, errEmptyPhaseSyncEMGData)
 	require.Contains(t, err.Error(), "EMG 數據為空")
-}
-
-// TestWriteNormalizedPhaseSyncEMG_AtomicWrite_NoTmpLeftover 驗證成功路徑不留 .tmp 殘檔。
-func TestWriteNormalizedPhaseSyncEMG_AtomicWrite_NoTmpLeftover(t *testing.T) {
-	t.Parallel()
-
-	handler, tempDir := newFormatAwareTestHandler(t)
-	data := newNormalizedEMGTestData()
-
-	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(WriteRequest{}, data, "subject_01")
-	require.NoError(t, err)
-
-	// outputPath 必須存在。
-	_, err = os.Stat(outputPath)
-	require.NoError(t, err)
-
-	// outputPath + ".tmp" 必須不存在（WriteCSVAtomic rename 之後 tmp 已不在）。
-	_, err = os.Stat(outputPath + ".tmp")
-	require.True(t, os.IsNotExist(err), "atomic write 完成後 tmp 不該殘留: %v", err)
-
-	// 目錄內也不該有任何 .tmp. 檔。
-	entries, readErr := os.ReadDir(tempDir)
-	require.NoError(t, readErr)
-	for _, e := range entries {
-		require.False(t, strings.Contains(e.Name(), ".tmp."),
-			"no stray tmp file should remain, found: %s", e.Name())
-	}
 }
 
 // TestWriteNormalizedPhaseSyncEMG_AtomicWrite_LeavesFinalUntouchedOnEmitError
@@ -214,12 +167,12 @@ func TestWriteNormalizedPhaseSyncEMG_Precision6(t *testing.T) {
 }
 
 // TestWriteNormalizedPhaseSyncEMG_ReplaceContract_SymlinkWithinBase
-// 鎖定 phaseSyncAtomicWrite 的 replace-contract：base 內部 symlink 指向 base 內目標時，
+// 鎖定 placeSubjectOutput 的 replace-contract：base 內部 symlink 指向 base 內目標時，
 // WriteNormalizedPhaseSyncEMG 成功、symlink entry 被替換成 regular file、原 target 不被覆寫。
 //
 // ADR-0020 symlink disposition：
 //   - TestCSVHandler_WriteAllowsSymlinkWithinBase（symlink_test.go:67）只覆蓋 WriteCSV 路徑，
-//     不覆蓋 phaseSyncAtomicWrite seam → 新增本 test 補上 replace-contract 釘住。
+//     不覆蓋 placeSubjectOutput seam → 新增本 test 補上 replace-contract 釘住。
 //   - WriteCSVAtomic 的 tmp+rename 語意：rename 替換 symlink entry（非跟到 target），
 //     target 內容不變，symlink 被換成 regular file — 此為 atomic write 的設計意圖。
 func TestWriteNormalizedPhaseSyncEMG_ReplaceContract_SymlinkWithinBase(t *testing.T) {

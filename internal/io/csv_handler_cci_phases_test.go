@@ -5,16 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/cci"
-	"count_mean/internal/csvutil"
 )
 
 // TestWriteCCIPhasesResult_ContentRoundTrip 驗證 WriteCCIPhasesResult 的 header
@@ -68,54 +65,6 @@ func TestWriteCCIPhasesResult_ContentRoundTrip(t *testing.T) {
 	assert.Equal(t, "", rows[3][4], "NaN value cell must be empty")
 }
 
-// TestWriteCCIPhasesResult_BOMPresent 驗證寫出的檔案開頭有 UTF-8 BOM。
-func TestWriteCCIPhasesResult_BOMPresent(t *testing.T) {
-	t.Parallel()
-
-	handler, _ := newFormatAwareTestHandler(t)
-
-	payload := &cci.CCIAnalysisResult{
-		Subject:     "subj",
-		PairResults: []cci.CCIResult{{PairName: "P1"}},
-		PhaseStats: []cci.CCIPhaseStatRow{
-			{Item: "IC", Metric: "mean", HasTime: false, Values: []float64{1.0}},
-		},
-	}
-
-	outputPath, err := handler.WriteCCIPhasesResult(context.Background(), WriteRequest{}, payload)
-	require.NoError(t, err)
-
-	content, readErr := os.ReadFile(outputPath)
-	require.NoError(t, readErr)
-	require.True(t, len(content) >= 3, "file too short to contain BOM")
-	assert.Equal(t, csvutil.BOMBytes(), content[:3], "first 3 bytes must be UTF-8 BOM")
-}
-
-// TestWriteCCIPhasesResult_NoTmpResidue 驗證成功寫出後輸出目錄沒有殘留 .tmp. 檔。
-func TestWriteCCIPhasesResult_NoTmpResidue(t *testing.T) {
-	t.Parallel()
-
-	handler, tempDir := newFormatAwareTestHandler(t)
-
-	payload := &cci.CCIAnalysisResult{
-		Subject:     "subj",
-		PairResults: []cci.CCIResult{{PairName: "P1"}},
-		PhaseStats: []cci.CCIPhaseStatRow{
-			{Item: "IC", Metric: "mean", HasTime: false, Values: []float64{1.0}},
-		},
-	}
-
-	_, err := handler.WriteCCIPhasesResult(context.Background(), WriteRequest{}, payload)
-	require.NoError(t, err)
-
-	entries, readErr := os.ReadDir(tempDir)
-	require.NoError(t, readErr)
-	for _, e := range entries {
-		assert.False(t, strings.Contains(e.Name(), ".tmp."),
-			"no stray tmp file should remain in output dir, found: %s", e.Name())
-	}
-}
-
 // TestWriteCCIPhasesResult_EmptyRows 驗證 len(Rows)==0 → errEmptyCCIPhasesPayload。
 func TestWriteCCIPhasesResult_EmptyRows(t *testing.T) {
 	t.Parallel()
@@ -132,44 +81,6 @@ func TestWriteCCIPhasesResult_EmptyRows(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errEmptyCCIPhasesPayload),
 		"expected errEmptyCCIPhasesPayload, got: %v", err)
-}
-
-// TestWriteCCIPhasesResult_PathTraversalRejected 驗證 SubDir 含 traversal 或絕對路徑時
-// writer 拒絕並返回 error,不寫入任何檔案。
-func TestWriteCCIPhasesResult_PathTraversalRejected(t *testing.T) {
-	t.Parallel()
-
-	traversalCases := []struct {
-		name   string
-		subDir string
-	}{
-		{"relative_traversal", "../evil"},
-		{"absolute_path", "/etc"},
-		{"deep_traversal", "../../etc"},
-	}
-
-	row := cci.CCIPhaseStatRow{
-		Item: "IC", Metric: "mean", HasTime: false, Values: []float64{1.0},
-	}
-	payload := &cci.CCIAnalysisResult{
-		Subject:     "subj",
-		PairResults: []cci.CCIResult{{PairName: "P1"}},
-		PhaseStats:  []cci.CCIPhaseStatRow{row},
-	}
-
-	for _, tc := range traversalCases {
-		t.Run(tc.name, func(t *testing.T) {
-			handler, _ := newFormatAwareTestHandler(t)
-			_, err := handler.WriteCCIPhasesResult(
-				context.Background(),
-				WriteRequest{SubDir: tc.subDir},
-				payload,
-			)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "輸出路徑",
-				"error should mention 輸出路徑 for subDir=%q", tc.subDir)
-		})
-	}
 }
 
 // TestWriteCCIPhasesResult_NilResult 驗證 result == nil → errEmptyCCIPhasesPayload

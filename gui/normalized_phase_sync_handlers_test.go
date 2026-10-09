@@ -227,7 +227,7 @@ func TestAnalyzeNormalizedPhaseSync_StatsZeroDurationRejected(t *testing.T) {
 // 此 test 透過注入 OutputDir = "/etc/..."(系統敏感前綴)強迫 boundary check
 // 觸發。修法前:Output 1 由 GUI 層自行拼路徑並直接寫檔,OS perm/ENOENT 錯誤
 // 訊息洩漏完整 absolute path 給 patient。
-// 修法後:result.Message 應含「PhaseSync 輸出路徑無效」(CSVHandler 的 wrap
+// 修法後:result.Message 應含「輸出路徑無效」(CSVHandler 的 wrap
 // prefix)而非 OS-level error,anti-PII-leak 意圖保持。
 func TestAnalyzeNormalizedPhaseSync_RejectsInvalidExternalPath(t *testing.T) {
 	app := setupNormalizedPhaseSyncTestApp(t)
@@ -257,11 +257,11 @@ func TestAnalyzeNormalizedPhaseSync_RejectsInvalidExternalPath(t *testing.T) {
 	assert.False(t, result.Success,
 		"OutputDir 落在 /etc 系統敏感目錄,應在寫檔前被 boundary validate 攔下")
 
-	// boundary validation 觸發後 message 含「PhaseSync 輸出路徑無效」(CSVHandler
+	// boundary validation 觸發後 message 含「輸出路徑無效」(CSVHandler
 	// WriteNormalizedPhaseSyncEMG 的 wrap prefix);若 fix 未生效,訊息會帶 OS-level
 	// error 字面如 "open /etc/...: no such file or directory",含完整 absolute path PII。
 	// anti-PII-leak 驗證:訊息不應含完整路徑 /etc/normalized_phase_sync_invalid/...。
-	assert.Contains(t, result.Message, "PhaseSync 輸出路徑無效",
+	assert.Contains(t, result.Message, "輸出路徑無效",
 		"boundary path validation 應在 OS write 前 reject,error message 應走 CSVHandler 的 wrap 格式")
 	assert.NotContains(t, result.Message, "/etc/normalized_phase_sync_invalid",
 		"完整的 /etc 子目錄路徑不應洩漏進 result.Message(anti-PII-leak)")
