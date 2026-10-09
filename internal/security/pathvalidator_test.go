@@ -584,6 +584,63 @@ func TestPathValidator_ExternalPath_AcceptsLiteralPercentInFilename(t *testing.T
 	}
 }
 
+// 路徑不做 URL-decode:檔名裡的編碼序列(`%2E%2E`、`%2F`、`%65tc`、`+`)一律是字面字元。
+// 它們不會被還原成 `..` 或 `/etc`,驗證通過的路徑仍落在原目錄內;真正的 `..` element
+// 與敏感目錄仍然擋。
+func TestValidateExternalPath_EncodedSequencesAreLiteral(t *testing.T) {
+	t.Parallel()
+
+	validator := NewPathValidator(nil)
+	tmpRoot := t.TempDir()
+
+	accepted := []string{
+		"%2e%2e%2fetc%2fpasswd.csv",
+		"%2E%2E.csv",
+		"..%2Fetc%2Fpasswd.csv",
+		"%65tc%2Fpasswd.csv",
+		"a%252Fb.csv",
+		"a+b.csv",
+	}
+	for _, name := range accepted {
+		t.Run("accept/"+name, func(t *testing.T) {
+			t.Parallel()
+			p := filepath.Join(tmpRoot, name)
+			if err := validator.ValidateExternalPath(p); err != nil {
+				t.Fatalf("ValidateExternalPath(%q) 編碼序列應視為字面字元放行，實際 err=%v", p, err)
+			}
+			abs, err := validator.validatePathFormat(p)
+			if err != nil {
+				t.Fatalf("validatePathFormat(%q) err=%v", p, err)
+			}
+			if filepath.Dir(abs) != tmpRoot || filepath.Base(abs) != name {
+				t.Errorf("驗證後的路徑應仍是 %q 下的字面檔名 %q，實際 %q", tmpRoot, name, abs)
+			}
+		})
+	}
+
+	// 編碼序列作為「目錄」元素同樣是字面。
+	t.Run("accept/encoded_dir_element", func(t *testing.T) {
+		t.Parallel()
+		p := filepath.Join(tmpRoot, "%2E%2E", "%65tc", "data.csv")
+		if err := validator.ValidateExternalPath(p); err != nil {
+			t.Errorf("ValidateExternalPath(%q) 應放行，實際 err=%v", p, err)
+		}
+	})
+
+	rejected := []string{
+		tmpRoot + "/../data.csv",
+		"/etc/passwd",
+	}
+	for _, p := range rejected {
+		t.Run("reject/"+p, func(t *testing.T) {
+			t.Parallel()
+			if err := validator.ValidateExternalPath(p); err == nil {
+				t.Errorf("ValidateExternalPath(%q) 仍應拒絕，實際通過", p)
+			}
+		})
+	}
+}
+
 // 放行字面 `%` 不可順便放走 traversal — 即使 path 含字面 %,含 `..` 路徑元素
 // 仍必須擋。
 func TestPathValidator_ExternalPath_StillRejectsTraversalEvenWithPercent(t *testing.T) {

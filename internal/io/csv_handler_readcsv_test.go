@@ -64,26 +64,40 @@ func TestReadCSV_PlusFilenameReadsExactFile(t *testing.T) {
 }
 
 // TestReadCSV_OverLimitMessage 釘住:超過 100MB 回 ErrCodeFileTooLarge,
-// 訊息帶實際 MB 數與上限。用 sparse file,不佔磁碟。
+// 訊息帶實際 MB 數(無條件進位,至少 101)與上限。用 sparse file,不佔磁碟。
 func TestReadCSV_OverLimitMessage(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	handler := newReadCSVHandler(dir)
+	const mb = int64(1024 * 1024)
 
-	p := filepath.Join(dir, "huge.csv")
-	f, err := os.Create(p) //nolint:gosec // p 位於 t.TempDir()
-	require.NoError(t, err)
-	require.NoError(t, f.Truncate(101*1024*1024))
-	require.NoError(t, f.Close())
+	for name, tc := range map[string]struct {
+		size int64
+		want string
+	}{
+		"101MB":         {101 * mb, "檔案過大（101 MB，上限 100 MB），請分割檔案後再試"},
+		"limit_plus_1B": {100*mb + 1, "檔案過大（101 MB，上限 100 MB），請分割檔案後再試"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	_, err = handler.ReadCSV(p)
-	require.Error(t, err)
+			dir := t.TempDir()
+			handler := newReadCSVHandler(dir)
 
-	var appErr *apperrors.AppError
-	require.True(t, errors.As(err, &appErr), "應為 AppError,實際 %T", err)
-	require.Equal(t, apperrors.ErrCodeFileTooLarge, appErr.Code)
-	require.Equal(t, "檔案過大（101 MB，上限 100 MB），請分割檔案後再試", appErr.Message)
+			p := filepath.Join(dir, "huge.csv")
+			f, err := os.Create(p) //nolint:gosec // p 位於 t.TempDir()
+			require.NoError(t, err)
+			require.NoError(t, f.Truncate(tc.size))
+			require.NoError(t, f.Close())
+
+			_, err = handler.ReadCSV(p)
+			require.Error(t, err)
+
+			var appErr *apperrors.AppError
+			require.True(t, errors.As(err, &appErr), "應為 AppError,實際 %T", err)
+			require.Equal(t, apperrors.ErrCodeFileTooLarge, appErr.Code)
+			require.Equal(t, tc.want, appErr.Message)
+		})
+	}
 }
 
 // TestReadCSV_RejectsNonRegular 釘住:目錄(即使名稱以 .csv 結尾)不是 regular file,必須拒絕。

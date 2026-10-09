@@ -159,7 +159,11 @@ func (h *CSVHandler) isCSVFile(path string) bool {
 }
 
 // parseCSV 解析已開啟的 CSV 檔案(單次 ReadAll)。path 只用於 log。
+//
+// 讀取以 LimitReader 封頂在 maxReadCSVBytes+1:fstat 之後檔案若又長大,
+// 多讀到的那 1 byte 會被視為超過上限,不會無界吃進記憶體。
 func (h *CSVHandler) parseCSV(file *os.File, path string) ([][]string, error) {
+	limited := &stdio.LimitedReader{R: file, N: maxReadCSVBytes + 1}
 	// 用 bufio 包 *os.File 避免 csv.Reader 每次 Read 都觸發 syscall（大檔差異明顯）。
 	// BOM 處理：Excel 匯出的 UTF-8 CSV 常帶 0xEF 0xBB 0xBF 前綴。若不剝除，
 	// records[0][0] 會帶 U+FEFF，污染後續以 header 字串比對 channel 名稱的路徑，
@@ -167,7 +171,7 @@ func (h *CSVHandler) parseCSV(file *os.File, path string) ([][]string, error) {
 	// 與 internal/parsers/csv_reader.go 對稱：先 bufio.NewReaderSize 再 PeekBOM
 	// 再 csv.NewReader（PeekBOM 在 < 3 bytes 輸入時視為「無 BOM」回 nil，
 	// 不會把空檔的 EOF 提前丟出）。
-	bufReader := bufio.NewReaderSize(file, csvReaderBufSize)
+	bufReader := bufio.NewReaderSize(limited, csvReaderBufSize)
 	if _, err := csvutil.PeekBOM(bufReader); err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "BOM 偵測失敗")
 		h.logger.Error("BOM 偵測失敗", appErr, map[string]any{"path": path})
@@ -190,6 +194,10 @@ func (h *CSVHandler) parseCSV(file *os.File, path string) ([][]string, error) {
 	reader.ReuseRecord = false
 
 	records, err := reader.ReadAll()
+	if limited.N == 0 {
+		return nil, h.tooLargeError(path, maxReadCSVBytes+1)
+	}
+
 	if err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "無法讀取 CSV 資料")
 		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]any{"path": path})
@@ -261,6 +269,12 @@ func (h *CSVHandler) ReadCSV(path string) ([][]string, error) {
 		return nil, err
 	}
 
+	// open 前先 stat 擋非 regular(FIFO 等會讓 OpenFile 阻塞)。stat 失敗不在此報錯,
+	// 交給 OpenFile 產生既有的錯誤訊息;open 後的 file.Stat() 才是權威檢查。
+	if pre, statErr := os.Stat(path); statErr == nil && !pre.Mode().IsRegular() {
+		return nil, h.notRegularError(path)
+	}
+
 	file, err := os.OpenFile(path, fsperm.ReadFlags, 0) //nolint:gosec // path 已過 ValidateExternalPath;fsperm.ReadFlags 加 O_NOFOLLOW(與 WriteFlags 對稱)
 	if err != nil {
 		appErr := openFailure(err)
@@ -284,23 +298,11 @@ func (h *CSVHandler) ReadCSV(path string) ([][]string, error) {
 	}
 
 	if !info.Mode().IsRegular() {
-		appErr := errors.NewAppErrorWithDetails(
-			errors.ErrCodeFileFormat, "檔案格式無效",
-			fmt.Sprintf("'%s' 不是一般檔案", path),
-		)
-		h.logger.Error("檔案類型驗證失敗", appErr, map[string]any{"path": path})
-
-		return nil, appErr
+		return nil, h.notRegularError(path)
 	}
 
 	if info.Size() > maxReadCSVBytes {
-		h.logger.Info("檢測到大文件，拒絕讀取", map[string]any{"filename": path, "file_size": info.Size()})
-
-		return nil, errors.NewAppErrorWithDetails(
-			errors.ErrCodeFileTooLarge,
-			fmt.Sprintf("檔案過大（%d MB，上限 100 MB），請分割檔案後再試", info.Size()/(1024*1024)),
-			fmt.Sprintf("文件 %s 過大 (%d bytes)，超過 100 MB 上限", path, info.Size()),
-		)
+		return nil, h.tooLargeError(path, info.Size())
 	}
 
 	records, err := h.parseCSV(file, path)
@@ -317,6 +319,31 @@ func (h *CSVHandler) ReadCSV(path string) ([][]string, error) {
 	})
 
 	return records, nil
+}
+
+// notRegularError 建立「不是一般檔案」錯誤(目錄、FIFO、device 等)。
+func (h *CSVHandler) notRegularError(path string) *errors.AppError {
+	appErr := errors.NewAppErrorWithDetails(
+		errors.ErrCodeFileFormat, "檔案格式無效",
+		fmt.Sprintf("'%s' 不是一般檔案", path),
+	)
+	h.logger.Error("檔案類型驗證失敗", appErr, map[string]any{"path": path})
+
+	return appErr
+}
+
+// tooLargeError 建立超過 100MB 的錯誤。MB 數無條件進位,超過上限時一律顯示 >= 101,
+// 避免「100 MB，上限 100 MB」的矛盾訊息。
+func (h *CSVHandler) tooLargeError(path string, size int64) *errors.AppError {
+	const mb = 1024 * 1024
+
+	h.logger.Info("檢測到大文件，拒絕讀取", map[string]any{"filename": path, "file_size": size})
+
+	return errors.NewAppErrorWithDetails(
+		errors.ErrCodeFileTooLarge,
+		fmt.Sprintf("檔案過大（%d MB，上限 100 MB），請分割檔案後再試", (size+mb-1)/mb),
+		fmt.Sprintf("文件 %s 過大 (至少 %d bytes)，超過 100 MB 上限", path, size),
+	)
 }
 
 // openFailure 把 OpenFile 錯誤轉成 AppError。不存在沿用既有的「無法獲取文件信息」訊息。
