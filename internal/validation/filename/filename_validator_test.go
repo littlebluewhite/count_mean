@@ -126,7 +126,7 @@ func TestValidator_RejectsTabInFilename(t *testing.T) {
 // TestValidator_RejectsWindowsDriveLetterPrefix 釘住 regression：
 // `C:test.csv` 在 Windows 上 (legacy DOS 行為) 解析為「drive C 的 cwd 下的 test.csv」
 // — 即便不含 path separator,仍會在 Windows OpenFile 走 drive-relative resolution,
-// 跳出 caller 認知的 base directory。原本實作只靠 DetectDangerousChars 偵測 `:`
+// 跳出 caller 認知的 base directory。原本實作只靠(已刪除的)危險字元清單偵測 `:`
 // 字元間接擋下,defense 過於 fragile:若日後 `:` 為了 ISO timestamp / time literal 鬆綁,
 // drive letter 立刻 bypass。
 //
@@ -161,14 +161,14 @@ func TestValidator_RejectsWindowsDriveLetterPrefix(t *testing.T) {
 
 	// Pass cases: 含 `:` 但非 drive letter prefix
 	passCases := []string{
-		// 注意:單一 `:` 雖然不在 drive letter 形式,但目前 DetectDangerousChars 仍會擋,
+		// 注意:單一 `:` 雖然不在 drive letter 形式,但仍會被 illegalFilenameChars 擋下,
 		// 這個 pass case list 是「明確不是 drive letter 也不該被 drive letter check 擋」的範例。
-		// (若日後 `:` 從 DangerousChars 移除,以下 case 仍需透過其他守門擋下 — 不是本 fix 範圍。)
+		// (若日後 `:` 從 illegalFilenameChars 移除,以下 case 仍需透過其他守門擋下 — 不是本 fix 範圍。)
 	}
 	for _, in := range passCases {
 		t.Run("pass/"+in, func(t *testing.T) {
 			if err := v.ValidateFilename(in); err != nil {
-				// 若 `:` 仍在 DangerousChars,這條會 err 但不該是 drive-letter error
+				// 若 `:` 仍在 illegalFilenameChars,這條會 err 但不該是 drive-letter error
 				if strings.Contains(err.Error(), "Windows 磁碟代號") {
 					t.Errorf("filename %q 不是 drive letter,不該被 drive-letter check 誤擋",
 						in)

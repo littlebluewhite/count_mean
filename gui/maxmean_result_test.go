@@ -92,9 +92,9 @@ func TestCalculateMaxMean_ExternalBatch_OutputPathUnderOutputDir(t *testing.T) {
 // footgun — 空字串 → ListCSVFilesInDirectory("") → InputDir root)。
 //
 // inline empty-guard(gui/maxmean_batch_adapter.go)取代了已刪 facade 的
-// ValidateDirectoryPath;舊 check 的 NUL/length 部分刻意下放給下游
-// per-file security.PathValidator(internal GetSafePath / external
-// ValidateExternalPath),故此處只釘 empty 這個有行為意義的 case。
+// ValidateDirectoryPath(該 facade 與 GetSafePath 均已刪除);舊 check 的 NUL/length
+// 部分刻意下放給下游 per-file security.PathValidator(ValidateExternalPath /
+// ValidateExternalDir),故此處只釘 empty 這個有行為意義的 case。
 //
 // 斷言特定訊息「目錄路徑不能為空」而非僅 err!=nil:guard 被移除時下游 list/read
 // 會回別的錯誤(或 0 檔靜默),特定訊息斷言才能鑑別 guard 存活。

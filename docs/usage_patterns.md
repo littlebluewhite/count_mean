@@ -72,9 +72,10 @@ func StandardEMGAnalysis() {
         return
     }
 
-    // 4. 轉成 CSV 列陣列並寫入 OutputDir
-    csvData := csvHandler.ConvertMaxMeanResultsToCSV(records[0], results, 0, 0)
-    if err := csvHandler.WriteCSVToOutput("max_mean_results.csv", csvData); err != nil {
+    // 4. 寫入 OutputDir（writer 持有 row layout，回傳實際寫入的路徑）
+    if _, err := csvHandler.WriteMaxMean(
+        io.WriteRequest{Filename: "max_mean_results.csv"}, records[0], results, 0, 0,
+    ); err != nil {
         logger.Error("結果保存失敗", err, nil)
         return
     }
@@ -102,7 +103,7 @@ func StandardEMGAnalysis() {
 
 ## 檔案大小限制
 
-目前**沒有**串流處理大檔的 API。`LargeFileHandler` 的串流 Max-mean 路徑已刪除（見
+目前**沒有**串流處理大檔的 API。串流 Max-mean 路徑（`LargeFileHandler`）已刪除（見
 [ADR-0033](adr/0033-remove-streaming-maxmean.md)）；`CSVHandler.ReadCSV` 對超過 100 MB
 的檔案直接回 `ErrCodeFileTooLarge`（「檔案過大（上限 100 MB），請分割檔案後再試」），
 請先分割檔案再分析。
@@ -246,11 +247,9 @@ func processSingleFile(ctx context.Context, cfg *config.AppConfig, fileName stri
         return err
     }
 
-    // 保存結果（ConvertMaxMeanResultsToCSV 四參數版：headers / results / startRange / endRange）
-    csvData := csvHandler.ConvertMaxMeanResultsToCSV(dataset.Headers, results, 0, 0)
-
+    // 保存結果（WriteMaxMean：headers / results / startRange / endRange，回傳實際寫入的路徑）
     outputName := fmt.Sprintf("%s%s", config.OutputPrefix, fileName)
-    err = csvHandler.WriteCSVToOutput(outputName, csvData)
+    _, err = csvHandler.WriteMaxMean(io.WriteRequest{Filename: outputName}, dataset.Headers, results, 0, 0)
     if err != nil {
         return err
     }
@@ -608,11 +607,9 @@ func (p *ErrorHandlingProcessor) processFile(filePath string) error {
         }
     }
     
-    // 階段 4: 結果保存（ConvertMaxMeanResultsToCSV 為 4 參數版，回 [][]string 無 error）
-    csvData := csvHandler.ConvertMaxMeanResultsToCSV(dataset.Headers, results, 0, 0)
-
+    // 階段 4: 結果保存（WriteMaxMean 回傳實際寫入的路徑）
     outputName := fmt.Sprintf("recovered_%s", filepath.Base(filePath))
-    err = csvHandler.WriteCSVToOutput(outputName, csvData)
+    _, err = csvHandler.WriteMaxMean(io.WriteRequest{Filename: outputName}, dataset.Headers, results, 0, 0)
     if err != nil {
         return &errors.AppError{
             Code:    errors.ErrCodeFileNotFound,
@@ -654,7 +651,8 @@ func (p *ErrorHandlingProcessor) fallbackProcess(ctx context.Context, cfg *confi
         "file": filePath,
     })
 
-    // 降級處理：僅保留原始資料副本，待資源充足後再重新分析
+    // 降級處理：只確認檔案可讀並記錄規模，待資源充足後再重新分析
+    // （目前沒有「原樣複製 raw rows」的公開 writer，故不產出檔案）
     csvHandler := io.NewCSVHandler(cfg)
 
     csvData, err := csvHandler.ReadCSV(filePath)
@@ -662,8 +660,10 @@ func (p *ErrorHandlingProcessor) fallbackProcess(ctx context.Context, cfg *confi
         return err
     }
 
-    outputName := fmt.Sprintf("fallback_%s", filepath.Base(filePath))
-    return csvHandler.WriteCSVToOutput(outputName, csvData)
+    p.Logger.Info("降級處理完成（僅讀取驗證）", map[string]interface{}{
+        "rows": len(csvData),
+    })
+    return nil
 }
 ```
 
@@ -948,12 +948,10 @@ func processSequential(filePath string, options PerformanceOptions, monitor *Per
 func saveOptimizedResults(headers []string, results []models.MaxMeanResult, filePath string, monitor *PerformanceMonitor) error {
     csvHandler := io.NewCSVHandler(cfg)
 
-    // ConvertMaxMeanResultsToCSV 為四參數版（headers / results / startRange / endRange），
-    // 回 [][]string 無 error。
-    csvData := csvHandler.ConvertMaxMeanResultsToCSV(headers, results, 0, 0)
-
+    // WriteMaxMean：headers / results / startRange / endRange，回傳實際寫入的路徑。
     outputName := fmt.Sprintf("optimized_%s", filepath.Base(filePath))
-    return csvHandler.WriteCSVToOutput(outputName, csvData)
+    _, err := csvHandler.WriteMaxMean(io.WriteRequest{Filename: outputName}, headers, results, 0, 0)
+    return err
 }
 
 func (m *PerformanceMonitor) RecordProcessingTime(duration time.Duration) {

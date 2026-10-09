@@ -187,7 +187,7 @@ count_mean/
 ├── internal/                  # 內部套件
 │   ├── calculator/           # MaxMean / Normalizer / PhaseAnalyzer
 │   ├── parsers/              # CSV / EMG / Motion / ANC 統一解析器
-│   ├── io/                   # CSVHandler（BOM）/ LargeFileHandler（檔案資訊與大小檢查）
+│   ├── io/                   # CSVHandler（讀寫單一入口、BOM、檔案大小檢查）
 │   ├── models/               # EMGData / EMGDataset / MaxMeanResult
 │   ├── chart/                # go-echarts 圖表生成與降採樣
 │   ├── config/               # JSON 組態管理

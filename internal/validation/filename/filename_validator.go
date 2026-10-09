@@ -16,7 +16,7 @@ import (
 // 釘住:`C:test.csv` 在 Windows 上仍會被 OpenFile 解析為「drive C 的 current
 // directory + test.csv」(legacy DOS drive-relative resolution),即使檔名不含
 // path separator 也能跳脫 caller 認知的 base directory。
-// 原本只靠 DetectDangerousChars 偵測 `:` 字元間接擋下,屬 fragile defense:若日後
+// 原本只靠(已刪除的)危險字元清單間接擋下 `:`,屬 fragile defense:若日後
 // `:` 為了 ISO timestamp / time literal 等合法用途鬆綁,drive letter prefix 立刻 bypass。
 //
 // 採 anchor 在開頭的 `^[A-Za-z]:` regex,defense-in-depth:
@@ -68,7 +68,7 @@ func NewValidator() *Validator {
 //   - Unicode format chars (\p{Cf}) / surrogate (\p{Cs})：阻擋 RTL override
 //     (U+202E) 顯示欺騙、ZWSP smuggling。
 //   - 檔案系統非法字元 `<>:"|?*`（注入防禦不在此層，見 ADR-0041）
-//   - Windows reserved names (CON / PRN / COMx / LPTx)
+//   - Windows reserved names (CON / PRN / AUX / NUL / COMx / LPTx)
 //   - 長度上限 255
 //   - 限定副檔名白名單
 func (v *Validator) ValidateFilename(filename string) error {

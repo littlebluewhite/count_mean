@@ -217,9 +217,9 @@ if err != nil {
     log.Fatal(err)
 }
 
-// 保存標準化結果
+// 保存標準化結果（寫到 OutputDir，回傳實際寫入的路徑）
 csvHandler := io.NewCSVHandler(cfg)
-err = csvHandler.WriteCSVToOutput(normalizedData, "normalized_data.csv")
+outPath, err := csvHandler.WriteNormalized(io.WriteRequest{Filename: "normalized_data.csv"}, normalizedData)
 if err != nil {
     log.Fatal(err)
 }
@@ -409,21 +409,27 @@ func NewCSVHandler(cfg *config.AppConfig) *CSVHandler
 **ReadCSV**
 
 ```go
-func (h *CSVHandler) ReadCSV(filename string) ([][]string, error)
+func (h *CSVHandler) ReadCSV(path string) ([][]string, error)
 ```
 
-讀取 CSV 文件並回傳原始列／欄陣列（**未解析**為 EMGDataset）。`filename` 會被 PathValidator 合併到 InputDir 之下，攻擊者無法用 `../` 跳出。要解析成 EMGDataset 請串接 `parsers.DataParser.ParseRawData`。
+使用者選取 CSV 的**唯一讀取入口**，回傳原始列／欄陣列（**未解析**為 EMGDataset；要解析請串接 `parsers.DataParser.ParseRawData`）。`path` 可為任意絕對路徑（GUI 檔案對話框回傳的路徑），不再限定於 InputDir 之下。流程：
+
+1. `ValidateFilename(Base(path))`：只擋檔案系統非法的檔名（ADR-0041）。
+2. `PathValidator.ValidateExternalPath(path)`：擋 `..` traversal 與系統敏感位置（ADR-0038 / ADR-0039）。路徑不做 URL-decode，`%`、`+` 皆為字面字元。
+3. open 前先 `stat`，非 regular file（目錄、FIFO 等）直接拒絕，避免 FIFO 讓 open 阻塞。
+4. 以 `fsperm.ReadFlags`（含 `O_NOFOLLOW`）開檔，再對 fd `fstat`：必須是 regular file 且 ≤ 100 MB，超過回 `ErrCodeFileTooLarge`。
+5. 單次解析，再做讀取側 sanity check（儲存格 ≤ 32 KB、CSV 結構、user-picked 檔案的 UTF-8）；讀取側不做 injection 偵測（寫入側由 `csvutil` 負責逸出）。
 
 **參數：**
-- `filename` (string): CSV 檔名（相對 InputDir）
+- `path` (string): CSV 檔的絕對路徑
 
 **示例：**
 ```go
 cfg, _ := config.LoadConfig("./config.json")
 handler := io.NewCSVHandler(cfg)
 
-// 讀取 CSV 原始資料
-records, err := handler.ReadCSV("emg_data.csv")
+// 讀取使用者選取的 CSV 原始資料
+records, err := handler.ReadCSV("/Users/me/data/emg_data.csv")
 if err != nil {
     log.Fatal(err)
 }
@@ -431,35 +437,40 @@ if err != nil {
 fmt.Printf("讀取成功：%d 筆 row\n", len(records))
 ```
 
-**WriteCSV / WriteCSVToOutput**
+**WriteRequest 與公開 writer**
 
 ```go
-func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error)
-func (h *CSVHandler) WriteCSVToOutput(filename string, data [][]string) error
+type WriteRequest struct {
+    Filename string // File-based writer 使用；Subject-based writer 忽略（檔名由 subject 推導）
+    SubDir   string // OutputDir 之下的子目錄，空字串 = OutputDir 根
+}
+
+// File-based（檔名由 caller 傳入，非 atomic，單一寫門 writeFileOutput）
+func (h *CSVHandler) WriteMaxMean(req WriteRequest, headers []string, results []models.MaxMeanResult, startRange, endRange float64) (string, error)
+func (h *CSVHandler) WriteNormalized(req WriteRequest, dataset *models.EMGDataset) (string, error)
+func (h *CSVHandler) WritePhaseAnalysis(req WriteRequest, headers []string, result *calculator.AnalyzeResult /* ... */) (string, error)
+
+// Subject-based（檔名由 filename.SubjectOutputName 推導，WriteCSVAtomic，單一步驟 placeSubjectOutput）
+func (h *CSVHandler) WritePhaseSyncResult(req WriteRequest, stats *models.EMGStatistics) (string, error)
+func (h *CSVHandler) WriteCCIResult(ctx context.Context, req WriteRequest, result *cci.CCIAnalysisResult) (string, error)
+// 另有 WriteNormalizedPhaseSyncResult / WriteNormalizedPhaseSyncEMG / WriteCCIPhasesResult /
+// WriteMuscleRatioOutputAll / WriteMuscleRatioOutputPhases，見 internal/io/csv_handler.go
 ```
 
-`WriteCSV` 寫入指定路徑（已通過 PathValidator）；`WriteCSVToOutput` 自動寫入 `cfg.OutputDir`。兩者皆採 `O_NOFOLLOW` 拒絕 symlink-swap，並在 `BOMEnabled` 時補上 UTF-8 BOM。`WriteCSV` 採 named return，能傳播 `file.Close()` 錯誤（NFS 延遲寫入失敗才會出現）。
+所有 writer 皆回傳**實際寫入的路徑**。row layout、scaling、precision、BOM（`BOMEnabled`）、formula-injection 逸出、`O_NOFOLLOW` 拒絕 symlink、fsync 收尾由 writer 內部持有；caller 不再自行組裝 `[][]string`。輸出一律落在 `cfg.OutputDir[/SubDir]` 之內，`SubDir` 含 `..` 逸出時回「輸出路徑無效」（見 ADR-0040、GLOSSARY「Subject output placement」）。
 
 **示例：**
 ```go
 // 寫入計算結果到 OutputDir
-output := handler.ConvertMaxMeanResultsToCSV(records[0], results, 0, 0)
-if err := handler.WriteCSVToOutput("max_mean_results.csv", output); err != nil {
+outPath, err := handler.WriteMaxMean(
+    io.WriteRequest{Filename: "max_mean_results.csv"},
+    records[0], results, 0, 0,
+)
+if err != nil {
     log.Fatal(err)
 }
+fmt.Println("已寫入：", outPath)
 ```
-
-**ConvertMaxMeanResultsToCSV**
-
-```go
-func (h *CSVHandler) ConvertMaxMeanResultsToCSV(
-    headers []string,
-    results []models.MaxMeanResult,
-    startRange, endRange float64,
-) [][]string
-```
-
-將最大平均值結果合併原始 headers 轉成可寫入的 `[][]string`（每列：通道名、MaxMean、StartTime、EndTime；最後一列附範圍註記）。
 
 ---
 
@@ -775,7 +786,7 @@ validator := security.NewPathValidator([]string{
 func (v *PathValidator) ValidateFilePath(filePath string) error
 ```
 
-驗證文件路徑是否安全。
+Strict 驗證：路徑必須落在建構時給定的 allowed base paths 之內（受控的內部路徑）。使用者選取的任意檔請改用 `ValidateExternalPath`。
 
 **示例：**
 ```go
@@ -788,18 +799,30 @@ if err := validator.ValidateFilePath(userInputPath); err != nil {
 // 路徑安全，可以繼續處理
 ```
 
-**SanitizePath**
+**ValidateExternalPath**
 
 ```go
-func (v *PathValidator) SanitizePath(path string) string
+func (v *PathValidator) ValidateExternalPath(path string) error
 ```
 
-清理路徑中的危險字符。
+驗證使用者外部選取的**檔案**路徑（GUI 檔案對話框、CSV 讀寫目標），**不**要求落在 allow-list 內。擋 `..` traversal、系統敏感位置（`/etc`、`~/.ssh` …）、過長路徑與 Windows reserved device name；並把路徑經 symlink 解析後再檢查一次（`ln -s /etc /tmp/foo` 不能繞過）。路徑不做 URL-decode。`CSVHandler.ReadCSV` 與 Subject output placement 都經此驗證（ADR-0038 / ADR-0039）。
+
+**ValidateExternalDir**
+
+```go
+func (v *PathValidator) ValidateExternalDir(dir string) error
+```
+
+驗證使用者外部選取的**目錄**（output / data folder / config 目錄）。與 `ValidateExternalPath` 擋同一組敏感位置，但以目錄語意判定：比對前補結尾分隔符，使目錄根本身（`/etc`、`~/.ssh`）也命中；檔名專屬規則不套用。取代舊的「附 dummy child 再驗檔案」手法（ADR-0038）。
 
 **示例：**
 ```go
-// 清理用戶輸入的路徑
-safePath := validator.SanitizePath(userInputPath)
+if err := validator.ValidateExternalDir(dataFolder); err != nil {
+    return fmt.Errorf("資料夾不安全: %w", err)
+}
+if err := validator.ValidateExternalPath(csvPath); err != nil {
+    return fmt.Errorf("檔案路徑不安全: %w", err)
+}
 ```
 
 ### 輸入驗證
