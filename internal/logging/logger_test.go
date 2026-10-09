@@ -871,8 +871,8 @@ func TestSanitizeMessage_StripsNewlines(t *testing.T) {
 }
 
 // TestSanitizeMessage_RedactsPathAfterNewline 釘住 codex R1 [P2] 回歸:多行 message
-// 第二行以絕對路徑開頭時,sanitizeMessage 先把 raw \n escape 成字面 `\n` 再 redact —
-// 路徑前綴變成字面 `\n`,前導邊界須涵蓋跳脫換行才不洩漏 PHI。
+// 第二行以絕對路徑開頭時不得洩漏 PHI(當年 sanitizeMessage 先 escape 再 redact,
+// 路徑前綴變成字面 `\n`;現在先 redact 再 escape,此測試仍守住輸出結果)。
 func TestSanitizeMessage_RedactsPathAfterNewline(t *testing.T) {
 	var buf bytes.Buffer
 	logger := NewLogger(LevelDebug, &buf, false)
@@ -888,6 +888,32 @@ func TestSanitizeMessage_RedactsPathAfterNewline(t *testing.T) {
 	}
 	if !strings.Contains(out, "<redacted-path>") {
 		t.Errorf("應含 redact 標誌:\n%s", out)
+	}
+}
+
+// TestSanitizeMessage_MultiLineStackRedactedPerLine 釘住 sanitizeMessage 的順序:
+// 先 redact.Paths(看得到原始換行 —— 換行是空白、會斷開目錄段)再 escape 控制字元。
+// 反過來的話,redact 看到的是字面 `\n` / `\t`,而 redact 的 POSIX 詞接受 `\` 與詞中
+// `:`,跳脫後的多行 stack(`stack.go:26 +0x64\ncount_mean/...`)會被黏成一個「目錄段」,
+// 只剩最後一個 frame。斷言 exact output:每個 frame 各自脫敏、換行仍被 escape。
+func TestSanitizeMessage_MultiLineStackRedactedPerLine(t *testing.T) {
+	logger := NewLogger(LevelDebug, &bytes.Buffer{}, false)
+
+	in := "panic stack\n" +
+		"runtime/debug.Stack()\n" +
+		"\t/usr/local/go/src/runtime/debug/stack.go:26 +0x64\n" +
+		"count_mean/gui.(*App).Foo(...)\n" +
+		"\t/Users/alice/Jane Doe/proj/gui/recover.go:42 +0x1a\n" +
+		"open /Users/alice/O'Neil/emg.csv: no such file or directory"
+	want := `panic stack\n` +
+		`runtime/debug.Stack()\n` +
+		`\t<redacted-path>/stack.go:26 +0x64\n` +
+		`count_mean/gui.(*App).Foo(...)\n` +
+		`\t<redacted-path>/recover.go:42 +0x1a\n` +
+		`open <redacted-path>/emg.csv: no such file or directory`
+
+	if got := logger.sanitizeMessage(in); got != want {
+		t.Errorf("sanitizeMessage 多行 stack\n got: %q\nwant: %q", got, want)
 	}
 }
 

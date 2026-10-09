@@ -435,9 +435,10 @@ func TestPaths_RedactsNonAllowlistedAndProtectsRelative(t *testing.T) {
 }
 
 // TestPaths_RedactsPathAfterEscapedNewline 釘住 codex R1 [P2] 回歸:
-// logger.sanitizeMessage 先把 raw \n/\r escape 成字面 `\n`/`\r` 再呼叫 Paths,
-// 導致多行 error 第二行的絕對路徑前綴變成字面 `\n`(非空白邊界)而漏脫敏。
-// no-boundary 設計下,跳脫換行前綴的路徑仍直接脫敏。下方輸入用 Go raw string,`\n`/`\r` 即字面兩字元。
+// 當年 logger.sanitizeMessage 先把 raw \n/\r escape 成字面 `\n`/`\r` 再呼叫 Paths,
+// 多行 error 第二行的絕對路徑前綴變成字面 `\n`(非空白邊界)而漏脫敏。logger 現已改為
+// 先 Paths 再 escape,但字面 `\n` 仍可能來自 %q 等格式化;no-boundary 設計下,跳脫
+// 換行前綴的路徑仍直接脫敏。下方輸入用 Go raw string,`\n`/`\r` 即字面兩字元。
 func TestPaths_RedactsPathAfterEscapedNewline(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -748,9 +749,41 @@ func TestPaths_RedactsEveryDirectorySegment(t *testing.T) {
 			want:  `<redacted-path>/emg.csv`,
 		},
 		{
-			// 守:為 logger 跳脫字面而收窄 `\` 後,一般含 `\` 的 POSIX 段仍脫敏
+			// POSIX 名稱可含 `\`(任何位置,含段尾與 `\n` 這種組合)
 			name:  "posix_backslash_segment",
 			input: `/Users/x/Doe\Jane/S01/emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			name:  "posix_backslash_n_segment",
+			input: `/Users/x/Doe\nancy/S01/emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			name:  "posix_trailing_backslash_segment",
+			input: `/Users/x/Doe\/S01/emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			// %q 把 POSIX 名稱裡的 `\` 跳脫成 `\\`
+			name:  "posix_q_escaped_backslash",
+			input: fmt.Sprintf("resolved=%q", `/Users/x/Doe\Jane/S01/emg.csv`),
+			want:  `resolved="<redacted-path>/emg.csv"`,
+		},
+		{
+			// Windows 詞的 `'` 不限詞中(0c320ed 的 UNC 元素本就接受任何位置的 `'`)
+			name:  "unc_edge_apostrophe_segment",
+			input: `\\nas\share\'Jane'\S01\emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			name:  "unc_double_apostrophe_segment",
+			input: `\\nas\share\O''Neil\S01\emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			name:  "windows_edge_apostrophe_segment",
+			input: `C:\Users\x\'Jane'\S01\emg.csv`,
 			want:  `<redacted-path>/emg.csv`,
 		},
 		{
@@ -826,12 +859,21 @@ func TestPaths_KeepsOrdinaryTextAroundPaths(t *testing.T) {
 			want:  "\t<redacted-path>/recover.go:42 +0x1a",
 		},
 		{
-			// logger.sanitizeMessage 先把換行跳脫成字面 `\n` / `\t` 再呼叫 Paths(stack 已在
-			// recover.go 以原始換行 redact 過一次):跳脫後的多行 stack 不得被黏成一個
-			// 「目錄段」而只剩最後一個 frame。
-			name:  "logger_escaped_stack_frames_kept",
-			input: `runtime/debug.Stack()\n\t<redacted-path>/stack.go:26 +0x64\ncount_mean/gui.(*App).Foo(...)\n\t<redacted-path>/recover.go:42 +0x1a`,
-			want:  `runtime/debug.Stack()\n\t<redacted-path>/stack.go:26 +0x64\ncount_mean/gui.(*App).Foo(...)\n\t<redacted-path>/recover.go:42 +0x1a`,
+			// 多行 stack(原始換行):換行是空白、會斷詞,每個 frame 各自脫敏、不被黏成
+			// 一個「目錄段」。Paths 要吃原始換行 —— logger 因此先 Paths 再跳脫控制字元
+			// (internal/logging TestSanitizeMessage_MultiLineStackRedactedPerLine)。
+			name: "raw_multiline_stack_frames_kept",
+			input: "runtime/debug.Stack()\n\t/usr/local/go/src/runtime/debug/stack.go:26 +0x64\n" +
+				"count_mean/gui.(*App).Foo(...)\n\t/Users/x/proj/gui/recover.go:42 +0x1a",
+			want: "runtime/debug.Stack()\n\t<redacted-path>/stack.go:26 +0x64\n" +
+				"count_mean/gui.(*App).Foo(...)\n\t<redacted-path>/recover.go:42 +0x1a",
+		},
+		{
+			// Windows 詞接受任何位置的 `'` 後,單引號包住的兩條 drive-letter 路徑仍不黏在
+			// 一起(第二條的 `C:` 含 `:`,不是詞)
+			name:  "single_quoted_windows_paths_no_overmatch",
+			input: `'C:\Users\a\b.csv' and 'C:\x\y.csv'`,
+			want:  `'<redacted-path>/b.csv' and '<redacted-path>/y.csv'`,
 		},
 		{
 			name:  "prose_apostrophe_and_colon_no_path",
@@ -882,11 +924,65 @@ func TestPaths_DocumentedSurvivingSegments(t *testing.T) {
 			want:  `<redacted-path>/Jane "JJ" Doe<redacted-path>/emg.csv`,
 		},
 		{
-			// POSIX 詞裡的 `\n` / `\r` / `\t` 斷詞(logger 的跳脫字面),名稱恰含這三種
-			// 組合的段因此留存
-			name:  "posix_backslash_n_segment",
-			input: `/Users/x/Doe\nancy/S01/emg.csv`,
-			want:  `<redacted-path>/Doe\nancy<redacted-path>/emg.csv`,
+			// POSIX 詞的 `'` 只能在詞中;POSIX 分支在下一個 `/` 重新起始,只有該段留存
+			name:  "posix_edge_apostrophe_segment",
+			input: `/Users/x/'Jane'/S01/emg.csv`,
+			want:  `<redacted-path>/'Jane'<redacted-path>/emg.csv`,
+		},
+		{
+			// drive-letter 以 `\` 分隔:不符文法的段(以空白開頭)中斷匹配,單一 `\` 不會
+			// 重新起始任何分支 —— 該段與其後所有目錄段都留存
+			name:  "windows_leading_space_segment_backslash",
+			input: `C:\Users\x\ Jane\S01\emg.csv`,
+			want:  `<redacted-path>/ Jane\S01\emg.csv`,
+		},
+		{
+			// 同一路徑以 `/` 分隔:POSIX 分支在下一個 `/` 重新起始,只有該段留存
+			name:  "windows_leading_space_segment_forward_slash",
+			input: `C:/Users/x/ Jane/S01/emg.csv`,
+			want:  `<redacted-path>/ Jane<redacted-path>/emg.csv`,
+		},
+		{
+			// %q 形式:UNC 分支可在其後的 `\\` 重新起始,但它要「server + 至少一段 +
+			// 分隔字元」,其後只剩一個目錄段時該段同樣留存
+			name:  "windows_q_escaped_leading_space_segment",
+			input: fmt.Sprintf("%q", `C:\Users\x\ Jane\S01\emg.csv`),
+			want:  `"<redacted-path>/ Jane\\S01\\emg.csv"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Paths(tc.input); got != tc.want {
+				t.Errorf("Paths(%q)\n got: %q\nwant: %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPaths_DocumentedOverRedaction 釘住 ADR-0036 Decision 5 記載、刻意接受的過度
+// 脫敏(安全方向,只損失可讀性):http URL 的 host 與 path、`and/or` 這種「詞緊接 `/`」
+// 被當成目錄段、單引號包住的兩條 UNC 路徑(第二條開頭的 `\\` 被當成 %q 分隔字元)。
+func TestPaths_DocumentedOverRedaction(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "http_url_host_and_path",
+			input: "http://localhost:34115/index.html",
+			want:  "http:/<redacted-path>/index.html",
+		},
+		{
+			name:  "word_slash_after_windows_path",
+			input: `copied C:\a\x.csv and/or C:\b\y.csv`,
+			want:  `copied <redacted-path>/or <redacted-path>/y.csv`,
+		},
+		{
+			name:  "single_quoted_unc_pair",
+			input: `'\\nas\a\b.csv' and '\\nas\c\d.csv'`,
+			want:  `'<redacted-path>/d.csv'`,
 		},
 	}
 

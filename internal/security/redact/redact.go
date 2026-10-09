@@ -48,19 +48,25 @@ import (
 // `file://host/path` 的 host 都會被一併脫敏(P3、安全方向、僅 log 可讀性損失)。單段相對
 // 參照(`internal/x.go:12` — 無 trailing-slash 目錄段)不受影響。basename 不被消費而保留。
 //
-// # 目錄段文法(三個分支一致)
+// # 目錄段文法
 //
-// 目錄段 = 以 1+ 個半形空白分隔的「詞」(posixWord / winWord);詞不含空白、`/`、`"`
-// (Windows 另不含 `\`),詞的**中間**可夾 `'`(O'Neil),POSIX 另可夾 `:`。分隔字元
-// 不能出現在詞的頭尾,才不會吃掉相鄰 token:路徑後的 `: no such file`(`:` 後接空白)、
-// 閉引號(`'/a/b.csv' and`)、stack 的 `recover.go:42 +0x1a`(後面沒有 `/`,整段不成
-// 目錄段)。POSIX 詞裡的 `\` 不可接 `n` / `r` / `t`:logger 先把換行跳脫成字面
-// `\n` / `\t` 再呼叫 Paths,否則跳脫後的多行 stack 會被黏成一個「目錄段」而只剩最後
-// 一個 frame。
+// 目錄段 = 以 1+ 個半形空白分隔的「詞」(posixWord / winWord),不能以空白開頭或結尾。
+//   - POSIX 詞:不含空白、`/`、`"`;`\` 是一般字元;`'` 與 `:` 只能在詞中間(O'Neil、
+//     macOS Finder 名稱的 2026:05:18)。頭尾限制讓路徑後的 `: no such file`、閉引號
+//     (`'/a/b.csv' and '/c/d.csv'`)不被吃掉;stack 的 `recover.go:42 +0x1a` 後面沒有
+//     `/`,整段不成目錄段。
+//   - drive-letter / UNC 詞:不含空白、`\`、`/`、`:`、`"`(後兩者在 Windows 名稱不合法),
+//     `'` 可在任何位置。分隔字元是 `\`、`/` 或 %q 跳脫後成對的 `\\`。
 //
-// 不符此文法的目錄段(含 `"`、tab、`: `、POSIX 的 `\n` / `\r` / `\t`、以 `'` 或空白
-// 開頭結尾)會中斷匹配、該段原文留存,其後的目錄段由下一個匹配脫敏 —— 放寬到「`/` 以外
-// 皆可」會把 `c.csv: input/` 當成目錄段而吃掉 basename 與錯誤文字(ADR-0036 Decision 5)。
+// 換行是空白:Paths 要吃原始文字。先把換行跳脫成字面 `\n` / `\t` 再呼叫的話,多行
+// stack 會被黏成一個「目錄段」而只剩最後一個 frame —— logger.sanitizeMessage 因此先
+// Paths 再跳脫控制字元。
+//
+// 不符文法的目錄段會中斷匹配、該段原文留存;其後的目錄段要看分隔字元(ADR-0036
+// Decision 5):`/` 會讓 POSIX 分支重新起始,只有該段留存;單一 `\` 不會重新起始任何
+// 分支,該段之後到末段前的所有目錄段都留存;%q 的 `\\` 可讓 UNC 分支重新起始(需其後
+// 至少兩個目錄段)。放寬文法(例如允許 `: `)會把 `c.csv: input/` 當成目錄段而吃掉
+// basename 與錯誤文字。
 //
 //nolint:gochecknoglobals // immutable regex shared across redact callers
 var pathRedactPattern = regexp.MustCompile(
@@ -74,16 +80,14 @@ var pathRedactPattern = regexp.MustCompile(
 )
 
 const (
-	// posixChar:POSIX 詞的一個字元;`\` 只在不接 n / r / t(logger 的跳脫字面)時算數。
-	posixChar = `(?:[^\s/:"'\\]|\\[^\s/:"'\\nrt])`
-	// posixWord:POSIX 目錄段的一個詞。詞中間可夾 `:` —— macOS Finder 名稱裡的 `/`
-	// (例「2026/05/18」)在 POSIX 層是 `:`。
-	posixWord    = posixChar + `+(?:[':]` + posixChar + `+)*`
+	// posixWord:POSIX 目錄段的一個詞(`\` 是一般字元)。詞中間可夾 `'`(O'Neil)與
+	// `:` —— macOS Finder 名稱裡的 `/`(例「2026/05/18」)在 POSIX 層是 `:`。
+	posixWord    = `[^\s/:"']+(?:[':][^\s/:"']+)*`
 	posixSegment = posixWord + `(?: +` + posixWord + `)*`
 
-	// winWord:drive-letter / UNC 目錄段的一個詞,另排除 `\`;`:` 在 Windows 名稱
-	// 不合法,只允許詞中間的 `'`。
-	winWord    = `[^\s:"'\\/]+(?:'[^\s:"'\\/]+)*`
+	// winWord:drive-letter / UNC 目錄段的一個詞。`\` 是分隔字元、`:` 與 `"` 在
+	// Windows 名稱不合法,三者排除;`'` 可在任何位置('Jane'、O''Neil)。
+	winWord    = `[^\s:"\\/]+`
 	winSegment = winWord + `(?: +` + winWord + `)*`
 
 	// winSep:`\`、`/`,或 %q 格式化後成對的 `\\`(`resolved="C:\\Users\\..."`)。

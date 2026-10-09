@@ -310,7 +310,7 @@ func newControlCharEscaper() *strings.Replacer {
 }
 
 // sanitizeMessage removes sensitive information and log-injection vectors from
-// log messages. 在 sensitive-pattern masking 之前先把所有 raw C0 控制字元
+// log messages. 在 sensitive-pattern masking 之前把所有 raw C0 控制字元
 // (0x00–0x1F) 與 0x7F escape 成可讀字面形式(CR/LF/TAB 用 \\r/\\n/\\t,其餘用
 // \\xNN),確保 writeText 不會被 user-controlled 字串(filename / error msg /
 // dynamic context)注入偽 log line 或夾帶 terminal escape sequence。writeJSON
@@ -323,13 +323,14 @@ func newControlCharEscaper() *strings.Replacer {
 // 自己維護一份重複正則。Path redact 在 keyword-mask 之前跑,因為 path 含的
 // 子字串可能被 keyword pattern 誤判 (e.g. "/home/secret-key/" 會被「key=」
 // 規則 mask 切碎)。
+//
+// 順序:redact.Paths → control-char escape → keyword mask。Paths 要看到原始換行
+// (空白,會斷開目錄段);先 escape 的話它看到字面 `\n` / `\t`,而 POSIX 目錄段接受
+// `\` 與詞中 `:`,多行 stack 會被黏成一個段而只剩最後一個 frame。Paths 只會插入
+// `<redacted-path>/`,不會產生控制字元,escape 放在它之後仍涵蓋整個輸出。
 func (l *Logger) sanitizeMessage(message string) string {
-	sanitized := controlCharEscaper.Replace(message)
-
-	// 先過 path redact — pathRedactPattern 比 keyword pattern 精準
-	// (只切 known system-root prefix + 後續 path 元素),先跑保留更多上下文
-	// 給 keyword pattern 處理。
-	sanitized = redact.Paths(sanitized)
+	sanitized := redact.Paths(message)
+	sanitized = controlCharEscaper.Replace(sanitized)
 
 	if l.sensitivePatterns == nil {
 		return sanitized
