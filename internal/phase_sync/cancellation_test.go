@@ -15,7 +15,7 @@ import (
 // cancel 的 ctx 必須在 file load 之前就 bail，避免長運算被使用者 cancel 後
 // 還要等 IO 完成。
 //
-// 分析中途的取消由 compute core 的 pre-cancel 測試釘住(computePhaseSync_test.go,
+// compute core 入口的取消由其 pre-cancel 測試釘住(computePhaseSync_test.go,
 // ADR-0047):原本以 test hook 注入阻塞 parser 的 in-flight 測試隨 hook 一併刪除。
 func TestAnalyzePhaseSync_PreCancelledContextReturnsErr(t *testing.T) {
 	analyzer := NewPhaseSyncAnalyzer()

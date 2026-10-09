@@ -51,7 +51,7 @@ type NormalizedResult struct {
 	NormalizedEMG *models.PhaseSyncEMGData // 整段 EMG 除以各通道在 Norm 區間內的最大值(Output 1 的內容)
 	ChannelMaxes  map[string]float64       // 標準化前、Norm 區間內各通道最大值(除數)
 	NormRange     models.PhaseTimeRange    // Norm 區間的 EMG 秒數([[Phase timeline]] 解析值,非切片後的 sample 時間)
-	StatsRange    models.PhaseTimeRange    // Stats 區間的 EMG 秒數(同上)
+	StatsRange    models.PhaseTimeRange    // Stats 區間的 EMG 秒數(同上);唯一讀者是 Phase timeline agreement 測試(gui/phase_timeline_agreement_test.go,Ruling 25)
 	Stats         *models.EMGStatistics    // 標準化資料在 Stats 區間內的統計(Output 2 的內容)
 }
 

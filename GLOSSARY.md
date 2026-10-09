@@ -37,7 +37,7 @@ _Avoid_: synced time range(已刪的 `GetSyncedTimeRange`)、phase times map(那
 _Avoid_: 切片用 ±ε、caller 內私有的 epsilon、strict-0 邊界比較、在 caller 內自行毫秒取整切片.
 
 **Manifest**
-描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析與 [[Chart Composer]] 都先經 `manifest.LoadManifests` 解析 manifest 取得 row 集合，再經 [[Subject source]] 載入該列的 EMG。`MotionFile` / `ForceFile` 只有會開這兩檔的 consumer（PhaseSync）要求非空，CCI 不要求（[[ADR-0045]]）。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有四個 analyzer 不消費此欄位，向後相容。
+描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析與 [[Chart Composer]] 都先經 `manifest.LoadManifests` 解析 manifest 取得 row 集合，再經 [[Subject source]] 載入該列的 EMG。`MotionFile` / `ForceFile` 只有會開該檔的 consumer 要求非空：PhaseSync 兩者都要求，[[Chart Composer]] 要求 `MotionFile`（`internal/composer/load.go` 的 `ErrMotionFileEmpty`），CCI 與 MuscleRatio 兩者都不要求（[[ADR-0045]]）。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有三個 analyzer 不消費此欄位（僅 [[Chart Composer]] 使用），向後相容。
 _Avoid_: config, batch file, descriptor, sheet.
 
 **Subject**

@@ -8,12 +8,12 @@
 
 1. **`ValidatePhaseManifest` 不再檢查 `MotionFile` / `ForceFile`。** 它保留 Subject、EMGFile、EMGMotionOffset 與分期點不變量（順序 / NaN-Inf / motion-index 單調）。
 2. **phase_sync 在 `validateManifestData` 補上這兩個檢查**，因為 phase_sync 會開這兩個檔。錯誤型別與文字不變（`models.PhaseSyncValidationError{Field: "MotionFile"/"ForceFile", …}`，外層仍是「分期總檔案數據驗證失敗: %w」）。
-3. **行為變更（唯一）**：CCI 對 `MotionFile` / `ForceFile` 為空的 row 由「驗證失敗」變「接受」。phase_sync 對這類 row 仍然失敗。測試：`TestAnalyzeCCI_AcceptsBlankForceFile`（CCI）、`TestValidateManifestData_RequiresMotionAndForceFile`（phase_sync）。
+3. **行為變更**：CCI 對 `MotionFile` / `ForceFile` 為空的 row 由「驗證失敗」變「接受」。phase_sync 對這類 row 仍然失敗。測試：`TestAnalyzeCCI_AcceptsBlankForceFile`（CCI）、`TestValidateManifestData_RequiresMotionAndForceFile`（phase_sync）。
 
 ## Why
 
 - 驗證條件應跟「這個 analyzer 實際要開的檔」一致。必填欄位是 consumer 的需求，不是 manifest 格式本身的不變量。
-- 同一列 manifest 在三個 consumer 之間可用性不一致（muscle_ratio / Composer 可用、CCI 拒絕），沒有任何領域理由。
+- 同一列 manifest 在三個 consumer 之間可用性不一致（muscle_ratio 可用、CCI 拒絕；Composer 只在 ForceFile 為空時可用，它仍要求 `MotionFile`），沒有任何領域理由。
 
 ## Considered Options
 
@@ -23,7 +23,7 @@
 
 ## Consequences
 
-- 錯誤順序的細微差異：phase_sync 同一列同時有「EMGFile 為空」與「MotionFile 為空」時，原本先報 MotionFile，現在先報 EMGFile（Motion / Force 檢查排在 `ValidatePhaseManifest` 之後）。只影響多重錯誤的 row 先報哪一個。
+- 錯誤順序的細微差異：phase_sync 同一列只要同時有任何 `ValidatePhaseManifest` 會擋的錯誤（EMGFile 為空、負的 EMGMotionOffset、分期點順序不變量、NaN / Inf…）與空的 MotionFile / ForceFile 時，原本先報 Motion / Force，現在先報 `ValidatePhaseManifest` 的錯誤（Motion / Force 檢查排在它之後）。只影響多重錯誤的 row 先報哪一個。
 - `ValidatePhaseManifest` 的單元測試刪除 empty motion / force 兩案例，由 phase_sync 的測試取代。
 
 ## Related

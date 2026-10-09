@@ -53,7 +53,7 @@ type LoadChartComposerSubjectsParams struct {
 // GenerateChartComposerParams Wails RPC params for composer chart generation.
 //
 // ADR-0013:一鍵生成、預設全通道。前端不再先打 LoadChartComposerEMGChannels
-// 取 channel 清單 / EMGMotionOffset 再回傳;handler 自己從 manifest row 讀
+// 取 channel 清單 / EMGMotionOffset 再回傳;composer.Load 自己從 manifest row 讀
 // EMGMotionOffset(單一來源),EMG 通道由 chart composer 依 EMG.Headers 全部渲染。
 type GenerateChartComposerParams struct {
 	ManifestPath string `json:"manifestPath"`

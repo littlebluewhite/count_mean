@@ -11,8 +11,8 @@ import (
 	"count_mean/internal/parsers"
 )
 
-// err113 sentinel — 純承載 user-facing 訊息(caller 把 err.Error() 灌入
-// 結果訊息,不做 errors.Is 比對)。
+// err113 sentinel — 承載 user-facing 訊息;internal/composer 的
+// loadMuscleRatio 以 errors.Is 比對這兩個 sentinel 決定 Stage 與訊息。
 var (
 	ErrMuscleRatioCSVEmpty    = stderrors.New("muscle_ratio CSV 為空或缺少資料行")
 	ErrMuscleRatioCSVNoHeader = stderrors.New("muscle_ratio CSV 標題不足: 至少需要時間欄與一個 ratio 欄")

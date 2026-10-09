@@ -26,9 +26,8 @@ package models
 // 目前 consumer：
 //   - internal/cci：CCI Rudolph 分析（fail-fast，per-subject）
 //   - internal/muscle_ratio：肌肉比值批次分析（per-subject batch，partial-success）
-//   - internal/phase_sync：分期同步分析
-//   - internal/calculator (normalized phase sync)：標準化分期同步分析
-//   - gui（[[Chart Composer]]）：圖表生成，經 manifest.LoadEMG 取得 EMG
+//   - internal/phase_sync：分期同步分析（AnalyzePhaseSync、AnalyzeNormalizedPhaseSync 兩個入口）
+//   - internal/composer：[[Chart Composer]] 資料載入（composer.Load）
 //
 // 改動本 struct 欄位或契約時，必須同步檢視 5 個 consumer。
 type PhaseManifest struct {
