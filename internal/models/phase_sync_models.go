@@ -28,8 +28,9 @@ package models
 //   - internal/muscle_ratio：肌肉比值批次分析（per-subject batch，partial-success）
 //   - internal/phase_sync：分期同步分析
 //   - internal/calculator (normalized phase sync)：標準化分期同步分析
+//   - gui（[[Chart Composer]]）：圖表生成，經 manifest.LoadEMG 取得 EMG
 //
-// 改動本 struct 欄位或契約時，必須同步檢視 4 個 consumer。
+// 改動本 struct 欄位或契約時，必須同步檢視 5 個 consumer。
 type PhaseManifest struct {
 	Subject         string      // 主題名稱
 	MotionFile      string      // Motion檔案名

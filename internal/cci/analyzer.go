@@ -189,22 +189,19 @@ func (a *CCIAnalyzer) loadAndValidate(params *CCIParams) (*models.PhaseManifest,
 	return m, nil
 }
 
-// loadEMGData opens the EMG file through the hardened read door and parses it.
-// 開檔走 manifest.OpenDataFile（內部走 security.OpenLenientValidated，允許含字面
-// "%" 的 BTS 匯出檔名 — 見該套件 doc）；交出已驗證的 *os.File 後 caller defer Close。
-// CCI fail-fast：開檔或解析任一失敗立即 return。
+// loadEMGData 走 manifest.LoadEMG 載入 [[Subject source]] 的 EMG（硬化讀檔門，
+// 允許含字面 "%" 的 BTS 匯出檔名 — 見該套件 doc）。
+// CCI fail-fast：開檔失敗原樣回傳，解析失敗加 i18n 前綴，任一失敗立即 return。
 func (a *CCIAnalyzer) loadEMGData(
 	dataFolder string, m *models.PhaseManifest,
 ) (*models.PhaseSyncEMGData, error) {
-	f, err := manifest.OpenDataFile(dataFolder, m.EMGFile)
+	emgData, err := manifest.LoadEMG(dataFolder, m)
 	if err != nil {
+		var parseErr *manifest.EMGParseError
+		if errors.As(err, &parseErr) {
+			return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIParseEMGFailed), err)
+		}
 		return nil, err
-	}
-	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
-
-	emgData, _, err := parsers.NewEMGParser().Parse(f, m.EMGFile)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIParseEMGFailed), err)
 	}
 
 	return emgData, nil
@@ -316,9 +313,9 @@ func (a *CCIAnalyzer) calculateGaitCycle(
 // fallback 路徑加 logger.Warn — 過去 silently fallback 等於把 caller
 // 的「資料品質問題」(times 倒退、單筆 EMG、相同時間戳) 偷藏在 sample interval
 // 估算裡,下游 duration 守門用了 default 0.001 反推結果仍會 PASS,但實際
-// 計算的 phase percent 等下游數值是無意義的。Logger 可選 (nil-safe) — 同套
-// 函式被 analyzer / chart / muscle_ratio 等多個 caller 用,部分 path 沒 logger
-// 也得能 fallback,因此採 optional logger pattern。
+// 計算的 phase percent 等下游數值是無意義的。Logger 可選 (nil-safe),
+// 沒 logger 的 path 也得能 fallback。本函式僅供 cci 內部使用(analyzer.go 與
+// phase_stats.go 兩處)。
 func estimateSampleInterval(times []float64, logger *logging.Logger) float64 {
 	const defaultInterval = 0.001
 	if len(times) < 2 {

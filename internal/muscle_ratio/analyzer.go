@@ -17,7 +17,6 @@ import (
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/musclemap"
-	"count_mean/internal/parsers"
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
 	"count_mean/internal/synchronizer"
@@ -172,16 +171,14 @@ func (a *Analyzer) analyzeSubject(
 		return result
 	}
 
-	f, err := manifest.OpenDataFile(params.DataFolder, m.EMGFile)
+	emg, err := manifest.LoadEMG(params.DataFolder, m)
 	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
-
-	emg, _, err := parsers.NewEMGParser().Parse(f, m.EMGFile)
-	if err != nil {
-		result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectParseEMGFailed, err)
+		var parseErr *manifest.EMGParseError
+		if errors.As(err, &parseErr) {
+			result.Error = i18n.T(i18n.KeyErrorMuscleRatioSubjectParseEMGFailed, err)
+		} else {
+			result.Error = err.Error()
+		}
 		return result
 	}
 

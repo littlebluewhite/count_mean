@@ -337,17 +337,12 @@ func motionIndexOpt(v int) models.OptFloat {
 }
 
 // ValidatePhaseManifest 驗證分期總檔案數據.
+//
+// 不要求 MotionFile / ForceFile 非空:那是 phase_sync 會開這兩檔才需要的條件,
+// 由 phase_sync 自己檢查(ADR-0045);CCI 不開這兩檔。
 func ValidatePhaseManifest(manifest *models.PhaseManifest) error {
 	if manifest.Subject == "" {
 		return models.PhaseSyncValidationError{Field: "Subject", Message: "主題名稱不能為空"}
-	}
-
-	if manifest.MotionFile == "" {
-		return models.PhaseSyncValidationError{Field: "MotionFile", Message: "Motion檔案名不能為空"}
-	}
-
-	if manifest.ForceFile == "" {
-		return models.PhaseSyncValidationError{Field: "ForceFile", Message: "力板檔案名不能為空"}
 	}
 
 	if manifest.EMGFile == "" {

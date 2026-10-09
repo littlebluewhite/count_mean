@@ -432,3 +432,39 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,0.8
 	assert.Error(t, analyzeErr)
 	assert.Contains(t, analyzeErr.Error(), "Force Plate")
 }
+
+// TestValidateManifestData_RequiresMotionAndForceFile 釘住 ADR-0045 的另一半:
+// phase_sync 會開 Motion / Force 檔,所以兩欄非空由 validateManifestData 要求
+// (自 ValidatePhaseManifest 搬來),錯誤文字與搬移前逐字相同。
+func TestValidateManifestData_RequiresMotionAndForceFile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		motion     string
+		force      string
+		wantErrMsg string
+	}{
+		{"empty motion file", "", "force1.anc",
+			"分期總檔案數據驗證失敗: MotionFile: Motion檔案名不能為空"},
+		{"empty force file", "motion1.csv", "",
+			"分期總檔案數據驗證失敗: ForceFile: 力板檔案名不能為空"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := &validationContext{manifest: models.PhaseManifest{
+				Subject: "Subject1", MotionFile: tt.motion, ForceFile: tt.force, EMGFile: "emg1.csv",
+			}}
+
+			err := validateManifestData(nil, ctx)
+
+			require.Error(t, err)
+			assert.Equal(t, tt.wantErrMsg, err.Error())
+			var ve models.PhaseSyncValidationError
+			assert.ErrorAs(t, err, &ve)
+		})
+	}
+}

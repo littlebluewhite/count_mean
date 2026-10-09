@@ -264,30 +264,6 @@ func TestValidatePhaseManifest(t *testing.T) {
 			errMsg:   "主題名稱不能為空",
 		},
 		{
-			name: "empty motion file",
-			manifest: models.PhaseManifest{
-				Subject:    "Subject1",
-				MotionFile: "",
-				ForceFile:  "force1.anc",
-				EMGFile:    "emg1.csv",
-			},
-			wantErr:  true,
-			errField: "MotionFile",
-			errMsg:   "Motion檔案名不能為空",
-		},
-		{
-			name: "empty force file",
-			manifest: models.PhaseManifest{
-				Subject:    "Subject1",
-				MotionFile: "motion1.csv",
-				ForceFile:  "",
-				EMGFile:    "emg1.csv",
-			},
-			wantErr:  true,
-			errField: "ForceFile",
-			errMsg:   "力板檔案名不能為空",
-		},
-		{
 			name: "empty EMG file",
 			manifest: models.PhaseManifest{
 				Subject:    "Subject1",

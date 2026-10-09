@@ -37,12 +37,16 @@ _Avoid_: synced time range(已刪的 `GetSyncedTimeRange`)、phase times map(那
 _Avoid_: 切片用 ±ε、caller 內私有的 epsilon、strict-0 邊界比較、在 caller 內自行毫秒取整切片.
 
 **Manifest**
-描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析都先解析 manifest 取得 dataset 集合再計算。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有四個 analyzer 不消費此欄位，向後相容。
+描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析與 [[Chart Composer]] 都先經 `manifest.LoadManifests` 解析 manifest 取得 row 集合，再經 [[Subject source]] 載入該列的 EMG。`MotionFile` / `ForceFile` 只有會開這兩檔的 consumer（PhaseSync）要求非空，CCI 不要求（[[ADR-0045]]）。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有四個 analyzer 不消費此欄位，向後相容。
 _Avoid_: config, batch file, descriptor, sheet.
 
 **Subject**
 [[Manifest]] 一列代表的「一個分析對象」，是 [[Domain analyzer]]、NormalizedPhaseSync 與 [[Chart Composer]] 的 unit of work。在程式碼裡是 `PhaseManifest.Subject` 字串欄位（首欄）；在 UI 上 CCI / PhaseSync / Chart Composer panel 統一以「分析主題」呈現 — 兩個詞**同義**。Subject 名稱經檔名安全化後成為 muscle_ratio output1 (`{safeSubject}_muscle_ratio.csv`) 等下游檔名的 prefix。
 _Avoid_: trial, sample, case, 分析主題（UI label only — 內部以 Subject 為準）.
+
+**Subject source**
+`internal/manifest` 持有的「[[Manifest]] 一列 + 資料夾 → 該 [[Subject]] 的 EMG」入口：`manifest.LoadEMG(dataFolder, row)` 經 `OpenDataFile`（硬化讀檔門）開檔、`EMGParser` 解析、關檔，回傳 [[PhaseSyncEMGData]]。開檔失敗原樣回 `OpenDataFile` 的錯誤；解析失敗包成 `*manifest.EMGParseError`（`Error()` 與內層相同），caller 以 `errors.As` 區分兩階段並保有自己的失敗 policy（CCI fail-fast、MuscleRatio per-subject、Composer 轉 UI 訊息）。不攜帶取樣頻率（與 CCI 的 sample interval 估計同源）。見 [[ADR-0044]]。
+_Avoid_: EMG loader, data source.
 
 **Reference EMG**
 標準化（Normalize）時作為分母的參考訊號，常見來源是 MVIC（Maximal Voluntary Isometric Contraction）。Normalizer 把主訊號除以 reference 對應 channel 的代表值。

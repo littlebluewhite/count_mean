@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"count_mean/internal/models"
 )
 
 // writeFileHelper 在 base 下寫一個含 content 的檔，回傳寫入的 bytes 供讀回比對。
@@ -138,5 +140,56 @@ func TestOpenDataFile_BaseFolderNotFound(t *testing.T) {
 
 	if !errors.Is(err, ErrBaseFolderNotFound) {
 		t.Errorf("errors.Is(err, ErrBaseFolderNotFound) = false; err=%v", err)
+	}
+}
+
+const loadEMGTestCSV = "X [],R.RA: EMG 1\n0.000,1.0\n0.001,2.0\n0.002,3.0\n"
+
+// TestLoadEMG_Success 釘住 happy path:row.EMGFile + 資料夾 → 該 Subject 的 EMG。
+func TestLoadEMG_Success(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	writeFileHelper(t, base, "emg.csv", loadEMGTestCSV)
+
+	data, err := LoadEMG(base, &models.PhaseManifest{EMGFile: "emg.csv"})
+	if err != nil {
+		t.Fatalf("LoadEMG 不該失敗:%v", err)
+	}
+	if len(data.Time) != 3 {
+		t.Errorf("len(Time) = %d; want 3", len(data.Time))
+	}
+}
+
+// TestLoadEMG_OpenErrorIsNotParseError 釘住兩階段可區分:開檔失敗原樣回
+// OpenDataFile 的 sentinel,不是 *EMGParseError。
+func TestLoadEMG_OpenErrorIsNotParseError(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadEMG(t.TempDir(), &models.PhaseManifest{EMGFile: "missing.csv"})
+	if !errors.Is(err, ErrManifestDataFileMissing) {
+		t.Fatalf("err = %v; want ErrManifestDataFileMissing", err)
+	}
+	var pe *EMGParseError
+	if errors.As(err, &pe) {
+		t.Error("開檔失敗不該是 *EMGParseError")
+	}
+}
+
+// TestLoadEMG_ParseErrorIsEMGParseError 釘住解析失敗包成 *EMGParseError,
+// 且 Error() 與內層錯誤逐字相同(不改變任何 caller 的輸出文字)。
+func TestLoadEMG_ParseErrorIsEMGParseError(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	writeFileHelper(t, base, "bad.csv", "")
+
+	_, err := LoadEMG(base, &models.PhaseManifest{EMGFile: "bad.csv"})
+	var pe *EMGParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v; want *EMGParseError", err)
+	}
+	if err.Error() != pe.Err.Error() {
+		t.Errorf("Error() = %q; want inner %q", err.Error(), pe.Err.Error())
 	}
 }

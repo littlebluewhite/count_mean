@@ -1,12 +1,14 @@
-// Package manifest 集中 phase manifest 載入與 data 檔案加固開檔的共用流程。
+// Package manifest 是 [[Manifest]] row + 資料夾 → [[Subject source]] 的共用入口。
 //
-// cci 與 muscle_ratio 兩個 analyzer 共用：
-//   - 載入分期總檔（manifest CSV）
-//   - 把 manifest 內相對檔名解析為 baseFolder 下的路徑、邊界檢查、原子化開檔
+// cci、muscle_ratio、phase_sync 三個 [[Domain analyzer]] 與 [[Chart Composer]] 共用：
+//   - LoadManifests：載入分期總檔（manifest CSV）
+//   - LoadEMG：一個 manifest row + 資料夾 → 該 Subject 的 EMG（開檔、解析、關檔）
+//   - OpenDataFile：把 manifest 內相對檔名解析為 baseFolder 下的路徑、邊界檢查、原子化開檔
 //
-// 開檔走 OpenDataFile → security.OpenLenientValidated（允許 BTS 匯出含字面 "%" 的檔名），
-// 不要 bundle 後續 ParseFile / 迭代 / 錯誤處理 — caller 行為刻意不同（cci 是 fail-fast，
-// muscle_ratio 是 per-subject batch）。
+// 開檔走 OpenDataFile → security.OpenLenientValidated（允許 BTS 匯出含字面 "%" 的檔名）。
+// 本套件只負責「載入」並回傳 (data, err)；caller 對錯誤的處置仍各自決定（cci 是 fail-fast，
+// muscle_ratio 是 per-subject batch，Composer 轉成 UI 訊息），LoadEMG 不替它們選 policy。
+// 見 [[ADR-0044]]。
 package manifest
 
 import (
@@ -33,6 +35,38 @@ var (
 // LoadManifests 解析分期總檔案，回傳所有 manifest 紀錄。
 func LoadManifests(filepath string) ([]models.PhaseManifest, error) {
 	return parsers.NewPhaseManifestParser().ParseFile(filepath)
+}
+
+// EMGParseError 表示 [[Subject source]] 的 EMG 檔已開成功、但解析失敗。
+// LoadEMG 的開檔失敗直接回 OpenDataFile 的錯誤（errors.Is 三條 sentinel）；
+// 解析失敗包成本型別，讓 caller 以 errors.As 區分「開檔」與「解析」兩階段，
+// 各自套用既有的 user-facing 訊息。Error() 與內層錯誤逐字相同，不改變任何輸出文字。
+type EMGParseError struct{ Err error }
+
+func (e *EMGParseError) Error() string { return e.Err.Error() }
+
+func (e *EMGParseError) Unwrap() error { return e.Err }
+
+// LoadEMG 以 [[Manifest]] row 的 EMGFile 與資料夾載入該 [[Subject]] 的 EMG：
+// OpenDataFile（硬化讀檔門）→ 解析 → Close。
+//
+// 不回傳取樣頻率：parser 的 frequency 與 CCI 的 sample interval 估計讀同一對 sample，
+// 兩者本來就同源，沒有需要傳遞的額外資訊。
+//
+// 錯誤：開檔失敗原樣回 OpenDataFile 的錯誤；解析失敗回 *EMGParseError。
+func LoadEMG(dataFolder string, row *models.PhaseManifest) (*models.PhaseSyncEMGData, error) {
+	f, err := OpenDataFile(dataFolder, row.EMGFile)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
+
+	data, _, err := parsers.NewEMGParser().Parse(f, row.EMGFile)
+	if err != nil {
+		return nil, &EMGParseError{Err: err}
+	}
+
+	return data, nil
 }
 
 // OpenDataFile 是開啟 manifest 引用之資料檔（EMG / Motion / Force / muscle_ratio）的

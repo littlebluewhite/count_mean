@@ -155,3 +155,37 @@ func TestCCIAnalyzer_RejectsInvalidPhaseManifest(t *testing.T) {
 	assert.Contains(t, err.Error(), "不能早於",
 		"錯誤應來自 ValidatePhaseManifest 的 force-time 順序檢查,err=%v", err)
 }
+
+// TestAnalyzeCCI_AcceptsBlankForceFile 釘住 ADR-0045:CCI 不開 Motion / Force 檔,
+// 所以 manifest row 的 MotionFile / ForceFile 留空不該被 CCI 擋下。
+// 同一份資料在 Chart Composer / muscle_ratio 本就可用,CCI 不應多一道無關的必填。
+func TestAnalyzeCCI_AcceptsBlankForceFile(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	const emgFile = "blank_force.csv"
+
+	var emgBuf strings.Builder
+	emgBuf.WriteString(`X [],R.RA: EMG 1,R.ES: EMG 2,R.IL: EMG 3,R.GMax: EMG 4,` +
+		`R.RF: EMG 5,R.BF: EMG 6,R.TA&IO: EMG 7,R.MF: EMG 8` + "\n")
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&emgBuf, "%.4f,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0\n", float64(i)*0.001)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, emgFile), []byte(emgBuf.String()), 0o600))
+
+	// MotionFile、ForceFile 皆留空。
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	manifestContent := "Subject,motion file,Force Plate file,EMG file," +
+		"EMG第一筆時間對應Motion的時間index值,P0,P1,P2,S,C,D,T0,T,O,L\n" +
+		fmt.Sprintf("SF8,,,%s,1,0.01,0.02,0.03,0.04,0.05,20,0.07,0.08,30,0.09\n", emgFile)
+	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o600))
+
+	_, err := NewCCIAnalyzer().AnalyzeCCI(context.Background(), &CCIParams{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		SubjectIndex: 0,
+	})
+
+	require.NoError(t, err, "CCI 不開 Motion / Force 檔,兩欄留空應可分析")
+}

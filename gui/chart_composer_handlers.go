@@ -264,15 +264,14 @@ func (a *App) GenerateChartComposer(
 		)), nil
 	}
 
-	// 載入 EMG(必要)— 走 manifest.OpenDataFile 硬化讀檔門,交出已驗證 *os.File。
-	emgFile, emgOpenErr := manifest.OpenDataFile(params.DataFolder, row.EMGFile)
-	if emgOpenErr != nil {
-		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerResolveEMGPathFailed, emgOpenErr)), nil
-	}
-	emgPhaseSync, _, emgErr := parsers.NewEMGParser().Parse(emgFile, row.EMGFile)
-	_ = emgFile.Close() //nolint:errcheck // read-only fd; close error not actionable (data materialized by Parse)
+	// 載入 EMG(必要)— 走 manifest.LoadEMG([[Subject source]]),開檔失敗與解析失敗各用自己的 key。
+	emgPhaseSync, emgErr := manifest.LoadEMG(params.DataFolder, &row)
 	if emgErr != nil {
-		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseEMGFailed, emgErr)), nil
+		var parseErr *manifest.EMGParseError
+		if errors.As(emgErr, &parseErr) {
+			return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseEMGFailed, emgErr)), nil
+		}
+		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerResolveEMGPathFailed, emgErr)), nil
 	}
 	emgDataset := phaseSyncEMGToDataset(emgPhaseSync)
 

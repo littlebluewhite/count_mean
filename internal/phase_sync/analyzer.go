@@ -44,8 +44,6 @@ var (
 
 // PhaseSyncAnalyzer 分期同步分析器.
 type PhaseSyncAnalyzer struct {
-	manifestParser  *parsers.PhaseManifestParser
-	emgParser       *parsers.EMGParser
 	motionParser    *parsers.MotionParser
 	ancParser       *parsers.ANCParser
 	phaseCalculator *synchronizer.PhaseCalculator
@@ -58,8 +56,6 @@ type PhaseSyncAnalyzer struct {
 // 狀態需要管理。
 func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 	return &PhaseSyncAnalyzer{
-		manifestParser:  parsers.NewPhaseManifestParser(),
-		emgParser:       parsers.NewEMGParser(),
 		motionParser:    parsers.NewMotionParser(),
 		ancParser:       parsers.NewANCParser(),
 		phaseCalculator: synchronizer.NewPhaseCalculator(),
@@ -84,7 +80,7 @@ type validationStep func(analyzer *PhaseSyncAnalyzer, ctx *validationContext) er
 
 // validateManifestFile 驗證分期總檔案.
 func validateManifestFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error {
-	manifests, err := analyzer.manifestParser.ParseFile(ctx.params.ManifestFile)
+	manifests, err := manifest.LoadManifests(ctx.params.ManifestFile)
 	if err != nil {
 		return fmt.Errorf("解析分期總檔案失敗: %w", err)
 	}
@@ -110,6 +106,17 @@ func validateSubjectIndex(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 func validateManifestData(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 	if err := parsers.ValidatePhaseManifest(&ctx.manifest); err != nil {
 		return fmt.Errorf("分期總檔案數據驗證失敗: %w", err)
+	}
+
+	// phase_sync 會開 Motion / Force 檔,故在此要求兩欄非空;CCI 不開這兩檔,不要求(ADR-0045)。
+	if ctx.manifest.MotionFile == "" {
+		return fmt.Errorf("分期總檔案數據驗證失敗: %w",
+			models.PhaseSyncValidationError{Field: "MotionFile", Message: "Motion檔案名不能為空"})
+	}
+
+	if ctx.manifest.ForceFile == "" {
+		return fmt.Errorf("分期總檔案數據驗證失敗: %w",
+			models.PhaseSyncValidationError{Field: "ForceFile", Message: "力板檔案名不能為空"})
 	}
 
 	return nil
@@ -336,7 +343,7 @@ type parseEMGFileFunc func(r io.Reader, name string) (*models.PhaseSyncEMGData, 
 
 // parseEMGFileFnPtr 是 EMG 檔案解析的 test hook (P2-H24, P2-25)。
 //
-// Production 預設為 nil pointer → Load() 用 analyzer.emgParser.Parse;test 可
+// Production 預設為 nil pointer → Load() 走 manifest.LoadEMG;test 可
 // override (用 setParseEMGFileFnForTest) 注入 fake parser,讓 in-flight cancel
 // test 可以「卡住 Parse 直到 cancel 被觸發」確定性化測試 cancel path。
 //
@@ -380,8 +387,7 @@ func SetParseEMGFileFnForTest(fn parseEMGFileFunc) (cleanup func()) {
 // 再開門一次取得 reader 交給 parser。重開是 validate-pipeline 的固有特性,門內
 // 原子化 validated-open 保證每次都安全。
 //
-// 走 parseEMGFileFn test hook 取得 parser (production 預設 nil → 走
-// reader-based analyzer.emgParser.Parse)。
+// EMG 載入走 manifest.LoadEMG（test hook 有注入時改走 hook，見 loadEMG）。
 func (analyzer *PhaseSyncAnalyzer) Load(
 	params *models.AnalysisParams,
 ) (*LoadedPhaseSyncContext, error) {
@@ -390,18 +396,7 @@ func (analyzer *PhaseSyncAnalyzer) Load(
 		return nil, err
 	}
 
-	f, err := manifest.OpenDataFile(ctx.baseFolder, ctx.manifest.EMGFile)
-	if err != nil {
-		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
-	}
-	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
-
-	parseFn := analyzer.emgParser.Parse
-	if hook := parseEMGFileFnPtr.Load(); hook != nil {
-		parseFn = *hook
-	}
-
-	emgData, _, err := parseFn(f, ctx.manifest.EMGFile)
+	emgData, err := analyzer.loadEMG(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("解析 EMG 檔案失敗: %w", err)
 	}
@@ -413,6 +408,25 @@ func (analyzer *PhaseSyncAnalyzer) Load(
 		EMGData:        emgData,
 		PhaseTimeRange: nil,
 	}, nil
+}
+
+// loadEMG 載入 [[Subject source]] 的 EMG：production 走 manifest.LoadEMG；
+// test hook 有注入時改開檔後交給 hook（in-flight cancel test 用，Task 23 隨該 test 一併移除）。
+func (analyzer *PhaseSyncAnalyzer) loadEMG(ctx *validationContext) (*models.PhaseSyncEMGData, error) {
+	hook := parseEMGFileFnPtr.Load()
+	if hook == nil {
+		return manifest.LoadEMG(ctx.baseFolder, &ctx.manifest)
+	}
+
+	f, err := manifest.OpenDataFile(ctx.baseFolder, ctx.manifest.EMGFile)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
+
+	emgData, _, err := (*hook)(f, ctx.manifest.EMGFile)
+
+	return emgData, err
 }
 
 // ErrNegativePhaseTime 表示請求的 phase point force-time 為負,phase_sync 拒絕用負時間
@@ -617,7 +631,7 @@ func validateEMGTimeRange(
 
 // LoadManifestSubjects 載入分期總檔案中的所有主題.
 func (analyzer *PhaseSyncAnalyzer) LoadManifestSubjects(manifestPath string) ([]string, error) {
-	manifests, err := analyzer.manifestParser.ParseFile(manifestPath)
+	manifests, err := manifest.LoadManifests(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("解析分期總檔案失敗: %w", err)
 	}
