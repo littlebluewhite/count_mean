@@ -80,7 +80,6 @@ func main() {
 		// 錯誤訊息示例
 		fmt.Printf("錯誤訊息示例:\n")
 		fmt.Printf("  - %s\n", i18n.T("error.file_not_found"))
-		fmt.Printf("  - %s\n", i18n.T("error.file_too_large"))
 		fmt.Printf("  - %s\n", i18n.T("error.calculation_failed"))
 
 		// 狀態訊息（帶參數）

@@ -55,7 +55,6 @@ var translationsJaJP = map[string]string{
 	KeyErrorFileNotFound:     "ファイルが見つかりません",
 	KeyErrorInvalidPath:      "無効なファイルパス",
 	KeyErrorInvalidCSV:       "無効なCSVファイル形式",
-	KeyErrorFileTooLarge:     "ファイルが大きすぎます。大容量ファイル処理機能を使用してください",
 	KeyErrorInsufficientData: "データが不足しています",
 	KeyErrorCalculationFail:  "計算が失敗しました",
 	KeyErrorMemoryLimit:      "メモリ不足",

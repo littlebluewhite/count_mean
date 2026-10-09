@@ -133,10 +133,6 @@ flowchart TB
 
 透過 go-echarts 生成 HTML 互動圖表，支援 zoom、tooltip、多通道疊加顯示。針對大數據集自動執行降採樣（downsampling），確保瀏覽器渲染效能。
 
-### 大檔串流處理（1GB+）
-
-採用串流式 CSV 讀取搭配 Worker Pool 並行運算，BackpressureController 動態監控記憶體用量，避免 OOM。即使面對 GB 等級的資料集也能穩定處理。
-
 ## 安裝與使用
 
 ### 快速開始
@@ -193,7 +189,7 @@ count_mean/
 ├── internal/                  # 內部套件
 │   ├── calculator/           # MaxMean / Normalizer / PhaseAnalyzer
 │   ├── parsers/              # CSV / EMG / Motion / ANC 統一解析器
-│   ├── io/                   # CSVHandler（BOM）/ LargeFileHandler（串流）
+│   ├── io/                   # CSVHandler（BOM）/ LargeFileHandler（檔案資訊與大小檢查）
 │   ├── models/               # EMGData / EMGDataset / MaxMeanResult
 │   ├── chart/                # go-echarts 圖表生成與降採樣
 │   ├── config/               # JSON 組態管理

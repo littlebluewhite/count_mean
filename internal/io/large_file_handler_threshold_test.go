@@ -31,7 +31,7 @@ func TestIsLargeFileThreshold_IsConservative(t *testing.T) {
 
 // TestLargeFileHandler_GetFileInfo_FlagsLargeFiles 釘住 修法:
 // GetFileInfo 對 > 100MB 檔案標 IsLarge=true,使 csv_handler 拒絕 ReadAll path
-// 並指示 caller 走 streaming(ProcessLargeFile)。
+// 並以過大錯誤拒絕之。
 //
 // 實作策略:不寫真 100MB+ 檔(test runner 太慢且佔磁碟),改用 os.Truncate sparse
 // file — file size 報 100MB+1 但實際只佔幾 KiB sparse hole。同樣命中

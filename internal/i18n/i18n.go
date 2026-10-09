@@ -143,7 +143,6 @@ const (
 	KeyErrorFileNotFound     = "error.file_not_found"
 	KeyErrorInvalidPath      = "error.invalid_path"
 	KeyErrorInvalidCSV       = "error.invalid_csv"
-	KeyErrorFileTooLarge     = "error.file_too_large"
 	KeyErrorInsufficientData = "error.insufficient_data"
 	KeyErrorCalculationFail  = "error.calculation_failed"
 	KeyErrorMemoryLimit      = "error.memory_limit"

@@ -173,13 +173,13 @@ func (h *CSVHandler) checkFileSizeAndFormat(filename string, opts readOptions) (
 	}
 
 	if fileInfo.IsLarge {
-		h.logger.Info("檢測到大文件，使用流式讀取", map[string]any{
+		h.logger.Info("檢測到大文件，拒絕讀取", map[string]any{
 			"filename": filename, "file_size": fileInfo.Size, "line_count": fileInfo.LineCount,
 		})
 
 		return "", errors.NewAppErrorWithDetails(
-			errors.ErrCodeFileTooLarge, "文件過大，請使用大文件處理功能",
-			fmt.Sprintf("文件 %s 過大 (%d bytes)，建議使用流式處理", filename, fileInfo.Size),
+			errors.ErrCodeFileTooLarge, "檔案過大（上限 100 MB），請分割檔案後再試",
+			fmt.Sprintf("文件 %s 過大 (%d bytes)，超過 100 MB 上限", filename, fileInfo.Size),
 		)
 	}
 
@@ -589,20 +589,6 @@ func writeCSVPayload(w stdio.Writer, data [][]string, bomEnabled bool) error {
 	}
 
 	return nil
-}
-
-// ProcessLargeFile 處理大文件.
-func (h *CSVHandler) ProcessLargeFile(
-	filename string,
-	windowSize int,
-	callback ProgressCallback,
-) (*StreamingResult, error) {
-	h.logger.Info("開始處理大文件", map[string]any{
-		"filename":    filename,
-		"window_size": windowSize,
-	})
-
-	return h.largeFileHandler.ProcessLargeFileInChunks(filename, windowSize, callback)
 }
 
 // errEmptyPhaseAnalysis 標示 WritePhaseAnalysis 收到沒有 phase 結果可寫的請求。

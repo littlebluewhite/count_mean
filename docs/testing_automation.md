@@ -80,7 +80,6 @@ func BenchmarkSomething(b *testing.B) {
 8. **BenchmarkPhaseAnalysis** - Phase analysis
 9. **BenchmarkConcurrentDataProcessing** - Concurrent processing
 10. **BenchmarkMemoryIntensiveOperation** - Memory usage tests
-11. **BenchmarkLargeFileProcessing** - Large file handling
 
 ### Running Benchmarks
 

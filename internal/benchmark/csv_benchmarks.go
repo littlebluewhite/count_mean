@@ -230,41 +230,6 @@ func singleRowReference(records [][]string) [][]string {
 	return [][]string{records[0], records[1]}
 }
 
-// BenchmarkLargeFileProcessing 測試大文件處理性能.
-func (cb *CSVBenchmarks) BenchmarkLargeFileProcessing() {
-	testCases := []struct {
-		name      string
-		rows      int
-		cols      int
-		chunkSize int
-	}{
-		{"大文件流式_1萬行", 10000, 50, 1000},
-		{"大文件流式_5萬行", 50000, 100, 5000},
-		{"大文件流式_10萬行", 100000, 200, 10000},
-	}
-
-	csvHandler := io.NewCSVHandler(cb.config)
-
-	for _, tc := range testCases {
-		filePath, fileSize, err := cb.generateTestCSV(
-			fmt.Sprintf("large_%s.csv", tc.name), tc.rows, tc.cols)
-		if err != nil {
-			cb.benchmarker.logger.Error("生成測試文件失敗", err)
-			continue
-		}
-
-		cb.benchmarker.BenchmarkWithData(
-			fmt.Sprintf("大文件處理_%s", tc.name),
-			fileSize,
-			func() error {
-				_, procErr := csvHandler.ProcessLargeFile(filePath, 100, func(_, _ int64, _ float64) {})
-
-				return procErr //nolint:wrapcheck // benchmark errors don't need wrapping
-			},
-		)
-	}
-}
-
 // BenchmarkConcurrentProcessing 測試並發處理性能.
 //
 //nolint:gocognit // complexity is acceptable for benchmark setup
@@ -389,7 +354,6 @@ func (cb *CSVBenchmarks) RunAllBenchmarks() *Result {
 	cb.BenchmarkCSVReading()
 	cb.BenchmarkMaxMeanCalculation()
 	cb.BenchmarkNormalization()
-	cb.BenchmarkLargeFileProcessing()
 	cb.BenchmarkConcurrentProcessing()
 	cb.BenchmarkMemoryUsage()
 

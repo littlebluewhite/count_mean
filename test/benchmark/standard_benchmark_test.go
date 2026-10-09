@@ -1,18 +1,14 @@
 package benchmark_test
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"count_mean/internal/calculator"
-	"count_mean/internal/config"
-	"count_mean/internal/io"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 )
@@ -314,105 +310,6 @@ func BenchmarkMemoryIntensiveOperation(b *testing.B) {
 	}
 }
 
-// BenchmarkLargeFileHandler_SlidingWindow PR-D streaming sliding window 重寫
-// 後的效能基準。windowSize=1000、N=100_000、channels=16 模擬實際 EMG 大檔場景。
-//
-// 對照：plan 描述舊版 O(n × windowSize² × channels) 在此規模屬災難級
-// （cross-validation test `large_w500_n3000_c16` 即跑 8.68s）；新版
-// O(n × channels) rolling sum 在同尺度應 < 100ms。
-func BenchmarkLargeFileHandler_SlidingWindow(b *testing.B) {
-	const (
-		records    = 100_000
-		channels   = 16
-		windowSize = 1000
-	)
-
-	tempFile := createSlidingWindowCSV(b, records, channels)
-	cfg := config.DefaultConfig()
-	cfg.ScalingFactor = 1
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		handler := io.NewLargeFileHandler(cfg)
-		if _, err := handler.ProcessLargeFileInChunks(tempFile, windowSize, nil); err != nil {
-			b.Fatalf("ProcessLargeFileInChunks 失敗: %v", err)
-		}
-	}
-}
-
-// createSlidingWindowCSV 產生 records 列 × (1+channels) 欄合成 EMG CSV
-// 給 BenchmarkLargeFileHandler_SlidingWindow 用，sine 波保證資料變化。
-func createSlidingWindowCSV(b *testing.B, records, channels int) string {
-	b.Helper()
-	tempFile := filepath.Join(b.TempDir(),
-		fmt.Sprintf("sliding_w_n%d_c%d_%d.csv", records, channels, time.Now().UnixNano()))
-
-	file, err := os.Create(tempFile) //nolint:gosec // benchmark fixture in tempdir
-	if err != nil {
-		b.Fatalf("創建測試檔案失敗: %v", err)
-	}
-	defer func() { _ = file.Close() }()
-
-	writer := bufio.NewWriterSize(file, 64*1024)
-
-	if _, err := writer.WriteString("time"); err != nil {
-		b.Fatalf("寫入標題失敗: %v", err)
-	}
-	for c := 1; c <= channels; c++ {
-		if _, err := fmt.Fprintf(writer, ",ch%d", c); err != nil {
-			b.Fatalf("寫入標題欄位失敗: %v", err)
-		}
-	}
-	if _, err := writer.WriteString("\n"); err != nil {
-		b.Fatalf("寫入標題換行失敗: %v", err)
-	}
-
-	for i := 0; i < records; i++ {
-		if _, err := fmt.Fprintf(writer, "%.4f", float64(i)*0.001); err != nil {
-			b.Fatalf("寫入時間失敗: %v", err)
-		}
-		for c := 1; c <= channels; c++ {
-			val := math.Sin(float64(i*c)*0.001) * 100
-			if _, err := fmt.Fprintf(writer, ",%.4f", val); err != nil {
-				b.Fatalf("寫入通道資料失敗: %v", err)
-			}
-		}
-		if _, err := writer.WriteString("\n"); err != nil {
-			b.Fatalf("寫入記錄換行失敗: %v", err)
-		}
-	}
-	if err := writer.Flush(); err != nil {
-		b.Fatalf("flush 失敗: %v", err)
-	}
-
-	return tempFile
-}
-
-// BenchmarkLargeFileProcessing 大檔案處理基準測試.
-func BenchmarkLargeFileProcessing(b *testing.B) {
-	// 創建大檔案
-	tempFile := createLargeTestCSV(b)
-
-	cfg := config.DefaultConfig()
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		handler := io.NewLargeFileHandler(cfg)
-
-		_, err := handler.ProcessLargeFileInChunks(tempFile, 1000, func(_, total int64, percentage float64) {
-			// 模擬進度回調
-			_ = total
-			_ = percentage
-		})
-		if err != nil {
-			b.Fatalf("處理大檔案失敗: %v", err)
-		}
-	}
-}
-
 // createTestCSV 創建測試CSV檔案.
 func createTestCSV(b *testing.B) string {
 	tempFile := filepath.Join(b.TempDir(), fmt.Sprintf("test_benchmark_%d.csv", time.Now().UnixNano()))
@@ -430,32 +327,6 @@ func createTestCSV(b *testing.B) string {
 
 	// 寫入測試數據
 	for i := 0; i < 1000; i++ {
-		if _, err := fmt.Fprintf(file, "%.2f,%.2f,%.2f,%.2f\n",
-			float64(i)*0.01, float64(i)*1.1, float64(i)*1.2, float64(i)*1.3); err != nil {
-			b.Fatalf("寫入數據失敗: %v", err)
-		}
-	}
-
-	return tempFile
-}
-
-// createLargeTestCSV 創建大測試CSV檔案.
-func createLargeTestCSV(b *testing.B) string {
-	tempFile := filepath.Join(b.TempDir(), fmt.Sprintf("large_test_benchmark_%d.csv", time.Now().UnixNano()))
-
-	file, err := os.Create(tempFile)
-	if err != nil {
-		b.Fatalf("創建大測試檔案失敗: %v", err)
-	}
-	defer file.Close()
-
-	// 寫入標題
-	if _, err := file.WriteString("time,channel1,channel2,channel3\n"); err != nil {
-		b.Fatalf("寫入標題失敗: %v", err)
-	}
-
-	// 寫入大量測試數據
-	for i := 0; i < 10000; i++ {
 		if _, err := fmt.Fprintf(file, "%.2f,%.2f,%.2f,%.2f\n",
 			float64(i)*0.01, float64(i)*1.1, float64(i)*1.2, float64(i)*1.3); err != nil {
 			b.Fatalf("寫入數據失敗: %v", err)

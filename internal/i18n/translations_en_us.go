@@ -55,7 +55,6 @@ var translationsEnUS = map[string]string{
 	KeyErrorFileNotFound:     "File not found",
 	KeyErrorInvalidPath:      "Invalid file path",
 	KeyErrorInvalidCSV:       "Invalid CSV file format",
-	KeyErrorFileTooLarge:     "File too large, please use large file processing",
 	KeyErrorInsufficientData: "Insufficient data",
 	KeyErrorCalculationFail:  "Calculation failed",
 	KeyErrorMemoryLimit:      "Memory limit exceeded",

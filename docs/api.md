@@ -15,7 +15,6 @@
   - [parsers.DataParser](#parsersdataparser)
 - [I/O 操作](#io-操作)
   - [CSV 處理](#csv-處理)
-  - [大文件處理](#大文件處理)
 - [圖表生成](#圖表生成)
 - [配置管理](#配置管理)
 - [錯誤處理](#錯誤處理)
@@ -461,60 +460,6 @@ func (h *CSVHandler) ConvertMaxMeanResultsToCSV(
 ```
 
 將最大平均值結果合併原始 headers 轉成可寫入的 `[][]string`（每列：通道名、MaxMean、StartTime、EndTime；最後一列附範圍註記）。
-
----
-
-### 大文件處理
-
-#### LargeFileHandler
-
-`LargeFileHandler` 專門處理大型 CSV 文件，提供串流式滑動窗口分塊計算。為**不透明結構體** — caller 只應透過下列 method 互動。
-
-**NewLargeFileHandler**
-
-```go
-func NewLargeFileHandler(cfg *config.AppConfig) *LargeFileHandler
-```
-
-**參數：**
-- `cfg` (*config.AppConfig): 應用配置。內部會根據 `cfg.InputDir`/`OutputDir`/`OperateDir` 建立路徑驗證白名單；記憶體上限與分塊大小由 handler 內部以工程經驗預設（記憶體限制 512 MB、`chunkSize=1000` 同時控制 progress 報告頻率），caller 無需指定。
-
-**示例：**
-```go
-cfg := config.DefaultConfig()
-handler := io.NewLargeFileHandler(cfg)
-```
-
-**ProcessLargeFileInChunks**
-
-```go
-func (h *LargeFileHandler) ProcessLargeFileInChunks(
-    filename string,
-    windowSize int,
-    callback ProgressCallback,
-) (*StreamingResult, error)
-```
-
-對大型 CSV 串流執行滑動窗口最大平均值計算 — 一次只在記憶體保留窗口大小的 ring buffer，配合 backpressure 在記憶體壓力下中止。`callback` 型別為 `ProgressCallback = func(processed, total int64, percentage float64)`，每 `chunkSize` 筆觸發一次（預設 1000；可傳 `nil` 跳過進度回報）。
-
-`StreamingResult` 含完成統計（`ProcessedLines`、`Duration`、每通道 `Results`、`Headers`、`MemoryUsed` 等）；錯誤通常為 `errors.AppError` 包裝（路徑驗證失敗、記憶體爆量、CSV 格式錯誤等）。
-
-**示例：**
-```go
-cfg := config.DefaultConfig()
-handler := io.NewLargeFileHandler(cfg)
-
-progressCallback := func(processed, total int64, percentage float64) {
-    fmt.Printf("進度：%d / %d (%.2f%%)\n", processed, total, percentage)
-}
-
-result, err := handler.ProcessLargeFileInChunks("large_file.csv", 500, progressCallback)
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("處理 %d 筆，耗時 %s，產出 %d 通道結果\n",
-    result.ProcessedLines, result.Duration, len(result.Results))
-```
 
 ---
 
@@ -983,19 +928,12 @@ if err != nil {
 
 ### 記憶體管理
 
-1. **使用 `LargeFileHandler` 處理大檔**
-   ```go
-   // chunk size、memory limit 等內部以工程經驗預設，caller 只傳 cfg。
-   cfg := config.DefaultConfig()
-   handler := io.NewLargeFileHandler(cfg)
-   ```
-
-2. **及時釋放資源**
+1. **及時釋放資源**
    ```go
    defer file.Close()
    ```
 
-3. **監控記憶體使用**
+2. **監控記憶體使用**
    ```go
    // 在處理大文件時監控記憶體
    runtime.GC()
@@ -1039,12 +977,7 @@ if err != nil {
 ## 常見問題
 
 ### Q: 如何處理大文件？
-A: 透過 `LargeFileHandler.ProcessLargeFileInChunks` 進行流式滑動窗口計算：
-```go
-handler := io.NewLargeFileHandler(cfg)
-result, err := handler.ProcessLargeFileInChunks(filePath, windowSize, progressCallback)
-```
-
+A: 超過 100 MB 的 CSV 會被 `CSVHandler.ReadCSV` 以 `ErrCodeFileTooLarge` 拒絕（串流路徑已刪除，見 ADR-0033），請先分割檔案。
 
 ### Q: 如何處理多語言支持？
 A: 使用 `i18n` 模組：

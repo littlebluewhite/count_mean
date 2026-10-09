@@ -59,7 +59,6 @@ var translationsZhTW = map[string]string{
 	KeyErrorFileNotFound:     "檔案未找到",
 	KeyErrorInvalidPath:      "無效的檔案路徑",
 	KeyErrorInvalidCSV:       "無效的 CSV 檔案格式",
-	KeyErrorFileTooLarge:     "檔案過大，請使用大文件處理功能",
 	KeyErrorInsufficientData: "資料不足",
 	KeyErrorCalculationFail:  "計算失敗",
 	KeyErrorMemoryLimit:      "記憶體不足",

@@ -102,66 +102,10 @@ func StandardEMGAnalysis() {
 
 ## 大文件處理模式
 
-### 模式：流式處理大型 EMG 文件
-
-適用於處理超過 500MB 的大型 EMG 數據文件。
-
-```go
-func ProcessLargeEMGFile(cfg *config.AppConfig) {
-    logger := logging.GetLogger("large_file")
-
-    // 1. 初始化大文件處理器：chunk size / memory limit / backpressure 由 handler
-    //    內部以工程經驗預設（記憶體上限 512 MB），caller 只傳 cfg。
-    handler := io.NewLargeFileHandler(cfg)
-
-    // 2. 進度回報：每 chunkSize 筆觸發一次（預設 1000；傳 nil 跳過回報）
-    progressCallback := func(processed, total int64, percentage float64) {
-        logger.Info("處理進度", map[string]interface{}{
-            "processed":  processed,
-            "total":      total,
-            "percentage": percentage,
-        })
-    }
-
-    // 3. 一次性執行串流滑動窗口計算：內部自動 streaming、ring buffer、backpressure
-    //    達到 memoryLimit 時 fail-fast。回傳 *StreamingResult 含每通道最大平均值。
-    result, err := handler.ProcessLargeFileInChunks("large_emg_file.csv", 500, progressCallback)
-    if err != nil {
-        logger.Error("大文件處理失敗", err, nil)
-        return
-    }
-
-    // 4. 結果寫回 CSV（headers + results 都從 StreamingResult 取，無需手動 merge）
-    csvHandler := io.NewCSVHandler(cfg)
-    csvData := csvHandler.ConvertMaxMeanResultsToCSV(result.Headers, result.Results, 0, 0)
-    if err := csvHandler.WriteCSVToOutput("large_file_results.csv", csvData); err != nil {
-        logger.Error("結果保存失敗", err, nil)
-        return
-    }
-
-    logger.Info("大文件處理完成", map[string]interface{}{
-        "processed_lines": result.ProcessedLines,
-        "duration":        result.Duration,
-        "results_count":   len(result.Results),
-    })
-}
-```
-
-> **設計演進：** 早期 API 暴露 `ReadCSVStreaming(file, chunkCallback)` 讓 caller
-> 自行於 callback 內計算並 merge — chunk 邊界處理複雜且容易出錯。現行
-> `ProcessLargeFileInChunks` 把分塊、ring buffer、結果 merge 都內封在 handler，
-> caller 只需呼叫 + 取 `result.Results`。
-
-### 使用場景
-- 處理大於 500MB 的 EMG 文件
-- 記憶體有限的環境
-- 需要實時處理進度反饋
-
-### 最佳實踐
-1. 根據系統記憶體調整塊大小
-2. 實現進度回調顯示處理狀態
-3. 使用臨時文件存儲中間結果
-4. 處理完成後清理臨時文件
+目前**沒有**串流處理大檔的 API。`LargeFileHandler` 的串流 Max-mean 路徑已刪除（見
+[ADR-0033](adr/0033-remove-streaming-maxmean.md)）；`CSVHandler.ReadCSV` 對超過 100 MB
+的檔案直接回 `ErrCodeFileTooLarge`（「檔案過大（上限 100 MB），請分割檔案後再試」），
+請先分割檔案再分析。
 
 ---
 
@@ -710,18 +654,13 @@ func (p *ErrorHandlingProcessor) fallbackProcess(ctx context.Context, cfg *confi
         "file": filePath,
     })
 
-    // 降級處理：改用 LargeFileHandler 走串流路徑，降低 in-memory 峰值
-    handler := io.NewLargeFileHandler(cfg)
+    // 降級處理：僅保留原始資料副本，待資源充足後再重新分析
+    csvHandler := io.NewCSVHandler(cfg)
 
-    // 降低窗口大小換取較快回應；progressCallback 為 nil 跳過進度回報
-    result, err := handler.ProcessLargeFileInChunks(filePath, 50, nil)
+    csvData, err := csvHandler.ReadCSV(filePath)
     if err != nil {
         return err
     }
-
-    // 保存降級結果（Headers / Results 由 StreamingResult 提供）
-    csvHandler := io.NewCSVHandler(cfg)
-    csvData := csvHandler.ConvertMaxMeanResultsToCSV(result.Headers, result.Results, 0, 0)
 
     outputName := fmt.Sprintf("fallback_%s", filepath.Base(filePath))
     return csvHandler.WriteCSVToOutput(outputName, csvData)
@@ -750,9 +689,8 @@ func (p *ErrorHandlingProcessor) fallbackProcess(ctx context.Context, cfg *confi
 
 > **教學範例 caveat：** 以下 worker-pool + chunk channel 設計為**教學用 pattern**，
 > 展示 backpressure / sync.Pool / 多 worker 協調等概念。
-> 現實使用上 `LargeFileHandler.ProcessLargeFileInChunks` 已內封 worker pool、
-> ring buffer、backpressure 與 -Inf channel skip — 外部 caller 通常無需自行
-> wrap layer。若僅需大檔串流處理，請優先採用「大文件處理模式」段的簡單寫法。
+> 現行 `MaxMeanCalculator` 已內建 worker pool 與 backpressure，外部 caller
+> 通常無需自行 wrap layer。
 
 ```go
 func OptimizedPerformanceProcessing() {
@@ -873,7 +811,7 @@ func processParallel(filePath string, options PerformanceOptions, monitor *Perfo
     close(results)
     resultWg.Wait()
     
-    // 6. 保存結果（headers 在實務上應從 dataset / StreamingResult 取，這裡示意）
+    // 6. 保存結果（headers 在實務上應從 dataset 取，這裡示意）
     headers := []string{"Time", "Channel1", "Channel2", "Channel3"}
     return saveOptimizedResults(headers, finalResults, filePath, monitor)
 }
@@ -942,7 +880,7 @@ func processWorker(workerID int, jobs <-chan DataChunk, results chan<- []models.
 func distributeData(filePath string, options PerformanceOptions, jobs chan<- DataChunk, 
                    monitor *PerformanceMonitor) error {
     
-    handler := io.NewLargeFileHandler(cfg) // chunk size / memory limit 由 handler 內部預設
+    csvHandler := io.NewCSVHandler(cfg)
     chunkID := 0
     
     processChunk := func(chunk []models.EMGData) error {
@@ -960,16 +898,16 @@ func distributeData(filePath string, options PerformanceOptions, jobs chan<- Dat
         return nil
     }
     
-    // 註：實際 API 為 ProcessLargeFileInChunks(filePath, windowSize, progressCallback)，
-    // 它不暴露 chunk callback；這段教學範例假想存在 chunk-level hook。
-    _, err := handler.ProcessLargeFileInChunks(filePath, 50, nil)
+    // 註：實際 API 為 CSVHandler.ReadCSV(filePath)，一次回傳整檔 [][]string，
+    // 不暴露 chunk callback；這段教學範例假想存在 chunk-level hook。
+    _, err := csvHandler.ReadCSV(filePath)
     _ = processChunk // 教學示意：實際 API 不接 chunk callback
     return err
 }
 
 func processSequential(filePath string, options PerformanceOptions, monitor *PerformanceMonitor) error {
     // 順序處理實現
-    handler := io.NewLargeFileHandler(cfg) // chunk size / memory limit 由 handler 內部預設
+    csvHandler := io.NewCSVHandler(cfg)
     calculator := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
     
     var allResults []models.MaxMeanResult
@@ -995,9 +933,9 @@ func processSequential(filePath string, options PerformanceOptions, monitor *Per
         return nil
     }
     
-    // 註：實際 API 為 ProcessLargeFileInChunks(filePath, windowSize, progressCallback)，
-    // 它不暴露 chunk callback；這段教學範例假想存在 chunk-level hook。
-    _, err := handler.ProcessLargeFileInChunks(filePath, 50, nil)
+    // 註：實際 API 為 CSVHandler.ReadCSV(filePath)，一次回傳整檔 [][]string，
+    // 不暴露 chunk callback；這段教學範例假想存在 chunk-level hook。
+    _, err := csvHandler.ReadCSV(filePath)
     _ = processChunk // 教學示意：實際 API 不接 chunk callback
     if err != nil {
         return err
