@@ -5,12 +5,12 @@ EMG 肌電訊號分析工具的領域概念字典。架構詞彙（module / inte
 ## Language
 
 **EMGDataset**
-一筆完整的肌電訊號量測，包含 headers（通道名稱）、time-series rows、與 OriginalTimePrecision。[[Max-mean]]、Phase analysis 與 Normalize 等 calculator 路徑先把輸入解析為 EMGDataset；以 [[Manifest]] 為入口的 [[Domain analyzer]]、NPS（NormalizedPhaseSync）與 [[Chart Composer]] 改用 [[PhaseSyncEMGData]]，不經 EMGDataset。
+一筆完整的肌電訊號量測，包含 headers（通道名稱）、time-series rows、與 OriginalTimePrecision。[[Max-mean]]、Phase analysis 與 Normalize 等 calculator 路徑先把輸入解析為 EMGDataset；以 [[Manifest]] 為入口的 [[Domain analyzer]] 與 NPS（NormalizedPhaseSync）直接使用 [[PhaseSyncEMGData]]，不經 EMGDataset；[[Chart Composer]] 同樣先載入 PhaseSyncEMGData，但在 `gui` 以 `phaseSyncEMGToDataset` 轉成 EMGDataset 供 chart 渲染（後續 wave 移除此轉換）。
 _Avoid_: data file, signal data, EMG records.
 
 **PhaseSyncEMGData**
-[[Domain analyzer]]（CCI / MuscleRatio / PhaseSync）、NormalizedPhaseSync 與 [[Chart Composer]] 使用的 EMG 資料形狀（`models.PhaseSyncEMGData`）：以**秒**為時間域、**columnar** 排列 —— 一條 `Time []float64` 加 `Channels map[通道名]→[]float64` 與 `Headers` 通道順序。與逐 row 記錄的 [[EMGDataset]] 是不同結構：切片 [[Phase]] 區間時直接以秒定位，不經 row 迭代。
-_Avoid_: 把它當成 EMGDataset 的別名；兩者不可互換.
+[[Domain analyzer]]（CCI / MuscleRatio / PhaseSync）、NormalizedPhaseSync 與 [[Chart Composer]] 使用的 EMG 資料形狀（`models.PhaseSyncEMGData`）：以**秒**為時間域、**columnar** 排列 —— 一條 `Time []float64` 加 `Channels map[通道名]→[]float64` 與 `Headers` 通道順序。與逐 row 記錄的 [[EMGDataset]] 是不同結構（兩者之間只有 Composer 的 `phaseSyncEMGToDataset` 明確橋接，不可互換）：切片 [[Phase]] 區間時直接以秒定位，不經 row 迭代。
+_Avoid_: 把它當成 EMGDataset 的別名.
 
 **Channel**
 EMGDataset 中的一條獨立肌電訊號欄位（例如「左前脛骨肌」「右股外側肌」）。一個 EMGDataset 有 1 到 N 個 channels。
