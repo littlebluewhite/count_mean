@@ -24,8 +24,16 @@ Go 端文字有兩條路進 Wails webview：**err 通道** —— bound method �
    - `gui/main_test.go` 的 `TestMain` 比照 production 載入內建 catalog 並 `SetLocale(zh-TW)`。
 5. **已知限制：sink-side redact 只脫敏「符合目錄段文法的非末段」**。兩條通道都只過 `redact.Paths`（與 log 的 `sanitizeMessage` 同一個 pattern）：
    - **末段保留**：目錄段換成 `<redacted-path>/`，**最後一段（檔名或資料夾名）保留**。錯誤若以病患資料夾名結尾（例如 DataFolder 本身不存在：`stat /Users/x/PatientAlice: no such file` → `stat <redacted-path>/PatientAlice: …`），那個名字仍會出現在 err 文字與 Message 裡。這正是 fsperm 保留 source-side `redactBasePaths`（對 base path 先補 `/`，連末段一併脫敏）的原因。
-   - **目錄段文法**（POSIX `/…/`、drive-letter `C:\…\` / `C:/…/`、UNC `\\server\share\…\` 三個分支一致）：段 = 以一或多個半形空白分隔的詞；詞不含空白、`/`、`"`，詞的中間（不在頭尾）可夾 `'`。POSIX 詞的中間另可夾 `:`（macOS Finder 名稱裡的 `/` 在 POSIX 層是 `:`），詞裡的 `\` 不可接 `n` / `r` / `t`（logger 先把換行跳脫成字面 `\n` / `\t` 再呼叫 `Paths`，否則跳脫後的多行 stack 會黏成一個段）；drive-letter / UNC 的詞不含 `\` 與 `:`，分隔字元另接受 `%q` 格式化後成對的 `\\`。涵蓋 `Jane Doe`、`OneDrive - Hospital`、`EMG Data`、`O'Neil`、雙空白、`2026:05:18`、`resolved=%q` 形狀的 Windows / UNC 路徑（`7b9a058` 之前，drive-letter / UNC 段內的空白、各分支的 `'` 與雙空白、POSIX 的 `:`、`%q` 跳脫都會讓該段原文留存）。
-   - **不符文法的目錄段原文留存**，其後的目錄段仍由下一個匹配脫敏：含 `"`、tab 等非半形空白、冒號後接空白、以 `'` 或空白開頭 / 結尾的段，以及 POSIX 段內 `\` 後接 `n` / `r` / `t` 的段（如 `Doe\nancy`）。例：`/Users/x/Study: Phase 1/S01/emg.csv` → `<redacted-path>/Study: Phase 1<redacted-path>/emg.csv`。這些形狀放寬就會吃掉路徑後的錯誤文字 —— 允許 `: ` 時，`open …/c.csv: input/output error` 的 `c.csv: input/` 會被當成目錄段。`TestPaths_DocumentedSurvivingSegments` 釘住留存的形狀，`TestPaths_KeepsOrdinaryTextAroundPaths` 釘住不得過度脫敏的文字。
+   - **目錄段文法**：段 = 以一或多個半形空白分隔的詞，不以空白開頭或結尾。
+     - POSIX（`/…/`）：詞不含空白、`/`、`"`；`\` 是一般字元（段尾的 `\`、`%q` 的 `\\`、`Doe\nancy` 都算詞的一部分）；`'` 與 `:` 只能在詞中間（`O'Neil`；macOS Finder 名稱裡的 `/` 在 POSIX 層是 `:`，如 `2026:05:18`）。
+     - drive-letter（`C:\…\`、`C:/…/`）/ UNC（`\\server\share\…\`）：詞不含空白、`\`、`/`、`:`、`"`（後兩者在 Windows 名稱不合法），`'` 可在任何位置；分隔字元是 `\`、`/` 或 `%q` 格式化後成對的 `\\`（UNC 開頭可為 `\\\\`）。
+     - 換行是空白，所以 `Paths` 必須吃原始文字：`Logger.sanitizeMessage` 先 `Paths` 再跳脫控制字元。反過來的話字面 `\n` / `\t` 會把多行 stack 黏成一個段、只剩最後一個 frame（`TestSanitizeMessage_MultiLineStackRedactedPerLine`）。
+     - 涵蓋 `Jane Doe`、`OneDrive - Hospital`、`EMG Data`、`O'Neil`、Windows 的 `'Jane'`、雙空白、`2026:05:18`、`resolved=%q` 形狀的 POSIX / Windows / UNC 路徑。歷史：`0c320ed` 時 drive-letter / UNC 段不接受空白，drive-letter / POSIX 段不接受 `'`（UNC 段則接受空白與 `\` 以外的任何字元），POSIX 段不接受雙空白與 `:`，`%q` 的 `\\` 分隔完全不匹配 —— 這些段原文留存。
+   - **不符文法的目錄段原文留存**，其後的目錄段是否脫敏取決於分隔字元：
+     - POSIX：段含 `"`、tab 等非半形空白、詞頭尾的 `'` 或 `:`（`'Jane'`、`Study: Phase 1`），或以空白開頭 / 結尾 —— 只有該段留存，POSIX 分支在下一個 `/` 重新起始。例：`/Users/x/Study: Phase 1/S01/emg.csv` → `<redacted-path>/Study: Phase 1<redacted-path>/emg.csv`。
+     - drive-letter / UNC 以 `\` 分隔：段含 `"`、`:`、非半形空白，或以空白開頭 / 結尾 —— 單一 `\` 不會重新起始任何分支，**該段與其後到末段前的所有目錄段都留存**。例：`C:\Users\x\ Jane\S01\emg.csv` → `<redacted-path>/ Jane\S01\emg.csv`。`"`、`:`、控制字元在 Windows 名稱不合法，結尾空白會被 Windows 去掉，所以真實 Windows 路徑上只有「以空白開頭的段」會觸發。以 `/` 分隔時同 POSIX（只有該段留存）；`%q` 的 `\\` 可讓 UNC 分支在其後重新起始，但需其後至少兩個目錄段，否則同樣留存。
+     - 放寬文法就會吃掉路徑後的錯誤文字 —— 允許 `: ` 時，`open …/c.csv: input/output error` 的 `c.csv: input/` 會被當成目錄段。`TestPaths_DocumentedSurvivingSegments` 釘住留存的形狀，`TestPaths_KeepsOrdinaryTextAroundPaths` 釘住不得過度脫敏的文字。
+   - **刻意接受的過度脫敏**（安全方向，只損失可讀性；`TestPaths_DocumentedOverRedaction`）：http URL 的 host 與 path（`http://localhost:34115/index.html` → `http:/<redacted-path>/index.html`）；詞緊接 `/` 被當成目錄段（`copied C:\a\x.csv and/or C:\b\y.csv` → `copied <redacted-path>/or <redacted-path>/y.csv`）；單引號包住的兩條 UNC 路徑黏成一條（第二條開頭的 `\\` 被當成 `%q` 分隔字元）。log 改為先 `Paths` 後，`Paths` 的行首 fallback 也作用在多行訊息的每一行：以 `/`、`\\`、`C:\` 開頭的行（例如 `/help`）會被改寫成 `<redacted-path>/<最後一段>`。
    - 測試把植入目錄放在非末段、名稱符合文法，只斷言 `redact.Paths` 真正保證的部分。
 
 ### Amends ADR-0035
