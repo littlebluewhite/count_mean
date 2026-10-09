@@ -237,6 +237,10 @@ func TestGetTranslations_ReturnsLocaleDictionary(t *testing.T) {
 // SetLanguage 加 defer recoverHandlerPanic 後 nil receiver 失效(同上理由),
 // 改用 NewApp。
 func TestSetLanguage_ValidLocale_NoError(t *testing.T) {
+	// SetLanguage 切換 process-wide i18n locale;測完還原,避免汙染其他測試。
+	prevLocale := i18n.GetLocale()
+	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
+
 	app := NewApp(config.DefaultConfig(), "test-set-language-valid")
 
 	for _, loc := range []string{"zh-TW", "zh-CN", "en-US", "ja-JP"} {
@@ -288,6 +292,10 @@ func TestSaveConfig_InvalidLocale_Rejected(t *testing.T) {
 // 後 SaveConfig 用 a.configPath 而非 hardcoded "./config.json",test 用
 // NewAppWithConfigPath 顯式注入 path 到 t.TempDir 下,assert 在那個位置看到檔。
 func TestSaveConfig_ValidLocale_Saved(t *testing.T) {
+	// SaveConfig 會把 backend i18n locale 切到 cfg.Language;測完還原,避免汙染其他測試。
+	prevLocale := i18n.GetLocale()
+	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
+
 	cfg := config.DefaultConfig()
 	cfg.Language = "en-US"
 

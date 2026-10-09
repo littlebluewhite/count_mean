@@ -87,7 +87,7 @@ func TestComposerPhaseTimesEMG(t *testing.T) {
 }
 
 // setupChartComposerTestApp 構造僅含 Chart Composer handler 所需依賴的最小 App.
-// 與 sibling setupMuscleRatioTestApp / setupCCITestApp 對稱 — 不啟動真實 ctx /
+// 與 sibling setupMuscleRatioTestApp 對稱 — 不啟動真實 ctx /
 // 其他 analyzer,只專注於 handler 邊界行為。
 //
 // OutputDir 與其他 sibling test 一致用 t.TempDir(),DownloadChartComposerImage

@@ -35,10 +35,10 @@ import (
 	"strings"
 
 	"count_mean/internal/chart"
+	"count_mean/internal/i18n"
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
-	"count_mean/internal/security/redact"
 	"count_mean/internal/synchronizer"
 	"count_mean/internal/validation/filename"
 )
@@ -51,6 +51,7 @@ var (
 	ErrChartComposerMuscleRatioFileEmpty   = errors.New("manifest 內 MuscleRatioFile 為空")
 	ErrChartComposerMuscleRatioCSVEmpty    = errors.New("muscle_ratio CSV 為空或缺少資料行")
 	ErrChartComposerMuscleRatioCSVNoHeader = errors.New("muscle_ratio CSV 標題不足: 至少需要時間欄與一個 ratio 欄")
+	ErrChartComposerSubjectNotFound        = errors.New("不存在於分期總檔案")
 )
 
 // LoadChartComposerSubjectsParams Wails RPC params for subject list lookup.
@@ -167,15 +168,12 @@ func (a *App) LoadChartComposerSubjects(
 	}
 
 	if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
-		return failedChartComposerSubjectsResult(redact.RedactForMessage(err)), nil
+		return failedChartComposerSubjectsResult(inputMessage(err)), nil
 	}
 
 	manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
 	if parseErr != nil {
-		a.logger.Error("Chart Composer 載入 manifest 失敗", parseErr, map[string]any{})
-		return failedChartComposerSubjectsResult(
-			fmt.Sprintf("載入分期總檔案失敗: %s", redact.RedactForMessage(parseErr)),
-		), nil
+		return failedChartComposerSubjectsResult(a.failMessage(i18n.KeyErrorHandlerLoadManifestFailed, parseErr)), nil
 	}
 
 	// 收集 unique subject — 與 LoadPhaseManifest 對稱:回 dedup 過的 subject
@@ -202,7 +200,7 @@ func (a *App) LoadChartComposerSubjects(
 			Subject: m.Subject,
 			EMGFile: m.EMGFile,
 			// OpenDataFile error 含期待路徑 → 過 redact 防 PHI 洩漏(保留 basename)。
-			ErrMessage: redact.RedactForMessage(m.Err),
+			ErrMessage: redactText(m.Err.Error()),
 		}
 	}
 
@@ -246,7 +244,7 @@ func (a *App) GenerateChartComposer(
 	}
 
 	if err := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); err != nil {
-		return failedChartComposerResult(redact.RedactForMessage(err)), nil
+		return failedChartComposerResult(inputMessage(err)), nil
 	}
 
 	if params.Subject == "" {
@@ -255,34 +253,25 @@ func (a *App) GenerateChartComposer(
 
 	manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
 	if parseErr != nil {
-		a.logger.Error("Chart Composer 載入 manifest 失敗", parseErr, map[string]any{})
-		return failedChartComposerResult(
-			fmt.Sprintf("載入分期總檔案失敗: %s", redact.RedactForMessage(parseErr)),
-		), nil
+		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerLoadManifestFailed, parseErr)), nil
 	}
 
 	row, found := findManifestBySubject(manifests, params.Subject)
 	if !found {
-		return failedChartComposerResult(
-			fmt.Sprintf("Subject %q 不存在於分期總檔案", params.Subject),
-		), nil
+		return failedChartComposerResult(inputMessage(
+			fmt.Errorf("Subject %q %w", params.Subject, ErrChartComposerSubjectNotFound),
+		)), nil
 	}
 
 	// 載入 EMG(必要)— 走 manifest.OpenDataFile 硬化讀檔門,交出已驗證 *os.File。
 	emgFile, emgOpenErr := manifest.OpenDataFile(params.DataFolder, row.EMGFile)
 	if emgOpenErr != nil {
-		a.logger.Error("Chart Composer 開啟 EMG 失敗", emgOpenErr, map[string]any{})
-		return failedChartComposerResult(
-			fmt.Sprintf("EMG 檔案路徑解析失敗: %s", redact.RedactForMessage(emgOpenErr)),
-		), nil
+		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerResolveEMGPathFailed, emgOpenErr)), nil
 	}
 	emgPhaseSync, _, emgErr := parsers.NewEMGParser().Parse(emgFile, row.EMGFile)
 	_ = emgFile.Close() //nolint:errcheck // read-only fd; close error not actionable (data materialized by Parse)
 	if emgErr != nil {
-		a.logger.Error("Chart Composer 解析 EMG 失敗", emgErr, map[string]any{})
-		return failedChartComposerResult(
-			fmt.Sprintf("解析 EMG 失敗: %s", redact.RedactForMessage(emgErr)),
-		), nil
+		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseEMGFailed, emgErr)), nil
 	}
 	emgDataset := phaseSyncEMGToDataset(emgPhaseSync)
 
@@ -291,10 +280,7 @@ func (a *App) GenerateChartComposer(
 		params.DataFolder, row.MotionFile, row.EMGMotionOffset,
 	)
 	if motionErr != nil {
-		a.logger.Error("Chart Composer 解析 Motion 失敗", motionErr, map[string]any{})
-		return failedChartComposerResult(
-			fmt.Sprintf("解析 Motion 失敗: %s", redact.RedactForMessage(motionErr)),
-		), nil
+		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseMotionFailed, motionErr)), nil
 	}
 
 	// 載入 muscle_ratio(可選 — 僅 V.14 manifest 帶 MuscleRatioFile)
@@ -302,10 +288,7 @@ func (a *App) GenerateChartComposer(
 	if strings.TrimSpace(row.MuscleRatioFile) != "" {
 		mr, mrErr := loadComposerMuscleRatio(params.DataFolder, row.MuscleRatioFile)
 		if mrErr != nil {
-			a.logger.Error("Chart Composer 解析 muscle_ratio 失敗", mrErr, map[string]any{})
-			return failedChartComposerResult(
-				fmt.Sprintf("解析 muscle_ratio 失敗: %s", redact.RedactForMessage(mrErr)),
-			), nil
+			return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerParseMuscleRatioFailed, mrErr)), nil
 		}
 		muscleRatioData = mr
 	}
@@ -337,9 +320,7 @@ func (a *App) GenerateChartComposer(
 		if errors.Is(renderErr, chart.ErrComposerEMGRequired) {
 			return failedChartComposerResult("內部錯誤: EMG dataset 為空"), nil
 		}
-		return failedChartComposerResult(
-			fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(renderErr)),
-		), nil
+		return failedChartComposerResult(a.failMessage(i18n.KeyErrorHandlerChartRenderFailed, renderErr)), nil
 	}
 
 	return &ChartComposerResult{

@@ -25,7 +25,6 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/muscle_ratio"
 	"count_mean/internal/phase_sync"
-	"count_mean/internal/security/redact"
 	"count_mean/internal/synchronizer"
 	"count_mean/internal/validation/filename"
 )
@@ -931,24 +930,14 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 		SubjectIndex: params.SubjectIndex,
 	})
 	if analyzeErr != nil {
-		a.logger.Error("分期同步分析失敗", analyzeErr, map[string]any{})
-
-		return &PhaseSyncResult{
-			Success: false,
-			Message: fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(analyzeErr)),
-		}, nil
+		return failedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerAnalysisFailed, analyzeErr)), nil
 	}
 
 	// 3 導出結果 → failed-result channel。ADR-0001: 寫檔職責由 PhaseSyncAnalyzer
 	// 搬到 CSVHandler,走同一條 format-aware write 路徑。
 	outputPath, writeErr := s.csvHandler.WritePhaseSyncResult(io.WriteRequest{}, stats)
 	if writeErr != nil {
-		a.logger.Error("導出結果失敗", writeErr, map[string]any{})
-
-		return &PhaseSyncResult{
-			Success: false,
-			Message: fmt.Sprintf("導出失敗: %s", redact.RedactForMessage(writeErr)),
-		}, nil
+		return failedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerExportFailed, writeErr)), nil
 	}
 
 	a.logger.Info("分期同步分析完成", nil)
@@ -972,4 +961,13 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 		Success:      true,
 		Message:      "分析完成",
 	}, nil
+}
+
+// failedPhaseSyncResult builds a phase-sync result indicating failure
+// (分析 / 寫檔分支;validate 分支走 err 通道)。
+func failedPhaseSyncResult(message string) *PhaseSyncResult {
+	return &PhaseSyncResult{
+		Success: false,
+		Message: message,
+	}
 }

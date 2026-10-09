@@ -80,9 +80,9 @@ func locateGUIDir() (string, error) {
 	return filepath.Dir(thisFile), nil
 }
 
-// collectExportedAppMethods 用 go/parser 解析目錄下所有非 _test.go 的 .go 檔,
-// 回傳所有 exported 的 func (a *App) ... / func (*App) ... 宣告。
-func collectExportedAppMethods(dir string) ([]*ast.FuncDecl, error) {
+// parseGUIFiles 用 go/parser 解析目錄下所有非 _test.go 的 .go 檔,回傳
+// 檔案路徑 → AST(連同 FileSet,供錯誤訊息標位置)。
+func parseGUIFiles(dir string) (*token.FileSet, map[string]*ast.File, error) {
 	fset := token.NewFileSet()
 	// parser.ParseDir 自 Go 1.25 標記 deprecated(建議改 x/tools/go/packages 以
 	// 支援 build tags);但本測試只掃 gui/*.go 沒有 build tag 分裂的場景,且
@@ -92,22 +92,39 @@ func collectExportedAppMethods(dir string) ([]*ast.FuncDecl, error) {
 		return !strings.HasSuffix(fi.Name(), "_test.go")
 	}, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, fmt.Errorf("parser.ParseDir(%s): %w", dir, err)
+		return nil, nil, fmt.Errorf("parser.ParseDir(%s): %w", dir, err)
+	}
+
+	files := make(map[string]*ast.File)
+
+	for _, pkg := range pkgs {
+		for path, file := range pkg.Files {
+			files[path] = file
+		}
+	}
+
+	return fset, files, nil
+}
+
+// collectExportedAppMethods 回傳 gui/ 非 _test.go 檔中所有 exported 的
+// func (a *App) ... / func (*App) ... 宣告。
+func collectExportedAppMethods(dir string) ([]*ast.FuncDecl, error) {
+	_, files, err := parseGUIFiles(dir)
+	if err != nil {
+		return nil, err
 	}
 
 	var out []*ast.FuncDecl
 
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 {
-					continue
-				}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 {
+				continue
+			}
 
-				if isAppReceiver(fn.Recv.List[0].Type) && ast.IsExported(fn.Name.Name) {
-					out = append(out, fn)
-				}
+			if isAppReceiver(fn.Recv.List[0].Type) && ast.IsExported(fn.Name.Name) {
+				out = append(out, fn)
 			}
 		}
 	}
@@ -220,4 +237,108 @@ func calleeName(fun ast.Expr) string {
 	}
 
 	return fmt.Sprintf("%T", fun)
+}
+
+// TestFailedResultArgs_OnlyLiteralOrEnvelope 用 go/ast 守 [[Webview envelope]] 的
+// Message 建構規則(ADR-0036):gui/ 非 _test.go 檔中每個 failed*Result(...) 呼叫的
+// 引數只能是
+//
+//   - 字串字面值(不帶任何動態內容的固定訊息,例如「參數為空」)
+//   - <receiver>.failMessage(key, err)(可預期失敗:i18n 前綴 + redact + log 一次)
+//   - inputMessage(err)(驗證 sentinel:只 redact、不 log)
+//
+// handler 不得自己拼 Message —— 舊形狀 fmt.Sprintf("…: %s", redact…(err)) 每個分支
+// 各自決定要不要 redact / log / localize,漏一處就是一個 PHI 洩漏點。
+func TestFailedResultArgs_OnlyLiteralOrEnvelope(t *testing.T) {
+	guiDir, err := locateGUIDir()
+	require.NoError(t, err, "找不到 gui/ 目錄 — AST scan 無法執行")
+
+	fset, files, err := parseGUIFiles(guiDir)
+	require.NoError(t, err, "解析 gui/ 套件失敗")
+
+	calls := 0
+
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok || !strings.HasPrefix(ident.Name, "failed") || !strings.HasSuffix(ident.Name, "Result") {
+				return true
+			}
+
+			calls++
+
+			if problem := failedResultArgProblem(call); problem != "" {
+				t.Errorf("%s: %s(...) %s", fset.Position(call.Pos()), ident.Name, problem)
+			}
+
+			return true
+		})
+	}
+
+	// 反向保險:掃不到任何呼叫代表比對條件或 scan 本身壞掉,上面的斷言恆真。
+	require.Positive(t, calls, "AST scan 應掃到 failed*Result 呼叫")
+}
+
+// failedResultArgProblem 檢查 failed*Result 的引數形狀;符合回空字串。
+func failedResultArgProblem(call *ast.CallExpr) string {
+	if len(call.Args) != 1 {
+		return fmt.Sprintf("應恰有 1 個引數,實際 %d 個", len(call.Args))
+	}
+
+	switch arg := call.Args[0].(type) {
+	case *ast.BasicLit:
+		if arg.Kind == token.STRING {
+			return ""
+		}
+	case *ast.CallExpr:
+		switch fun := arg.Fun.(type) {
+		case *ast.Ident:
+			if fun.Name == "inputMessage" {
+				return ""
+			}
+		case *ast.SelectorExpr:
+			if fun.Sel.Name == "failMessage" {
+				return ""
+			}
+		}
+	}
+
+	return "的引數只能是字串字面值、failMessage(...) 或 inputMessage(...)"
+}
+
+// TestRedactImport_OnlyEnvelopeAndRecover 守 [[Webview envelope]] 的出口集中規則
+// (ADR-0036):gui/ 非 _test.go 檔中只有 envelope.go(Message 通道)與 recover.go
+// (err 通道)可以 import internal/security/redact。其他檔案要把文字送進 webview,
+// 只能經這兩處的 helper(failMessage / inputMessage / redactText / recoverHandlerPanic)。
+func TestRedactImport_OnlyEnvelopeAndRecover(t *testing.T) {
+	guiDir, err := locateGUIDir()
+	require.NoError(t, err, "找不到 gui/ 目錄 — AST scan 無法執行")
+
+	_, files, err := parseGUIFiles(guiDir)
+	require.NoError(t, err, "解析 gui/ 套件失敗")
+
+	allowed := map[string]bool{"envelope.go": true, "recover.go": true}
+	importers := 0
+
+	for path, file := range files {
+		for _, imp := range file.Imports {
+			if strings.Trim(imp.Path.Value, `"`) != "count_mean/internal/security/redact" {
+				continue
+			}
+
+			importers++
+
+			if name := filepath.Base(path); !allowed[name] {
+				t.Errorf("%s import 了 redact 套件;webview 文字只能經 envelope.go / recover.go 的出口 redact", name)
+			}
+		}
+	}
+
+	// 反向保險:recover.go 一定 import redact,掃不到代表 scan 本身壞掉。
+	require.Positive(t, importers, "AST scan 應至少掃到 recover.go 的 redact import")
 }

@@ -29,6 +29,42 @@ func plantDir(t *testing.T) string {
 	return planted
 }
 
+// leakyPrefixes 是各平台常見的 system-root 前綴(macOS t.TempDir 在 /var/folders/、
+// Linux CI 在 /tmp/、Windows 在 C:\Users\…\Temp\),出現任一個即視為目錄外洩。
+var leakyPrefixes = []string{
+	"/Users/",
+	"/home/",
+	"/var/folders/",
+	"/private/",
+	"/Volumes/",
+	"/mnt/",
+	"/tmp/",
+	`C:\Users\`,
+	`C:\`,
+}
+
+// requireNoDirLeak 斷言送進 webview 的文字(err 文字或 result 字串欄位)不洩漏目錄段:
+//
+//   - 不含任何 leakyPrefixes
+//   - planted 非空(呼叫端刻意觸發帶植入目錄的錯誤)時,另斷言不含 planted 絕對路徑與
+//     plantedDirMarker,且帶 `<redacted-path>` 標記 —— 反向保險:錯誤若根本沒帶路徑,
+//     前兩條恆真,失去守門作用。
+func requireNoDirLeak(t *testing.T, text, planted string) {
+	t.Helper()
+
+	for _, prefix := range leakyPrefixes {
+		require.NotContains(t, text, prefix, "webview 文字不可含 system-root 前綴")
+	}
+
+	if planted == "" {
+		return
+	}
+
+	require.NotContains(t, text, plantedDirMarker, "webview 文字不可含植入的病患目錄段")
+	require.NotContains(t, text, planted, "webview 文字不可含植入目錄的絕對路徑")
+	require.Contains(t, text, "<redacted-path>", "觸發的錯誤應帶路徑並被 redact")
+}
+
 // newRPCRedactTestApp 走 NewAppWithConfigPath 建完整 App(buildAppState 全套依賴),
 // config 三個目錄與 configPath 都由 caller 指定,避免測試寫進 CWD。
 func newRPCRedactTestApp(t *testing.T, outputDir, configPath string) *App {
@@ -187,12 +223,137 @@ func TestRPCErrChannel_NoAbsolutePath(t *testing.T) {
 			err := tc.call(t, planted)
 			require.Error(t, err, "觸發條件應讓 handler 走 err 通道")
 
-			msg := err.Error()
-			assert.NotContains(t, msg, plantedDirMarker, "err 文字不可含植入的病患目錄段")
-			assert.NotContains(t, msg, planted, "err 文字不可含植入目錄的絕對路徑")
-			// 反向保險:確認這列觸發的真的是帶路徑的錯誤(否則上面兩條斷言恆真,失去守門作用)。
-			assert.Contains(t, msg, "<redacted-path>", "err 應帶 redact 標記")
+			requireNoDirLeak(t, err.Error(), planted)
 			assert.ErrorIs(t, err, tc.sentinel, "redact 後 errors.Is 仍須命中原 sentinel")
+		})
+	}
+}
+
+// TestRPCMessage_NoAbsolutePath 守 Message 通道出口:每個把可預期失敗包進 result
+// 字串欄位的 handler 各一列,植入病患目錄、觸發帶路徑的錯誤,斷言送進 webview 的
+// 字串不洩漏目錄段。
+//
+// 名單:AnalyzeCCI、AnalyzeNormalizedPhaseSync、LoadChartComposerSubjects、
+// GenerateChartComposer、AnalyzePhaseSync(分析分支)走 result.Message;
+// AnalyzeMuscleRatio 的逐 subject 失敗走 Subjects[i].Error(analyzer 回的字串,
+// 不經 Message)。
+func TestRPCMessage_NoAbsolutePath(t *testing.T) {
+	missingManifest := func(planted string) string {
+		return filepath.Join(planted, "missing_manifest.csv")
+	}
+
+	cases := []struct {
+		name string
+		call func(t *testing.T, planted string) string
+	}{
+		{
+			name: "AnalyzeCCI",
+			call: func(t *testing.T, planted string) string {
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzeCCI(CCIParams{
+					ManifestFile: missingManifest(planted),
+					DataFolder:   planted,
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+		},
+		{
+			name: "AnalyzeNormalizedPhaseSync",
+			call: func(t *testing.T, planted string) string {
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
+					ManifestFile:    missingManifest(planted),
+					DataFolder:      planted,
+					NormStartPhase:  "P0",
+					NormEndPhase:    "P2",
+					StatsStartPhase: "P0",
+					StatsEndPhase:   "P2",
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+		},
+		{
+			name: "LoadChartComposerSubjects",
+			call: func(t *testing.T, planted string) string {
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.LoadChartComposerSubjects(&LoadChartComposerSubjectsParams{
+					ManifestPath: missingManifest(planted),
+					DataFolder:   planted,
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+		},
+		{
+			name: "GenerateChartComposer",
+			call: func(t *testing.T, planted string) string {
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.GenerateChartComposer(&GenerateChartComposerParams{
+					ManifestPath: missingManifest(planted),
+					DataFolder:   planted,
+					Subject:      "S1",
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+		},
+		{
+			name: "AnalyzePhaseSync",
+			call: func(t *testing.T, planted string) string {
+				// 分析分支(validate 通過後)走 failed-result;validate 分支走 err 通道,
+				// 由 TestRPCErrChannel_NoAbsolutePath 守。
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzePhaseSync(PhaseSyncParams{
+					ManifestFile: missingManifest(planted),
+					DataFolder:   planted,
+					StartPhase:   "P0",
+					EndPhase:     "P2",
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+		},
+		{
+			name: "AnalyzeMuscleRatio_SubjectError",
+			call: func(t *testing.T, planted string) string {
+				// manifest 合法、EMG 檔不存在 → 該 subject 失敗,開檔錯誤帶完整 EMG 路徑。
+				manifestPath := filepath.Join(planted, "manifest.csv")
+				require.NoError(t, os.WriteFile(manifestPath, []byte(
+					"Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n"+
+						"S1,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,0.8",
+				), 0o600))
+
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzeMuscleRatio(MuscleRatioParams{
+					ManifestFile: manifestPath,
+					DataFolder:   planted,
+				})
+				require.NoError(t, err)
+				require.Len(t, result.Subjects, 1)
+				require.False(t, result.Subjects[0].Success)
+
+				return result.Subjects[0].Error
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			planted := plantDir(t)
+
+			requireNoDirLeak(t, tc.call(t, planted), planted)
 		})
 	}
 }

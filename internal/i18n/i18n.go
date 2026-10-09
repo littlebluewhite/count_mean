@@ -187,7 +187,6 @@ const (
 	KeyErrorMuscleRatioSubjectParseEMGFailed     = "error.muscle_ratio.subject.parse_emg_failed"
 	KeyErrorMuscleRatioSubjectWriteOutput1Failed = "error.muscle_ratio.subject.write_output1_failed"
 	KeyErrorMuscleRatioSubjectWriteOutput2Failed = "error.muscle_ratio.subject.write_output2_failed"
-	KeyErrorMuscleRatioHandlerAnalysisFailed     = "error.muscle_ratio.handler.analysis_failed"
 	KeyStatusMuscleRatioProcessedCount           = "status.muscle_ratio.processed_count"
 	KeyStatusMuscleRatioPartialWarning           = "status.muscle_ratio.partial_warning"
 
@@ -214,11 +213,33 @@ const (
 	KeyErrorCCIGaitStartBelowEMGMin    = "error.cci.gait_start_below_emg_min"
 	KeyErrorCCIGaitEndAboveEMGMax      = "error.cci.gait_end_above_emg_max"
 	KeyErrorCCIMissingSLAnchor         = "error.cci.missing_sl_anchor"
-	KeyErrorCCIOutputDirInvalid        = "error.cci.output_dir_invalid"
-	KeyErrorCCIMkdirFailed             = "error.cci.mkdir_failed"
 	KeyErrorCCIChannelLenMismatch      = "error.cci.channel_len_mismatch"
 	KeyErrorCCIMissingMuscleChannel    = "error.cci.missing_muscle_channel"
 	KeyErrorCCIRenderChartFailed       = "error.cci.render_chart_failed"
+
+	// GUI handler 失敗前綴 — gui.failMessage 的 key(ADR-0036 Webview envelope):
+	// handler 層 localize,analyzer 只回 error / sentinel。值只是前綴(無 verb、
+	// 無冒號),failMessage 接上 ": " + redact 後的 err 文字;多個 handler 的同義
+	// 步驟共用一個 key。
+	KeyErrorHandlerAnalysisFailed           = "error.handler.analysis_failed"
+	KeyErrorHandlerCSVExportFailed          = "error.handler.csv_export_failed"
+	KeyErrorHandlerChartRenderFailed        = "error.handler.chart_render_failed"
+	KeyErrorHandlerPhaseStatsExportFailed   = "error.handler.phase_stats_export_failed"
+	KeyErrorHandlerExportFailed             = "error.handler.export_failed"
+	KeyErrorHandlerLoadDataFailed           = "error.handler.load_data_failed"
+	KeyErrorHandlerNormRange                = "error.handler.norm_range"
+	KeyErrorHandlerStatsRange               = "error.handler.stats_range"
+	KeyErrorHandlerNormalizeFailed          = "error.handler.normalize_failed"
+	KeyErrorHandlerCancelled                = "error.handler.cancelled"
+	KeyErrorHandlerWriteNormalizedEMGFailed = "error.handler.write_normalized_emg_failed"
+	KeyErrorHandlerExtractStatsRangeFailed  = "error.handler.extract_stats_range_failed"
+	KeyErrorHandlerCalcStatsFailed          = "error.handler.calc_stats_failed"
+	KeyErrorHandlerWriteStatsFailed         = "error.handler.write_stats_failed"
+	KeyErrorHandlerLoadManifestFailed       = "error.handler.load_manifest_failed"
+	KeyErrorHandlerResolveEMGPathFailed     = "error.handler.resolve_emg_path_failed"
+	KeyErrorHandlerParseEMGFailed           = "error.handler.parse_emg_failed"
+	KeyErrorHandlerParseMotionFailed        = "error.handler.parse_motion_failed"
+	KeyErrorHandlerParseMuscleRatioFailed   = "error.handler.parse_muscle_ratio_failed"
 
 	// ConfigPanel — Phase 1 frontend i18n MVP keys (2026-05-14).
 	// 用於前端 frontend/src/main.js showConfigPanel() 字串 catalog 化。

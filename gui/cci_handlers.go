@@ -2,12 +2,11 @@ package gui
 
 import (
 	"bytes"
-	"fmt"
 	"path/filepath"
 
 	"count_mean/internal/cci"
+	"count_mean/internal/i18n"
 	"count_mean/internal/io"
-	"count_mean/internal/security/redact"
 	"count_mean/internal/validation/filename"
 )
 
@@ -65,24 +64,24 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 
 	// 1 validate
 	if vErr := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); vErr != nil {
-		return failedCCIResult(redact.RedactForMessage(vErr)), nil
+		return failedCCIResult(inputMessage(vErr)), nil
 	}
 	// 2 execute（domain analyzer）
 	analysisResult, aErr := a.cciAnalyzer.AnalyzeCCI(ctx, &cci.CCIParams{
 		ManifestFile: params.ManifestFile, DataFolder: params.DataFolder, SubjectIndex: params.SubjectIndex,
 	})
 	if aErr != nil {
-		return failedCCIResult(fmt.Sprintf("分析失敗: %s", redact.RedactForMessage(aErr))), nil
+		return failedCCIResult(a.failMessage(i18n.KeyErrorHandlerAnalysisFailed, aErr)), nil
 	}
 	// 3 Output 1
 	csvPath, e1 := s.csvHandler.WriteCCIResult(ctx, io.WriteRequest{}, analysisResult)
 	if e1 != nil {
-		return failedCCIResult(fmt.Sprintf("CSV 導出失敗: %s", redact.RedactForMessage(e1))), nil
+		return failedCCIResult(a.failMessage(i18n.KeyErrorHandlerCSVExportFailed, e1)), nil
 	}
 	// 4 chart
 	var buf bytes.Buffer
 	if cErr := cci.GenerateCCIInteractiveChart(ctx, analysisResult, &buf); cErr != nil {
-		return failedCCIResult(fmt.Sprintf("圖表生成失敗: %s", redact.RedactForMessage(cErr))), nil
+		return failedCCIResult(a.failMessage(i18n.KeyErrorHandlerChartRenderFailed, cErr)), nil
 	}
 	// 5 report + transform
 	pairNames := make([]string, len(analysisResult.PairResults))
@@ -93,7 +92,7 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 	// 6 Output 2
 	phasesPath, e2 := s.csvHandler.WriteCCIPhasesResult(ctx, io.WriteRequest{}, analysisResult)
 	if e2 != nil {
-		return failedCCIResult(fmt.Sprintf("分期統計導出失敗: %s", redact.RedactForMessage(e2))), nil
+		return failedCCIResult(a.failMessage(i18n.KeyErrorHandlerPhaseStatsExportFailed, e2)), nil
 	}
 
 	a.logger.Info("CCI 分析輸出", map[string]any{"csv": csvPath, "phases": phasesPath})

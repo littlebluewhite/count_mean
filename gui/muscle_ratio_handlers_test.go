@@ -31,22 +31,20 @@ func setupMuscleRatioTestApp(t *testing.T) *App {
 }
 
 // TestAnalyzeMuscleRatio_LocaleSwitchAffectsMessage 驗證 Phase 2 i18n 遷移：
-// handler L72 fail-path message 經 i18n.T(KeyErrorMuscleRatioHandlerAnalysisFailed)
+// handler analyze fail-path message 經 failMessage(KeyErrorHandlerAnalysisFailed)
 // 查表 — 不是 hard-code zh-TW。
 //
 // Phase 5 翻譯落地後升級：每個 locale 期望各自的 catalog 內容（distinct-output
 // assertion），這也順帶守門「locale 切換確實產生不同 message」— 防 catalog
 // 某 locale entry 不慎被改回 copy zh-TW 的 regression。
 func TestAnalyzeMuscleRatio_LocaleSwitchAffectsMessage(t *testing.T) {
-	require.NoError(t, i18n.InitI18n("./nonexistent"))
-
 	prevLocale := i18n.GetLocale()
 	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
 
 	app := setupMuscleRatioTestApp(t)
 
 	// Fail path: 不存在的 manifest → muscle_ratio.Analyze return err
-	// → handler L72 走 i18n.T(KeyErrorMuscleRatioHandlerAnalysisFailed, err)
+	// → handler 走 failMessage(KeyErrorHandlerAnalysisFailed, err)
 	params := MuscleRatioParams{
 		ManifestFile: filepath.Join(t.TempDir(), "nonexistent.csv"),
 		DataFolder:   t.TempDir(),
@@ -71,7 +69,7 @@ func TestAnalyzeMuscleRatio_LocaleSwitchAffectsMessage(t *testing.T) {
 			require.False(t, result.Success)
 
 			// i18n lookup path 命中：message 不是 key 本身（fallback 行為）
-			assert.NotEqual(t, i18n.KeyErrorMuscleRatioHandlerAnalysisFailed, result.Message,
+			assert.NotContains(t, result.Message, i18n.KeyErrorHandlerAnalysisFailed,
 				"locale %s: message 應從 catalog 查表，不應 fallback 到 key 本身", tc.locale)
 
 			// Phase 5 catalog 內容應為各 locale 翻譯

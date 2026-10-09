@@ -227,7 +227,6 @@ var muscleRatioKeys = []string{
 	KeyErrorMuscleRatioSubjectParseEMGFailed,
 	KeyErrorMuscleRatioSubjectWriteOutput1Failed,
 	KeyErrorMuscleRatioSubjectWriteOutput2Failed,
-	KeyErrorMuscleRatioHandlerAnalysisFailed,
 	KeyStatusMuscleRatioProcessedCount,
 	KeyStatusMuscleRatioPartialWarning,
 
@@ -259,7 +258,6 @@ func TestT_MuscleRatioKeysVerbCompat(t *testing.T) {
 		{"%v with error (subject.parse_emg_failed)", KeyErrorMuscleRatioSubjectParseEMGFailed, []any{innerErr}, "解析 EMG 檔案失敗:boom"},
 		{"%v with error (subject.write_output1_failed)", KeyErrorMuscleRatioSubjectWriteOutput1Failed, []any{innerErr}, "寫入 Output 1 失敗:boom"},
 		{"%v with error (subject.write_output2_failed)", KeyErrorMuscleRatioSubjectWriteOutput2Failed, []any{innerErr}, "寫入 Output 2 失敗（Output 1 已產出）:boom"},
-		{"%v with error (handler.analysis_failed)", KeyErrorMuscleRatioHandlerAnalysisFailed, []any{innerErr}, "分析失敗:boom"},
 		{"%d with int (status.processed_count)", KeyStatusMuscleRatioProcessedCount, []any{5}, "已處理 5 個主題"},
 	}
 
@@ -575,12 +573,13 @@ func TestI18n_MainJSDoesNotHardCodeOutputStatsLabel(t *testing.T) {
 // translationsDir 提供的 JSON 是舊版（缺新版加入的 key），LoadTranslations
 // 必須以「外部 JSON overlay 在 builtin 上」的方式合併，而非直接 replace。
 // 否則 i18n.T(key) 取不到 builtin fallback，會回 raw key（catalog 內部識別
-// 字會字面 render 到使用者面前），這正是 muscle_ratio handler L74 走到
-// i18n.T(KeyErrorMuscleRatioHandlerAnalysisFailed) 時遇到的破口。
+// 字會字面 render 到使用者面前），這正是 muscle_ratio handler 走到
+// i18n.T(error.muscle_ratio.handler.analysis_failed) 時遇到的破口(該 key 已由
+// ADR-0036 的 error.handler.analysis_failed 取代)。
 func TestI18n_LoadTranslations_OverlayMergesBuiltin(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// 舊版 zh-TW 外部 JSON：只含 app.title，缺 muscle_ratio.handler.* 等新 key。
+	// 舊版 zh-TW 外部 JSON：只含 app.title，缺 error.handler.* 等新 key。
 	partialJSON := `{"app.title": "舊版 EMG"}`
 	path := filepath.Join(tempDir, "zh-TW.json")
 	if err := os.WriteFile(path, []byte(partialJSON), fsperm.FilePerm); err != nil {
@@ -599,12 +598,13 @@ func TestI18n_LoadTranslations_OverlayMergesBuiltin(t *testing.T) {
 	}
 
 	// (b) 外部 JSON 缺的 key，T() 必須從 builtin 取得翻譯，不可回 raw key。
-	//     用 muscle_ratio.handler.analysis_failed 因為它是 CDX-1 issue 的真實受害者。
-	got := inst.T(KeyErrorMuscleRatioHandlerAnalysisFailed, errors.New("boom"))
-	if got == KeyErrorMuscleRatioHandlerAnalysisFailed {
+	//     用 handler.analysis_failed:CDX-1 issue 真實受害者(muscle_ratio handler 的
+	//     analysis_failed)的後繼 key。
+	got := inst.T(KeyErrorHandlerAnalysisFailed)
+	if got == KeyErrorHandlerAnalysisFailed {
 		t.Errorf("T() returned raw key — builtin overlay failed: got %q", got)
 	}
-	if strings.HasPrefix(got, "error.muscle_ratio") {
+	if strings.HasPrefix(got, "error.handler") {
 		t.Errorf("T() returned key-shaped string — builtin not merged: got %q", got)
 	}
 	// builtin zh-TW 翻譯應該包含「分析失敗」
@@ -705,7 +705,7 @@ func TestI18n_GlobalI18n_ConcurrentReadWrite_NoRace(t *testing.T) {
 				SetLocale(loc)
 				_ = GetLocale()
 				_ = T(KeyAppTitle)
-				_ = T(KeyErrorMuscleRatioHandlerAnalysisFailed, errors.New("boom"))
+				_ = T(KeyErrorMuscleRatioSubjectParseEMGFailed, errors.New("boom"))
 				_ = GetTranslationMap(loc)
 				_ = GetLocaleName(loc)
 			}

@@ -115,7 +115,8 @@ var ErrAppNotReady = errors.New("App 尚未完成啟動，請稍候再試")
 // path 換成 `<redacted-path>/`,errors.Is/As chain 不變(見 webviewErr)。
 // app_panic_ast_test.go 強制每個回 error 的 bound method 首句都是這個 defer,
 // 所以這裡是所有 Go err 進 webview 前的唯一出口,handler 不必各自 redact err
-// (result 的 Message 字串不經此處)。
+// (result 的 Message 字串不經此處,由 envelope.go 的 failMessage / inputMessage /
+// redactText 負責 —— 兩條通道合稱 [[Webview envelope]],見 ADR-0036)。
 //
 // # errPtr 設計意圖
 //
@@ -301,7 +302,7 @@ func logPanic(
 //
 // Thin wrapper over internal/security/redact:
 //   - 既有 recover_test.go 不必改 import 即可繼續綁契約
-//   - 新加入的 handler error redact 直接呼叫 redact.RedactForMessage,不繞 gui
+//   - handler 的 Message 文字由 envelope.go 的 helper redact,不繞此 wrapper
 //   - logger.sanitizeMessage 也能直接 import redact 而不會循環依賴(gui 已依賴
 //     logging,反向不行)
 //

@@ -1,13 +1,11 @@
 package gui
 
 import (
-	"fmt"
-
 	"count_mean/internal/calculator"
+	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
-	"count_mean/internal/security/redact"
 )
 
 // NormalizedPhaseSyncParams 標準化分期同步分析參數。
@@ -92,8 +90,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 	ctx := a.context()
 
 	if validationErr := validateNormalizedPhaseSyncParams(params); validationErr != nil {
-		// redact 對 path-free sentinel 不變,防未來帶路徑的 Validate error 洩漏 PHI。
-		return failedNormalizedPhaseSyncResult(redact.RedactForMessage(validationErr)), nil
+		return failedNormalizedPhaseSyncResult(inputMessage(validationErr)), nil
 	}
 
 	// 1. 載入 manifest 與 EMG（共用兩組區間的前置步驟）
@@ -107,22 +104,18 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 
 	loaded, loadErr := a.phaseSyncAnalyzer.Load(baseParams)
 	if loadErr != nil {
-		a.logger.Error("載入分期同步資料失敗", loadErr, map[string]any{})
-		// 同 CCI handler — error 字面可能含 absolute path,過 redact 才塞 message。
-		return failedNormalizedPhaseSyncResult(fmt.Sprintf("載入資料失敗: %s", redact.RedactForMessage(loadErr))), nil
+		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerLoadDataFailed, loadErr)), nil
 	}
 
 	// 2. 分別解析標準化視窗與統計視窗（兩組獨立、不互相驗證）
 	normRange, normRangeErr := a.phaseSyncAnalyzer.ResolvePhaseRange(loaded, params.NormStartPhase, params.NormEndPhase)
 	if normRangeErr != nil {
-		a.logger.Error("標準化區間解析失敗", normRangeErr, map[string]any{})
-		return failedNormalizedPhaseSyncResult(fmt.Sprintf("標準化區間: %s", redact.RedactForMessage(normRangeErr))), nil
+		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerNormRange, normRangeErr)), nil
 	}
 
 	statsRange, statsRangeErr := a.phaseSyncAnalyzer.ResolvePhaseRange(loaded, params.StatsStartPhase, params.StatsEndPhase)
 	if statsRangeErr != nil {
-		a.logger.Error("統計區間解析失敗", statsRangeErr, map[string]any{})
-		return failedNormalizedPhaseSyncResult(fmt.Sprintf("統計區間: %s", redact.RedactForMessage(statsRangeErr))), nil
+		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerStatsRange, statsRangeErr)), nil
 	}
 
 	// 3. 用 normRange 做標準化（除數來自此區間每條肌肉的最大值）
@@ -134,8 +127,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		normRange.EndTime,
 	)
 	if normErr != nil {
-		a.logger.Error("區間最大值標準化失敗", normErr, map[string]any{})
-		return failedNormalizedPhaseSyncResult(fmt.Sprintf("標準化失敗: %s", redact.RedactForMessage(normErr))), nil
+		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerNormalizeFailed, normErr)), nil
 	}
 
 	// 4. 撰寫 Output 1：標準化後的 EMG CSV
@@ -145,13 +137,12 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 	// 在重 IO step 之前檢查 ctx,讓 Shutdown 能及時 cancel(NormalizeByRangeMax
 	// 已跑完,寫檔即將開始 — 此處取消對使用者體驗最有感)。
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return failedNormalizedPhaseSyncResult(fmt.Sprintf("分析已取消: %s", redact.RedactForMessage(ctxErr))), nil
+		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerCancelled, ctxErr)), nil
 	}
 
 	normalizedEMGPath, csvWriteErr := s.csvHandler.WriteNormalizedPhaseSyncEMG(io.WriteRequest{}, normalizedData, loaded.Manifest.Subject)
 	if csvWriteErr != nil {
-		a.logger.Error("寫入標準化 EMG 失敗", csvWriteErr, map[string]any{})
-		return failedNormalizedPhaseSyncResult(fmt.Sprintf("寫入標準化 EMG 失敗: %s", redact.RedactForMessage(csvWriteErr))), nil
+		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerWriteNormalizedEMGFailed, csvWriteErr)), nil
 	}
 
 	// 5. 用 statsRange 擷取標準化後的資料 + 計算統計
@@ -161,8 +152,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		statsRange.EndTime,
 	)
 	if rangeErr != nil {
-		a.logger.Error("擷取標準化資料統計區間失敗", rangeErr, map[string]any{})
-		return failedNormalizedPhaseSyncResult(fmt.Sprintf("擷取統計區間失敗: %s", redact.RedactForMessage(rangeErr))), nil
+		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerExtractStatsRangeFailed, rangeErr)), nil
 	}
 
 	statsCalc := calculator.NewEMGStatisticsCalculator()
@@ -178,14 +168,13 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		},
 	)
 	if statsErr != nil {
-		a.logger.Error("計算標準化統計失敗", statsErr, map[string]any{})
-		return failedNormalizedPhaseSyncResult(fmt.Sprintf("計算統計失敗: %s", redact.RedactForMessage(statsErr))), nil
+		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerCalcStatsFailed, statsErr)), nil
 	}
 
 	// 6. 撰寫 Output 2：Subject-based atomic write;filename + 路徑守門由 CSVHandler 持有。
 	// 第二輪 ctx 檢查,寫檔前再給一次 cancel 機會。
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return failedNormalizedPhaseSyncResult(fmt.Sprintf("分析已取消: %s", redact.RedactForMessage(ctxErr))), nil
+		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerCancelled, ctxErr)), nil
 	}
 
 	phaseSyncCSVPath, statsWriteErr := s.csvHandler.WriteNormalizedPhaseSyncResult(
@@ -195,8 +184,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		// 對齊 CCI/muscle_ratio sibling:atomic 寫入失敗時不另記 path 欄位
 		// (writePhaseSyncAtomic 失敗回空 path);statsWriteErr 已 wrap「PhaseSync
 		// 輸出...」帶 context,redact 後進 result.Message。
-		a.logger.Error("寫入標準化統計 CSV 失敗", statsWriteErr, map[string]any{})
-		return failedNormalizedPhaseSyncResult(fmt.Sprintf("寫入統計失敗: %s", redact.RedactForMessage(statsWriteErr))), nil
+		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerWriteStatsFailed, statsWriteErr)), nil
 	}
 
 	a.logger.Info("標準化分期同步分析輸出", map[string]any{

@@ -14,8 +14,9 @@
 // internal/security/redact 作為 single source of truth:
 //
 //   - gui/recover.go::redactPathsInStack → 改成 thin wrapper 呼叫 redact.Paths()
-//   - gui/cci_handlers.go / muscle_ratio_handlers.go / normalized_phase_sync_handlers.go
-//     錯誤訊息塞給前端前先過 redact.RedactForMessage(err)
+//   - handler 錯誤訊息塞給前端前在 gui 的 Webview envelope(ADR-0036)出口 redact:
+//     Message 通道 gui/envelope.go(failMessage / inputMessage → RedactForMessage)、
+//     err 通道 gui/recover.go(recoverHandlerPanic → Paths)
 //   - internal/logging/logger.go::sanitizeMessage 加入 redact.PathPattern() / 直接調用 Paths()
 //
 // # 為什麼不直接 export pathRedactPattern

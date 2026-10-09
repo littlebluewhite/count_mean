@@ -136,19 +136,7 @@ func TestRecoverHandlerPanic_NoPIIInReturnedErr(t *testing.T) {
 			}
 
 			// returned err 不能含 absolute path PII。check 各平台典型 prefix。
-			leakyPrefixes := []string{
-				"/Users/",
-				"/home/",
-				`C:\Users\`,
-				"/var/folders",
-				"/private/",
-			}
-			for _, prefix := range leakyPrefixes {
-				if strings.Contains(err.Error(), prefix) {
-					t.Errorf("returned err leaks path prefix %q:\n%s",
-						prefix, err.Error())
-				}
-			}
+			requireNoDirLeak(t, err.Error(), "")
 
 			// 連 basename 都不該漏出去(caller 的 err 字面 = `... emg_raw.csv ...`
 			// 也是 user-controlled 字串,可能洩漏 patient ID 等命名線索)

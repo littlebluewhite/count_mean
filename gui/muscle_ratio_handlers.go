@@ -3,7 +3,6 @@ package gui
 import (
 	"count_mean/internal/i18n"
 	"count_mean/internal/muscle_ratio"
-	"count_mean/internal/security/redact"
 )
 
 // MuscleRatioParams 是肌肉比值分析的前端參數（兩步驟：選 manifest + 選資料夾）。
@@ -74,10 +73,9 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 	a.logger.Info("開始肌肉比值分析", nil)
 
 	// 1 validate:失敗回原 sentinel 文字(對齊 TestAnalyzeMuscleRatio_EmptyParamsUnifiedChannel
-	// 對 ErrNoManifestFile / ErrNoDataFolder.Error() 的字面期望)。redact 對 path-free
-	// sentinel 不變,防未來帶路徑的 validate error 洩漏 PHI。
+	// 對 ErrNoManifestFile / ErrNoDataFolder.Error() 的字面期望)。
 	if validateErr := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); validateErr != nil {
-		return failedMuscleRatioResult(redact.RedactForMessage(validateErr)), nil
+		return failedMuscleRatioResult(inputMessage(validateErr)), nil
 	}
 
 	// 2 analyze:batch unit-of-work,per-subject 兩個 CSV 由 muscle_ratio.Analyzer 內呼叫
@@ -92,15 +90,7 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 		CSVHandler:   s.csvHandler,
 	})
 	if analyzeErr != nil {
-		// error 字面可能含 absolute path(downstream parser 用 %w wrap),
-		// 前端 user-visible message 必須先過 redact 把 system-root prefix
-		// 砍掉,並走 i18n.T 取得 locale 化的「分析失敗」prefix(對齊
-		// TestAnalyzeMuscleRatio_LocaleSwitchAffectsMessage 對 zh-TW /
-		// zh-CN / en-US / ja-JP 各 locale 的 catalog 翻譯期望)。外層 redact.Paths
-		// 保留退役前「翻譯後訊息再過一次 RedactForMessage」的位元組行為。
-		return failedMuscleRatioResult(redact.Paths(
-			i18n.T(i18n.KeyErrorMuscleRatioHandlerAnalysisFailed, redact.RedactForMessage(analyzeErr)),
-		)), nil
+		return failedMuscleRatioResult(a.failMessage(i18n.KeyErrorHandlerAnalysisFailed, analyzeErr)), nil
 	}
 
 	a.logger.Info("肌肉比值分析完成", nil)
@@ -120,7 +110,7 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 			OutputAllPath:   sr.OutputAllPath,
 			OutputPhasePath: sr.OutputPhasePath,
 			Success:         sr.Success,
-			Error:           sr.Error,
+			Error:           redactText(sr.Error), // analyzer 的逐 subject 錯誤字串常帶 EMG 檔絕對路徑
 			DurationMs:      sr.DurationMs,
 		})
 	}
