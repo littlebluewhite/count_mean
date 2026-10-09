@@ -1,0 +1,199 @@
+package io
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/cci"
+	"count_mean/internal/config"
+	"count_mean/internal/models"
+)
+
+// placementCase 描述一個 Subject-based writer:在 subDir 下以 subject "subj_01" 寫出,
+// wantName 是逐字的輸出檔名(golden harness 比對的 byte-identity 契約,不可用實作自身算)。
+type placementCase struct {
+	name     string
+	wantName string
+	write    func(h *CSVHandler, subDir string) (string, error)
+}
+
+func placementCases() []placementCase {
+	stats := &models.EMGStatistics{
+		Subject:      "subj_01",
+		StartPhase:   models.PhaseP0,
+		EndPhase:     models.PhaseL,
+		StartTime:    0,
+		EndTime:      1,
+		ChannelNames: []string{"Ch1"},
+		ChannelMeans: map[string]float64{"Ch1": 1},
+		ChannelMaxes: map[string]float64{"Ch1": 2},
+	}
+	cciResult := &cci.CCIAnalysisResult{
+		Subject:       "subj_01",
+		GaitStartTime: 0,
+		GaitEndTime:   1,
+		TimeValues:    []float64{0, 0.5, 1},
+		PairResults:   []cci.CCIResult{{PairName: "P1", Values: []float64{0.1, 0.2, 0.3}}},
+		PhaseStats: []cci.CCIPhaseStatRow{
+			{Item: "IC", Metric: "mean", Values: []float64{1}},
+		},
+	}
+	emg := &models.PhaseSyncEMGData{
+		Time:     []float64{0, 0.001},
+		Channels: map[string][]float64{"MuscleA": {0.1, 0.2}},
+		Headers:  []string{"MuscleA"},
+	}
+	ctx := context.Background()
+
+	return []placementCase{
+		{
+			name: "PhaseSyncResult", wantName: "subj_01_P0-L_statistics.csv",
+			write: func(h *CSVHandler, sub string) (string, error) {
+				return h.WritePhaseSyncResult(WriteRequest{SubDir: sub}, stats)
+			},
+		},
+		{
+			name: "NormalizedPhaseSyncResult", wantName: "subj_01_normalized_norm-P0-L_stats-P0-L.csv",
+			write: func(h *CSVHandler, sub string) (string, error) {
+				return h.WriteNormalizedPhaseSyncResult(WriteRequest{SubDir: sub}, stats,
+					models.PhaseP0, models.PhaseL)
+			},
+		},
+		{
+			name: "NormalizedPhaseSyncEMG", wantName: "subj_01_normalized.csv",
+			write: func(h *CSVHandler, sub string) (string, error) {
+				return h.WriteNormalizedPhaseSyncEMG(WriteRequest{SubDir: sub}, emg, "subj_01")
+			},
+		},
+		{
+			name: "CCIResult", wantName: "subj_01_CCI_Rudolph.csv",
+			write: func(h *CSVHandler, sub string) (string, error) {
+				return h.WriteCCIResult(ctx, WriteRequest{SubDir: sub}, cciResult)
+			},
+		},
+		{
+			name: "CCIPhasesResult", wantName: "subj_01_CCI_Rudolph_phases.csv",
+			write: func(h *CSVHandler, sub string) (string, error) {
+				return h.WriteCCIPhasesResult(ctx, WriteRequest{SubDir: sub}, cciResult)
+			},
+		},
+		{
+			name: "MuscleRatioOutputAll", wantName: "subj_01_muscle_ratio.csv",
+			write: func(h *CSVHandler, sub string) (string, error) {
+				return h.WriteMuscleRatioOutputAll(WriteRequest{SubDir: sub}, MuscleRatioOutputAllPayload{
+					Subject: "subj_01", PairLabels: []string{"R1"},
+					Times: []float64{0, 1}, Ratios: [][]float64{{1, 2}},
+				})
+			},
+		},
+		{
+			name: "MuscleRatioOutputPhases", wantName: "subj_01_muscle_ratio_phases_avg11.csv",
+			write: func(h *CSVHandler, sub string) (string, error) {
+				return h.WriteMuscleRatioOutputPhases(WriteRequest{SubDir: sub}, MuscleRatioOutputPhasesPayload{
+					Subject: "subj_01", PairLabels: []string{"R1"},
+					Points: []MuscleRatioPhasePoint{{Name: "P0", Time: 0, Values: []float64{1}}},
+				})
+			},
+		},
+	}
+}
+
+// Subject-based writer 的 placement 契約(Subject output placement):
+// 檔名逐字、落在 OutputDir(/SubDir)內、逸出與敏感目錄被拒、不留 tmp、帶 BOM、回傳路徑存在。
+func TestSubjectWriters_Placement(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range placementCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("Filename", func(t *testing.T) {
+				t.Parallel()
+				h, dir := newFormatAwareTestHandler(t)
+				got, err := tc.write(h, "")
+				require.NoError(t, err)
+				require.Equal(t, filepath.Join(dir, tc.wantName), got)
+			})
+
+			t.Run("StaysInOutputDir", func(t *testing.T) {
+				t.Parallel()
+				h, dir := newFormatAwareTestHandler(t)
+				got, err := tc.write(h, "")
+				require.NoError(t, err)
+				require.Equal(t, dir, filepath.Dir(got))
+
+				got, err = tc.write(h, "sub")
+				require.NoError(t, err)
+				require.Equal(t, filepath.Join(dir, "sub"), filepath.Dir(got))
+			})
+
+			t.Run("SubDirEscapeRejected", func(t *testing.T) {
+				t.Parallel()
+				for _, sub := range []string{"../evil", "../../etc", "/etc"} {
+					h, dir := newFormatAwareTestHandler(t)
+					got, err := tc.write(h, sub)
+					require.Error(t, err, sub)
+					require.Empty(t, got, sub)
+					require.Contains(t, err.Error(), "輸出路徑", sub)
+
+					entries, readErr := os.ReadDir(dir)
+					require.NoError(t, readErr)
+					require.Empty(t, entries, "拒絕時 OutputDir 內不得有任何殘留: %s", sub)
+				}
+			})
+
+			t.Run("SensitiveOutputDirRejected", func(t *testing.T) {
+				t.Parallel()
+				if runtime.GOOS == "windows" {
+					t.Skip("敏感位置字面值以 POSIX 路徑表示")
+				}
+				cfg := config.DefaultConfig()
+				cfg.InputDir, cfg.OperateDir, cfg.OutputDir = "/etc", "/etc", "/etc"
+				h := NewCSVHandler(cfg)
+
+				got, err := tc.write(h, "")
+				require.Error(t, err)
+				require.Empty(t, got)
+				require.Contains(t, err.Error(), "輸出路徑無效")
+			})
+
+			t.Run("NoStrayTmp", func(t *testing.T) {
+				t.Parallel()
+				h, dir := newFormatAwareTestHandler(t)
+				_, err := tc.write(h, "")
+				require.NoError(t, err)
+
+				entries, readErr := os.ReadDir(dir)
+				require.NoError(t, readErr)
+				require.Len(t, entries, 1)
+				require.False(t, strings.Contains(entries[0].Name(), ".tmp"), entries[0].Name())
+			})
+
+			t.Run("BOM", func(t *testing.T) {
+				t.Parallel()
+				h, _ := newFormatAwareTestHandler(t)
+				got, err := tc.write(h, "")
+				require.NoError(t, err)
+
+				content, readErr := os.ReadFile(got) //nolint:gosec // t.TempDir 內的測試檔
+				require.NoError(t, readErr)
+				require.True(t, len(content) >= 3 &&
+					content[0] == 0xEF && content[1] == 0xBB && content[2] == 0xBF)
+			})
+
+			t.Run("ReturnedPathExists", func(t *testing.T) {
+				t.Parallel()
+				h, _ := newFormatAwareTestHandler(t)
+				got, err := tc.write(h, "sub")
+				require.NoError(t, err)
+				require.FileExists(t, got)
+			})
+		})
+	}
+}
