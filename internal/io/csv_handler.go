@@ -419,7 +419,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 	// 原本 os.OpenFile(sanitizedPath, WriteFlags) 是 lexical-only + O_NOFOLLOW
 	// 兩段式守門:
 	//   - sanitizedPath 只是字串清理,沒 EvalSymlinks resolve,parent component 是
-	//     symlink 時 lexical fsperm.IsWithin 通過,kernel 在 syscall 階段跟到底,
+	//     symlink 時 lexical 舊 isPathWithinBase(已併入 fsperm.IsWithin)通過,kernel 在 syscall 階段跟到底,
 	//     檔案落在 OutputDir 外。
 	//   - O_NOFOLLOW 只擋 leaf component 為 symlink 的 case,parent 為 symlink
 	//     完全不擋。

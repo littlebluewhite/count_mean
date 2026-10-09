@@ -273,7 +273,7 @@ func TestOpenAtomicWriteValidated_AcceptsInternalSymlinkParent(t *testing.T) {
 // TestOpenAtomicWriteValidated_RelativeTargetAbsoluteBase 釘住 codex review 抓到的
 // P1 regression:target 相對(預設 config OutputDir "./output" → safeJoinOutput 回
 // "output/...")而 basePaths 絕對(NewPathValidator 對每個 base 跑 filepath.Abs)時,
-// matchAnyBase 的 filepath.Rel(absBase, relTarget) 會報錯 → 誤判逸出 base →
+// resolvedParent 保持相對而無法對 abs base 錨定 → 誤判逸出 base →
 // ErrPathEscapesBase,開箱即用的相對輸出目錄下 PhaseSync/CCI/muscle_ratio 匯出全壞。
 // primitive 現在於入口先把 target/tmp 絕對化(filepath.Abs 對絕對路徑是 no-op)。
 // 非 parallel:t.Chdir 改 process CWD,讓相對 "output" 在 tmp 下解析。

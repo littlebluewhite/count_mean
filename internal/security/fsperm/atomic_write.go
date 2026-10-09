@@ -98,13 +98,12 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 		return nil, ErrBasePathsEmpty
 	}
 
-	// Normalize to absolute before boundary-matching. basePaths arrive already
-	// abs-ified (PathValidator.NewPathValidator runs filepath.Abs on each), but a
-	// relative targetPath — which the default config produces (OutputDir
-	// "./output" → safeJoinOutput returns "output/...") — would leave resolvedParent
-	// relative, and matchAnyBase's filepath.Rel(absBase, relTarget) then errors out
-	// and wrongly rejects the write with ErrPathEscapesBase. filepath.Abs is a
-	// no-op on an already-absolute path, so absolute callers are unaffected.
+	// Normalize to absolute first. basePaths arrive already abs-ified
+	// (PathValidator.NewPathValidator runs filepath.Abs on each), but a relative
+	// targetPath — which the default config produces (OutputDir "./output" →
+	// safeJoinOutput returns "output/...") — would leave resolvedParent relative,
+	// while the dirfd anchoring below (relParent, resolvedTmp/resolvedTarget) needs
+	// absolute paths. filepath.Abs is a no-op on an already-absolute path.
 	absTarget, absErr := filepath.Abs(targetPath)
 	if absErr != nil {
 		// 路徑值過 redact 再進 caller-facing 訊息,避免 PHI 絕對路徑洩漏進 webview。

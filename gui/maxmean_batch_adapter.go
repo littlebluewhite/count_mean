@@ -48,10 +48,15 @@ func (a *App) buildMaxMeanFileSource(s *appState, inputPath string) (maxmean.Fil
 		return &dirFileSource{csvHandler: s.csvHandler, dirName: inputPath}, filepath.Base(inputPath), nil
 	}
 
-	relPath, err := filepath.Rel(s.config.InputDir, inputPath)
-	if err != nil || !fsperm.IsWithin(s.config.InputDir, inputPath) {
+	if !fsperm.IsWithin(s.config.InputDir, inputPath) {
 		// 外部絕對路徑
 		return &externalFileSource{csvHandler: s.csvHandler, dirPath: inputPath}, filepath.Base(inputPath), nil
+	}
+
+	// IsWithin 為 true 蘊含 Rel 成功。
+	relPath, err := filepath.Rel(s.config.InputDir, inputPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("計算相對路徑失敗: %w", err)
 	}
 
 	// 絕對路徑但在 InputDir 下

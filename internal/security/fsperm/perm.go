@@ -82,6 +82,10 @@ func evalSymlinksWithFallbackDepth(path string, depth, maxDepth int, bounded boo
 //
 // 大小寫與 Windows drive/volume 處理完全沿用 filepath.Rel 在執行 OS 上的行為。
 func IsWithin(base, target string) bool {
+	// filepath.Rel 把 "" 當 "."(→ true);空路徑一律 fail-closed。
+	if base == "" || target == "" {
+		return false
+	}
 	rel, err := filepath.Rel(base, target)
 	if err != nil {
 		return false
@@ -99,8 +103,15 @@ func IsWithin(base, target string) bool {
 // 回傳解析後的 base,讓需要它的 caller(如 atomic write 的 dirfd anchor)不必再解析一次。
 // 任一路徑為空、無法絕對化或解析失敗 → ("", false)(fail-closed);ok 為 false 時
 // resolvedBase 一律為 ""。
+//
+// target 含 ".." element 一律 fail-closed:filepath.Abs 會先詞法 Clean,把
+// `base/link/../x` 折成 `base/x`,但 kernel 是先跟 link 再退上一層(實際落在 link 目標的
+// 上層),詞法折疊後再解析會誤判在內。呼叫端應傳已 Clean / 已解析的路徑。
 func IsWithinResolved(base, target string) (resolvedBase string, ok bool) {
 	if base == "" || target == "" {
+		return "", false
+	}
+	if hasDotDotElement(target) {
 		return "", false
 	}
 	absBase, err := filepath.Abs(base)
@@ -123,4 +134,10 @@ func IsWithinResolved(base, target string) (resolvedBase string, ok bool) {
 		return "", false
 	}
 	return resolvedBase, true
+}
+
+// hasDotDotElement 回報 path 是否含 ".." element(以 / 與 filepath.Separator 切分,
+// 不是子字串比對:`..foo`、`foo..bar` 不算)。
+func hasDotDotElement(path string) bool {
+	return strings.Contains("/"+filepath.ToSlash(path)+"/", "/../")
 }

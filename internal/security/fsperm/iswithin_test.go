@@ -44,6 +44,9 @@ func TestIsWithin(t *testing.T) {
 		{"abs target vs relative base", "rel", filepath.Join(base, "a.csv"), false},
 		{"relative both, child", "output", filepath.Join("output", "sub", "a.csv"), true},
 		{"relative both, escape", "output", filepath.Join("output", "..", "x"), false},
+		{"empty base fails closed", "", filepath.Join(base, "a.csv"), false},
+		{"empty target fails closed", base, "", false},
+		{"both empty fails closed", "", "", false},
 	}
 
 	for _, tc := range tests {
@@ -139,6 +142,27 @@ func TestIsWithinResolved(t *testing.T) {
 		got, ok := fsperm.IsWithinResolved(link, filepath.Join(realBase, "a.csv"))
 		if !ok || got != realBase {
 			t.Errorf("got (%q, %v), want (%q, true)", got, ok, realBase)
+		}
+	})
+
+	// kernel 先跟 symlink 再套 "..":base/link/../secret.csv 實際是 <outside>/secret.csv,
+	// 但 filepath.Abs 詞法 Clean 會把它折成 base/secret.csv。含 ".." element 的 target fail-closed。
+	t.Run("dotdot after symlink", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows symlink 需要 admin 權限")
+		}
+		deep := filepath.Join(outside, "deep")
+		if err := os.MkdirAll(deep, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(deep, filepath.Join(realBase, "dlink")); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(realBase, "dlink") + string(filepath.Separator) + ".." +
+			string(filepath.Separator) + "secret.csv"
+		if got, ok := fsperm.IsWithinResolved(realBase, target); ok || got != "" {
+			t.Errorf("got (%q, %v), want (\"\", false)", got, ok)
 		}
 	})
 

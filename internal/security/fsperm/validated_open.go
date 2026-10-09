@@ -46,6 +46,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"count_mean/internal/security/redact"
@@ -63,12 +64,11 @@ var ErrPathEscapesBase = errors.New("fsperm.OpenWriteValidated: 解析後路徑�
 // resolved path 落在至少一個 basePaths 之下。
 //
 // 流程：
+//  0. 相對 path 先接 cwd 絕對化(absolutizeKeepDotDot)
 //  1. EvalSymlinks(path) — fallback 到 EvalSymlinks(parent) + base name（path
 //     尚未存在的合理情境，如「即將建立的 .tmp 中介檔」）
-//  2. EvalSymlinks(basePath) for each basePath — 解析 basePath 本身的 symlink
-//     才能正確 Rel 比對（例 macOS /tmp → /private/tmp）
-//  3. filepath.Rel(resolvedBase, resolvedPath) — 不為 `..` 開頭即視為「在 base
-//     之下」；至少一個 basePath 命中即放行
+//  2. matchAnyBase — 對每個 basePath 以 IsWithinResolved 解析 base 本身的 symlink
+//     （例 macOS /tmp → /private/tmp）並比對；至少一個 basePath 命中即放行
 //  4. openValidated(resolvedPath, hitBase) — 平台 atomic open。詳見 validated_open_<os>.go
 //
 // 回傳：成功時 *os.File，caller 自行 Close。失敗時 nil + 包裝錯誤。
@@ -81,7 +81,12 @@ func OpenWriteValidated(path string, basePaths []string) (*os.File, error) {
 		return nil, ErrBasePathsEmpty
 	}
 
-	resolvedPath, err := EvalSymlinksWithFallback(path, 0)
+	absPath, err := absolutizeKeepDotDot(path)
+	if err != nil {
+		return nil, fmt.Errorf("fsperm.OpenWriteValidated: 無法絕對化路徑 %s: %w", redact.Paths(path), err)
+	}
+
+	resolvedPath, err := EvalSymlinksWithFallback(absPath, 0)
 	if err != nil {
 		// 路徑值過 redact 再進 caller-facing 訊息,避免 PHI 絕對路徑洩漏進 webview。
 		return nil, fmt.Errorf("fsperm.OpenWriteValidated: 無法解析路徑 %s: %w", redact.Paths(path), err)
@@ -98,6 +103,21 @@ func OpenWriteValidated(path string, basePaths []string) (*os.File, error) {
 		return nil, fmt.Errorf("fsperm.OpenWriteValidated: OpenFile failed: %w", err)
 	}
 	return f, nil
+}
+
+// absolutizeKeepDotDot 把相對 path 接在 cwd 之後,已是絕對則原樣回傳。刻意不 Clean
+// (filepath.Abs 會):`link/..` 須留給 EvalSymlinks 依 kernel 語義解析。
+// basePaths 皆已絕對化(NewPathValidator),相對 path(如預設 OutputDir "./output")
+// 若不先絕對化,Linux 的 filepath.Rel(hitBase, resolvedPath) 會失敗,各平台行為分歧。
+func absolutizeKeepDotDot(path string) (string, error) {
+	if path == "" || filepath.IsAbs(path) {
+		return path, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("os.Getwd: %w", err)
+	}
+	return cwd + string(filepath.Separator) + path, nil
 }
 
 // redactBasePaths 將 base path 清單逐一過 redact 後組成 caller-facing 顯示字串。
@@ -145,7 +165,12 @@ func OpenReadValidated(path string, basePaths []string) (*os.File, error) {
 		return nil, ErrBasePathsEmpty
 	}
 
-	resolvedPath, err := EvalSymlinksWithFallback(path, 0)
+	absPath, err := absolutizeKeepDotDot(path)
+	if err != nil {
+		return nil, fmt.Errorf("fsperm.OpenReadValidated: 無法絕對化路徑 %s: %w", redact.Paths(path), err)
+	}
+
+	resolvedPath, err := EvalSymlinksWithFallback(absPath, 0)
 	if err != nil {
 		// 路徑值過 redact 再進 caller-facing 訊息,避免 PHI 絕對路徑洩漏進 webview。
 		return nil, fmt.Errorf("fsperm.OpenReadValidated: 無法解析路徑 %s: %w", redact.Paths(path), err)
