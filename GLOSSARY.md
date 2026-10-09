@@ -48,7 +48,13 @@ _Avoid_: window max, rolling average, peak mean.
 CSVHandler 對外的一種寫入操作 —— caller 傳入 result struct（MaxMeanResult / EMGDataset / PhaseAnalysisResult）與 WriteRequest，CSVHandler 內部負責 row layout、precision、scaling、merging（多 phase 合一檔）與 sanitize 後寫檔。
 與 raw write 對比：raw write 只接受 `[][]string`；format-aware write 接受分析結果結構，CSVHandler 持有 row layout 的真相。
 **Filename ownership 隨 unit-of-work 形狀分**：Subject-based write（PhaseSync / NormalizedPhaseSync / CCI / MuscleRatioOutput*）由 CSVHandler 內部從 `result.Subject` + suffix convention 推導（`req.Filename` 被忽略）；File-based write（PhaseAnalysis / MaxMean / Normalized）由 caller 傳入 `req.Filename`。詳見 [[ADR-0004]]。**NormalizedPhaseSync 產兩個 Subject-based 輸出**（標準化 EMG 時序 + 統計），檔名皆由 CSVHandler 推導（見 [[ADR-0020]]）；與 File-based 的 plain **Normalized**（EMGDataset 標準化）是不同概念，勿混。
+**File-based write 回傳實際寫入的路徑**：經單一寫門 `writeFileOutput`（join → MkdirAll → WriteCSV），回傳值就是落檔位置；檔案路徑一律不 URL-decode（`%`、`+` 為字面字元，見 [[ADR-0039]]）。
 _Avoid_: structured write, typed write, formatted output.
+
+**User-picked CSV read**
+讀取使用者在 GUI 選取之 CSV 的唯一入口 `CSVHandler.ReadCSV`：base filename 驗證 → `ValidateExternalPath` → 以 `fsperm.ReadFlags` 開檔 → fstat（regular file、≤100MB）→ 解析 → 內容驗證。路徑不 URL-decode。見 [[ADR-0039]]。
+與 manifest-driven 的 lenient 讀取（`OpenLenientValidated`）不同：後者的檔名來自 manifest、相對於 baseFolder。
+_Avoid_: raw read, direct open.
 
 **WriteRequest**
 所有 format-aware write 共用的請求外殼，欄位有 Filename（檔名）、SubDir（可選的 OutputDir 子目錄，空字串 = 寫到 OutputDir 根）、Headers、Data（generic payload）。

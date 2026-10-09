@@ -3,14 +3,16 @@
 // are restricted to allowed directories.
 //
 // 本套件提供兩條路徑驗證 API，**選用規則見 lenient_path.go 開頭的 Decision matrix**：
-//   - PathValidator (此檔)：受控內部讀寫路徑（InputDir / OutputDir / 直接 user-input）
+//   - PathValidator (此檔)：strict file（ValidateFilePath，限 allow-list 內）/
+//     external file（ValidateExternalPath）/ external dir（ValidateExternalDir），見 ADR-0038
 //   - OpenLenientValidated (lenient_path.go)：manifest-driven user files（檔名可能含 BTS 字面 "%"）
+//
+// 路徑一律不做 URL-decode：`%`、`+` 皆為字面檔名字元（ADR-0039）。
 package security
 
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,14 +30,6 @@ var (
 	ErrSensitiveDirectory = errors.New("路徑指向系統敏感目錄")
 	ErrPathTooLong        = errors.New("路徑長度超過限制")
 	ErrFilenameTooLong    = errors.New("文件名長度超過限制")
-	// ErrPathSanitizationRequired is returned by SanitizePath when the input
-	// contains characters or patterns that would require rewriting (NUL byte,
-	// control chars, `../` traversal). Silent rewrite would let attackers
-	// craft inputs whose post-sanitize form passes downstream ValidateFilePath
-	// but resolves to a different file on disk; callers must retry with a
-	// clean filename or surface the rejection.
-	ErrPathSanitizationRequired = errors.New("路徑包含需淨化的字元，拒絕 silent 改寫")
-
 	// ErrPathContainsNUL is returned when the input contains a NUL byte
 	// (\x00). NUL is a classic file-path truncation vector on POSIX/Windows
 	// OS APIs — caller must never pass a NUL-containing path to OpenFile.
@@ -271,158 +265,10 @@ func HasTraversalElement(path string) bool {
 // 取 Ext 前先 TrimRight 把尾端空白與點剝掉:Excel 匯出 / Windows 拖拉常在檔名
 // 尾端留 trailing space 或 dot,這類檔名仍能 open,validator 不該誤判為非 CSV。
 //
-// 本函式只判斷副檔名類別,不負責 sanitize;caller 若要實際開檔請走
-// SanitizePath / PathValidator.GetSafePath。
+// 本函式只判斷副檔名類別,不負責路徑驗證;caller 若要實際開檔請先走
+// ValidateFilePath / ValidateExternalPath。
 func IsCSVFile(path string) bool {
 	return strings.ToLower(filepath.Ext(strings.TrimRight(path, " ."))) == ".csv"
-}
-
-// charReplacement is a deterministic (from, to) replacement entry used by
-// SanitizePath. Slice (not map) is required: Go map iteration is randomized,
-// which lets overlapping patterns (e.g. `....//foo.csv` matching both `../`
-// and `./`) produce different outputs across invocations. Determinism matters
-// for log/audit reproducibility and for callers that hash the sanitized output.
-type charReplacement struct {
-	From string
-	To   string
-}
-
-// dangerousReplacements lists the ordered sanitization replacements applied
-// by SanitizePath. Order is load-bearing:
-//  1. Path traversal patterns (`../`, `..\`) run first so they're removed
-//     before any sub-pattern (`./`, `.\`) can chew them apart and leave a
-//     stray `..` that would then corrupt a
-//     legitimate filename.
-//  2. Single-dot prefix patterns (`./`, `.\`) follow.
-//  3. Multi-separator normalization (`//`, `\\`) runs after traversal removal
-//     so collapsing slashes doesn't merge two unrelated path segments into a
-//     new `..` pattern.
-//  4. Control-character stripping runs last; replacement order among these
-//     is order-independent because none overlap.
-//
-//nolint:gochecknoglobals // intentional package-private constant table
-var dangerousReplacements = []charReplacement{
-	// Traversal patterns first (longer/more specific runs before subsets).
-	{From: "../", To: ""},  // 路徑遍歷
-	{From: "..\\", To: ""}, // Windows 路徑遍歷
-	{From: "./", To: ""},   // 當前目錄引用
-	{From: ".\\", To: ""},  // Windows 當前目錄引用
-	// Separator normalization after traversal removal.
-	{From: "//", To: "/"},    // 多重斜線規範化
-	{From: "\\\\", To: "\\"}, // 多重反斜線規範化
-	// Control characters (no overlap among themselves).
-	{From: "\x00", To: ""}, // Null bytes
-	{From: "\r", To: ""},   // Carriage return
-	{From: "\n", To: ""},   // Newline
-	{From: "\t", To: ""},   // Tab
-	{From: "\x0B", To: ""}, // Vertical tab
-	{From: "\x0C", To: ""}, // Form feed
-	{From: "\x1C", To: ""}, // File separator
-	{From: "\x1D", To: ""}, // Group separator
-	{From: "\x1E", To: ""}, // Record separator
-	{From: "\x1F", To: ""}, // Unit separator
-}
-
-// SanitizePath sanitizes a file path by detecting dangerous characters.
-//
-// Silent rewrite is NOT allowed: if input contains stripped characters or
-// matched traversal patterns, returns ErrPathSanitizationRequired (empty
-// string) — callers must retry with a clean filename or surface the
-// rejection. Silent rewrite is an attack vector (`...//etc/passwd` and
-// `report\x01..csv` post-sanitize forms could pass element-based traversal
-// checks but resolve to different files).
-//
-// dangerousReplacements is used as a detection table; clean inputs go through
-// filepath.Clean + ToSlash for normalization (separator collapsing is not a
-// security-relevant rewrite).
-func SanitizePath(path string) (string, error) {
-	if path == "" {
-		return "", nil
-	}
-
-	// URL 解碼防止編碼繞過。decode 後的殘留 `%` 不在此 layer 攔;
-	// 但 decode 失敗的 input 不允許
-	// 進入 sanitization 流程 — 那已是無法判讀的 bytes,reject 比 best-effort 安全。
-	decodedPath, err := url.QueryUnescape(path)
-	if err != nil {
-		return "", fmt.Errorf("%w: 路徑 URL-decode 失敗: %v", ErrPathSanitizationRequired, err)
-	}
-
-	// 偵測階段:任一 dangerousReplacements 命中即視為「需淨化」,直接 reject。
-	for _, rep := range dangerousReplacements {
-		if strings.Contains(decodedPath, rep.From) {
-			return "", fmt.Errorf("%w: 命中 dangerous pattern %q",
-				ErrPathSanitizationRequired, rep.From)
-		}
-	}
-
-	// 控制字元二次檢查 — dangerousReplacements 已涵蓋 \x00 / \r / \n / \t /
-	// \x0B / \x0C / \x1C-\x1F,但 U+007F-U+009F 區段歷史上是用「白名單字元」
-	// 過濾掉而非顯式拒絕。改為「發現任何非允許字元就 reject」與上一段守門一致。
-	for _, r := range decodedPath {
-		if (r >= 0x0020 && r <= 0x007E) || // ASCII 可見字符
-			(r >= nonASCIIVisible) || // 非 ASCII 但可見的字符
-			r == '/' || r == '\\' || r == '.' || r == '-' || r == '_' { // 路徑相關的特殊字符
-			continue
-		}
-		return "", fmt.Errorf("%w: 路徑含不允許的字元 U+%04X",
-			ErrPathSanitizationRequired, r)
-	}
-
-	// 走到這裡:input 已乾淨,只做 Clean + ToSlash 正規化(無 character drop)。
-	// HasTraversalElement 當守門 — element-based check 與 dangerous
-	// pattern detection 是互補的:前者擋 element 為 `..` 的 case;後者擋
-	// substring `../` / `..\` / 控制字元。dangerousReplacements 已含 `../` 與 `..\`,
-	// 所以走到此處不應有 element-`..` 出現,但留 defense-in-depth check。
-	finalPath := filepath.Clean(decodedPath)
-	if HasTraversalElement(finalPath) {
-		return "", fmt.Errorf("%w: Clean 後仍含 `..` element", ErrPathSanitizationRequired)
-	}
-
-	// 強制 forward-slash 輸出,讓 Windows 與 Unix 中間值一致。下游 caller 接
-	// filepath.Abs/Join 會再 normalize 成 OS native separator,end-to-end 行為不變。
-	return filepath.ToSlash(finalPath), nil
-}
-
-// GetSafePath returns a safe path within the allowed directories.
-func (pv *PathValidator) GetSafePath(basePath, filename string) (string, error) {
-	if err := pv.ValidateFilePath(basePath); err != nil {
-		return "", fmt.Errorf("基礎路徑無效: %w", err)
-	}
-
-	// 在清理之前檢查文件名是否包含路徑遍歷攻擊；改為 element-based 比對，
-	// 與 validatePathFormat 同步（substring `..` 會誤拒 `report..v2.csv` 等合法檔名）。
-	// 先 URL-decode 才比對：攻擊者常用 `..%2F..%2F` 繞過原始字串 check。
-	decodedFilename, decodeErr := url.QueryUnescape(filename)
-	if decodeErr != nil {
-		decodedFilename = filename
-	}
-
-	if HasTraversalElement(decodedFilename) {
-		return "", fmt.Errorf("%w: %s", ErrFilenameTraversal, filename)
-	}
-
-	// SanitizePath 失敗時 propagate 給 caller — invalid 是「沒料」,sanitize
-	// 失敗是「原料髒」,語意不同不該 fall back 到 ErrFilenameInvalid。
-	safeFilename, err := SanitizePath(filename)
-	if err != nil {
-		return "", fmt.Errorf("檔名 %q 淨化失敗: %w", filename, err)
-	}
-
-	// 檢查清理後的文件名是否為空或只包含無效字符
-	if safeFilename == "" || safeFilename == "." {
-		return "", fmt.Errorf("%w: %s", ErrFilenameInvalid, filename)
-	}
-
-	// Join paths safely
-	fullPath := filepath.Join(basePath, safeFilename)
-
-	// Validate the final path
-	if err := pv.ValidateFilePath(fullPath); err != nil {
-		return "", fmt.Errorf("最終路徑無效: %w", err)
-	}
-
-	return fullPath, nil
 }
 
 // performBasicSecurityChecks 執行基本安全檢查,適用於無白名單限制的情況。

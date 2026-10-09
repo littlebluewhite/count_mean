@@ -179,11 +179,7 @@ func parseCSVFloat(t *testing.T, s string) float64 {
 }
 
 // TestCalculateMaxMean_BTSPercentFile 釘住:BTS 匯出檔名含字面 `%`(`SF_8_BTS%_6.10.csv`)
-// 放在 InputDir 內時,讀取階段必須通過。先前 InputDir 內的檔走 strict 路徑,殘留 `%`
-// 被誤判為 URL-encoding 攻擊而在讀取階段拒讀。
-//
-// 輸出檔名由輸入檔名推導,寫入端的 `%` 處理屬 Task 14(單一寫入入口)範圍,
-// 因此這裡只斷言「不是讀取階段失敗」;寫入門改完後可收緊為完整成功。
+// 放在 InputDir 內時,讀取與寫入都必須成功 — 路徑一律不 URL-decode,輸出檔名保留字面 `%`。
 func TestCalculateMaxMean_BTSPercentFile(t *testing.T) {
 	inDir := t.TempDir()
 	cfg := config.DefaultConfig()
@@ -194,8 +190,9 @@ func TestCalculateMaxMean_BTSPercentFile(t *testing.T) {
 	csvPath := filepath.Join(inDir, "SF_8_BTS%_6.10.csv")
 	writeEMGCSVForMaxMean(t, csvPath, 50)
 
-	_, err := app.CalculateMaxMean(MaxMeanParams{InputPath: csvPath, WindowSize: 5})
-	if err != nil {
-		assert.NotContains(t, err.Error(), "讀取檔案失敗", "含 `%` 的檔名不得在讀取階段被拒")
-	}
+	result, err := app.CalculateMaxMean(MaxMeanParams{InputPath: csvPath, WindowSize: 5})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Contains(t, filepath.Base(result.OutputPath), "SF_8_BTS%_6.10", "輸出檔名須保留字面 `%`")
+	assert.FileExists(t, result.OutputPath)
 }

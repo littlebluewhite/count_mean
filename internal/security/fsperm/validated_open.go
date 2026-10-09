@@ -5,7 +5,7 @@
 // fsperm.WriteFlags / ReadFlags 在 Unix 帶 O_NOFOLLOW、在 Windows 不帶（標準
 // syscall 無等價 flag）。Windows 端的 symlink 防護完全依賴 caller-side
 // filepath.EvalSymlinks，但 repo 內 11+ 條 OpenFile callsite 多數沒這道前置
-// 守門，只有 ResolveLenientPath 與 PathValidator.GetSafePath 有做。
+// 守門，只有 ResolveLenientPath 與 PathValidator.ValidateExternalPath 有做。
 //
 // 本檔提供統一 wrapper：caller 一行 OpenWriteValidated(path, basePaths) 取代
 // 三步驟 EvalSymlinks → Rel-check → OpenFile，避免「caller 忘做、Windows 上

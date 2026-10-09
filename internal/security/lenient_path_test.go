@@ -14,7 +14,7 @@ import (
 )
 
 // TestResolveLenientPath_AcceptsLiteralPercent 釘住 codex review P1 (post-impl)：
-// BTS 匯出檔名常含字面 "%"，PathValidator.GetSafePath 會誤拒，本 lenient 版本必須接受。
+// BTS 匯出檔名常含字面 "%"，本 lenient 版本必須接受。
 func TestResolveLenientPath_AcceptsLiteralPercent(t *testing.T) {
 	base := t.TempDir()
 	got, err := resolveLenientPath(base, "SF_8_BTS%_6.10_BP30450_RMS0.5_0.49.csv")
@@ -212,7 +212,7 @@ func TestResolveLenientPath_RejectsWhitespace(t *testing.T) {
 }
 
 // TestResolveLenientPath_RejectsLongFilename 釘住 filename base > 255 字元被拒。
-// 與 PathValidator.GetSafePath:408 對齊 maxFilenameLength=255。
+// 與 PathValidator 的 maxFilenameLength=255 對齊。
 func TestResolveLenientPath_RejectsLongFilename(t *testing.T) {
 	base := t.TempDir()
 	longName := strings.Repeat("a", 256) + ".csv"
@@ -468,7 +468,7 @@ func TestResolveLenientPath_DepthLimitProtectsAgainstPathologicalDepth(t *testin
 }
 
 // TestResolveLenientPath_RejectsLongPath 釘住 joined path > 4096 字元被拒。
-// 與 PathValidator.GetSafePath:401 對齊 maxPathLength=4096。
+// 與 PathValidator 的 maxPathLength=4096 對齊。
 // 構造：base (~50 on macOS) + "a/" * 2048 + "a.csv" (~4101 chars) 使 joined > 4096，
 // 但每個 component 個別 < 255 不會觸發 filename cap、無 ".." 不會觸發 HasTraversalElement。
 func TestResolveLenientPath_RejectsLongPath(t *testing.T) {

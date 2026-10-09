@@ -16,7 +16,7 @@
 // package on Windows has no equivalent. Cross-platform callers must NOT
 // assume kernel-level symlink protection on Windows; pre-validate paths via
 // `filepath.EvalSymlinks` (already done in `security.ResolveLenientPath` /
-// `security.PathValidator.GetSafePath`) before reaching any fsperm OpenFile
+// `security.PathValidator.ValidateExternalPath`) before reaching any fsperm OpenFile
 // site. See `flags_windows.go` for the full Windows contract.
 package fsperm
 

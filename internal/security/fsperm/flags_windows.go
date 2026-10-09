@@ -18,7 +18,7 @@
 //   - Defense-in-depth on Windows happens at a layer above:
 //     callers MUST pre-validate paths via `filepath.EvalSymlinks` (already
 //     done in `internal/security/lenient_path.go:ResolveLenientPath` and
-//     `internal/security/pathvalidator.go:PathValidator.GetSafePath`) BEFORE
+//     `internal/security/pathvalidator.go:PathValidator.ValidateExternalPath`) BEFORE
 //     reaching the OpenFile site. The lexical path is rejected if it resolves
 //     outside the trusted base directory.
 //   - Windows-only attack surface is narrower: creating a reparse point /
@@ -32,8 +32,8 @@
 // Any code path that uses these flag constants on a user-supplied path MUST
 // have already run through either:
 //
-//   - `security.PathValidator.GetSafePath()` — strict input validation +
-//     symlink-aware boundary check; OR
+//   - `security.PathValidator.ValidateExternalPath()` — input validation +
+//     symlink-aware sensitive-location check; OR
 //   - `security.ResolveLenientPath()` — manifest-driven path, ditto check;
 //     OR
 //   - an explicit `filepath.EvalSymlinks()` step that confirms the final

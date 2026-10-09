@@ -43,7 +43,6 @@ type CSVHandler struct {
 	csvValidator      *csvvalidator.Validator
 	filenameValidator *filename.Validator
 	logger            *logging.Logger
-	pathBuilder       *FilePathBuilder
 	converter         *csvConverter
 }
 
@@ -65,7 +64,6 @@ func NewCSVHandler(cfg *config.AppConfig) *CSVHandler {
 		csvValidator:      csvvalidator.NewValidator(),
 		filenameValidator: filename.NewValidator(),
 		logger:            logging.GetLogger("csv_handler"),
-		pathBuilder:       NewFilePathBuilder(cfg, pathValidator),
 		converter:         newCSVConverter(scalingMultiplier, cfg.Precision),
 	}
 }
@@ -135,22 +133,10 @@ func (h *CSVHandler) ListCSVFilesInDirectory(dirName string) ([]string, error) {
 
 // ReadCSVFromDirectory 從指定目錄讀取CSV檔案.
 func (h *CSVHandler) ReadCSVFromDirectory(dirName, fileName string) ([][]string, error) {
-	fileName = h.pathBuilder.EnsureCSVExtension(fileName)
+	fileName = ensureCSVExtension(fileName)
 	fullPath := filepath.Join(h.config.InputDir, dirName, fileName)
 
 	return h.ReadCSV(fullPath)
-}
-
-// WriteCSVToOutputDirectory 寫入CSV文件到輸出目錄的子目錄.
-func (h *CSVHandler) WriteCSVToOutputDirectory(dirName, filename string, data [][]string) error {
-	outputDir := filepath.Join(h.config.OutputDir, dirName)
-	if err := os.MkdirAll(outputDir, fsperm.DirPerm); err != nil {
-		return fmt.Errorf("無法創建輸出目錄: %w", err)
-	}
-
-	fullPath := filepath.Join(outputDir, filename)
-
-	return h.WriteCSV(fullPath, data)
 }
 
 // isCSVFile checks if the file has a CSV extension.
@@ -355,20 +341,6 @@ func openFailure(err error) *errors.AppError {
 	return errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟檔案")
 }
 
-// WriteCSVToOutput 寫入CSV文件到輸出目錄.
-func (h *CSVHandler) WriteCSVToOutput(filename string, data [][]string) error {
-	if err := os.MkdirAll(h.config.OutputDir, fsperm.DirPerm); err != nil {
-		return fmt.Errorf("無法創建輸出目錄: %w", err)
-	}
-
-	fullPath, err := h.pathValidator.GetSafePath(h.config.OutputDir, filename)
-	if err != nil {
-		return fmt.Errorf("無法構建安全輸出路徑: %w", err)
-	}
-
-	return h.WriteCSV(fullPath, data)
-}
-
 // WriteCSV 寫入 CSV 檔案.
 //
 // 採用 named return 以便在 defer 中捕獲 file.Sync() / file.Close() 錯誤：
@@ -392,27 +364,24 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 		"bom_enabled": h.config.BOMEnabled,
 	})
 
-	sanitizedPath, sanitizeErr := security.SanitizePath(filename)
-	if sanitizeErr != nil {
-		h.logger.Error("寫入路徑淨化失敗", sanitizeErr, map[string]any{
-			"original_path": filename,
-		})
+	if err := h.filenameValidator.ValidateFilename(filepath.Base(filename)); err != nil {
+		h.logger.Error("檔案名稱驗證失敗", err, map[string]any{"filename": filename})
 
-		return fmt.Errorf("路徑驗證失敗: %w", sanitizeErr)
+		return fmt.Errorf("檔案名稱驗證失敗: %w", err)
 	}
-	if err := h.pathValidator.ValidateFilePath(sanitizedPath); err != nil {
+
+	if err := h.pathValidator.ValidateFilePath(filename); err != nil {
 		h.logger.Error("寫入路徑驗證失敗", err, map[string]any{
-			"original_path":  filename,
-			"sanitized_path": sanitizedPath,
+			"path": filename,
 		})
 
 		return fmt.Errorf("路徑驗證失敗: %w", err)
 	}
 
-	if !security.IsCSVFile(sanitizedPath) {
-		err := fmt.Errorf("檔案 '%s': %w", sanitizedPath, errInvalidCSVFile)
+	if !security.IsCSVFile(filename) {
+		err := fmt.Errorf("檔案 '%s': %w", filename, errInvalidCSVFile)
 		h.logger.Error("檔案格式驗證失敗", err, map[string]any{
-			"path": sanitizedPath,
+			"path": filename,
 		})
 
 		return err
@@ -427,30 +396,30 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 	// BOMEnabled=false 則 truncate 到 0 byte(完全空檔)。
 	// path 驗證必須先過,空 data 也不該被當成 path-validation bypass 的後門。
 	if len(data) == 0 {
-		return h.handleEmptyDataWrite(sanitizedPath, filename)
+		return h.handleEmptyDataWrite(filename)
 	}
 
-	// 原本 os.OpenFile(sanitizedPath, WriteFlags) 是 lexical-only + O_NOFOLLOW
+	// 原本 os.OpenFile(filename, WriteFlags) 是 lexical-only + O_NOFOLLOW
 	// 兩段式守門:
-	//   - sanitizedPath 只是字串清理,沒 EvalSymlinks resolve,parent component 是
+	//   - filename 只是字串,沒 EvalSymlinks resolve,parent component 是
 	//     symlink 時 lexical 舊 isPathWithinBase(已併入 fsperm.IsWithin)通過,kernel 在 syscall 階段跟到底,
 	//     檔案落在 OutputDir 外。
 	//   - O_NOFOLLOW 只擋 leaf component 為 symlink 的 case,parent 為 symlink
 	//     完全不擋。
 	//
-	// 改用 fsperm.OpenWriteValidated:內部會 EvalSymlinks resolve sanitizedPath 後
+	// 改用 fsperm.OpenWriteValidated:內部會 EvalSymlinks resolve filename 後
 	// 比對 GetAllowedBasePaths(),resolved path 落在 base 外直接 reject;同時
 	// Linux 用 openat2(RESOLVE_BENEATH)、Darwin 用 O_NOFOLLOW_ANY 取得 kernel-
 	// level atomic 保證。詳見 internal/security/fsperm/validated_open.go 註解。
 	//
 	// GetAllowedBasePaths 回傳 allow-list 副本(PathValidator 建構後不可變)。
-	file, err := fsperm.OpenWriteValidated(sanitizedPath, h.pathValidator.GetAllowedBasePaths())
+	file, err := fsperm.OpenWriteValidated(filename, h.pathValidator.GetAllowedBasePaths())
 	if err != nil {
 		h.logger.Error("無法建立輸出檔案", err, map[string]any{
-			"path": sanitizedPath,
+			"path": filename,
 		})
 
-		return fmt.Errorf("無法建立檔案 %s: %w", sanitizedPath, err)
+		return fmt.Errorf("無法建立檔案: %w", err)
 	}
 
 	// 兩段式收尾 — 先 Sync 再 Close。
@@ -482,7 +451,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 
 	if err := writeCSVPayload(file, data, h.config.BOMEnabled); err != nil {
 		h.logger.Error("CSV 資料寫入失敗", err, map[string]any{
-			"path":     sanitizedPath,
+			"path":     filename,
 			"filename": filename,
 		})
 
@@ -490,7 +459,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 	}
 
 	h.logger.Info("CSV 檔案寫入成功", map[string]any{
-		"path":      sanitizedPath,
+		"path":      filename,
 		"row_count": len(data),
 		"bom_used":  h.config.BOMEnabled,
 	})
@@ -503,21 +472,21 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 //   - target 已存在:用 fsperm.OpenWriteValidated 重開檔(O_TRUNC),寫入空內容
 //     (BOMEnabled → BOM-only 維持 CSV 語意 hint;else → 0 byte)。
 //
-// caller (WriteCSV) 已完成 SanitizePath / ValidateFilePath / IsCSVFile 三段守門,
+// caller (WriteCSV) 已完成 ValidateFilename / ValidateFilePath / IsCSVFile 三段守門,
 // 此 helper 不重覆驗證以避免 lexical/resolved 兩條路徑不一致;但仍走 fsperm
 // safe-open(保留 symlink / parent-symlink 攻擊面的 kernel-level reject)。
-func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string) (err error) {
-	if _, statErr := os.Stat(sanitizedPath); statErr != nil {
+func (h *CSVHandler) handleEmptyDataWrite(filename string) (err error) {
+	if _, statErr := os.Stat(filename); statErr != nil {
 		if os.IsNotExist(statErr) {
 			h.logger.Warn("WriteCSV 收到空 data，目標不存在,跳過建檔", map[string]any{
-				"filename": originalFilename,
+				"filename": filename,
 			})
 			return nil
 		}
 		// 其他 stat 錯誤(permission denied、I/O error 等)— 不該當成 not-exist
 		// 處理(會 silently skip truncate),回傳錯誤讓 caller 知道。
 		h.logger.Error("WriteCSV 空 data 路徑探測失敗", statErr, map[string]any{
-			"path": sanitizedPath,
+			"path": filename,
 		})
 		return fmt.Errorf("空 data 探測目標檔案失敗: %w", statErr)
 	}
@@ -525,12 +494,12 @@ func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string
 	// target 已存在 — 必須 truncate stale 內容,不能讓 caller 以為「寫了空結果」
 	// 但磁碟仍是舊資料。fsperm.OpenWriteValidated 內含 O_TRUNC(WriteFlags),
 	// 重新 open 等同 truncate。
-	file, err := fsperm.OpenWriteValidated(sanitizedPath, h.pathValidator.GetAllowedBasePaths())
+	file, err := fsperm.OpenWriteValidated(filename, h.pathValidator.GetAllowedBasePaths())
 	if err != nil {
 		h.logger.Error("無法 truncate stale 檔案", err, map[string]any{
-			"path": sanitizedPath,
+			"path": filename,
 		})
-		return fmt.Errorf("無法 truncate %s: %w", sanitizedPath, err)
+		return fmt.Errorf("無法 truncate %s: %w", filename, err)
 	}
 
 	// 兩段式收尾(同 WriteCSV main path):先 Sync 再 Close。
@@ -541,7 +510,7 @@ func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string
 				"error": syncErr.Error(),
 			})
 			if err == nil {
-				err = fmt.Errorf("fsync truncated 檔案 %s 失敗: %w", originalFilename, syncErr)
+				err = fmt.Errorf("fsync truncated 檔案 %s 失敗: %w", filename, syncErr)
 			}
 		}
 		if closeErr := file.Close(); closeErr != nil {
@@ -550,7 +519,7 @@ func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string
 				"error": closeErr.Error(),
 			})
 			if err == nil {
-				err = fmt.Errorf("關閉 truncated 檔案 %s 失敗: %w", originalFilename, closeErr)
+				err = fmt.Errorf("關閉 truncated 檔案 %s 失敗: %w", filename, closeErr)
 			}
 		}
 	}()
@@ -563,7 +532,7 @@ func (h *CSVHandler) handleEmptyDataWrite(sanitizedPath, originalFilename string
 	// BOMEnabled=false 時不寫任何 byte,truncate 後檔案長度為 0。
 
 	h.logger.Info("WriteCSV 空 data + 既有目標檔案: 已 truncate", map[string]any{
-		"path":     sanitizedPath,
+		"path":     filename,
 		"bom_used": h.config.BOMEnabled,
 	})
 
@@ -625,8 +594,9 @@ var errEmptyPhaseSyncEMGData = stderrors.New("EMG 數據為空")
 // Filename 是 CSV 檔名;SubDir 為空時直接寫到 OutputDir 根,非空時自動
 // MkdirAll(OutputDir/SubDir) 後寫到該子目錄。
 //
-// 此 struct 取代 caller 端在「WriteCSVToOutput vs WriteCSVToOutputDirectory」
-// 與「Convert* + WriteCSV*」兩條選擇上的 ad-hoc 拼接 — caller 一次描述「寫哪裡」即可。
+// 此 struct 取代 caller 端在「寫到 OutputDir 根 vs 子目錄」與「Convert* + WriteCSV*」
+// 兩條選擇上的 ad-hoc 拼接 — caller 一次描述「寫哪裡」即可;file-based writer 一律經
+// writeFileOutput 落檔並回傳實際寫入的路徑。
 type WriteRequest struct {
 	Filename string
 	SubDir   string
@@ -647,11 +617,7 @@ func (h *CSVHandler) WriteMaxMean(
 ) (string, error) {
 	data := h.converter.ConvertMaxMeanResults(headers, results, startRange, endRange)
 
-	if err := h.writeToTarget(req, data); err != nil {
-		return "", err
-	}
-
-	return filepath.Join(h.config.OutputDir, req.SubDir, req.Filename), nil
+	return h.writeFileOutput(req, data)
 }
 
 // WriteNormalized 把標準化後的 EMGDataset 寫成 CSV (1 header + N data rows)。
@@ -661,11 +627,7 @@ func (h *CSVHandler) WriteMaxMean(
 func (h *CSVHandler) WriteNormalized(req WriteRequest, dataset *models.EMGDataset) (string, error) {
 	data := h.converter.ConvertNormalizedData(dataset)
 
-	if err := h.writeToTarget(req, data); err != nil {
-		return "", err
-	}
-
-	return filepath.Join(h.config.OutputDir, req.SubDir, req.Filename), nil
+	return h.writeFileOutput(req, data)
 }
 
 // WritePhaseAnalysis 把 phase 分析結果寫成 CSV;支援單 phase 與多 phase merge。
@@ -714,22 +676,28 @@ func (h *CSVHandler) WritePhaseAnalysis(
 		}
 	}
 
-	if err := h.writeToTarget(req, data); err != nil {
+	return h.writeFileOutput(req, data)
+}
+
+// writeFileOutput 是 File-based write 的單一寫門:join(OutputDir/SubDir/Filename,
+// 含 containment 檢查)→ MkdirAll → WriteCSV。回傳「實際寫入的路徑」,caller 不得自行重組。
+//
+// 路徑不做 URL-decode:`%`、`+` 皆為字面檔名字元([[File-based write]])。
+func (h *CSVHandler) writeFileOutput(req WriteRequest, data [][]string) (string, error) {
+	path, err := h.safeJoinOutput(req.SubDir, req.Filename)
+	if err != nil {
+		return "", fmt.Errorf("輸出路徑無效: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), fsperm.DirPerm); err != nil {
+		return "", fmt.Errorf("無法創建輸出目錄: %w", err)
+	}
+
+	if err := h.WriteCSV(path, data); err != nil {
 		return "", err
 	}
 
-	return filepath.Join(h.config.OutputDir, req.SubDir, req.Filename), nil
-}
-
-// writeToTarget 是 format-aware write 的內部 dispatch 點:依 req.SubDir 走 WriteCSVToOutput
-// 或 WriteCSVToOutputDirectory,確保 path validation / BOM / sanitize / fsync 路徑沿用
-// WriteCSV 既有守門。
-func (h *CSVHandler) writeToTarget(req WriteRequest, data [][]string) error {
-	if req.SubDir != "" {
-		return h.WriteCSVToOutputDirectory(req.SubDir, req.Filename, data)
-	}
-
-	return h.WriteCSVToOutput(req.Filename, data)
+	return path, nil
 }
 
 // phaseSyncAtomicWrite 是所有 PhaseSync / normalized-EMG 原子寫檔的共用 seam:
@@ -1134,11 +1102,9 @@ func (h *CSVHandler) validateMuscleRatioOutputDir(subDir string) error {
 // safeJoinOutput 把 subDir + filename 安全 join 在 OutputDir 之下,拒絕逸出 OutputDir
 // 的 SubDir(含 traversal 如 "../evil" 或絕對路徑如 "/etc")。
 //
-// ADR-0001 invariant 補課:既有 writeToTarget → WriteCSVToOutputDirectory → WriteCSV
-// 路徑透過 WriteCSV 內部 path containment 守住 OutputDir 邊界;新加的 direct
-// csvutil.WriteCSVAtomic writer(WriteCCIResult / WriteMuscleRatioOutput*)沒走
-// WriteCSV,本 helper 把同款邊界檢查補回來,確保 codex review 抓到的 SubDir traversal
-// 不會把 *.csv 寫到 OutputDir 外面。
+// ADR-0001 invariant:writeFileOutput 與直接走 csvutil.WriteCSVAtomic 的 writer
+// (WriteCCIResult / WriteMuscleRatioOutput*)共用本 helper 守住 OutputDir 邊界,
+// 確保 SubDir traversal 不會把 *.csv 寫到 OutputDir 外面。
 func (h *CSVHandler) safeJoinOutput(subDir, filename string) (string, error) {
 	joined := filepath.Join(h.config.OutputDir, subDir, filename)
 	if !fsperm.IsWithin(h.config.OutputDir, joined) {

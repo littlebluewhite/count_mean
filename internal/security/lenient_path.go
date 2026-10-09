@@ -25,24 +25,26 @@ import (
 //	| manifest-driven user files、檔名可能含 vendor encoding     | security.OpenLenientValidated     |
 //	| （例：BTS EMG 匯出 "SF_8_BTS%_*.csv"，字面 "%" 屬正常）    | （經此 helper）                  |
 //	|                                                           |                                   |
-//	| internal / config / 直接 user-input 的 path               | security.PathValidator.GetSafePath|
-//	| （受控路徑，URL-decode 後殘留 "%" 視為可疑）              | （pathvalidator.go）              |
+//	| 受控內部讀寫路徑（allow-list 內的檔案）                    | PathValidator.ValidateFilePath    |
+//	|                                                           | （pathvalidator.go）              |
 //	|                                                           |                                   |
-//	| Output 目錄、批次寫檔目標                                  | security.PathValidator.NewPathValidator + ValidateExternalPath |
-//	| （防 traversal + 系統敏感目錄 prefix）                    |                                   |
+//	| 使用者選取的檔案（GUI file dialog，如 ReadCSV）            | PathValidator.ValidateExternalPath|
+//	| （防 traversal + 系統敏感位置，不限 allow-list）          |                                   |
+//	|                                                           |                                   |
+//	| Output / data 目錄                                        | PathValidator.ValidateExternalDir |
+//	| （目錄語意：只擋系統敏感位置與路徑長度）                  |                                   |
 //
 // 跨平台 trust assumption：兩者皆要求 baseFolder / allowedBasePaths 為 user-selected 可信路徑。
 //
-// # 與 PathValidator.GetSafePath 的取捨
+// # 與 PathValidator 的關係
 //
-//   - PathValidator (pathvalidator.go:144 附近) 對 URL-decode 後仍含 literal "%" 的 path
-//     一律拒絕，視為「無法完全 decode 的可疑 input」（Wave 7 anti-bypass design）。對 user-input
-//     path 是合理的；但對「manifest CSV 指定 EMG 檔名」這條 path，BTS 匯出檔常包含字面 "%"
-//     （例 "SF_8_BTS%_6.10_BP30450_RMS0.5_0.49.csv"），用 GetSafePath 會把整批 subject 都
-//     誤判為「URL-encoded 殘留」並拒絕，導致 muscle ratio / CCI 對標準資料完全跑不動。
+//   - PathValidator 不做 URL-decode（ADR-0039），字面 "%" 本來就通過；本函式與它的差異在
+//     「manifest 檔名可為相對路徑、含子目錄」且結果必須落在 baseFolder 內（fused door，
+//     validate 與 open 同一步）。
 //
-//   - 本函式保留 PathValidator 的核心防護（".." element / 絕對路徑 / 結果落在 baseFolder 外）
-//     但接受字面 "%"。CCI 與 muscle_ratio 兩個 analyzer 經 OpenLenientValidated 走到這裡。
+//   - 本函式保留核心防護（".." element / 絕對路徑 / 結果落在 baseFolder 外），並接受字面
+//     "%"（例 "SF_8_BTS%_6.10_BP30450_RMS0.5_0.49.csv"）。CCI 與 muscle_ratio 兩個 analyzer
+//     經 OpenLenientValidated 走到這裡。
 //
 // **Threat model**：caller 已確認 baseFolder 是 user-selected directory（可信），filename 來自
 // manifest CSV（半可信，可能含 BTS 的奇怪檔名但不應有 ".."）。本函式不檢查 baseFolder 本身是否
@@ -88,7 +90,7 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 		return "", fmt.Errorf("檔名無效（空 / 純 whitespace / dot-only）: %q", filename)
 	}
 
-	// 長度上限：Wave 7 (PathValidator.GetSafePath) 對 absPath/filename 已有 4096/255 守門；
+	// 長度上限：strict 路徑（PathValidator）對 absPath/filename 有 4096/255 守門；
 	// lenient 路徑取代後曾遺失此防護，回補。
 	if base := filepath.Base(cleaned); len(base) > maxFilenameLength {
 		return "", fmt.Errorf("檔名過長（> %d）: %d 字元", maxFilenameLength, len(base))
@@ -171,7 +173,7 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 // # 字面 "%" 不可 regress
 //
 // BTS EMG 匯出檔名常含字面 "%"（例 "SF_8_BTS%_*.csv"）。resolveLenientPath 刻意接受
-// "%"（與 PathValidator.GetSafePath 不同），fsperm.OpenReadValidated 亦不做 URL-decode、
+// "%"，fsperm.OpenReadValidated 亦不做 URL-decode、
 // 把 "%" 當普通 path byte，故端到端接受字面 "%"。
 //
 // # baseFolder 傳法
