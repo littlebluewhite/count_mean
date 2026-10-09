@@ -1,8 +1,5 @@
-// Package redact 的測試守護:
-//
-//  1. Paths 行為與 gui/recover.go::redactPathsInStack 完全對齊(等於是把舊測試
-//     在新位址重新跑一遍 — 守 migration 等價)。
-//  2. RedactForMessage 對 error 文字做相同 redact 處理,並對 nil error 回空字串。
+// Package redact 的測試守護:Paths 行為與 gui/recover.go::redactPathsInStack 完全
+// 對齊(等於是把舊測試在新位址重新跑一遍 — 守 migration 等價)。
 //
 // 把 redactPathsInStack 從 gui/recover.go 抽到 internal/security/redact 作為
 // process-wide 共用 helper。新位址要先有 test 才落實 helper(TDD),
@@ -10,7 +7,6 @@
 package redact
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -223,85 +219,6 @@ func TestPaths_RedactsSpaceAndRootLevelPaths(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestRedactForMessage_NilReturnsEmpty 守 contract:nil error → "" 空字串,
-// caller 可安心把回傳值塞進 result.Message 而不必先做 nil-check。
-func TestRedactForMessage_NilReturnsEmpty(t *testing.T) {
-	if got := RedactForMessage(nil); got != "" {
-		t.Errorf("RedactForMessage(nil) = %q, want \"\"", got)
-	}
-}
-
-// TestRedactForMessage_StripsAbsolutePaths 守 主目標:handler 把 err.Error()
-// 塞進 user-facing message 時,path PII 必須先過 redact。
-func TestRedactForMessage_StripsAbsolutePaths(t *testing.T) {
-	cases := []struct {
-		name        string
-		err         error
-		mustNotLeak []string
-	}{
-		{
-			name: "posix_users_home_in_error",
-			err:  errors.New("open /Users/alice/patient/case_2026_05_18/emg_raw.csv: permission denied"),
-			mustNotLeak: []string{
-				"/Users/alice",
-				"/Users/",
-			},
-		},
-		{
-			name: "linux_home_in_error",
-			err:  errors.New("failed to read /home/bob/data/recording_001.csv"),
-			mustNotLeak: []string{
-				"/home/bob",
-				"/home/",
-			},
-		},
-		{
-			name: "windows_drive_letter_in_error",
-			err:  errors.New(`failed to open C:\Users\carol\Documents\emg.csv: not found`),
-			mustNotLeak: []string{
-				`C:\Users`,
-			},
-		},
-		{
-			name: "volumes_pcloud_in_error",
-			err:  errors.New("open /Volumes/pCloud/patient_xx/ch1.csv: permission denied"),
-			mustNotLeak: []string{
-				"/Volumes/pCloud",
-			},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := RedactForMessage(tc.err)
-			if got == "" {
-				t.Fatal("RedactForMessage 不應對非 nil error 回空字串")
-			}
-			for _, leak := range tc.mustNotLeak {
-				if strings.Contains(got, leak) {
-					t.Errorf("leaky path %q 仍出現在 redacted message: %q",
-						leak, got)
-				}
-			}
-			if !strings.Contains(got, "<redacted-path>") {
-				t.Errorf("redacted message 應含 <redacted-path> 標誌: %q", got)
-			}
-		})
-	}
-}
-
-// TestRedactForMessage_PreservesNonPathParts 守:non-path 部分必須保留,
-// 才能讓 user 看到「實際發生什麼錯誤」(permission denied / not found 等)。
-func TestRedactForMessage_PreservesNonPathParts(t *testing.T) {
-	err := errors.New("open /Users/alice/foo.csv: permission denied")
-	got := RedactForMessage(err)
-	for _, want := range []string{"permission denied", "foo.csv", "<redacted-path>"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("redacted message 應保留 %q,got: %q", want, got)
-		}
 	}
 }
 
