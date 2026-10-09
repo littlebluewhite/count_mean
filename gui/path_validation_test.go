@@ -39,7 +39,6 @@ func setupHandlerTestApp(t *testing.T) *App {
 
 // traversalPaths 列出 應該被 boundary 擋下的攻擊樣本。涵蓋：
 //   - 顯式 ".." element（最常見的 traversal）
-//   - URL-encoded 變形（".%2E/" 等，PathValidator 會 decode 後再 check）
 //   - 系統敏感目錄（/etc, /root, C:\Windows）
 //
 // 不放 "/etc/passwd" raw 字串本身——performBasicSecurityChecks 比對 substring，
@@ -56,7 +55,6 @@ func traversalPaths() []struct {
 		{"deep_relative_traversal", "../../../etc/shadow"},
 		{"absolute_etc", "/etc/passwd"},
 		{"absolute_root", "/root/.ssh/id_rsa"},
-		{"url_encoded_traversal", "..%2Fetc%2Fpasswd"},
 	}
 }
 

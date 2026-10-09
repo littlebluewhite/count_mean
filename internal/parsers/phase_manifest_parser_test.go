@@ -889,7 +889,7 @@ Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,150,6
 // ParseFile 過去直接 csv.NewReader(file) — 不包 bufio + 不剝 BOM。Excel 匯出的
 // UTF-8 manifest CSV 帶 0xEF 0xBB 0xBF 前綴時,records[1][0] 會帶 U+FEFF,
 // Subject 比對失敗(整個 LoadManifestSubjects 流程因為「找不到 subject」中斷)。
-// 修法:bufio.NewReaderSize + csvutil.PeekBOM,對稱於 csv_handler.go / large_file_handler.go。
+// 修法:bufio.NewReaderSize + csvutil.PeekBOM,對稱於 csv_handler.go。
 func TestPhaseManifestParser_ParseFile_StripsBOM(t *testing.T) {
 	parser := NewPhaseManifestParser()
 
@@ -915,9 +915,9 @@ func TestPhaseManifestParser_ParseFile_StripsBOM(t *testing.T) {
 // 升級的核心契約 — 新增第 16 欄 MuscleRatioFile（filename only、相對 DataFolder、可空）
 // 必須對既有 V.10 / V.13 manifest（15 欄）保持 happy path:
 //
-//	1) V.10 fixture（15 欄,header 不含 MuscleRatioFile）→ 解析成功,MuscleRatioFile == ""
-//	2) V.14 fixture（16 欄,header 含 MuscleRatioFile）  → 解析成功,MuscleRatioFile == "muscle_ratio_subject1.csv"
-//	3) V.14 fixture with empty MuscleRatioFile（16 欄但第 16 欄為空字串）→ MuscleRatioFile == ""
+//  1. V.10 fixture（15 欄,header 不含 MuscleRatioFile）→ 解析成功,MuscleRatioFile == ""
+//  2. V.14 fixture（16 欄,header 含 MuscleRatioFile）  → 解析成功,MuscleRatioFile == "muscle_ratio_subject1.csv"
+//  3. V.14 fixture with empty MuscleRatioFile（16 欄但第 16 欄為空字串）→ MuscleRatioFile == ""
 //
 // 同時:PhaseManifestMinFields 必須維持 15(新欄位純加值,不收緊既有契約)。
 func TestPhaseManifestParser_MuscleRatioFile_VersionMatrix(t *testing.T) {

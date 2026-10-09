@@ -32,8 +32,8 @@ func TestCSVHandler_ReadCSV(t *testing.T) {
 	handler := NewCSVHandler(cfg)
 
 	t.Run("FileNotExists", func(t *testing.T) {
-		// 用 allowlist 內不存在的檔，避免被 readCSVCore 的路徑驗證先擋下，
-		// 仍保留「file-not-found」測試意圖。
+		// 讀 InputDir 內不存在的檔，通過 ReadCSV 的路徑驗證後落到
+		// 「file-not-found」。
 		records, err := handler.ReadCSV(filepath.Join(tempDir, "nonexistent.csv"))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "無法獲取文件信息")

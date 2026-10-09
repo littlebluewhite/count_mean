@@ -29,13 +29,13 @@ func (a *App) NormalizeData(params NormalizeParams) (result *NormalizeResult, er
 	}
 
 	// 讀取主要資料檔案（包含路徑驗證）
-	mainRecords, err := a.readCSVWithPathValidation(s, params.MainFile, s.config.InputDir)
+	mainRecords, err := s.csvHandler.ReadCSV(params.MainFile)
 	if err != nil {
 		return nil, fmt.Errorf("讀取主要資料檔案失敗: %w", err)
 	}
 
 	// 讀取參考資料檔案（包含路徑驗證）
-	refRecords, err := a.readCSVWithPathValidation(s, params.ReferenceFile, s.config.OperateDir)
+	refRecords, err := s.csvHandler.ReadCSV(params.ReferenceFile)
 	if err != nil {
 		return nil, fmt.Errorf("讀取參考資料檔案失敗: %w", err)
 	}

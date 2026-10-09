@@ -87,7 +87,7 @@ func (d *dirFileSource) Discover() ([]maxmean.BatchFile, error) {
 	return files, nil
 }
 
-// externalFileSource 是 external absolute-path adapter:用 filepath.Glob + ReadCSVExternal。
+// externalFileSource 是 external absolute-path adapter:用 filepath.Glob + ReadCSV。
 type externalFileSource struct {
 	csvHandler *io.CSVHandler
 	dirPath    string
@@ -104,7 +104,7 @@ func (e *externalFileSource) Discover() ([]maxmean.BatchFile, error) {
 		fp := p
 		files[i] = maxmean.BatchFile{
 			Name: TrimCSVExtension(filepath.Base(fp)),
-			Read: func() ([][]string, error) { return e.csvHandler.ReadCSVExternal(fp) },
+			Read: func() ([][]string, error) { return e.csvHandler.ReadCSV(fp) },
 		}
 	}
 

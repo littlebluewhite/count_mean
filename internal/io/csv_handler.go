@@ -38,13 +38,13 @@ const csvReaderBufSize = 64 * 1024
 
 // CSVHandler 處理 CSV 檔案讀寫.
 type CSVHandler struct {
-	config           *config.AppConfig
-	pathValidator    *security.PathValidator
-	csvValidator     *csvvalidator.Validator
-	logger           *logging.Logger
-	largeFileHandler *LargeFileHandler
-	pathBuilder      *FilePathBuilder
-	converter        *csvConverter
+	config            *config.AppConfig
+	pathValidator     *security.PathValidator
+	csvValidator      *csvvalidator.Validator
+	filenameValidator *filename.Validator
+	logger            *logging.Logger
+	pathBuilder       *FilePathBuilder
+	converter         *csvConverter
 }
 
 // NewCSVHandler 創建新的 CSV 處理器.
@@ -60,13 +60,13 @@ func NewCSVHandler(cfg *config.AppConfig) *CSVHandler {
 	scalingMultiplier := math.Pow10(cfg.ScalingFactor)
 
 	return &CSVHandler{
-		config:           cfg,
-		pathValidator:    pathValidator,
-		csvValidator:     csvvalidator.NewValidator(),
-		logger:           logging.GetLogger("csv_handler"),
-		largeFileHandler: NewLargeFileHandler(cfg),
-		pathBuilder:      NewFilePathBuilder(cfg, pathValidator),
-		converter:        newCSVConverter(scalingMultiplier, cfg.Precision),
+		config:            cfg,
+		pathValidator:     pathValidator,
+		csvValidator:      csvvalidator.NewValidator(),
+		filenameValidator: filename.NewValidator(),
+		logger:            logging.GetLogger("csv_handler"),
+		pathBuilder:       NewFilePathBuilder(cfg, pathValidator),
+		converter:         newCSVConverter(scalingMultiplier, cfg.Precision),
 	}
 }
 
@@ -153,74 +153,13 @@ func (h *CSVHandler) WriteCSVToOutputDirectory(dirName, filename string, data []
 	return h.WriteCSV(fullPath, data)
 }
 
-// readOptions specifies options for reading CSV files.
-//
-// external 區分兩種來源：false 走嚴格 allowedBasePaths 白名單（內部設定路徑），
-// true 走 lenient performBasicSecurityChecks（使用者透過 file-dialog 選的任意檔
-// — 仍會擋 /etc、/root、C:\Windows 等系統敏感路徑與 path traversal）。
-type readOptions struct {
-	logPrefix string
-	external  bool
-}
-
-// checkFileSizeAndFormat validates file size and format before reading.
-func (h *CSVHandler) checkFileSizeAndFormat(filename string, opts readOptions) (string, error) {
-	fileInfo, err := h.largeFileHandler.GetFileInfo(filename)
-	if err != nil {
-		h.logger.Error(opts.logPrefix+"檔案路徑驗證失敗", err, map[string]any{"filename": filename})
-
-		return "", err
-	}
-
-	if fileInfo.IsLarge {
-		h.logger.Info("檢測到大文件，拒絕讀取", map[string]any{
-			"filename": filename, "file_size": fileInfo.Size, "line_count": fileInfo.LineCount,
-		})
-
-		return "", errors.NewAppErrorWithDetails(
-			errors.ErrCodeFileTooLarge, "檔案過大（上限 100 MB），請分割檔案後再試",
-			fmt.Sprintf("文件 %s 過大 (%d bytes)，超過 100 MB 上限", filename, fileInfo.Size),
-		)
-	}
-
-	cleanPath := fileInfo.Path
-
-	if !h.isCSVFile(cleanPath) {
-		err := errors.NewAppErrorWithDetails(
-			errors.ErrCodeFileFormat, "檔案格式無效",
-			fmt.Sprintf("檔案 '%s' 不是有效的 CSV 檔案", cleanPath),
-		)
-		h.logger.Error("檔案格式驗證失敗", err, map[string]any{"path": cleanPath})
-
-		return "", err
-	}
-
-	return cleanPath, nil
-}
-
 // isCSVFile checks if the file has a CSV extension.
 func (h *CSVHandler) isCSVFile(path string) bool {
 	return security.IsCSVFile(path)
 }
 
-// readAndParseCSV opens and parses a CSV file.
-func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
-	file, err := os.OpenFile(cleanPath, fsperm.ReadFlags, 0) //nolint:gosec // cleanPath sanitized and validated; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with WriteFlags)
-	if err != nil {
-		appErr := errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟檔案")
-		h.logger.Error("檔案開啟失敗", appErr, map[string]any{"path": cleanPath})
-
-		return nil, appErr
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			h.logger.Warn("關閉檔案時發生錯誤", map[string]any{
-				"file": file.Name(), "error": closeErr.Error(),
-			})
-		}
-	}()
-
+// parseCSV 解析已開啟的 CSV 檔案(單次 ReadAll)。path 只用於 log。
+func (h *CSVHandler) parseCSV(file *os.File, path string) ([][]string, error) {
 	// 用 bufio 包 *os.File 避免 csv.Reader 每次 Read 都觸發 syscall（大檔差異明顯）。
 	// BOM 處理：Excel 匯出的 UTF-8 CSV 常帶 0xEF 0xBB 0xBF 前綴。若不剝除，
 	// records[0][0] 會帶 U+FEFF，污染後續以 header 字串比對 channel 名稱的路徑，
@@ -231,7 +170,7 @@ func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
 	bufReader := bufio.NewReaderSize(file, csvReaderBufSize)
 	if _, err := csvutil.PeekBOM(bufReader); err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "BOM 偵測失敗")
-		h.logger.Error("BOM 偵測失敗", appErr, map[string]any{"path": cleanPath})
+		h.logger.Error("BOM 偵測失敗", appErr, map[string]any{"path": path})
 
 		return nil, appErr
 	}
@@ -253,7 +192,7 @@ func (h *CSVHandler) readAndParseCSV(cleanPath string) ([][]string, error) {
 	records, err := reader.ReadAll()
 	if err != nil {
 		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "無法讀取 CSV 資料")
-		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]any{"path": cleanPath})
+		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]any{"path": path})
 
 		return nil, appErr
 	}
@@ -283,62 +222,110 @@ func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) er
 	return nil
 }
 
-// readCSVCore is the internal method that handles CSV reading logic.
-func (h *CSVHandler) readCSVCore(filename string, opts readOptions) ([][]string, error) {
-	h.logger.Debug("開始讀取"+opts.logPrefix+" CSV 檔案", map[string]any{"filename": filename})
+// maxReadCSVBytes 是 ReadCSV 的檔案大小上限(100 MB)。
+//
+// csv.Reader.ReadAll 把整檔 materialize 成 [][]string,實測 memory 約為 source bytes 的
+// 4-10x;200MB source → 800MB-2GB heap 對 GUI process 是 OOM 風險。典型 EMG CSV 1-50MB,
+// 100MB 已是極端 outlier;超過一律拒絕(streaming 路徑已刪,見 ADR-0033)。
+const maxReadCSVBytes = 100 * 1024 * 1024
 
-	// 路徑驗證：external 走 lenient，預設走嚴格白名單。
-	// 之前 readCSVCore 完全不驗證路徑，導致 GetCSVHeaders 可透過 raw absolute
-	// path 讀任意檔（multi-agent code review 確認的漏洞）。
-	if opts.external {
-		if err := h.pathValidator.ValidateExternalPath(filename); err != nil {
-			h.logger.Error(opts.logPrefix+"外部路徑驗證失敗", err, map[string]any{"filename": filename})
+// ReadCSV 是使用者選取 CSV 的唯一讀取入口。
+//
+// 流程:base filename 驗證 → ValidateExternalPath(任意絕對路徑皆可,仍擋 traversal 與
+// 系統敏感位置)→ OpenFile(fsperm.ReadFlags,O_NOFOLLOW)→ fstat(必須是 regular file
+// 且 ≤ 100MB)→ 單次解析 → validateCSVRecords。
+//
+// 路徑不做 URL-decode,`%`、`+` 皆為字面檔名字元。
+func (h *CSVHandler) ReadCSV(path string) ([][]string, error) {
+	h.logger.Debug("開始讀取 CSV 檔案", map[string]any{"filename": path})
 
-			return nil, fmt.Errorf("路徑驗證失敗: %w", err)
-		}
-	} else {
-		if err := h.pathValidator.ValidateFilePath(filename); err != nil {
-			h.logger.Error(opts.logPrefix+"路徑驗證失敗", err, map[string]any{"filename": filename})
+	if err := h.filenameValidator.ValidateFilename(filepath.Base(path)); err != nil {
+		h.logger.Error("檔案名稱驗證失敗", err, map[string]any{"filename": path})
 
-			return nil, fmt.Errorf("路徑驗證失敗: %w", err)
-		}
+		return nil, fmt.Errorf("檔案名稱驗證失敗: %w", err)
 	}
 
-	cleanPath, err := h.checkFileSizeAndFormat(filename, opts)
+	if err := h.pathValidator.ValidateExternalPath(path); err != nil {
+		h.logger.Error("路徑驗證失敗", err, map[string]any{"filename": path})
+
+		return nil, fmt.Errorf("路徑驗證失敗: %w", err)
+	}
+
+	if !h.isCSVFile(path) {
+		err := errors.NewAppErrorWithDetails(
+			errors.ErrCodeFileFormat, "檔案格式無效",
+			fmt.Sprintf("檔案 '%s' 不是有效的 CSV 檔案", path),
+		)
+		h.logger.Error("檔案格式驗證失敗", err, map[string]any{"path": path})
+
+		return nil, err
+	}
+
+	file, err := os.OpenFile(path, fsperm.ReadFlags, 0) //nolint:gosec // path 已過 ValidateExternalPath;fsperm.ReadFlags 加 O_NOFOLLOW(與 WriteFlags 對稱)
+	if err != nil {
+		appErr := openFailure(err)
+		h.logger.Error("檔案開啟失敗", appErr, map[string]any{"path": path})
+
+		return nil, appErr
+	}
+
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			h.logger.Warn("關閉檔案時發生錯誤", map[string]any{
+				"file": file.Name(), "error": closeErr.Error(),
+			})
+		}
+	}()
+
+	// fstat 作用在已開啟的 fd 上,檢查與讀取是同一個 inode(無 stat-then-open TOCTOU)。
+	info, err := file.Stat()
+	if err != nil {
+		return nil, errors.WrapError(err, errors.ErrCodeFileNotFound, "無法獲取文件信息")
+	}
+
+	if !info.Mode().IsRegular() {
+		appErr := errors.NewAppErrorWithDetails(
+			errors.ErrCodeFileFormat, "檔案格式無效",
+			fmt.Sprintf("'%s' 不是一般檔案", path),
+		)
+		h.logger.Error("檔案類型驗證失敗", appErr, map[string]any{"path": path})
+
+		return nil, appErr
+	}
+
+	if info.Size() > maxReadCSVBytes {
+		h.logger.Info("檢測到大文件，拒絕讀取", map[string]any{"filename": path, "file_size": info.Size()})
+
+		return nil, errors.NewAppErrorWithDetails(
+			errors.ErrCodeFileTooLarge,
+			fmt.Sprintf("檔案過大（%d MB，上限 100 MB），請分割檔案後再試", info.Size()/(1024*1024)),
+			fmt.Sprintf("文件 %s 過大 (%d bytes)，超過 100 MB 上限", path, info.Size()),
+		)
+	}
+
+	records, err := h.parseCSV(file, path)
 	if err != nil {
 		return nil, err
 	}
 
-	records, err := h.readAndParseCSV(cleanPath)
-	if err != nil {
+	if err := h.validateCSVRecords(records, path); err != nil {
 		return nil, err
 	}
 
-	if err := h.validateCSVRecords(records, cleanPath); err != nil {
-		return nil, err
-	}
-
-	h.logger.Info(opts.logPrefix+"CSV 檔案讀取成功", map[string]any{
-		"path": cleanPath, "record_count": len(records), "column_count": len(records[0]),
+	h.logger.Info("CSV 檔案讀取成功", map[string]any{
+		"path": path, "record_count": len(records), "column_count": len(records[0]),
 	})
 
 	return records, nil
 }
 
-// ReadCSVExternal 讀取外部 CSV 檔案（使用 lenient 路徑驗證以容納使用者選檔，
-// 仍會擋 path traversal 與系統敏感目錄）.
-func (h *CSVHandler) ReadCSVExternal(filename string) ([][]string, error) {
-	return h.readCSVCore(filename, readOptions{
-		logPrefix: "外部 ",
-		external:  true,
-	})
-}
+// openFailure 把 OpenFile 錯誤轉成 AppError。不存在沿用既有的「無法獲取文件信息」訊息。
+func openFailure(err error) *errors.AppError {
+	if stderrors.Is(err, os.ErrNotExist) {
+		return errors.WrapError(err, errors.ErrCodeFileNotFound, "無法獲取文件信息")
+	}
 
-// ReadCSV 讀取 CSV 檔案（自動檢測大文件並使用相應處理方式）.
-func (h *CSVHandler) ReadCSV(filename string) ([][]string, error) {
-	return h.readCSVCore(filename, readOptions{
-		logPrefix: "",
-	})
+	return errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟檔案")
 }
 
 // WriteCSVToOutput 寫入CSV文件到輸出目錄.

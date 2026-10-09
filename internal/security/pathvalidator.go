@@ -96,9 +96,7 @@ func NewPathValidator(allowedBasePaths []string) *PathValidator {
 // 任意檔（GUI file dialog 回來的絕對路徑），改用 ValidateExternalPath，否則
 // 路徑落在 allowedBasePaths 外會被 reject。
 //
-// 嚴格守門：strictPercent=true → URL-decode 4 層後仍含 literal `%` 視為可疑
-// 直接 reject。理由：本 API 處理 config / API string 直接送入的 path，trust
-// model 較低，雙重編碼攻擊風險高。
+// 路徑不做 URL-decode:`%`、`+` 等一律是字面檔名字元(見 validatePathFormat)。
 func (pv *PathValidator) ValidateFilePath(path string) error {
 	if path == "" {
 		return nil
@@ -110,7 +108,7 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 		return fmt.Errorf("%w", ErrPathContainsNUL)
 	}
 
-	absPath, decodedPath, err := pv.validatePathFormat(path, true)
+	absPath, err := pv.validatePathFormat(path)
 	if err != nil {
 		return err
 	}
@@ -135,12 +133,12 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 		}
 	}
 
-	return fmt.Errorf("%w: %s", ErrPathOutOfScope, decodedPath)
+	return fmt.Errorf("%w: %s", ErrPathOutOfScope, path)
 }
 
 // ValidateExternalPath validates an externally-selected path (e.g. from a GUI
 // file dialog) without enforcing the allowed-base-paths whitelist. Use for
-// external CSV reads (CSVHandler.ReadCSVExternal), manifest / data-folder inputs
+// CSV reads (CSVHandler.ReadCSV), manifest / data-folder inputs
 // and output / configured directories — any path the user has explicitly chosen.
 //
 // Symlink defense (critical): lexical Clean+Abs alone is insufficient —
@@ -184,11 +182,10 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 		return fmt.Errorf("%w", ErrPathContainsNUL)
 	}
 
-	// strictPercent=false:GUI dialog 等 user-confirmed 場景,path 可能含合法
-	// 字面 `%`(例 `report 50%.csv` / BTS 匯出 `SF_8_BTS%_*.csv`)。嚴格守門
-	// 會打斷流程;放寬 % 不影響其他守門(element traversal / 敏感目錄 / symlink
-	// resolve 都仍生效)。
-	absPath, _, err := pv.validatePathFormat(path, false)
+	// path 可能含合法字面 `%`(例 `report 50%.csv` / BTS 匯出 `SF_8_BTS%_*.csv`),
+	// validatePathFormat 不 decode,故照原樣通過;element traversal / 敏感目錄 /
+	// symlink resolve 仍生效。
+	absPath, err := pv.validatePathFormat(path)
 	if err != nil {
 		return err
 	}
@@ -220,58 +217,34 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 	return check(resolvedPath)
 }
 
-// validatePathFormat performs the URL-decode + traversal + absolute-resolution
-// prechecks shared by ValidateFilePath and ValidateExternalPath. Returns the
-// cleaned absolute path and the URL-decoded original (used for error messages).
+// validatePathFormat 做 ValidateFilePath / ValidateExternalPath 共用的前置檢查:
+// traversal + 絕對化。回傳 Clean 後的絕對路徑。
 //
-// Traversal 檢查採 element-based(filepath.Clean 後 split 比對 `..` element),
-// 不用 substring scan — 後者會誤拒 `report..v2.csv` / `backup..2024.csv` 等合法
-// 檔名。
+// 不做 URL-decode:path 是檔案系統路徑,不是 URL。`%2E%2E`、`%2F`、`+` 都是字面檔名
+// 字元,OS 開檔時也不會解碼;先前的 decode loop 會讓「驗證的路徑」與「實際開的路徑」
+// 不一致(`a+b.csv` 被驗成 `a b.csv`),還會誤拒合法的 `%` 檔名。
 //
-// strictPercent 控制 URL-decode 4 層後是否仍將「殘留 `%`」視為可疑:
-//   - true  (ValidateFilePath)    : 受控路徑,雙重編碼風險高,殘留 % 直接 reject
-//   - false (ValidateExternalPath): GUI dialog 等 user-confirmed 場景, 合法檔名
-//     可能本就含字面 `%`,殘留 % 放行;其他守門仍生效。
-func (*PathValidator) validatePathFormat(path string, strictPercent bool) (absPath, decodedPath string, err error) {
-	// URL 解碼 — loop until idempotent (cap 4 層深度) 以擋雙重編碼繞過：
-	// 單層 decode 對 `..%252Fetc%252Fpasswd` 只變成 `..%2Fetc%2Fpasswd`，
-	// HasTraversalElement 依 / 與 \ split 不會切到 `%2F`，整段被當成單一 element
-	// `..%2Fetc...` 比對 `..` 失敗，攻擊 bypass。loop decode 直到不變、或設深度
-	// 上限（防超長 encoded payload 形成 DoS 與無限解碼）。
-	decoded := path
-	for i := 0; i < 4; i++ {
-		next, decodeErr := url.QueryUnescape(decoded)
-		if decodeErr != nil || next == decoded {
-			break
-		}
-		decoded = next
-	}
-	// strictPercent=true 時,仍含 literal `%` 視為「無法完全 decode 的可疑 input」直接拒;
-	// 適用 ValidateFilePath。ValidateExternalPath 走 false 放行合法字面 % 檔名。
-	if strictPercent && strings.Contains(decoded, "%") {
-		return "", decoded, fmt.Errorf("%w: 路徑含 URL-encoded 殘留：%s", ErrPathTraversal, decoded)
-	}
-
+// Traversal 檢查採 element-based(split 比對 `..` element),不用 substring scan —
+// 後者會誤拒 `report..v2.csv` / `backup..2024.csv` 等合法檔名。
+func (*PathValidator) validatePathFormat(path string) (absPath string, err error) {
 	// Pre-Clean element check：interior `..`（例如 `./input/../output/test.csv`）
 	// 在 Clean 後會被解析消去，但這種跨目錄寫法本身就值得擋，因此在 Clean 之前
 	// 先 split 比對 `..` element。filename 含字面雙點（`report..v2.csv`）的 path
 	// element 不會被誤拒。
-	if HasTraversalElement(decoded) {
-		return "", decoded, fmt.Errorf("%w: %s", ErrPathTraversal, decoded)
+	if HasTraversalElement(path) {
+		return "", fmt.Errorf("%w: %s", ErrPathTraversal, path)
 	}
 
-	cleanPath := filepath.Clean(decoded)
-
-	abs, absErr := filepath.Abs(cleanPath)
+	abs, absErr := filepath.Abs(filepath.Clean(path))
 	if absErr != nil {
-		return "", decoded, fmt.Errorf("無法解析路徑 '%s': %w", decoded, absErr)
+		return "", fmt.Errorf("無法解析路徑 '%s': %w", path, absErr)
 	}
 
 	if HasTraversalElement(abs) {
-		return "", decoded, fmt.Errorf("%w: %s", ErrPathTraversalAbs, abs)
+		return "", fmt.Errorf("%w: %s", ErrPathTraversalAbs, abs)
 	}
 
-	return abs, decoded, nil
+	return abs, nil
 }
 
 // HasTraversalElement reports whether any path element equals "..".
@@ -367,8 +340,8 @@ func SanitizePath(path string) (string, error) {
 		return "", nil
 	}
 
-	// URL 解碼防止編碼繞過。decode 後若仍含 `%` 形式殘留,我們不在此 layer 攔
-	// (validatePathFormat 走 strict % 守門);但 decode 失敗的 input 不允許
+	// URL 解碼防止編碼繞過。decode 後的殘留 `%` 不在此 layer 攔;
+	// 但 decode 失敗的 input 不允許
 	// 進入 sanitization 流程 — 那已是無法判讀的 bytes,reject 比 best-effort 安全。
 	decodedPath, err := url.QueryUnescape(path)
 	if err != nil {

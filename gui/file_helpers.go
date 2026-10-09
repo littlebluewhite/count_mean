@@ -3,7 +3,6 @@ package gui
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"count_mean/internal/io"
@@ -23,48 +22,6 @@ const (
 	SuffixNormalized    = "_標準化"
 	SuffixPhaseAnalysis = "_階段分析"
 )
-
-// readCSVWithPathValidation reads a CSV file with automatic path validation.
-//
-// `s` 是呼叫端 (entry method) 取得的 *appState snapshot — 必須由 caller 顯式
-// 傳入,不在這裡再做一次 a.state.Load()。否則 SaveConfig 在 entry 與 helper 之間
-// 觸發時,entry 用舊 snapshot 算結果但 helper 讀到的 csvHandler 已是新 cfg 的版本,
-// 即 cross-compare review fresh hunt 抓到的「snapshot 撕裂」邏輯 race。
-func (a *App) readCSVWithPathValidation(s *appState, filePath, baseDir string) ([][]string, error) {
-	filename := filepath.Base(filePath)
-	if err := a.filenameValidator.ValidateFilename(filename); err != nil {
-		return nil, fmt.Errorf("檔案名稱驗證失敗: %w", err)
-	}
-
-	if isExternalPath(filePath, baseDir) {
-		records, err := s.csvHandler.ReadCSVExternal(filePath)
-		if err != nil {
-			return nil, fmt.Errorf("讀取外部檔案失敗: %w", err)
-		}
-
-		return records, nil
-	}
-
-	records, err := s.csvHandler.ReadCSV(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("讀取檔案失敗: %w", err)
-	}
-
-	return records, nil
-}
-
-// isExternalPath checks if the file path is outside the base directory.
-func isExternalPath(filePath, baseDir string) bool {
-	if !filepath.IsAbs(filePath) {
-		return false
-	}
-
-	fileDir := filepath.Dir(filePath)
-
-	relPath, err := filepath.Rel(baseDir, fileDir)
-
-	return err != nil || strings.HasPrefix(relPath, "..")
-}
 
 // TrimCSVExtension removes .csv extension from filename (case-insensitive).
 func TrimCSVExtension(fileName string) string {

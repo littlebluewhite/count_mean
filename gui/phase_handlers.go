@@ -87,7 +87,7 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 	}
 
 	// 2 讀檔
-	records, readErr := a.readCSVWithPathValidation(s, params.InputFile, s.config.InputDir)
+	records, readErr := s.csvHandler.ReadCSV(params.InputFile)
 	if readErr != nil {
 		return nil, fmt.Errorf("讀取資料檔案失敗: %w", readErr)
 	}

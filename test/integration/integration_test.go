@@ -306,8 +306,8 @@ func TestFullWorkflow_ErrorHandling(t *testing.T) {
 	maxMeanCalc := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
 
 	t.Run("InvalidCSVFile", func(t *testing.T) {
-		// 測試讀取不存在的文件：用 allowlist (InputDir) 內的路徑避免被 readCSVCore
-		// 路徑驗證先擋下，仍保留「file-not-found」原本測試意圖。
+		// 測試讀取不存在的文件：讀 InputDir 內不存在的檔,走完 ReadCSV 的
+		// 路徑驗證後才落到「file-not-found」。
 		_, err := csvHandler.ReadCSV(filepath.Join(cfg.InputDir, "nonexistent.csv"))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "無法獲取文件信息")

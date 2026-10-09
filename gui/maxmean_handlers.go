@@ -37,7 +37,7 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	s := a.state.Load()
 
 	// 使用統一的 CSV 讀取方法（包含路徑驗證）
-	records, err := a.readCSVWithPathValidation(s, params.InputPath, s.config.InputDir)
+	records, err := s.csvHandler.ReadCSV(params.InputPath)
 	if err != nil {
 		return nil, fmt.Errorf("讀取檔案失敗: %w", err)
 	}

@@ -2,7 +2,6 @@ package security
 
 import (
 	"errors"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -560,10 +559,8 @@ func TestPathValidator_ValidateExternalPath_EmptyPathPasses(t *testing.T) {
 	}
 }
 
-// ValidateExternalPath(GUI dialog 等 user-confirmed 場景)對「URL-decode 4 層後
-// 仍含 `%`」不 reject,放行合法檔名(`report 50%.csv` / BTS 匯出檔)。其他守門
-// (element traversal、敏感目錄、symlink resolve)仍生效。ValidateFilePath
-// 保留嚴格 % 守門 — 受控路徑來源可信度較低,典型 config/API string 直接送入。
+// 含字面 `%` 的合法檔名(`report 50%.csv` / BTS 匯出檔)必須放行。其他守門
+// (element traversal、敏感目錄、symlink resolve)仍生效。
 func TestPathValidator_ExternalPath_AcceptsLiteralPercentInFilename(t *testing.T) {
 	t.Parallel()
 
@@ -587,20 +584,7 @@ func TestPathValidator_ExternalPath_AcceptsLiteralPercentInFilename(t *testing.T
 	}
 }
 
-// 確認「% 放寬只限 ExternalPath」不會 leak 到 strict 路徑 — ValidateFilePath
-// 在受控路徑(InputDir / OutputDir / config 直接送入)仍視殘留 `%` 為可疑。
-func TestPathValidator_FilePath_StillRejectsLiteralPercent(t *testing.T) {
-	t.Parallel()
-
-	validator := NewPathValidator(nil)
-
-	// 純 lexical 含 `%` — ValidateFilePath 仍應擋（防 double-encoding 攻擊）
-	if err := validator.ValidateFilePath("./input/report 50%.csv"); err == nil {
-		t.Error("ValidateFilePath 仍應拒絕含字面 %% 的 path（嚴格守門），實際通過")
-	}
-}
-
-// 放寬「殘留 %」不可順便放走 traversal — 即使 path 含字面 %,含 `..` 路徑元素
+// 放行字面 `%` 不可順便放走 traversal — 即使 path 含字面 %,含 `..` 路徑元素
 // 仍必須擋。
 func TestPathValidator_ExternalPath_StillRejectsTraversalEvenWithPercent(t *testing.T) {
 	t.Parallel()
@@ -609,7 +593,6 @@ func TestPathValidator_ExternalPath_StillRejectsTraversalEvenWithPercent(t *test
 
 	cases := []string{
 		"/tmp/../etc/50% target.csv",
-		"/tmp/.%2E/etc/data.csv", // %2E = `.`，decode 後變成 `..`
 	}
 
 	for _, p := range cases {
@@ -846,17 +829,16 @@ func TestPathValidator_IsCSVFile_TrailingSpaceAndDot(t *testing.T) {
 	}
 }
 
-// Fuzz target:用 multi-layer URL-encoded traversal payload + unicode mutation
-// 持續攻擊 validatePathFormat,strictPercent on/off 兩條都跑。
+// Fuzz target:用 URL-encoded traversal payload + unicode mutation 持續攻擊
+// validatePathFormat(經 ValidateFilePath / ValidateExternalPath 兩條入口)。
 //
 // 不變式:
 //  1. 任意 input 不得 panic
-//  2. 任意 input 若 URL-decode 4 層後含 `..` 路徑元素,validation 必須擋下,
-//     否則 traversal 守門失效。
-func FuzzValidatePathFormatMultiLayerURL(f *testing.F) {
-	// Seed corpus：手動建構多層 URL-encoded traversal payload 與相關變體。
-	// 每個 seed 都應該被 validatePathFormat 透過 element-level traversal 守門擋下；
-	// 若 fuzz 發現「validation 通過 + decode 後 path 含 `..` element」即 bug。
+//  2. 路徑不做 URL-decode;input 本身含 `..` 路徑元素時,兩條入口都必須擋下。
+//     編碼過的 `%2E%2E` 是字面字元,不在此不變式內(見
+//     TestValidateExternalPath_EncodedSequencesAreLiteral)。
+func FuzzValidatePathFormat(f *testing.F) {
+	// Seed corpus:URL-encoded traversal 變體(現在應視為字面)與真正的 `..`。
 	seeds := []string{
 		"../etc/passwd",
 		"..%2Fetc%2Fpasswd",                          // 1 層
@@ -886,28 +868,16 @@ func FuzzValidatePathFormatMultiLayerURL(f *testing.F) {
 	v := NewPathValidator(nil)
 
 	f.Fuzz(func(t *testing.T, s string) {
-		// 兩條入口都跑 — 確保 strictPercent on/off 都不會 panic、都不會放走 traversal
+		// 兩條入口都跑 — 確保都不會 panic、都不會放走 traversal
 		errStrict := v.ValidateFilePath(s)
 		errExternal := v.ValidateExternalPath(s)
 
-		// Decode loop 與 validatePathFormat 對齊（cap 4），驗證 invariant 2
-		decoded := s
-		for i := 0; i < 4; i++ {
-			next, err := url.QueryUnescape(decoded)
-			if err != nil || next == decoded {
-				break
-			}
-			decoded = next
-		}
-		if HasTraversalElement(decoded) {
-			// 任何一邊 validation 通過都是 bug
+		if HasTraversalElement(s) {
 			if errStrict == nil {
-				t.Fatalf("ValidateFilePath 通過了 multi-layer URL traversal 攻擊：input=%q decoded=%q",
-					s, decoded)
+				t.Fatalf("ValidateFilePath 通過了含 `..` element 的 input：%q", s)
 			}
 			if errExternal == nil {
-				t.Fatalf("ValidateExternalPath 通過了 multi-layer URL traversal 攻擊：input=%q decoded=%q",
-					s, decoded)
+				t.Fatalf("ValidateExternalPath 通過了含 `..` element 的 input：%q", s)
 			}
 		}
 	})
