@@ -13,9 +13,10 @@ import (
 )
 
 // TestValidateEMGBounds_AcceptsULPDriftEpsilon 釘住 修補:
-// boundsEpsilon 從 1e-9 放寬到 1e-6,涵蓋 1000Hz EMG / 力板 ULP 飄移。
+// 邊界容差從 1e-9 放寬到 1e-6,涵蓋 1000Hz EMG / 力板 ULP 飄移(現為
+// synchronizer.OutsideEMG 的共用容差,ADR-0043)。
 //
-// 修補前 boundsEpsilon = 1e-9 比 sample interval (~1e-3) 還細 6 個量級,
+// 修補前容差 = 1e-9 比 sample interval (~1e-3) 還細 6 個量級,
 // 等於沒有 tolerance — 1000Hz force plate vs EMG 經 sync 後的 1e-7 ULP
 // 飄移會被誤判 out-of-range,讓真實資料報錯。
 //

@@ -41,6 +41,27 @@ func (ts *TimeSynchronizer) ForceTimeToEMGTime(forceTime float64, emgMotionOffse
 // (>= 1ms ≈ 1e-3)仍被判越界,浮點 ULP 飄移(<= 1e-6)被吸收。
 const emgTimeEpsilon = 1e-6
 
+// OutsideEMG 回報 t 是否落在 EMG 時間軸 [times[0], times[len-1]](含 ±emgTimeEpsilon
+// 邊界容差)之外,以及在哪一側。times 須升冪排序。這是「t 在不在 EMG 資料內」的
+// 唯一規則:ResolveTimeIndex 的 inRange 即 !before && !after(ADR-0030、ADR-0043)。
+//
+//	t < times[0]−ε                 → (true, false)
+//	t > times[len−1]+ε             → (false, true)
+//	在範圍內(或邊界 ±ε)           → (false, false)
+//	len(times)==0、t 或端點為 NaN  → (true, true):空軸沒有「內」,NaN 無從比較,一律越界
+//
+// 比較寫成 !(t >= lo) / !(t <= hi):不能證明在範圍內的值(NaN)都算越界。
+func OutsideEMG(times []float64, t float64) (before, after bool) {
+	if len(times) == 0 {
+		return true, true
+	}
+
+	before = !(t >= times[0]-emgTimeEpsilon)
+	after = !(t <= times[len(times)-1]+emgTimeEpsilon)
+
+	return before, after
+}
+
 // ResolveTimeIndex 解析 target 到 times 中最接近的 sample 索引,並回報 target 是否
 // 落在 [times[0], times[len-1]](含 ±emgTimeEpsilon 邊界容差)內。times 須升冪排序。
 //
@@ -59,7 +80,8 @@ func ResolveTimeIndex(times []float64, target float64) (idx int, inRange bool) {
 		return -1, false
 	}
 
-	inRange = target >= times[0]-emgTimeEpsilon && target <= times[len(times)-1]+emgTimeEpsilon
+	before, after := OutsideEMG(times, target)
+	inRange = !before && !after
 
 	// idx:沿用既有 clamp(越界 snap 到邊界索引)+ 既有二分查找 kernel,邏輯一字不改,
 	// 差別只是每個 return 多帶 inRange。

@@ -1,6 +1,7 @@
 package synchronizer
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -133,6 +134,47 @@ func TestResolveTimeIndex(t *testing.T) {
 			idx, inRange := ResolveTimeIndex(tt.times, tt.targetTime)
 			assert.Equal(t, tt.expected, idx)
 			assert.Equal(t, tt.inRange, inRange)
+		})
+	}
+}
+
+func TestOutsideEMG(t *testing.T) {
+	times := []float64{0.2, 0.7, 1.2}
+
+	tests := []struct {
+		name   string
+		times  []float64
+		t      float64
+		before bool
+		after  bool
+	}{
+		{name: "首筆", times: times, t: 0.2},
+		{name: "末筆", times: times, t: 1.2},
+		{name: "中間(非 sample)", times: times, t: 0.45},
+		{name: "低於首筆、容差內", times: times, t: 0.2 - 0.5e-6},
+		{name: "高於末筆、容差內", times: times, t: 1.2 + 0.5e-6},
+		{name: "低於首筆、超出容差", times: times, t: 0.2 - 2e-6, before: true},
+		{name: "高於末筆、超出容差", times: times, t: 1.2 + 2e-6, after: true},
+		{name: "遠低於首筆", times: times, t: -1, before: true},
+		{name: "遠高於末筆", times: times, t: 5, after: true},
+		{name: "-Inf", times: times, t: math.Inf(-1), before: true},
+		{name: "+Inf", times: times, t: math.Inf(1), after: true},
+		{name: "NaN 無從比較 → 兩側皆越界", times: times, t: math.NaN(), before: true, after: true},
+		{name: "空時間軸 → 兩側皆越界", times: []float64{}, t: 0, before: true, after: true},
+		{name: "nil 時間軸 → 兩側皆越界", times: nil, t: 0, before: true, after: true},
+		{name: "單筆、容差內", times: []float64{0.5}, t: 0.5 + 0.5e-6},
+		{name: "單筆、低於", times: []float64{0.5}, t: 0.4, before: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before, after := OutsideEMG(tt.times, tt.t)
+			assert.Equal(t, tt.before, before, "before")
+			assert.Equal(t, tt.after, after, "after")
+
+			// 與 ResolveTimeIndex 同一條規則:inRange == !before && !after。
+			_, inRange := ResolveTimeIndex(tt.times, tt.t)
+			assert.Equal(t, !before && !after, inRange, "ResolveTimeIndex inRange 須與 OutsideEMG 一致")
 		})
 	}
 }

@@ -436,6 +436,54 @@ func TestPhaseSyncAnalyzer_ResolvePhaseRange_PhaseValueErrorText(t *testing.T) {
 	}
 }
 
+// TestResolvePhaseRange_ToleratesSyncDriftAtEMGEdges 釘住 ADR-0043:phase_sync 的
+// EMG 範圍檢查與 CCI / muscle_ratio 共用 emgTimeEpsilon(1e-6)。分期點走
+// ForceTimeToEMGTime 同步後可能落在 EMG 首 / 末筆外 ~1e-7 的 ULP 飄移,strict-0
+// 比較會誤拒合法分期點([[ADR-0030]] 在別處修過的同一個 latent bug);真實越界
+// (> 1e-6)仍須回 ErrEMGTimeOutOfRange。
+//
+// EMGMotionOffset=26:力板 emg = force − 0.1;EMG 時間軸 [0.2, 1.2]。
+func TestResolvePhaseRange_ToleratesSyncDriftAtEMGEdges(t *testing.T) {
+	cases := []struct {
+		name    string
+		s, l    float64 // 力板時間
+		wantErr bool
+	}{
+		{name: "S 低於 EMG 首筆 5e-7(容差內)", s: 0.3 - 5e-7, l: 1.0},
+		{name: "L 高於 EMG 末筆 5e-7(容差內)", s: 0.5, l: 1.3 + 5e-7},
+		{name: "S 與 L 同時飄移 5e-7(容差內)", s: 0.3 - 5e-7, l: 1.3 + 5e-7},
+		{name: "S 低於 EMG 首筆 2e-6(真實越界)", s: 0.3 - 2e-6, l: 1.0, wantErr: true},
+		{name: "L 高於 EMG 末筆 2e-6(真實越界)", s: 0.5, l: 1.3 + 2e-6, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			loaded := &LoadedPhaseSyncContext{
+				Manifest: &models.PhaseManifest{
+					Subject:         "T",
+					EMGMotionOffset: 26,
+					PhasePoints: models.PhasePoints{
+						S: models.MakeOpt(tc.s),
+						L: models.MakeOpt(tc.l),
+					},
+				},
+				EMGData: &models.PhaseSyncEMGData{Time: []float64{0.2, 0.7, 1.2}},
+			}
+
+			got, err := NewPhaseSyncAnalyzer().ResolvePhaseRange(loaded, models.PhaseS, models.PhaseL)
+			if tc.wantErr {
+				require.ErrorIs(t, err, ErrEMGTimeOutOfRange)
+				return
+			}
+
+			require.NoError(t, err)
+			// 容差只決定接受與否,不 clamp:回傳的仍是 timeline 換算出的 EMG 秒數。
+			assert.InDelta(t, tc.s-0.1, got.StartTime, 1e-12)
+			assert.InDelta(t, tc.l-0.1, got.EndTime, 1e-12)
+		})
+	}
+}
+
 // Benchmark test.
 func BenchmarkPhaseSyncAnalyzer_LoadManifestSubjects(b *testing.B) {
 	// Create a large manifest file

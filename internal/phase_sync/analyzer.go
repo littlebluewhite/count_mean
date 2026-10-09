@@ -597,13 +597,16 @@ func validateEMGTimeRange(
 	emgMinTime := emgData.Time[0]
 	emgMaxTime := emgData.Time[len(emgData.Time)-1]
 
-	if phaseTimeRange.StartTime < emgMinTime {
+	// 越界判斷走 EMG 時間軸的共用規則(synchronizer.OutsideEMG,±emgTimeEpsilon):
+	// [[Phase timeline]] 經 ForceTimeToEMGTime 同步後的 ULP 飄移不誤拒,與 CCI /
+	// muscle_ratio 同一容差(ADR-0043)。
+	if before, _ := synchronizer.OutsideEMG(emgData.Time, phaseTimeRange.StartTime); before {
 		return fmt.Errorf(
 			"計算出的 EMG 開始時間 %.3f 小於 EMG 數據最小時間 %.3f (offset: %d): %w",
 			phaseTimeRange.StartTime, emgMinTime, emgMotionOffset, ErrEMGTimeOutOfRange)
 	}
 
-	if phaseTimeRange.EndTime > emgMaxTime {
+	if _, after := synchronizer.OutsideEMG(emgData.Time, phaseTimeRange.EndTime); after {
 		return fmt.Errorf(
 			"計算出的 EMG 結束時間 %.3f 超出 EMG 數據範圍 (最大: %.3f, offset: %d): %w",
 			phaseTimeRange.EndTime, emgMaxTime, emgMotionOffset, ErrEMGTimeOutOfRange)

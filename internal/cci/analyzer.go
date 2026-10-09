@@ -385,19 +385,15 @@ func validateEMGBounds(
 		return fmt.Errorf("EMG 時間軸末筆為非有限值: %v", emgMax)
 	}
 
-	// 浮點時間比較加 epsilon 容忍。原本 1e-9 比 1000Hz sample interval
-	// (1e-3) 還細 6 個量級,等於沒有 tolerance — 1000Hz force plate vs EMG 經
-	// sync 後的 1e-7 ULP 飄移會被誤判 out-of-range。
-	//
-	// 1e-6 為「比 sample interval 細 3 個量級」的安全餘量:真實 out-of-range
-	// (>= 1ms ≈ 1e-3) 仍會被擋下,浮點 ULP 飄移 (<= 1e-6) 被吸收。
-	const boundsEpsilon = 1e-6
-
-	if gaitStart+boundsEpsilon < emgMin {
+	// 越界判斷走 EMG 時間軸的共用規則(synchronizer.OutsideEMG,±emgTimeEpsilon =
+	// 1e-6):force plate ↔ EMG 同步後的 ~1e-7 ULP 飄移被吸收,真實 out-of-range
+	// (>= 1ms ≈ 1e-3) 仍會被擋下。與 phase_stats / muscle_ratio / phase_sync 同一容差
+	// (ADR-0030、ADR-0043)。
+	if before, _ := synchronizer.OutsideEMG(emgData.Time, gaitStart); before {
 		return errors.New(i18n.T(i18n.KeyErrorCCIGaitStartBelowEMGMin, gaitStart, emgMin))
 	}
 
-	if gaitEnd > emgMax+boundsEpsilon {
+	if _, after := synchronizer.OutsideEMG(emgData.Time, gaitEnd); after {
 		return errors.New(i18n.T(i18n.KeyErrorCCIGaitEndAboveEMGMax, gaitEnd, emgMax))
 	}
 
