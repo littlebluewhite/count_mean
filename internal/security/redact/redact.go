@@ -46,18 +46,48 @@ import (
 //
 // 取捨(刻意接受):多段相對路徑(`a/b/c.go`→`a<redacted-path>/c.go`)、URL path、
 // `file://host/path` 的 host 都會被一併脫敏(P3、安全方向、僅 log 可讀性損失)。單段相對
-// 參照(`internal/x.go:12` — 無 trailing-slash 目錄段)不受影響。元素排除 \s/:"'(避免
-// 吃掉相鄰 token、閉引號、`recover.go:42` 的行號),basename 不被消費而保留。
+// 參照(`internal/x.go:12` — 無 trailing-slash 目錄段)不受影響。basename 不被消費而保留。
+//
+// # 目錄段文法(三個分支一致)
+//
+// 目錄段 = 以 1+ 個半形空白分隔的「詞」(posixWord / winWord);詞不含空白、`/`、`"`
+// (Windows 另不含 `\`),詞的**中間**可夾 `'`(O'Neil),POSIX 另可夾 `:`。分隔字元
+// 不能出現在詞的頭尾,才不會吃掉相鄰 token:路徑後的 `: no such file`(`:` 後接空白)、
+// 閉引號(`'/a/b.csv' and`)、stack 的 `recover.go:42 +0x1a`(後面沒有 `/`,整段不成
+// 目錄段)。POSIX 詞裡的 `\` 不可接 `n` / `r` / `t`:logger 先把換行跳脫成字面
+// `\n` / `\t` 再呼叫 Paths,否則跳脫後的多行 stack 會被黏成一個「目錄段」而只剩最後
+// 一個 frame。
+//
+// 不符此文法的目錄段(含 `"`、tab、`: `、POSIX 的 `\n` / `\r` / `\t`、以 `'` 或空白
+// 開頭結尾)會中斷匹配、該段原文留存,其後的目錄段由下一個匹配脫敏 —— 放寬到「`/` 以外
+// 皆可」會把 `c.csv: input/` 當成目錄段而吃掉 basename 與錯誤文字(ADR-0036 Decision 5)。
 //
 //nolint:gochecknoglobals // immutable regex shared across redact callers
 var pathRedactPattern = regexp.MustCompile(
-	// POSIX:`/` 後 1+ 個「元素/」;元素內可含單空白分隔子詞(涵蓋 /Volumes/pCloud Drive/)。
-	`/(?:[^\s/:"']+(?: [^\s/:"']+)*/)+` +
+	// POSIX:`/` 後 1+ 個「目錄段/」(涵蓋 /Volumes/pCloud Drive/、/Users/x/O'Neil/)。
+	`/(?:` + posixSegment + `/)+` +
 		// Windows drive-letter(`C:\...` 或 `C:/...`);`\b` 要求盤符在詞邊界,避免把
 		// `file:/path` 的 `e:/`(`e` 前接詞字符 `l`)誤當盤符而吃掉 label 末字母。
-		`|\b[A-Za-z]:[\\/](?:[^\s:"'\\/]+[\\/])+` +
-		// UNC(`\\server\share\...`)
-		`|\\\\[^\s\\]+(?:\\[^\s\\]+)+\\`,
+		`|\b[A-Za-z]:` + winSep + `(?:` + winSegment + winSep + `)+` +
+		// UNC(`\\server\share\...`;%q 跳脫後開頭是 4 個反斜線)
+		`|\\\\(?:\\\\)?` + winSegment + `(?:` + winSep + winSegment + `)+` + winSep,
+)
+
+const (
+	// posixChar:POSIX 詞的一個字元;`\` 只在不接 n / r / t(logger 的跳脫字面)時算數。
+	posixChar = `(?:[^\s/:"'\\]|\\[^\s/:"'\\nrt])`
+	// posixWord:POSIX 目錄段的一個詞。詞中間可夾 `:` —— macOS Finder 名稱裡的 `/`
+	// (例「2026/05/18」)在 POSIX 層是 `:`。
+	posixWord    = posixChar + `+(?:[':]` + posixChar + `+)*`
+	posixSegment = posixWord + `(?: +` + posixWord + `)*`
+
+	// winWord:drive-letter / UNC 目錄段的一個詞,另排除 `\`;`:` 在 Windows 名稱
+	// 不合法,只允許詞中間的 `'`。
+	winWord    = `[^\s:"'\\/]+(?:'[^\s:"'\\/]+)*`
+	winSegment = winWord + `(?: +` + winWord + `)*`
+
+	// winSep:`\`、`/`,或 %q 格式化後成對的 `\\`(`resolved="C:\\Users\\..."`)。
+	winSep = `(?:\\\\?|/)`
 )
 
 // lineFallbackPathPrefix 是 line-loop fallback 的 trigger — 任何 trim 後以 absolute

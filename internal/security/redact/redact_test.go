@@ -11,6 +11,7 @@ package redact
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -683,6 +684,216 @@ func TestPaths_RedactsColonLabeledPath(t *testing.T) {
 				if !strings.Contains(got, want) {
 					t.Errorf("redact 過度,必要 %q 不在 output:\n%s", want, got)
 				}
+			}
+		})
+	}
+}
+
+// TestPaths_RedactsEveryDirectorySegment 釘住 W2 whole-branch review 的 PHI 漏洞:
+// 病患姓名常出現在資料夾名(app 跑在 macOS 與 Windows),但 drive-letter / UNC 分支的
+// 目錄段不允許空白、各分支的目錄段都不允許 `'`、雙空白與 `:`,`%q` 格式化的 Windows
+// 路徑(反斜線成對)則完全不匹配 —— 目錄段一中斷,該段(病患資料夾名)就原文留存。
+// 斷言 exact output:末段(檔名)以外的目錄段一律換成 `<redacted-path>/`。
+func TestPaths_RedactsEveryDirectorySegment(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "windows_drive_space_segment",
+			input: `open C:\Users\Jane Doe\EMG\PatientAlice\emg.csv: access denied`,
+			want:  `open <redacted-path>/emg.csv: access denied`,
+		},
+		{
+			name:  "windows_drive_forward_slash_space_segment",
+			input: `open C:/Users/Jane Doe/PatientAlice/emg.csv: access denied`,
+			want:  `open <redacted-path>/emg.csv: access denied`,
+		},
+		{
+			// OneDrive 同步資料夾的預設命名:`OneDrive - <組織名>`
+			name:  "windows_onedrive_dash_segment",
+			input: `C:\Users\jdoe\OneDrive - Hospital\PatientAlice\emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			name:  "unc_space_segment",
+			input: `\\nas\share\EMG Data\PatientAlice\emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			name:  "posix_apostrophe_segment",
+			input: `/Users/x/O'Neil/S01/emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			name:  "windows_apostrophe_segment",
+			input: `C:\Users\x\O'Neil\S01\emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			name:  "posix_double_space_segment",
+			input: `/Users/x/Jane  Doe/S01/emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			name:  "windows_double_space_segment",
+			input: `C:\Users\x\Jane  Doe\S01\emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			// macOS Finder 名稱裡的 `/`(例「2026/05/18」)在 POSIX 層是 `:`
+			name:  "posix_colon_inside_segment",
+			input: `/Users/x/2026:05:18/S01/emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			// 守:為 logger 跳脫字面而收窄 `\` 後,一般含 `\` 的 POSIX 段仍脫敏
+			name:  "posix_backslash_segment",
+			input: `/Users/x/Doe\Jane/S01/emg.csv`,
+			want:  `<redacted-path>/emg.csv`,
+		},
+		{
+			// internal/io/csv_handler.go 的 `(resolved=%q)` 形狀:%q 把 `\` 跳脫成 `\\`
+			name: "windows_q_escaped",
+			input: fmt.Sprintf("SubDir=%q filename=%q (resolved=%q)",
+				"out", "emg.csv", `C:\Users\Jane Doe\PatientAlice\out\emg.csv`),
+			want: `SubDir="out" filename="emg.csv" (resolved="<redacted-path>/emg.csv")`,
+		},
+		{
+			name:  "unc_q_escaped",
+			input: fmt.Sprintf("resolved=%q", `\\nas\share\EMG Data\PatientAlice\emg.csv`),
+			want:  `resolved="<redacted-path>/emg.csv"`,
+		},
+		{
+			name:  "posix_q_escaped_apostrophe",
+			input: fmt.Sprintf("resolved=%q", `/Users/O'Neil/PatientAlice/emg.csv`),
+			want:  `resolved="<redacted-path>/emg.csv"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Paths(tc.input); got != tc.want {
+				t.Errorf("Paths(%q)\n got: %q\nwant: %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPaths_KeepsOrdinaryTextAroundPaths 守「放寬目錄段文法」不過度脫敏:路徑後的
+// 錯誤文字(`: no such file or directory`、`: input/output error` 裡的斜線)、同一行的
+// 第二條路徑、單引號包住的路徑、不含路徑的散文(含 `'` 與 `:`)都原樣保留。
+func TestPaths_KeepsOrdinaryTextAroundPaths(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "posix_error_suffix",
+			input: "open /a/b/c.csv: no such file or directory",
+			want:  "open <redacted-path>/c.csv: no such file or directory",
+		},
+		{
+			name:  "posix_slash_in_error_suffix",
+			input: "read /a/b/c.csv: input/output error",
+			want:  "read <redacted-path>/c.csv: input/output error",
+		},
+		{
+			name:  "windows_error_suffix",
+			input: `open C:\Users\a\c.csv: The system cannot find the file specified.`,
+			want:  `open <redacted-path>/c.csv: The system cannot find the file specified.`,
+		},
+		{
+			name:  "unc_error_suffix",
+			input: `open \\nas\share\c.csv: Access is denied.`,
+			want:  `open <redacted-path>/c.csv: Access is denied.`,
+		},
+		{
+			name:  "two_windows_paths_no_overmatch",
+			input: `copied C:\Users\a\x.csv and C:\tmp\y.csv done`,
+			want:  `copied <redacted-path>/x.csv and <redacted-path>/y.csv done`,
+		},
+		{
+			name:  "single_quoted_paths_no_overmatch",
+			input: `'/Users/a/b.csv' and '/tmp/c.csv'`,
+			want:  `'<redacted-path>/b.csv' and '<redacted-path>/c.csv'`,
+		},
+		{
+			name:  "stack_frame_line_offset",
+			input: "\t/Users/x/proj/gui/recover.go:42 +0x1a",
+			want:  "\t<redacted-path>/recover.go:42 +0x1a",
+		},
+		{
+			// logger.sanitizeMessage 先把換行跳脫成字面 `\n` / `\t` 再呼叫 Paths(stack 已在
+			// recover.go 以原始換行 redact 過一次):跳脫後的多行 stack 不得被黏成一個
+			// 「目錄段」而只剩最後一個 frame。
+			name:  "logger_escaped_stack_frames_kept",
+			input: `runtime/debug.Stack()\n\t<redacted-path>/stack.go:26 +0x64\ncount_mean/gui.(*App).Foo(...)\n\t<redacted-path>/recover.go:42 +0x1a`,
+			want:  `runtime/debug.Stack()\n\t<redacted-path>/stack.go:26 +0x64\ncount_mean/gui.(*App).Foo(...)\n\t<redacted-path>/recover.go:42 +0x1a`,
+		},
+		{
+			name:  "prose_apostrophe_and_colon_no_path",
+			input: "can't open file: it's locked since 12:30:45",
+			want:  "can't open file: it's locked since 12:30:45",
+		},
+		{
+			name:  "zh_prose_no_path",
+			input: "分析失敗: 資料夾中沒有找到CSV文件",
+			want:  "分析失敗: 資料夾中沒有找到CSV文件",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Paths(tc.input); got != tc.want {
+				t.Errorf("Paths(%q)\n got: %q\nwant: %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPaths_DocumentedSurvivingSegments 釘住 ADR-0036 Decision 5 記載的已知限制
+// (exact output):路徑末段一律保留;不符目錄段文法(見 pathRedactPattern)的目錄段
+// 原文留存,其後的目錄段仍由下一個匹配脫敏。放寬文法去涵蓋這些形狀會吃掉路徑後的
+// 錯誤文字(TestPaths_KeepsOrdinaryTextAroundPaths)。
+func TestPaths_DocumentedSurvivingSegments(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			// 錯誤以病患資料夾名結尾(DataFolder 本身不存在)—— 末段保留
+			name:  "final_segment_folder_name",
+			input: "stat /Users/x/PatientAlice: no such file or directory",
+			want:  "stat <redacted-path>/PatientAlice: no such file or directory",
+		},
+		{
+			// `:` 後接空白:與 `c.csv: input/output error` 的形狀無法區分
+			name:  "colon_space_segment",
+			input: `/Users/x/Study: Phase 1/S01/emg.csv`,
+			want:  `<redacted-path>/Study: Phase 1<redacted-path>/emg.csv`,
+		},
+		{
+			name:  "double_quote_segment",
+			input: `/Users/x/Jane "JJ" Doe/S01/emg.csv`,
+			want:  `<redacted-path>/Jane "JJ" Doe<redacted-path>/emg.csv`,
+		},
+		{
+			// POSIX 詞裡的 `\n` / `\r` / `\t` 斷詞(logger 的跳脫字面),名稱恰含這三種
+			// 組合的段因此留存
+			name:  "posix_backslash_n_segment",
+			input: `/Users/x/Doe\nancy/S01/emg.csv`,
+			want:  `<redacted-path>/Doe\nancy<redacted-path>/emg.csv`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Paths(tc.input); got != tc.want {
+				t.Errorf("Paths(%q)\n got: %q\nwant: %q", tc.input, got, tc.want)
 			}
 		})
 	}
