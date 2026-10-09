@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Cross--Platform-brightgreen?style=for-the-badge)](https://github.com/littlebluewhite/count_mean)
 
-> 基於 Go + Wails 的跨平台桌面應用，供運動科學研究者與復健治療師批量分析肌電圖（EMG）生物訊號。透過 Worker Pool 並行運算模型高效處理 1GB+ 大型資料集，產出 CSV 報表與 ECharts 互動式圖表。
+> 基於 Go + Wails 的跨平台桌面應用，供運動科學研究者與復健治療師批量分析肌電圖（EMG）生物訊號。透過 Worker Pool 並行運算高效處理批量 EMG 資料（單一 CSV 上限 100 MB，超過會被拒絕），產出 CSV 報表與 ECharts 互動式圖表。
 
 ## 技術棧
 
@@ -64,7 +64,7 @@ graph TB
 ```mermaid
 flowchart LR
     A[用戶選擇檔案] --> B[PathValidator<br/>路徑驗證]
-    B --> C[CSV Reader<br/>串流讀取]
+    B --> C[CSV Reader<br/>整檔讀取（上限 100 MB）]
     C --> D[Data Parser<br/>EMG / Motion / ANC 解析]
     D --> E{計算處理}
 

@@ -41,6 +41,7 @@
 ## Consequences
 
 - 超過 100 MB 的 CSV 一律被讀取路徑以 `ErrCodeFileTooLarge` 拒絕；使用者需先分割檔案。
+- i18n loader 會拒絕含未知 key 的 JSON（`internal/i18n/i18n.go` `validateTranslationKeys`），因此先前由 `SaveTranslations`（僅 `test/demo/i18n_demo` 呼叫）寫出、仍含 `error.file_too_large` 的 `translations/*.json` 現在會載入失敗；app 本身從不寫這些檔案，風險可忽略。
 - `test/benchmark` 與 `internal/benchmark` 仍保留其餘 benchmark，兩個 package 皆未被清空。
 - 遺留（已於同一 wave 後續 commit 清理）：`validation/csv/csv_validator.go`（`ValidateRow` / `ValidateHeaderRow` 註解）、`parsers/emg_parser.go`、`util/str2number.go` 內提及 `processStreamingFile` / `executeStreamingLoop` / `large_file_handler` 為 caller 的過時註解已改寫；`LargeFileHandler.csvValidator` 欄位（streaming 刪除後無人讀取）已移除；`csv_handler.go` package doc、`docs/usage_patterns.md`「大文件處理模式」章節（改名「檔案大小限制」）與 `MaxMeanCalculator` worker pool / backpressure 描述、`README.md` 架構圖的 `BackpressureController` 同步修正。`KeyStatusLargeFileProc` i18n key 仍在，留待後續 wave。
 

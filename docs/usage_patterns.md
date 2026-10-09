@@ -228,7 +228,7 @@ func processSingleFile(ctx context.Context, cfg *config.AppConfig, fileName stri
     // 讀取文件（CSVHandler.ReadCSVFromDirectory 回 [][]string，非 *EMGDataset；
     // 需用 DataParser 解析成 dataset 才能餵給 MaxMeanCalculator.Calculate）
     csvHandler := io.NewCSVHandler(cfg)
-    records, err := csvHandler.ReadCSVFromDirectory(cfg.InputDir, fileName)
+    records, err := csvHandler.ReadCSVFromDirectory("", fileName)
     if err != nil {
         return err
     }

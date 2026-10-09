@@ -214,13 +214,13 @@ func FindTimeRangeIndices(times []float64, startTime, endTime float64) (int, int
 }
 
 // TimeSeriesLabels carries the dataset-specific words that ValidateTimeSeries
-// substitutes into its error messages so EMG / Force / Motion validation can
-// share one generic implementation while keeping their user-facing wording.
+// substitutes into its error messages so ValidateTimeSeries can keep a generic
+// implementation while the caller (currently only EMG) supplies its own user-facing wording.
 type TimeSeriesLabels struct {
-	DataName     string // "EMG" / "力板" / "Motion"
-	SeriesName   string // "時間序列" / "時間序列" / "index 序列"
-	SeriesPos    string // "索引" / "索引" / "位置"
-	ChannelLabel string // "通道" / "通道" / "列"
+	DataName     string // "EMG"
+	SeriesName   string // "時間序列"
+	SeriesPos    string // "索引"
+	ChannelLabel string // "通道"
 }
 
 // joinDataName 把 dataName 與後接文字接起來，ASCII 字尾自動插入空白避免「EMG時間序列」
@@ -232,7 +232,7 @@ type TimeSeriesLabels struct {
 //
 // **限制**：只看 dataName 末 byte 是否為 ASCII alphanumeric。對於以 ASCII 標點
 // 結尾（如 "EMG-"）或多 byte 字尾末 byte 恰巧落在 A-Z/a-z/0-9 範圍的罕見輸入，
-// 判斷結果可能不準。目前 3 個 caller (EMG / Motion / 力板) 結尾皆為「ASCII 字母 +
+// 判斷結果可能不準。目前唯一 caller (EMG) 的 dataName 結尾為「ASCII 字母 +
 // 中文字」標準型態，故安全。未來新增 dataName 若不符此型態，請更新此函式或在
 // caller 端自行決定間隔。
 func joinDataName(dataName, rest string) string {
@@ -248,8 +248,8 @@ func joinDataName(dataName, rest string) string {
 
 // ValidateTimeSeries checks the canonical "time series + channel map" invariants:
 // non-empty series, at least one channel, strictly increasing series, and all
-// channels matching the series length. EMG / Force / Motion share this shape
-// except for the typed series (float64 vs int) and the user-facing wording.
+// channels matching the series length. Currently only EMG uses it (Force / Motion callers were removed in ADR-0032 Area 4);
+// it stays generic over the series type and takes wording via TimeSeriesLabels.
 // Callers handle the nil-pointer guard themselves because the outer data type differs.
 //
 // TimeSeriesLabels.DataName 不需要帶 trailing space — joinDataName 會視字尾自動處理。

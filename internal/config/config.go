@@ -286,8 +286,8 @@ func (c *AppConfig) Validate() error {
 	// LogDirectory / TranslationsDir 五個 user-controllable directory 都一併保護。
 	//
 	// 用 process-wide singleton 避免每次 Validate 都重建 instance — 對於
-	// allowedBasePaths == nil 的 default 設定所有 caller 共用，singleton 內部 mutex
-	// 已 thread-safe。
+	// allowedBasePaths == nil 的 default 設定所有 caller 共用，singleton 建構後
+	// immutable（無 mutator），可安全並行共用。
 	validator := security.DefaultValidator()
 
 	dirFields := []struct {

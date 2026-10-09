@@ -36,7 +36,7 @@ var ErrOddArityValidatorArgs = errors.New("validateExternalPathInputs: 參數數
 // 只做 traversal / 系統敏感目錄 / 路徑長度等基本檢查，正合需求。
 //
 // 為何用 DefaultValidator singleton：避免每次 handler 呼叫都建一個新 instance
-// （無 base paths 的場景共用即可，內部有 RWMutex 保護）。
+// （無 base paths 的場景共用即可，建構後 immutable，並行讀取安全）。
 //
 // 過去版本對 odd-arity 走 panic。雖然在 unit test 階段能抓到 caller bug,
 // 但在 production 路徑上 (handlers → recoverHandlerPanic → ErrInternalPanic)
