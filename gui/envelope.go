@@ -20,15 +20,15 @@ import (
 // 目錄段文法的段(含 `"`、`: ` 等)也會原文留存,以 `\` 分隔的 Windows 路徑上連其後
 // 的目錄段一起(見 ADR-0036 Decision 5)。
 //
-// i18n 規則:handler 層 localize(failMessage 的前綴),analyzer 只回 error /
-// sentinel;cci / muscle_ratio / phase_sync 內部既有的 i18n 字串留待後續 wave 遷移。
+// i18n 規則:handler 層 localize —— failMessage 的前綴,以及 err 文字裡 analyzer 回的
+// *i18n.Error(i18n.Localize 依目前 locale 渲染,ADR-0048);analyzer 只回 error。
 //
 // AST 守門(app_panic_ast_test.go):failed*Result 的引數只能是字串字面值、
 // failMessage(...) 或 inputMessage(...);只有本檔與 recover.go 能 import redact。
 
 // failMessage 建構可預期失敗(下游 analyzer / IO / 計算錯誤)的 Message:
-// i18n.T(key) + ": " + redact 後的 err 文字,並以 a.logger.Error 記一次
-// (handler 分支不另打 Error log)。
+// i18n.T(key) + ": " + redact 後的 i18n.Localize(err),並以 a.logger.Error 記一次
+// (handler 分支不另打 Error log;log 帶原 err,文字是 zh-TW)。
 //
 // log 訊息是 localized 前綴(文字);context 帶 handler(呼叫端函式名)、caller
 // (呼叫端 file:line)與 i18n(key)—— key 跨 handler 共用、logger 記的 file:line
@@ -50,14 +50,14 @@ func (a *App) failMessage(key string, err error) string {
 
 	a.logger.Error(prefix, err, ctx)
 
-	return prefix + ": " + redact.RedactForMessage(err)
+	return prefix + ": " + redact.Paths(i18n.Localize(err))
 }
 
 // inputMessage 建構驗證失敗(使用者輸入 sentinel,例如 ErrNoManifestFile、
-// 路徑驗證失敗)的 Message:只 redact、不加前綴、不 log —— 使用者輸入問題不是
-// 系統錯誤。
+// 路徑驗證失敗)的 Message:redact 後的 i18n.Localize(err),不加前綴、不 log ——
+// 使用者輸入問題不是系統錯誤。nil 回空字串。
 func inputMessage(err error) string {
-	return redact.RedactForMessage(err)
+	return redact.Paths(i18n.Localize(err))
 }
 
 // redactText 給 Message 以外的 webview 文字欄位過 redact、不 log:muscle_ratio

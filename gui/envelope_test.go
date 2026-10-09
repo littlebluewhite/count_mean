@@ -16,40 +16,85 @@ import (
 	"count_mean/internal/logging"
 )
 
+// envelopeTestErrors 回兩個 envelope 測試共用的錯誤:pathErr 是一般 error(帶植入目錄的
+// 開檔失敗);analyzerErr 是 analyzer 回的 *i18n.Error(cci 解析 EMG 失敗的形狀),cause 為
+// pathErr。兩者 redact 後的 zh-TW 文字為 redactedPathErr / "解析 EMG 檔案失敗: " + redactedPathErr。
+func envelopeTestErrors() (pathErr, analyzerErr error) {
+	pathErr = fmt.Errorf("讀取失敗: %w", &fs.PathError{
+		Op:   "open",
+		Path: "/Users/alice/" + plantedDirMarker + "/emg.csv",
+		Err:  fs.ErrNotExist,
+	})
+
+	return pathErr, i18n.WrapError(pathErr, i18n.KeyErrorCCIParseEMGFailed)
+}
+
+const redactedPathErr = "讀取失敗: open <redacted-path>/emg.csv: file does not exist"
+
 // TestFailMessage_LocalizedAndRedacted 釘住 failMessage 的 Message 形狀:
-// i18n.T(key)(目前 locale)+ ": " + redact 後的 err 文字。
+// i18n.T(key)(目前 locale)+ ": " + redact 後的 i18n.Localize(err)。
 //
 //   - zh-TW / en-US:前綴隨 locale 切換,err 文字的目錄段一律換成 `<redacted-path>/`
+//   - analyzer 回的 *i18n.Error 也依目前 locale 渲染(ADR-0048);它的 cause 是一般 error,
+//     保留原文
 //   - catalog 沒有的 key:i18n.T 回 key 本身(bare-key fallback),err 文字照樣 redact
 func TestFailMessage_LocalizedAndRedacted(t *testing.T) {
 	prevLocale := i18n.GetLocale()
 	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
 
 	app := &App{logger: logging.NewLogger(logging.LevelInfo, io.Discard, false)}
-	pathErr := fmt.Errorf("讀取失敗: %w", &fs.PathError{
-		Op:   "open",
-		Path: "/Users/alice/" + plantedDirMarker + "/emg.csv",
-		Err:  fs.ErrNotExist,
-	})
-
-	const redactedErr = "讀取失敗: open <redacted-path>/emg.csv: file does not exist"
+	pathErr, analyzerErr := envelopeTestErrors()
 
 	cases := []struct {
 		name   string
 		locale i18n.Locale
 		key    string
+		err    error
 		want   string
 	}{
-		{"zh-TW", i18n.LocaleZhTW, i18n.KeyErrorHandlerAnalysisFailed, "分析失敗: " + redactedErr},
-		{"en-US", i18n.LocaleEnUS, i18n.KeyErrorHandlerAnalysisFailed, "Analysis failed: " + redactedErr},
-		{"missing_key_bare_fallback", i18n.LocaleZhTW, "error.handler.no_such_key", "error.handler.no_such_key: " + redactedErr},
+		{"zh-TW", i18n.LocaleZhTW, i18n.KeyErrorHandlerAnalysisFailed, pathErr, "分析失敗: " + redactedPathErr},
+		{"en-US", i18n.LocaleEnUS, i18n.KeyErrorHandlerAnalysisFailed, pathErr, "Analysis failed: " + redactedPathErr},
+		{"analyzer_error_zh-TW", i18n.LocaleZhTW, i18n.KeyErrorHandlerAnalysisFailed, analyzerErr,
+			"分析失敗: 解析 EMG 檔案失敗: " + redactedPathErr},
+		{"analyzer_error_en-US", i18n.LocaleEnUS, i18n.KeyErrorHandlerAnalysisFailed, analyzerErr,
+			"Analysis failed: Failed to parse EMG file: " + redactedPathErr},
+		{"missing_key_bare_fallback", i18n.LocaleZhTW, "error.handler.no_such_key", pathErr,
+			"error.handler.no_such_key: " + redactedPathErr},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			i18n.SetLocale(tc.locale)
 
-			assert.Equal(t, tc.want, app.failMessage(tc.key, pathErr))
+			assert.Equal(t, tc.want, app.failMessage(tc.key, tc.err))
+		})
+	}
+}
+
+// TestInputMessage_LocalizedAndRedacted 釘住 inputMessage:無前綴、redact 後的
+// i18n.Localize(err),nil 回空字串。
+func TestInputMessage_LocalizedAndRedacted(t *testing.T) {
+	prevLocale := i18n.GetLocale()
+	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
+
+	_, analyzerErr := envelopeTestErrors()
+
+	cases := []struct {
+		name   string
+		locale i18n.Locale
+		err    error
+		want   string
+	}{
+		{"zh-TW", i18n.LocaleZhTW, analyzerErr, "解析 EMG 檔案失敗: " + redactedPathErr},
+		{"en-US", i18n.LocaleEnUS, analyzerErr, "Failed to parse EMG file: " + redactedPathErr},
+		{"nil", i18n.LocaleEnUS, nil, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			i18n.SetLocale(tc.locale)
+
+			assert.Equal(t, tc.want, inputMessage(tc.err))
 		})
 	}
 }
