@@ -56,7 +56,7 @@ jobs:
     # branch 拉 install script,屬於 supply-chain attack vector
     # (任何 push 到 master 都會被 CI 立即執行)。改成:
     #   1. golangci-lint 用官方 action 並 pin commit SHA(v9.2.0 的 tag commit)
-    #   2. gosec 走 `go install ...@v2.29.0`(走 module proxy + GOSUMDB
+    #   2. gosec 走 `go install ...@<pinned commit>`(走 module proxy + GOSUMDB
     #      checksum 驗證,等同 pinned release)
     # SHA 來源:`gh api repos/golangci/golangci-lint-action/git/refs/tags/v9.2.0`
     #          `gh api repos/securego/gosec/tags`
@@ -105,8 +105,12 @@ jobs:
         go-version: '1.27'
         cache: true
 
-    - name: Install gosec (pinned v2.29.0 via go install)
-      run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+    # gosec v2.29.0(最新 release)依賴 x/tools v0.49.0,讀不了 Go 1.27.2 的
+    # export data v5("export data version 5 is greater than maximum supported
+    # version 4")。改 pin master commit 7b1b5ce(x/tools v0.51.0)。
+    # 下一個 gosec release 出來後改回 tag。
+    - name: Install gosec (pinned master 7b1b5ce via go install)
+      run: go install github.com/securego/gosec/v2/cmd/gosec@7b1b5cebe007d62fb58eacb90fc571112939ec30
 
     # main.go:42 `//go:embed all:frontend/dist` 要求目錄存在且至少一個檔案,
     # 否則 gosec 在解析 root package 時就會 "pattern all:frontend/dist: no matching files found"
