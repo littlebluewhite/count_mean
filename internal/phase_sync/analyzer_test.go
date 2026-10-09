@@ -14,6 +14,7 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security/fsperm"
+	"count_mean/internal/synchronizer"
 )
 
 // Helper function to create a temporary test CSV file.
@@ -367,6 +368,72 @@ func TestPhaseSyncAnalyzer_ResolvePhaseRange_AllowsMotionIndex(t *testing.T) {
 	if err != nil {
 		require.NotErrorIs(t, err, ErrNegativePhaseTime,
 			"motion-index 不該觸發 ErrNegativePhaseTime; err=%v", err)
+	}
+}
+
+// TestPhaseSyncAnalyzer_ResolvePhaseRange_PhaseValueErrorText 釘住 ResolvePhaseRange
+// 對「分期點未提供」與「開始 EMG 時間晚於結束」兩種失敗的錯誤全文(byte-identical)
+// 與 sentinel。EMGMotionOffset=26:力板 emg = force − 0.1、motion-index emg = (idx−26)/250。
+func TestPhaseSyncAnalyzer_ResolvePhaseRange_PhaseValueErrorText(t *testing.T) {
+	cases := []struct {
+		name       string
+		startPhase models.PhasePoint
+		endPhase   models.PhasePoint
+		points     models.PhasePoints
+		wantText   string
+		wantErr    error
+	}{
+		{
+			name:       "開始分期點未提供",
+			startPhase: models.PhaseS,
+			endPhase:   models.PhaseL,
+			points:     models.PhasePoints{L: models.MakeOpt(1.0)},
+			wantText:   "計算分期時間範圍失敗: 開始分期點 S: phase value is zero or not set",
+			wantErr:    synchronizer.ErrPhaseValueZero,
+		},
+		{
+			name:       "結束分期點未提供",
+			startPhase: models.PhaseS,
+			endPhase:   models.PhaseL,
+			points:     models.PhasePoints{S: models.MakeOpt(0.5)},
+			wantText:   "計算分期時間範圍失敗: 結束分期點 L: phase value is zero or not set",
+			wantErr:    synchronizer.ErrPhaseValueZero,
+		},
+		{
+			name:       "motion-index 結束分期點為 0 sentinel",
+			startPhase: models.PhaseD,
+			endPhase:   models.PhaseO,
+			points:     models.PhasePoints{D: 177},
+			wantText:   "計算分期時間範圍失敗: 結束分期點 O: phase value is zero or not set",
+			wantErr:    synchronizer.ErrPhaseValueZero,
+		},
+		{
+			name:       "開始 EMG 時間晚於結束(跨力板 / motion-index 兩域)",
+			startPhase: models.PhaseC,
+			endPhase:   models.PhaseD,
+			points:     models.PhasePoints{C: models.MakeOpt(1.0), D: 126},
+			wantText: "計算分期時間範圍失敗: 計算同步時間範圍失敗: " +
+				"開始時間 (0.900) 大於結束時間 (0.400): start time is after end time",
+			wantErr: synchronizer.ErrStartTimeAfterEnd,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			loaded := &LoadedPhaseSyncContext{
+				Manifest: &models.PhaseManifest{
+					Subject:         "T",
+					EMGMotionOffset: 26,
+					PhasePoints:     tc.points,
+				},
+				EMGData: &models.PhaseSyncEMGData{Time: []float64{0.0, 1.0, 2.0}},
+			}
+
+			_, err := NewPhaseSyncAnalyzer().ResolvePhaseRange(loaded, tc.startPhase, tc.endPhase)
+			require.Error(t, err)
+			assert.Equal(t, tc.wantText, err.Error())
+			assert.ErrorIs(t, err, tc.wantErr)
+		})
 	}
 }
 
