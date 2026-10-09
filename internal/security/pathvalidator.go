@@ -25,8 +25,6 @@ var (
 	ErrPathTraversal      = errors.New("路徑包含可疑的遍歷模式")
 	ErrPathTraversalAbs   = errors.New("絕對路徑仍包含遍歷字符")
 	ErrPathOutOfScope     = errors.New("路徑超出允許範圍")
-	ErrFilenameTraversal  = errors.New("文件名包含路徑遍歷字符")
-	ErrFilenameInvalid    = errors.New("文件名無效或被清理後為空")
 	ErrSensitiveDirectory = errors.New("路徑指向系統敏感目錄")
 	ErrPathTooLong        = errors.New("路徑長度超過限制")
 	ErrFilenameTooLong    = errors.New("文件名長度超過限制")

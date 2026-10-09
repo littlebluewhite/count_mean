@@ -112,3 +112,28 @@ func TestWriteMaxMean_SubDirWithPlus(t *testing.T) {
 	require.FileExists(t, got)
 	require.NoDirExists(t, filepath.Join(dir, "S 1"))
 }
+
+// WriteCSV 的檔名守門(取代已刪除的 SanitizePath):控制字元與保留名拒寫,
+// 與 ReadCSV 同一套規則;含字面 `%` / `+` 的合法檔名可寫。
+func TestWriteCSV_FilenameGuard(t *testing.T) {
+	t.Parallel()
+
+	handler, dir := newFormatAwareTestHandler(t)
+	data := [][]string{{"h"}, {"1"}}
+
+	rejected := map[string]string{
+		"NUL":      "a\x00b.csv",
+		"newline":  "a\nb.csv",
+		"reserved": "CON.csv",
+	}
+	for name, file := range rejected {
+		err := handler.WriteCSV(filepath.Join(dir, file), data)
+		require.Error(t, err, name)
+		require.Contains(t, err.Error(), "檔案名稱驗證失敗", name)
+	}
+
+	for _, file := range []string{"SF_8_BTS%_6.10.csv", "a+b.csv"} {
+		require.NoError(t, handler.WriteCSV(filepath.Join(dir, file), data), file)
+		require.FileExists(t, filepath.Join(dir, file))
+	}
+}

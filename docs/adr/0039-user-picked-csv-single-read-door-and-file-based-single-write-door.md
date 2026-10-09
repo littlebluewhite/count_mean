@@ -9,7 +9,7 @@
 ### 3.3 使用者選取 CSV 的唯一讀取入口：`CSVHandler.ReadCSV`
 
 1. `func (h *CSVHandler) ReadCSV(path string) ([][]string, error)` 是 **User-picked CSV read** 的唯一入口，流程固定為：
-   `ValidateFilename(filepath.Base(path))` → `ValidateExternalPath` → pre-open stat → 以 `fsperm.ReadFlags` 開檔 → fstat（必須是 regular file 且 ≤ 100MB，FIFO 不阻塞）→ `LimitReader` 單次解析 → `validateCSVRecords`。
+   `ValidateFilename(filepath.Base(path))` → `ValidateExternalPath` → `.csv` 副檔名檢查 → pre-open stat → 以 `fsperm.ReadFlags` 開檔 → fstat（必須是 regular file 且 ≤ 100MB，FIFO 不阻塞）→ `LimitReader` 單次解析 → `validateCSVRecords`。
 2. `validatePathFormat` **不再 URL-decode**。`%`、`+`、`%2E%2E` 都是字面檔名字元；traversal 判定只看 `..` element。
 
 ### 3.4 File-based write 的唯一寫入入口：`writeFileOutput`

@@ -156,7 +156,7 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 	return joined, nil
 }
 
-// lenientShownName 回傳可放進錯誤訊息的檔名:只留 basename(同樣把 "\\" 視為分隔符)。
+// lenientShownName 回傳可放進錯誤訊息的檔名:只留 basename(同樣把 "\" 視為分隔符)。
 func lenientShownName(filename string) string {
 	return filepath.Base(strings.ReplaceAll(filename, `\`, "/"))
 }
