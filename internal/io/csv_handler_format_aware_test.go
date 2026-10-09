@@ -274,7 +274,7 @@ func TestWriteNormalizedPhaseSyncResult_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	rows := readCSVRows(t, outputPath)
-	expected := newCSVConverter(1.0, 4).ConvertPhaseSyncResult(stats)
+	expected := newCSVConverter(calculator.NewUnitScale(0), 4).ConvertPhaseSyncResult(stats)
 	require.Len(t, rows, len(expected), "row count must match ConvertPhaseSyncResult")
 	for i, row := range rows {
 		require.Equal(t, expected[i], row, "row %d mismatch", i)

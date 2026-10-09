@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"count_mean/internal/calculator"
 	"count_mean/internal/models"
 )
 
@@ -18,7 +19,7 @@ func TestCSVConverter_SanitizesMaliciousHeaders(t *testing.T) {
 	maliciousHeaders := []string{"Time", "=cmd|/c calc!A1", "@SUM(1+1)", "+1|cmd"}
 	expectedPrefixes := []string{"Time", "'=", "'@", "'+"}
 
-	c := newCSVConverter(1.0, 6)
+	c := newCSVConverter(calculator.NewUnitScale(0), 6)
 
 	cases := []struct {
 		name string

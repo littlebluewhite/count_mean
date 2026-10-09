@@ -2,7 +2,6 @@ package calculator
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	calcerrors "count_mean/internal/errors"
@@ -18,6 +17,7 @@ const MinTimePointsForPhases = 5
 // PhaseAnalyzer 處理階段分析.
 type PhaseAnalyzer struct {
 	scalingFactor int
+	unitScale     UnitScale
 	phaseLabels   []string
 	logger        *logging.Logger
 	dataParser    *parsers.DataParser
@@ -29,6 +29,7 @@ func NewPhaseAnalyzer(scalingFactor int, phaseLabels []string) *PhaseAnalyzer {
 
 	return &PhaseAnalyzer{
 		scalingFactor: scalingFactor,
+		unitScale:     NewUnitScale(scalingFactor),
 		phaseLabels:   phaseLabels,
 		logger:        logger,
 		dataParser:    parsers.NewDataParserWithLogger(scalingFactor, logger),
@@ -284,13 +285,12 @@ func (p *PhaseAnalyzer) AnalyzeFromRawDataWithRanges(
 	}
 
 	// 前端 ranges 以「秒」為單位,但 ParseRawData 已用 Str2Number 把時間欄
-	// × math.Pow10(scalingFactor)。比照舊路徑 parsePhases 把 ranges scale 到同域,
+	// × 10^scalingFactor ([[Scaled domain]])。比照舊路徑 parsePhases 以 UnitScale.ToScaled 把 ranges 轉到同域,
 	// 否則已 scale 的 data.Time 永遠落不進原始秒區間 → 每個 phase 統計全 0。
 	// 建新 slice,不就地改 caller 傳入的 phases。
-	factor := math.Pow10(p.scalingFactor)
 	scaled := make([]models.TimeRange, len(phases))
 	for i, r := range phases {
-		scaled[i] = models.TimeRange{Start: r.Start * factor, End: r.End * factor}
+		scaled[i] = models.TimeRange{Start: p.unitScale.ToScaled(r.Start), End: p.unitScale.ToScaled(r.End)}
 	}
 
 	return p.Analyze(dataset, scaled)

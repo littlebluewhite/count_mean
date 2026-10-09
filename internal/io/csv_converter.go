@@ -3,6 +3,7 @@ package io
 import (
 	"fmt"
 
+	"count_mean/internal/calculator"
 	"count_mean/internal/csvutil"
 	"count_mean/internal/models"
 )
@@ -19,15 +20,15 @@ const (
 
 // csvConverter handles conversion of data structures to CSV format.
 type csvConverter struct {
-	scalingMultiplier float64
-	precision         int
+	unitScale calculator.UnitScale
+	precision int
 }
 
 // newCSVConverter creates a new csvConverter instance.
-func newCSVConverter(scalingMultiplier float64, precision int) *csvConverter {
+func newCSVConverter(unitScale calculator.UnitScale, precision int) *csvConverter {
 	return &csvConverter{
-		scalingMultiplier: scalingMultiplier,
-		precision:         precision,
+		unitScale: unitScale,
+		precision: precision,
 	}
 }
 
@@ -53,9 +54,9 @@ func (c *csvConverter) ConvertMaxMeanResults(
 	for _, result := range results {
 		startRangeTimes = append(startRangeTimes, c.formatPrecision(startRange))
 		endRangeTimes = append(endRangeTimes, c.formatPrecision(endRange))
-		startTimes = append(startTimes, c.formatPrecision(c.scaleValue(result.StartTime)))
-		endTimes = append(endTimes, c.formatPrecision(c.scaleValue(result.EndTime)))
-		maxMeans = append(maxMeans, c.formatPrecision(c.scaleValue(result.MaxMean)))
+		startTimes = append(startTimes, c.formatPrecision(c.unitScale.FromScaled(result.StartTime)))
+		endTimes = append(endTimes, c.formatPrecision(c.unitScale.FromScaled(result.EndTime)))
+		maxMeans = append(maxMeans, c.formatPrecision(c.unitScale.FromScaled(result.MaxMean)))
 	}
 
 	data = append(data, startRangeTimes, endRangeTimes, startTimes, endTimes, maxMeans)
@@ -78,7 +79,7 @@ func (c *csvConverter) ConvertNormalizedData(dataset *models.EMGDataset) [][]str
 		row := make([]string, 0, len(dataset.Headers))
 
 		// Time column - use original file time precision
-		row = append(row, fmt.Sprintf(timePrecision, c.scaleValue(emgData.Time)))
+		row = append(row, fmt.Sprintf(timePrecision, c.unitScale.FromScaled(emgData.Time)))
 
 		// Data columns - use configured precision
 		for _, val := range emgData.Channels {
@@ -108,7 +109,7 @@ func (c *csvConverter) ConvertPhaseAnalysis(
 	for j := 1; j < len(headers); j++ {
 		channelIdx := j - 1
 		if maxVal, exists := result.MaxValues[channelIdx]; exists {
-			maxRow = append(maxRow, c.formatPrecision(c.scaleValue(maxVal)))
+			maxRow = append(maxRow, c.formatPrecision(c.unitScale.FromScaled(maxVal)))
 		} else {
 			maxRow = append(maxRow, "N/A")
 		}
@@ -122,7 +123,7 @@ func (c *csvConverter) ConvertPhaseAnalysis(
 	for j := 1; j < len(headers); j++ {
 		channelIdx := j - 1
 		if meanVal, exists := result.MeanValues[channelIdx]; exists {
-			meanRow = append(meanRow, c.formatPrecision(c.scaleValue(meanVal)))
+			meanRow = append(meanRow, c.formatPrecision(c.unitScale.FromScaled(meanVal)))
 		} else {
 			meanRow = append(meanRow, "N/A")
 		}
@@ -137,7 +138,7 @@ func (c *csvConverter) ConvertPhaseAnalysis(
 		for j := 1; j < len(headers); j++ {
 			channelIdx := j - 1
 			if timeVal, exists := maxTimeIndex[channelIdx]; exists {
-				timeRow = append(timeRow, c.formatPrecision(c.scaleValue(timeVal)))
+				timeRow = append(timeRow, c.formatPrecision(c.unitScale.FromScaled(timeVal)))
 			} else {
 				timeRow = append(timeRow, "N/A")
 			}
@@ -152,11 +153,6 @@ func (c *csvConverter) ConvertPhaseAnalysis(
 // formatPrecision formats a float value with the configured precision.
 func (c *csvConverter) formatPrecision(value float64) string {
 	return fmt.Sprintf(fmt.Sprintf("%%.%df", c.precision), value)
-}
-
-// scaleValue scales a value by the scaling multiplier.
-func (c *csvConverter) scaleValue(value float64) float64 {
-	return value / c.scalingMultiplier
 }
 
 // buildRow creates a new row with the given label and capacity.

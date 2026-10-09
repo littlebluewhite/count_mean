@@ -57,7 +57,6 @@ func NewCSVHandler(cfg *config.AppConfig) *CSVHandler {
 	}
 
 	pathValidator := security.NewPathValidator(allowedPaths)
-	scalingMultiplier := math.Pow10(cfg.ScalingFactor)
 
 	return &CSVHandler{
 		config:            cfg,
@@ -65,7 +64,7 @@ func NewCSVHandler(cfg *config.AppConfig) *CSVHandler {
 		csvValidator:      csvvalidator.NewValidator(),
 		filenameValidator: filename.NewValidator(),
 		logger:            logging.GetLogger("csv_handler"),
-		converter:         newCSVConverter(scalingMultiplier, cfg.Precision),
+		converter:         newCSVConverter(calculator.NewUnitScale(cfg.ScalingFactor), cfg.Precision),
 	}
 }
 
@@ -606,7 +605,7 @@ type WriteRequest struct {
 // WriteMaxMean 把 MaxMean 計算結果寫成 6-row CSV (header / startRange / endRange /
 // startTime / endTime / maxMean)。
 //
-// row layout、scaling (config.ScalingFactor 推導的 scalingMultiplier)、precision
+// row layout、scaling (config.ScalingFactor 推導的 calculator.UnitScale)、precision
 // (config.Precision) 由 implementation 持有;caller 不再呼叫 Convert* 後組裝
 // [][]string。BOM / formula-injection sanitize / fsperm symlink reject / fsync
 // 兩段式收尾沿用 WriteCSV 既有路徑。

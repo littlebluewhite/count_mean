@@ -44,6 +44,7 @@ type CalculationOptions struct {
 // MaxMeanCalculator 處理最大平均值計算.
 type MaxMeanCalculator struct {
 	scalingFactor    int
+	unitScale        UnitScale
 	logger           *logging.Logger
 	workerCount      int
 	progressCallback models.ProgressCallback
@@ -91,6 +92,7 @@ func NewMaxMeanCalculator(scalingFactor int) *MaxMeanCalculator {
 
 	return &MaxMeanCalculator{
 		scalingFactor: scalingFactor,
+		unitScale:     NewUnitScale(scalingFactor),
 		logger:        logger,
 		workerCount:   workerCount,
 		dataParser:    parsers.NewDataParserWithLogger(scalingFactor, logger),
@@ -352,7 +354,7 @@ func infSign(v float64) string {
 	return ""
 }
 
-// normalizeTime 把 scaled-time 域 (已 Pow10 處理過的時間值) 的非有限值正規化,
+// normalizeTime 把 [[Scaled domain]] (已乘 10^scalingFactor 的時間值) 的非有限值正規化,
 // 讓 resolveDataRange 可以直接在 float64 scaled 域比較,不必再乘 1e6 轉 int64。
 //
 // 過去用 saturateMicroseconds 先乘 MicrosecondsPerSecond 再 round 成 int64,
@@ -420,10 +422,10 @@ func (c *MaxMeanCalculator) resolveDataRange(
 	//
 	// 邊界為「精確 float64 比較」,刻意不保留舊 ×1e6 的次微秒取整容差 (codex R2 dismiss):
 	// 那容差是 int64-微秒機制的附帶產物、非刻意 spec,而 ×1e6 正是溢位 bug 根源。
-	// 資料時間戳 (CSV→Str2Number→×Pow10) 與使用者邊界 (×Pow10) 共用縮放路徑,相等
+	// 資料時間戳 (CSV→Str2Number→×10^sf) 與使用者邊界 (UnitScale.ToScaled) 共用縮放算術,相等
 	// 字串值產生 bit-identical float 必被納入;僅「真正相異的次微秒值」被排除 (本應排除)。
-	scaledStartRange := normalizeTime(opts.StartRange * math.Pow10(c.scalingFactor))
-	scaledEndRange := normalizeTime(opts.EndRange * math.Pow10(c.scalingFactor))
+	scaledStartRange := normalizeTime(c.unitScale.ToScaled(opts.StartRange))
+	scaledEndRange := normalizeTime(c.unitScale.ToScaled(opts.EndRange))
 
 	startIdx = -1
 	endIdx = -1
