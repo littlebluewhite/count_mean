@@ -148,7 +148,7 @@ export function makeCciSpec(app) {
                 subjectIndex: ctx.subjectIdx,
             });
 
-            // backend HandlerRun 用 Success=false 表 soft error(non-panic,見
+            // backend handler 用 Success=false 表 soft error(non-panic,見
             // cci_handlers.go:114 failedCCIResult);envelope 需要 throw 才能走
             // ShowError → 把 soft error 升 throw(對齊 main.js:1356 ShowError 路徑)。
             if (!result.success) {

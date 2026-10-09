@@ -170,7 +170,7 @@ export function makeChartComposerSpec(app) {
                 dataFolder: ctx.dataFolder,
                 subject: ctx.subjectName,        // ADR-0002 §1 canonical-key:Composer 用 subject string
             });
-            // backend HandlerRun 用 Success=false 表 soft error(non-panic);
+            // backend handler 用 Success=false 表 soft error(non-panic);
             // envelope 需要 throw 才能走 ShowError → 把 soft error 升 throw。
             if (!result.success) {
                 throw new Error(result.message || 'Chart Composer 生成失敗');
