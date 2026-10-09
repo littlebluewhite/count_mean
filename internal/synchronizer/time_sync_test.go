@@ -5,6 +5,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/models"
+	"count_mean/internal/parsers"
 )
 
 func TestNewTimeSynchronizer(t *testing.T) {
@@ -177,6 +181,138 @@ func TestOutsideEMG(t *testing.T) {
 			assert.Equal(t, !before && !after, inRange, "ResolveTimeIndex inRange 須與 OutsideEMG 一致")
 		})
 	}
+}
+
+func TestSliceEMG(t *testing.T) {
+	data := &models.PhaseSyncEMGData{
+		Time:    []float64{0.0, 0.001, 0.002, 0.003, 0.004, 0.005},
+		Headers: []string{"Ch1", "Ch2"},
+		Channels: map[string][]float64{
+			"Ch1": {100, 101, 102, 103, 104, 105},
+			"Ch2": {200, 201, 202, 203, 204, 205},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		start, end float64
+		wantTime   []float64
+		wantCh1    []float64
+	}{
+		{name: "區間內", start: 0.001, end: 0.003,
+			wantTime: []float64{0.001, 0.002, 0.003}, wantCh1: []float64{101, 102, 103}},
+		{name: "恰為首末筆", start: 0.0, end: 0.005,
+			wantTime: data.Time, wantCh1: data.Channels["Ch1"]},
+		{name: "開頭一段", start: 0.0, end: 0.002,
+			wantTime: []float64{0.0, 0.001, 0.002}, wantCh1: []float64{100, 101, 102}},
+		{name: "結尾一段", start: 0.003, end: 0.005,
+			wantTime: []float64{0.003, 0.004, 0.005}, wantCh1: []float64{103, 104, 105}},
+		{name: "區間大於資料 → 兩端自然收在首末筆", start: -1, end: 10,
+			wantTime: data.Time, wantCh1: data.Channels["Ch1"]},
+		{name: "端點落在 sample 之間", start: 0.0015, end: 0.0035,
+			wantTime: []float64{0.002, 0.003}, wantCh1: []float64{102, 103}},
+		{name: "start == end 落在 sample 上", start: 0.002, end: 0.002,
+			wantTime: []float64{0.002}, wantCh1: []float64{102}},
+		{name: "端點在 sample 內側 ε 內 → 該 sample 仍切入", start: 0.001 + 0.5e-6, end: 0.003 - 0.5e-6,
+			wantTime: []float64{0.001, 0.002, 0.003}, wantCh1: []float64{101, 102, 103}},
+		{name: "端點在 sample 內側超出 ε → 該 sample 不切入", start: 0.001 + 2e-6, end: 0.003 - 2e-6,
+			wantTime: []float64{0.002}, wantCh1: []float64{102}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SliceEMG(data, tt.start, tt.end)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.wantTime, got.Data.Time)
+			assert.Equal(t, tt.wantCh1, got.Data.Channels["Ch1"])
+			assert.Len(t, got.Data.Channels["Ch2"], len(tt.wantTime))
+			assert.Equal(t, data.Headers, got.Data.Headers)
+			assert.Equal(t, tt.wantTime[0], got.ActualStartTime)
+			assert.Equal(t, tt.wantTime[len(tt.wantTime)-1], got.ActualEndTime)
+		})
+	}
+}
+
+// TestSliceEMG_Errors 釘住三種失敗的 sentinel 與錯誤全文(沿用舊
+// parsers.GetEMGDataInTimeRange / FindTimeRangeIndices 的 user-facing 字樣)。
+func TestSliceEMG_Errors(t *testing.T) {
+	data := &models.PhaseSyncEMGData{
+		Time:     []float64{0.0, 0.001, 0.002},
+		Headers:  []string{"Ch1"},
+		Channels: map[string][]float64{"Ch1": {1, 2, 3}},
+	}
+
+	tests := []struct {
+		name       string
+		data       *models.PhaseSyncEMGData
+		start, end float64
+		wantErr    error // nil = 不檢查 sentinel
+		wantText   string
+	}{
+		{name: "nil data", data: nil, start: 0, end: 1,
+			wantErr: parsers.ErrNilData, wantText: "EMG 數據為空: data is nil"},
+		{name: "空 Time", data: &models.PhaseSyncEMGData{Time: []float64{}}, start: 0, end: 1,
+			wantErr: parsers.ErrNilData, wantText: "EMG 數據為空: data is nil"},
+		{name: "start > end", data: data, start: 0.002, end: 0.001,
+			wantText: "開始時間 0.002 不能大於結束時間 0.001"},
+		{name: "區間整段在資料之後", data: data, start: 0.010, end: 0.020,
+			wantErr: ErrTimeRangeNotFound, wantText: "找不到有效的時間範圍數據: no data found in time range"},
+		{name: "區間整段在資料之前", data: data, start: -2, end: -1,
+			wantErr: ErrTimeRangeNotFound, wantText: "找不到有效的時間範圍數據: no data found in time range"},
+		{name: "區間夾在兩筆 sample 之間", data: data, start: 0.0012, end: 0.0018,
+			wantErr: ErrTimeRangeNotFound, wantText: "找不到有效的時間範圍數據: no data found in time range"},
+		{name: "start 為 NaN", data: data, start: math.NaN(), end: 0.002,
+			wantErr: ErrTimeRangeNotFound, wantText: "找不到有效的時間範圍數據: no data found in time range"},
+		{name: "end 為 NaN", data: data, start: 0.0, end: math.NaN(),
+			wantErr: ErrTimeRangeNotFound, wantText: "找不到有效的時間範圍數據: no data found in time range"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SliceEMG(tt.data, tt.start, tt.end)
+			require.Error(t, err)
+			assert.Nil(t, got)
+			assert.Equal(t, tt.wantText, err.Error())
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestSliceEMG_SubMillisecondEndBoundary 記錄 ADR-0043 的預期行為改變:切片從
+// 「整數毫秒取整後比較」改為 [start−ε, end+ε](ε = 1e-6)。舊規則把 end 與 sample
+// 都 math.Round 到毫秒,所以 end 之後不到 0.5ms 的 sample 會被切進來;> 1kHz 時
+// (相鄰 sample 間距 < 1ms)這會多切一筆。以 2.5kHz 時間軸為例:end = 1.0008 時,
+// 舊規則 round(1000.8) = round(1001.2) = 1001ms,把 end 之後 0.4ms 的 1.0012 也
+// 切入;新規則只到 1.0008。start 側對稱:舊規則會把 start 之前 0.4ms 的 sample 切入。
+func TestSliceEMG_SubMillisecondEndBoundary(t *testing.T) {
+	data := &models.PhaseSyncEMGData{
+		Time:     []float64{1.0, 1.0004, 1.0008, 1.0012, 1.0016},
+		Headers:  []string{"Ch1"},
+		Channels: map[string][]float64{"Ch1": {0, 1, 2, 3, 4}},
+	}
+
+	t.Run("end 之後 0.4ms 的 sample 不再切入(舊:切入 1.0012)", func(t *testing.T) {
+		got, err := SliceEMG(data, 1.0, 1.0008)
+		require.NoError(t, err)
+		assert.Equal(t, []float64{1.0, 1.0004, 1.0008}, got.Data.Time)
+		assert.Equal(t, 1.0008, got.ActualEndTime)
+	})
+
+	t.Run("start 之前 0.4ms 的 sample 不再切入(舊:切入 1.0008)", func(t *testing.T) {
+		got, err := SliceEMG(data, 1.0012, 1.0016)
+		require.NoError(t, err)
+		assert.Equal(t, []float64{1.0012, 1.0016}, got.Data.Time)
+		assert.Equal(t, 1.0012, got.ActualStartTime)
+	})
+
+	t.Run("end 只差同步飄移(< ε)仍切入邊界 sample", func(t *testing.T) {
+		got, err := SliceEMG(data, 1.0, 1.0008-5e-7)
+		require.NoError(t, err)
+		assert.Equal(t, []float64{1.0, 1.0004, 1.0008}, got.Data.Time)
+	})
 }
 
 func BenchmarkResolveTimeIndex(b *testing.B) {

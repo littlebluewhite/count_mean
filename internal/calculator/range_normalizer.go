@@ -6,7 +6,7 @@ import (
 	"math"
 
 	"count_mean/internal/models"
-	"count_mean/internal/parsers"
+	"count_mean/internal/synchronizer"
 )
 
 // ErrEmptyEMGData 表示 NormalizeByRangeMax 收到 nil PhaseSyncEMGData。
@@ -91,7 +91,7 @@ func (n *RangeNormalizer) NormalizeByRangeMax(
 		return nil, nil, ErrEmptyEMGData
 	}
 
-	rangeResult, err := parsers.GetEMGDataInTimeRange(data, startTime, endTime)
+	rangeResult, err := synchronizer.SliceEMG(data, startTime, endTime)
 	if err != nil {
 		return nil, nil, fmt.Errorf("提取分期區間 EMG 數據失敗: %w", err)
 	}
@@ -127,7 +127,7 @@ func (n *RangeNormalizer) NormalizeByRangeMax(
 // parsers.ParseFloatCell 對 "NaN"/"Inf" 字面是刻意接受的(見 parse_helpers.go
 // 註解),因此這個 scan 是計算端的最後一道防線。
 func computeChannelMaxes(
-	rangeResult *parsers.EMGTimeRangeResult,
+	rangeResult *synchronizer.EMGSlice,
 	headers []string,
 ) (map[string]float64, error) {
 	channelMaxes := make(map[string]float64, len(headers))

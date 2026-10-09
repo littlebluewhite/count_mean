@@ -182,37 +182,6 @@ func ParseTimeAndChannels(record []string, channelStartIdx int) (float64, []floa
 	return timeVal, channels, true
 }
 
-// FindTimeRangeIndices returns the first/last indices in times whose ms-rounded values
-// fall within [startTime, endTime]. Rounding to integer milliseconds matches the
-// project-wide convention for time comparison and avoids float precision drift.
-// Returns a wrapped ErrTimeRangeNotFound when no samples qualify.
-func FindTimeRangeIndices(times []float64, startTime, endTime float64) (int, int, error) {
-	startMs := int64(math.Round(startTime * 1000))
-	endMs := int64(math.Round(endTime * 1000))
-
-	startIdx := -1
-	endIdx := -1
-
-	for i, t := range times {
-		tMs := int64(math.Round(t * 1000))
-		if startIdx == -1 && tMs >= startMs {
-			startIdx = i
-		}
-
-		if tMs <= endMs {
-			endIdx = i
-		} else if endIdx != -1 {
-			break
-		}
-	}
-
-	if startIdx == -1 || endIdx == -1 || startIdx > endIdx {
-		return -1, -1, fmt.Errorf("找不到有效的時間範圍數據: %w", ErrTimeRangeNotFound)
-	}
-
-	return startIdx, endIdx, nil
-}
-
 // TimeSeriesLabels carries the dataset-specific words that ValidateTimeSeries
 // substitutes into its error messages so ValidateTimeSeries can keep a generic
 // implementation while the caller (currently only EMG) supplies its own user-facing wording.

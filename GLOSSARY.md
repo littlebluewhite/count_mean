@@ -32,6 +32,10 @@ _Avoid_: gait %(口語)、normalized time、jump cycle(code 用 gait cycle)、�
 一筆 [[Manifest]] row(一個 [[Subject]])的分期點在 EMG 時間軸上的位置:`synchronizer.NewPhaseTimeline(row)` 依 canonical 順序(`models.AllPhases()`,P0 → L)列出**已提供**的分期點與其 EMG 秒數,`At(p)` 查單點。是否提供由 `parsers.GetPhaseValue` 判斷(力板時間 `OptFloat` Set=false、motion-index D/O ≤ 0 為未提供);換算:力板時間 `emg = t − (EMGMotionOffset − 1) / 250`,motion-index `emg = (idx − EMGMotionOffset) / 250`,不設 motion-index 上限 guard(parser 已擋)。它是「分期點 → EMG 秒數」的唯一 owner;各 caller 只保留自己的 policy —— CCI 排除 P0–P2 並要求 S/L([[Gait cycle (CCI)]])、MuscleRatio 檢查 in-range 後排序加中點、[[Chart Composer]] 全部渲染成 [[Phase marker]]、PhaseSync 取一對分期點。見 [[ADR-0042]]。
 _Avoid_: synced time range(已刪的 `GetSyncedTimeRange`)、phase times map(那是 Composer / CCI 的輸出形狀,不是來源)、在 caller 內自行判斷力板時間 / motion-index 再換算.
 
+**EMG time axis**
+[[PhaseSyncEMGData]] 的 `Time`(秒,升冪)。[[Phase timeline]] 的 EMG 秒數落在這條軸上時,只有兩個操作,且共用同一個容差 `emgTimeEpsilon = 1e-6`(吸收力板 ↔ EMG 同步後的 ULP 飄移):**in-range** —— `synchronizer.OutsideEMG(times, t)` 回報 t 在首 / 末筆 ±ε 之外的哪一側(`ResolveTimeIndex` 的 inRange 由它推導);**切片** —— `synchronizer.SliceEMG(data, start, end)` 取 `[start−ε, end+ε]` 內的 samples(含端點)。通過 in-range 檢查的端點,其邊界 sample 一定被切入。越界時是 fail、drop 還是 skip,由各 analyzer 自己決定。見 [[ADR-0030]]、[[ADR-0043]]。
+_Avoid_: 毫秒取整比較(已刪的 `FindTimeRangeIndices`)、caller 內私有的 epsilon、strict-0 邊界比較.
+
 **Manifest**
 描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析都先解析 manifest 取得 dataset 集合再計算。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有四個 analyzer 不消費此欄位，向後相容。
 _Avoid_: config, batch file, descriptor, sheet.

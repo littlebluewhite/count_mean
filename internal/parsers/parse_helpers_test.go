@@ -208,57 +208,6 @@ func TestParseTimeAndChannels(t *testing.T) {
 	}
 }
 
-func TestFindTimeRangeIndices(t *testing.T) {
-	t.Parallel()
-
-	t.Run("typical_inside_range", func(t *testing.T) {
-		t.Parallel()
-		times := []float64{0.0, 0.5, 1.0, 1.5, 2.0}
-		start, end, err := FindTimeRangeIndices(times, 0.5, 1.5)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if start != 1 || end != 3 {
-			t.Errorf("got (%d, %d), want (1, 3)", start, end)
-		}
-	})
-
-	t.Run("empty_times", func(t *testing.T) {
-		t.Parallel()
-		_, _, err := FindTimeRangeIndices([]float64{}, 0, 1)
-		if !errors.Is(err, ErrTimeRangeNotFound) {
-			t.Errorf("expected ErrTimeRangeNotFound, got %v", err)
-		}
-	})
-
-	t.Run("range_fully_before_data", func(t *testing.T) {
-		t.Parallel()
-		_, _, err := FindTimeRangeIndices([]float64{5.0, 6.0}, 0, 1.0)
-		if !errors.Is(err, ErrTimeRangeNotFound) {
-			t.Errorf("expected ErrTimeRangeNotFound, got %v", err)
-		}
-	})
-
-	t.Run("ms_rounding_edge", func(t *testing.T) {
-		t.Parallel()
-		// 1.0004 round to ms = 1; 1.0005 round to ms = 1 (banker's rounding in Go)
-		// 1.0006 round to ms = 1 (1006 / 1000 = 1, since math.Round(1.0006*1000) = 1001)
-		// Actually 1.0005 * 1000 = 1000.5 → math.Round → 1001
-		times := []float64{1.0004, 1.0005, 1.0006}
-		// startTime = 1.0005 → startMs = 1001
-		// times[0] = 1.0004 → tMs = 1 (math.Round(1000.4) = 1000? actually 1000.4 → 1000)
-		// times[1] = 1.0005 → tMs = 1001 (math.Round(1000.5) = 1001 — banker's would round to 1000 but Go's math.Round rounds half-away-from-zero so 1001)
-		start, end, err := FindTimeRangeIndices(times, 1.0005, 1.001)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if start != 1 {
-			t.Errorf("ms-rounding boundary: start = %d, want 1", start)
-		}
-		_ = end
-	})
-}
-
 func TestValidateTimeSeries(t *testing.T) {
 	t.Parallel()
 

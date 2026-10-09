@@ -225,52 +225,6 @@ func (p *EMGParser) parseHeaders(headerRow []string) []string { //nolint:revive 
 	return headers
 }
 
-// EMGTimeRangeResult 時間範圍提取結果，包含實際選取的時間範圍.
-type EMGTimeRangeResult struct {
-	Data            *models.PhaseSyncEMGData
-	ActualStartTime float64 // 實際選取的第一個數據點時間
-	ActualEndTime   float64 // 實際選取的最後一個數據點時間
-}
-
-// GetEMGDataInTimeRange returns EMG data within the specified time range.
-// Uses integer milliseconds for comparison to avoid floating point precision issues.
-//
-//nolint:err113 // dynamic errors with Chinese messages for user-facing output
-func GetEMGDataInTimeRange(
-	data *models.PhaseSyncEMGData, startTime, endTime float64,
-) (*EMGTimeRangeResult, error) {
-	// validator path 已有此 guard，extractor path 需對稱保護避免 data.Time
-	// 索引存取造成 nil-deref panic。空 Time slice 也視為空資料一併 reject。
-	if data == nil || len(data.Time) == 0 {
-		return nil, fmt.Errorf("EMG 數據為空: %w", ErrNilData)
-	}
-
-	if startTime > endTime {
-		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", startTime, endTime)
-	}
-
-	startIdx, endIdx, err := FindTimeRangeIndices(data.Time, startTime, endTime)
-	if err != nil {
-		return nil, err
-	}
-
-	rangeData := &models.PhaseSyncEMGData{
-		Time:     data.Time[startIdx : endIdx+1],
-		Channels: make(map[string][]float64),
-		Headers:  data.Headers,
-	}
-
-	for channelName, channelData := range data.Channels {
-		rangeData.Channels[channelName] = channelData[startIdx : endIdx+1]
-	}
-
-	return &EMGTimeRangeResult{
-		Data:            rangeData,
-		ActualStartTime: data.Time[startIdx],
-		ActualEndTime:   data.Time[endIdx],
-	}, nil
-}
-
 // CalculateEMGStatistics 計算統計數據.
 //
 // **前置條件**:caller 必須先過 ValidateEMGData。本函式用 util.ArrayMean/ArrayMax,

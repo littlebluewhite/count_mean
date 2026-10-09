@@ -549,7 +549,7 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(
 	}
 
 	// 6. 提取指定時間範圍的 EMG 數據
-	rangeResult, err := parsers.GetEMGDataInTimeRange(
+	rangeResult, err := synchronizer.SliceEMG(
 		loaded.EMGData,
 		loaded.PhaseTimeRange.StartTime,
 		loaded.PhaseTimeRange.EndTime,
@@ -587,7 +587,7 @@ func validateEMGTimeRange(
 	emgMotionOffset int,
 ) error {
 	// nil 或空 Time slice 無法做範圍比對,且空 EMG 資料是上游 contract 缺陷
-	// (對齊 emg_parser.go:177 GetEMGDataInTimeRange 的 nil/empty guard)。
+	// (對齊 synchronizer.SliceEMG 的 nil/empty guard)。
 	// 空 Time 時原本 emgMinTime=emgMaxTime=0.0,任何 StartTime<0 都通過,
 	// 反而默許了錯位結果 — fail-fast 比 silent miscompute 安全。
 	if emgData == nil || len(emgData.Time) == 0 {
@@ -597,7 +597,7 @@ func validateEMGTimeRange(
 	emgMinTime := emgData.Time[0]
 	emgMaxTime := emgData.Time[len(emgData.Time)-1]
 
-	// 越界判斷走 EMG 時間軸的共用規則(synchronizer.OutsideEMG,±emgTimeEpsilon):
+	// 越界判斷走 [[EMG time axis]] 的共用規則(synchronizer.OutsideEMG,±emgTimeEpsilon):
 	// [[Phase timeline]] 經 ForceTimeToEMGTime 同步後的 ULP 飄移不誤拒,與 CCI /
 	// muscle_ratio 同一容差(ADR-0043)。
 	if before, _ := synchronizer.OutsideEMG(emgData.Time, phaseTimeRange.StartTime); before {

@@ -123,8 +123,8 @@ func (a *CCIAnalyzer) computeCCI(
 
 	// ADR-0018 anchor-vs-extraction split:錨點 [gaitStart, gaitEnd] = [S, L] 驅動
 	// percent;抽取範圍兩側各延伸 ±150ms,讓曲線顯示 <0% lead-in 與 >100% landing。
-	// 低端不需守門:FindTimeRangeIndices 會把 startIdx 自動 clamp 到 0(established
-	// behavior);高端則 clamp 到資料末筆,避免越界。emgData.Time 此處保證非空——
+	// 低端不需守門:SliceEMG 從第一筆 ≥ start−ε 的 sample 切起,低於首筆的 start
+	// 自然收在 index 0;高端則 clamp 到資料末筆,避免越界。emgData.Time 此處保證非空——
 	// calculateGaitCycle 內的 validateEMGBounds 已擋下空資料。
 	extractStart := gaitStart - gaitExtensionSeconds
 	extractEnd := gaitEnd + gaitExtensionSeconds
@@ -132,7 +132,7 @@ func (a *CCIAnalyzer) computeCCI(
 		extractEnd = last
 	}
 
-	rangeResult, err := parsers.GetEMGDataInTimeRange(emgData, extractStart, extractEnd)
+	rangeResult, err := synchronizer.SliceEMG(emgData, extractStart, extractEnd)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.KeyErrorCCIExtractGaitRangeFailed), err)
 	}
@@ -385,7 +385,7 @@ func validateEMGBounds(
 		return fmt.Errorf("EMG 時間軸末筆為非有限值: %v", emgMax)
 	}
 
-	// 越界判斷走 EMG 時間軸的共用規則(synchronizer.OutsideEMG,±emgTimeEpsilon =
+	// 越界判斷走 [[EMG time axis]] 的共用規則(synchronizer.OutsideEMG,±emgTimeEpsilon =
 	// 1e-6):force plate ↔ EMG 同步後的 ~1e-7 ULP 飄移被吸收,真實 out-of-range
 	// (>= 1ms ≈ 1e-3) 仍會被擋下。與 phase_stats / muscle_ratio / phase_sync 同一容差
 	// (ADR-0030、ADR-0043)。

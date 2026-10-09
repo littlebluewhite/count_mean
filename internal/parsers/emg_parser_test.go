@@ -209,98 +209,6 @@ func TestEMGParser_Parse_ReaderError(t *testing.T) {
 	assert.Zero(t, freq)
 }
 
-func TestEMGParser_GetDataInTimeRange(t *testing.T) {
-	// 創建測試數據
-	testData := &models.PhaseSyncEMGData{
-		Time:    []float64{0.0, 0.001, 0.002, 0.003, 0.004, 0.005},
-		Headers: []string{"Ch1", "Ch2"},
-		Channels: map[string][]float64{
-			"Ch1": {100.0, 101.0, 102.0, 103.0, 104.0, 105.0},
-			"Ch2": {200.0, 201.0, 202.0, 203.0, 204.0, 205.0},
-		},
-	}
-
-	tests := []struct {
-		name      string
-		startTime float64
-		endTime   float64
-		wantErr   bool
-		checkLen  int
-	}{
-		{
-			name:      "valid time range",
-			startTime: 0.001,
-			endTime:   0.003,
-			wantErr:   false,
-			checkLen:  3, // indices 1, 2, 3
-		},
-		{
-			name:      "start time greater than end time",
-			startTime: 0.003,
-			endTime:   0.001,
-			wantErr:   true,
-		},
-		{
-			name:      "time range outside data",
-			startTime: 0.010,
-			endTime:   0.020,
-			wantErr:   true,
-		},
-		{
-			name:      "exact boundary match",
-			startTime: 0.000,
-			endTime:   0.005,
-			wantErr:   false,
-			checkLen:  6, // all data
-		},
-		{
-			name:      "partial range at beginning",
-			startTime: 0.000,
-			endTime:   0.002,
-			wantErr:   false,
-			checkLen:  3, // indices 0, 1, 2
-		},
-		{
-			name:      "partial range at end",
-			startTime: 0.003,
-			endTime:   0.005,
-			wantErr:   false,
-			checkLen:  3, // indices 3, 4, 5
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := GetEMGDataInTimeRange(testData, tt.startTime, tt.endTime)
-
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-
-			assert.NoError(t, err)
-			assert.NotNil(t, result)
-			assert.NotNil(t, result.Data)
-			assert.Len(t, result.Data.Time, tt.checkLen)
-			assert.Len(t, result.Data.Channels["Ch1"], tt.checkLen)
-			assert.Len(t, result.Data.Channels["Ch2"], tt.checkLen)
-
-			// 檢查實際時間範圍與數據一致
-			if tt.checkLen > 0 {
-				assert.Equal(t, result.Data.Time[0], result.ActualStartTime)
-				assert.Equal(t, result.Data.Time[len(result.Data.Time)-1], result.ActualEndTime)
-				assert.GreaterOrEqual(t, result.ActualStartTime, tt.startTime)
-				assert.LessOrEqual(t, result.ActualEndTime, tt.endTime)
-			}
-
-			// 檢查數據完整性
-			for channelName := range result.Data.Channels {
-				assert.Len(t, result.Data.Channels[channelName], len(result.Data.Time))
-			}
-		})
-	}
-}
-
 func TestCalculateEMGStatistics(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -805,19 +713,6 @@ func TestEMGParser_Integration(t *testing.T) {
 		assert.Len(t, data.Time, 5)
 		assert.Len(t, data.Headers, 4)
 		assert.Len(t, data.Channels, 4)
-
-		// 測試時間範圍查詢
-		rangeResult, err := GetEMGDataInTimeRange(data, 0.001, 0.003)
-		require.NoError(t, err)
-		assert.Len(t, rangeResult.Data.Time, 3)
-
-		// 驗證實際時間範圍與數據一致
-		assert.Equal(t, rangeResult.Data.Time[0], rangeResult.ActualStartTime)
-		assert.Equal(t, rangeResult.Data.Time[len(rangeResult.Data.Time)-1], rangeResult.ActualEndTime)
-
-		// 驗證範圍數據
-		err = ValidateEMGData(rangeResult.Data)
-		assert.NoError(t, err)
 
 		// 測試統計計算
 		means, maxes := CalculateEMGStatistics(data)

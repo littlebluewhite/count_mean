@@ -5,7 +5,7 @@ import (
 	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/models"
-	"count_mean/internal/parsers"
+	"count_mean/internal/synchronizer"
 )
 
 // NormalizedPhaseSyncParams 標準化分期同步分析參數。
@@ -146,7 +146,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 	}
 
 	// 5. 用 statsRange 擷取標準化後的資料 + 計算統計
-	rangeResult, rangeErr := parsers.GetEMGDataInTimeRange(
+	rangeResult, rangeErr := synchronizer.SliceEMG(
 		normalizedData,
 		statsRange.StartTime,
 		statsRange.EndTime,

@@ -1,8 +1,11 @@
 package synchronizer
 
 import (
+	"errors"
+	"fmt"
 	"math"
 
+	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 )
 
@@ -41,16 +44,17 @@ func (ts *TimeSynchronizer) ForceTimeToEMGTime(forceTime float64, emgMotionOffse
 // (>= 1ms ≈ 1e-3)仍被判越界,浮點 ULP 飄移(<= 1e-6)被吸收。
 const emgTimeEpsilon = 1e-6
 
-// OutsideEMG 回報 t 是否落在 EMG 時間軸 [times[0], times[len-1]](含 ±emgTimeEpsilon
+// OutsideEMG 回報 t 是否落在 [[EMG time axis]] [times[0], times[len-1]](含 ±emgTimeEpsilon
 // 邊界容差)之外,以及在哪一側。times 須升冪排序。這是「t 在不在 EMG 資料內」的
 // 唯一規則:ResolveTimeIndex 的 inRange 即 !before && !after(ADR-0030、ADR-0043)。
 //
-//	t < times[0]−ε                 → (true, false)
-//	t > times[len−1]+ε             → (false, true)
-//	在範圍內(或邊界 ±ε)           → (false, false)
-//	len(times)==0、t 或端點為 NaN  → (true, true):空軸沒有「內」,NaN 無從比較,一律越界
+//	t < times[0]−ε           → (true, false)
+//	t > times[len−1]+ε       → (false, true)
+//	在範圍內(或邊界 ±ε)     → (false, false)
+//	len(times)==0 或 t 為 NaN → (true, true):空軸沒有「內」,NaN 無從比較
 //
-// 比較寫成 !(t >= lo) / !(t <= hi):不能證明在範圍內的值(NaN)都算越界。
+// 比較寫成 !(t >= lo) / !(t <= hi):不能證明在範圍內就算越界(首 / 末筆為 NaN 時,
+// 該側也回 true)。
 func OutsideEMG(times []float64, t float64) (before, after bool) {
 	if len(times) == 0 {
 		return true, true
@@ -60,6 +64,73 @@ func OutsideEMG(times []float64, t float64) (before, after bool) {
 	after = !(t <= times[len(times)-1]+emgTimeEpsilon)
 
 	return before, after
+}
+
+// ErrTimeRangeNotFound 表示 SliceEMG 的區間 [start−ε, end+ε] 內沒有任何 EMG sample。
+var ErrTimeRangeNotFound = errors.New("no data found in time range")
+
+// EMGSlice 是 SliceEMG 的結果。Data 的 Time 與各通道是原資料的子切片(共用底層
+// 陣列、不複製),Headers 沿用原 slice。
+type EMGSlice struct {
+	Data            *models.PhaseSyncEMGData
+	ActualStartTime float64 // 實際選取的第一筆 sample 時間
+	ActualEndTime   float64 // 實際選取的最後一筆 sample 時間
+}
+
+// SliceEMG 取出 [[EMG time axis]] 上落在 [start−ε, end+ε](含端點,ε = emgTimeEpsilon)的
+// samples —— 與 OutsideEMG 同一個容差:通過 OutsideEMG 的區間端點,其邊界 sample
+// 一定被切進來(ADR-0043;取代舊的整數毫秒取整切片)。d.Time 須升冪排序;掃描在
+// 第一個超過 end+ε 的 sample 停止。
+//
+//	d 為 nil 或 Time 為空 → parsers.ErrNilData
+//	start > end           → 錯誤(無 sentinel)
+//	區間內沒有 sample      → ErrTimeRangeNotFound(start 或 end 為 NaN 也落在這裡)
+//
+//nolint:err113 // start > end 的動態錯誤沿用既有 user-facing 字樣
+func SliceEMG(d *models.PhaseSyncEMGData, start, end float64) (*EMGSlice, error) {
+	// 空 Time slice 也視為空資料一併 reject,避免下方索引存取 panic。
+	if d == nil || len(d.Time) == 0 {
+		return nil, fmt.Errorf("EMG 數據為空: %w", parsers.ErrNilData)
+	}
+
+	if start > end {
+		return nil, fmt.Errorf("開始時間 %.3f 不能大於結束時間 %.3f", start, end)
+	}
+
+	lo := start - emgTimeEpsilon
+	hi := end + emgTimeEpsilon
+
+	startIdx, endIdx := -1, -1
+	for i, t := range d.Time {
+		if startIdx == -1 && t >= lo {
+			startIdx = i
+		}
+
+		if t <= hi {
+			endIdx = i
+		} else if endIdx != -1 {
+			break
+		}
+	}
+
+	if startIdx == -1 || endIdx == -1 || startIdx > endIdx {
+		return nil, fmt.Errorf("找不到有效的時間範圍數據: %w", ErrTimeRangeNotFound)
+	}
+
+	sliced := &models.PhaseSyncEMGData{
+		Time:     d.Time[startIdx : endIdx+1],
+		Channels: make(map[string][]float64, len(d.Channels)),
+		Headers:  d.Headers,
+	}
+	for name, values := range d.Channels {
+		sliced.Channels[name] = values[startIdx : endIdx+1]
+	}
+
+	return &EMGSlice{
+		Data:            sliced,
+		ActualStartTime: d.Time[startIdx],
+		ActualEndTime:   d.Time[endIdx],
+	}, nil
 }
 
 // ResolveTimeIndex 解析 target 到 times 中最接近的 sample 索引,並回報 target 是否

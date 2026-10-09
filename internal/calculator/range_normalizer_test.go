@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/models"
-	"count_mean/internal/parsers"
+	"count_mean/internal/synchronizer"
 )
 
 // makeSampleEMG 建立一份 sample EMG，時間 0.0..0.9（10 個取樣點），
@@ -151,10 +151,10 @@ func TestRangeNormalizer_NormalizeByRangeMax_MissingChannelReturnsDistinctError(
 // TestComputeChannelMaxes_EmptyChannelSliceIsMissing 守護:
 // 通道在 Channels map 但對應的 slice 長度為 0 (區間切出空 slice) 也算 missing,
 // 不算 zero — 因為「沒資料」與「實測為 0」的根因不同。
-// 直接測 computeChannelMaxes — 因為 NormalizeByRangeMax 走 GetEMGDataInTimeRange
+// 直接測 computeChannelMaxes — 因為 NormalizeByRangeMax 走 synchronizer.SliceEMG
 // 切片時對空 slice 會 panic,empty 案例只能透過內部 helper 觸發。
 func TestComputeChannelMaxes_EmptyChannelSliceIsMissing(t *testing.T) {
-	rangeResult := &parsers.EMGTimeRangeResult{
+	rangeResult := &synchronizer.EMGSlice{
 		Data: &models.PhaseSyncEMGData{
 			Time: []float64{0.0, 0.1},
 			Channels: map[string][]float64{

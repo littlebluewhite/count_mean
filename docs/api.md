@@ -380,7 +380,7 @@ fmt.Printf("解析成功：%d 筆 row, %d 個 channel\n",
     len(dataset.Data), len(dataset.Data[0].Channels))
 ```
 
-`parsers` 套件另提供 `EMGParser`、`ANCParser`、`MotionParser`、`PhaseManifestParser` 等格式專用 reader；共用的工具（`ParseFloatCell`、`ValidateTimeSeries[T]`、`FindTimeRangeIndices`）位於 `parse_helpers.go`。
+`parsers` 套件另提供 `EMGParser`、`ANCParser`、`MotionParser`、`PhaseManifestParser` 等格式專用 reader；共用的工具（`ParseFloatCell`、`ValidateTimeSeries[T]`）位於 `parse_helpers.go`。EMG 時間軸的區間切片（`SliceEMG`）與越界判斷（`OutsideEMG`）在 `synchronizer` 套件（ADR-0043）。
 
 ---
 

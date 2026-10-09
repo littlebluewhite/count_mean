@@ -31,8 +31,6 @@ var (
 	ErrInconsistentLength = errors.New("data length inconsistent")
 	// ErrInvalidTimeRange 是 apperrors.ErrInvalidTimeRange 的別名。
 	ErrInvalidTimeRange = apperrors.ErrInvalidTimeRange
-	// ErrTimeRangeNotFound indicates no data in time range.
-	ErrTimeRangeNotFound = errors.New("no data found in time range")
 	// ErrIndexNotFound indicates index not found.
 	ErrIndexNotFound = errors.New("index not found")
 	// ErrInvalidIndexRange indicates invalid index range.
