@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -58,6 +59,10 @@ func TestPathValidator_ValidateExternalDir(t *testing.T) {
 // TestPathValidator_ValidateExternalDir_RejectsSymlinkToSensitive:symlink 指向 /etc 的
 // 目錄,resolve 後仍須被擋(目錄根無結尾 slash 也不得漏)。
 func TestPathValidator_ValidateExternalDir_RejectsSymlinkToSensitive(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 上 /etc 不是敏感目錄(解析為 C:\\etc),同 ValidateExternalPath_RejectsSymlinkToSensitive 跳過")
+	}
+
 	t.Parallel()
 
 	link := filepath.Join(t.TempDir(), "etc-link")
