@@ -115,14 +115,14 @@ func TestRunBatch_PartialSuccess(t *testing.T) {
 }
 
 // TestRunBatch_NameAndRangeMapping asserts that Write receives name==BatchFile.Name,
-// headers==records[0], and startRange/endRange equal to what calculator.ResolveTimeRange
-// resolves for that file's records and params.
+// headers==records[0], and the range actually used for that file (whole file here:
+// first/last sample times 1..4).
 func TestRunBatch_NameAndRangeMapping(t *testing.T) {
 	calc := newCalc()
 	spy := &spyWriter{}
 
 	rec := goodRecords(1.0)
-	params := BatchParams{WindowSize: 2} // StartTime=0, EndTime=0
+	params := BatchParams{WindowSize: 2} // Range 兩端皆未給 = 整檔
 
 	source := &memFileSource{files: []BatchFile{
 		{Name: "myfile", Read: func() ([][]string, error) { return rec, nil }},
@@ -136,9 +136,8 @@ func TestRunBatch_NameAndRangeMapping(t *testing.T) {
 	assert.Equal(t, "myfile", call.name, "Write should receive BatchFile.Name")
 	assert.Equal(t, rec[0], call.headers, "Write should receive records[0] as headers")
 
-	wantStart, wantEnd := calculator.ResolveTimeRange(rec, params.StartTime, params.EndTime)
-	assert.Equal(t, wantStart, call.startRange, "startRange must equal ResolveTimeRange output")
-	assert.Equal(t, wantEnd, call.endRange, "endRange must equal ResolveTimeRange output")
+	assert.Equal(t, 1.0, call.startRange, "whole file: startRange = first sample time")
+	assert.Equal(t, 4.0, call.endRange, "whole file: endRange = last sample time")
 }
 
 // TestRunBatch_WriteOrder asserts that Write is called once per successful file,
@@ -187,71 +186,93 @@ func TestRunBatch_EmptySource(t *testing.T) {
 	assert.Nil(t, res)
 }
 
-// TestRunBatch_TimeRangeForwarding verifies that startRange/endRange forwarded
-// to Write equals calculator.ResolveTimeRange(records, params.StartTime, params.EndTime).
-//
-// Scenario A — params (0,0) with data that has non-zero timestamps:
-// ResolveTimeRange derives (firstTime, lastTime) from the data, which is
-// non-zero, so the resolved pair is non-(0,0). The spy must receive the resolved
-// pair, not the raw (0,0) input.
-//
-// Scenario B — explicit non-zero params: ResolveTimeRange returns them
-// unchanged; spy must receive the same values.
-//
-// NOTE: We do NOT assert "input (0,0) → CalculateFromRawData branch". The
-// dispatch in RunBatch keys on the resolved pair, not the raw input. With
-// typical fixture data the resolved pair is non-zero, so the runner uses
-// CalculateFromRawDataWithRange regardless of whether the caller passed (0,0).
-func TestRunBatch_TimeRangeForwarding(t *testing.T) {
-	calc := newCalc()
+// ptr 回傳 v 的指標,用來表達 MaxMeanRange 有給的那一端。
+func ptr(v float64) *float64 { return &v }
 
-	t.Run("ZeroParamsResolvedFromData", func(t *testing.T) {
-		spy := &spyWriter{}
-		rec := goodRecords(1.0) // first data time=1.0, last data time=4.0
+// TestRunBatch_TimeRange 釘住 [[Max-mean]] 時間範圍「兩端各自可省略」的語意
+// (ADR-0050):沒給的那端從資料實際首/末樣本算起,且寫給 Write 的範圍是實際採用的值。
+// fixture 用 scalingFactor=0,時間與通道值即原值;goodRecords(1.0) = 時間 1..4、
+// 值 100,200,150,300。
+func TestRunBatch_TimeRange(t *testing.T) {
+	cases := []struct {
+		name               string
+		rec                [][]string
+		params             BatchParams
+		wantStart, wantEnd float64 // 寫出的「開始/結束範圍秒數」
+		wantMaxMean        float64
+		wantWinStart       float64 // 最佳窗口首樣本時間
+		wantWinEnd         float64 // 最佳窗口末樣本時間
+	}{
+		{
+			// 兩端皆未給 = 整檔:範圍列印實際首/末樣本 1..4;最佳窗 (150+300)/2 = 225 @ 3..4。
+			name:      "WholeFile",
+			rec:       goodRecords(1.0),
+			params:    BatchParams{WindowSize: 2},
+			wantStart: 1, wantEnd: 4,
+			wantMaxMean: 225, wantWinStart: 3, wantWinEnd: 4,
+		},
+		{
+			// 兩端都給 [1.5, 3.5]:原樣轉發;範圍內 200,150 → 唯一窗 175 @ 2..3。
+			name:      "BothEnds",
+			rec:       goodRecords(1.0),
+			params:    BatchParams{WindowSize: 2, Range: calculator.MaxMeanRange{Start: ptr(1.5), End: ptr(3.5)}},
+			wantStart: 1.5, wantEnd: 3.5,
+			wantMaxMean: 175, wantWinStart: 2, wantWinEnd: 3,
+		},
+		{
+			// 只給起點 2:範圍 [2, 末樣本 4] → 200,150,300 → 最佳窗 (150+300)/2 = 225 @ 3..4。
+			name:      "StartOnly",
+			rec:       goodRecords(1.0),
+			params:    BatchParams{WindowSize: 2, Range: calculator.MaxMeanRange{Start: ptr(2)}},
+			wantStart: 2, wantEnd: 4,
+			wantMaxMean: 225, wantWinStart: 3, wantWinEnd: 4,
+		},
+		{
+			// 最後一列時間欄空白(parser 會跳過該列):整檔 = 實際首/末樣本 1..4。
+			name:      "BlankLastTimeCell",
+			rec:       append(goodRecords(1.0), []string{"", "999"}),
+			params:    BatchParams{WindowSize: 2},
+			wantStart: 1, wantEnd: 4,
+			wantMaxMean: 225, wantWinStart: 3, wantWinEnd: 4,
+		},
+		{
+			// 只給終點 2,資料含負時間:起點從首樣本 -2 起算,負時間樣本不得被丟掉。
+			// 範圍 -2..2 → 500,400,10,20,30 → 最佳窗 (500+400)/2 = 450 @ -2..-1。
+			name: "EndOnlyKeepsNegativeTimes",
+			rec: [][]string{
+				{"Time", "Ch1"},
+				{"-2", "500"},
+				{"-1", "400"},
+				{"0", "10"},
+				{"1", "20"},
+				{"2", "30"},
+			},
+			params:    BatchParams{WindowSize: 2, Range: calculator.MaxMeanRange{End: ptr(2)}},
+			wantStart: -2, wantEnd: 2,
+			wantMaxMean: 450, wantWinStart: -2, wantWinEnd: -1,
+		},
+	}
 
-		params := BatchParams{WindowSize: 2, StartTime: 0, EndTime: 0}
-		source := &memFileSource{files: []BatchFile{
-			{Name: "f", Read: func() ([][]string, error) { return rec, nil }},
-		}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &spyWriter{}
+			source := &memFileSource{files: []BatchFile{
+				{Name: "f", Read: func() ([][]string, error) { return tc.rec, nil }},
+			}}
 
-		_, err := RunBatch(context.Background(), calc, source, spy, params)
-		require.NoError(t, err)
-		require.Len(t, spy.calls, 1)
+			res, err := RunBatch(context.Background(), newCalc(), source, spy, tc.params)
+			require.NoError(t, err)
+			assert.Equal(t, 1, res.SuccessCount)
+			assert.Equal(t, 0, res.FailCount)
+			require.Len(t, spy.calls, 1)
 
-		wantStart, wantEnd := calculator.ResolveTimeRange(rec, 0, 0)
-
-		// Sanity-check the fixture: resolved range should be non-zero (1.0, 4.0).
-		assert.NotEqual(t, 0.0, wantStart, "fixture must produce non-zero resolved start")
-		assert.NotEqual(t, 0.0, wantEnd, "fixture must produce non-zero resolved end")
-
-		// Runner must forward the RESOLVED pair to Write.
-		assert.Equal(t, wantStart, spy.calls[0].startRange,
-			"startRange to Write must equal ResolveTimeRange output, not raw input 0")
-		assert.Equal(t, wantEnd, spy.calls[0].endRange,
-			"endRange to Write must equal ResolveTimeRange output, not raw input 0")
-	})
-
-	t.Run("ExplicitNonZeroParamsForwardedUnchanged", func(t *testing.T) {
-		spy := &spyWriter{}
-		rec := goodRecords(1.0)
-
-		params := BatchParams{WindowSize: 2, StartTime: 1.5, EndTime: 3.5}
-		source := &memFileSource{files: []BatchFile{
-			{Name: "f", Read: func() ([][]string, error) { return rec, nil }},
-		}}
-
-		_, err := RunBatch(context.Background(), calc, source, spy, params)
-		require.NoError(t, err)
-		require.Len(t, spy.calls, 1)
-
-		// ResolveTimeRange returns (startTime, endTime) unchanged when either is non-zero.
-		wantStart, wantEnd := calculator.ResolveTimeRange(rec, params.StartTime, params.EndTime)
-		assert.Equal(t, params.StartTime, wantStart)
-		assert.Equal(t, params.EndTime, wantEnd)
-
-		assert.Equal(t, wantStart, spy.calls[0].startRange,
-			"explicit StartTime must be forwarded to Write unchanged")
-		assert.Equal(t, wantEnd, spy.calls[0].endRange,
-			"explicit EndTime must be forwarded to Write unchanged")
-	})
+			call := spy.calls[0]
+			assert.Equal(t, tc.wantStart, call.startRange)
+			assert.Equal(t, tc.wantEnd, call.endRange)
+			require.Len(t, call.results, 1)
+			assert.Equal(t, tc.wantMaxMean, call.results[0].MaxMean)
+			assert.Equal(t, tc.wantWinStart, call.results[0].StartTime)
+			assert.Equal(t, tc.wantWinEnd, call.results[0].EndTime)
+		})
+	}
 }

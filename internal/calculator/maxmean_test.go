@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	calcerrors "count_mean/internal/errors"
 	"count_mean/internal/models"
 )
 
@@ -208,7 +209,12 @@ func TestMaxMeanCalculator_parseRawData(t *testing.T) {
 	})
 }
 
-func TestMaxMeanCalculator_CalculateWithRange(t *testing.T) {
+// bothEnds 建立兩端都有給的 MaxMeanRange(秒)。
+func bothEnds(start, end float64) MaxMeanRange {
+	return MaxMeanRange{Start: &start, End: &end}
+}
+
+func TestMaxMeanCalculator_CalculateInRange(t *testing.T) {
 	calc := NewMaxMeanCalculator(10)
 
 	t.Run("ValidTimeRange", func(t *testing.T) {
@@ -223,12 +229,12 @@ func TestMaxMeanCalculator_CalculateWithRange(t *testing.T) {
 		}
 
 		// Calculate max mean for range 1.5 to 3.5 seconds
-		results, err := calc.CalculateWithRange(context.Background(), dataset, 2, 1.5, 3.5)
+		run, err := calc.CalculateInRange(context.Background(), dataset, 2, bothEnds(1.5, 3.5))
 		require.NoError(t, err)
-		require.Len(t, results, 1)
+		require.Len(t, run.Results, 1)
 
 		// Should find the max mean of (100, 150) = 125.0 at time range 2.0-3.0
-		assert.Equal(t, 125.0, results[0].MaxMean)
+		assert.Equal(t, 125.0, run.Results[0].MaxMean)
 	})
 
 	t.Run("InsufficientDataInRange", func(t *testing.T) {
@@ -241,10 +247,10 @@ func TestMaxMeanCalculator_CalculateWithRange(t *testing.T) {
 		}
 
 		// Try to calculate with range 2.0-3.0 seconds (no data in this range)
-		results, err := calc.CalculateWithRange(context.Background(), dataset, 2, 2.0, 3.0)
+		run, err := calc.CalculateInRange(context.Background(), dataset, 2, bothEnds(2.0, 3.0))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "指定時間範圍內的數據不足")
-		require.Nil(t, results)
+		require.Nil(t, run)
 	})
 
 	t.Run("WindowSizeLargerThanAvailableData", func(t *testing.T) {
@@ -255,14 +261,14 @@ func TestMaxMeanCalculator_CalculateWithRange(t *testing.T) {
 			},
 		}
 
-		results, err := calc.CalculateWithRange(context.Background(), dataset, 5, 1.0, 3.0)
+		run, err := calc.CalculateInRange(context.Background(), dataset, 5, bothEnds(1.0, 3.0))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "數據集無效或窗口大小過大")
-		require.Nil(t, results)
+		require.Nil(t, run)
 	})
 
 	// EndRange == 0 是合法上界（時間軸從 0 開始的情境）。原本
-	// resolveDataRange 把 0 當作 "no end" sentinel，導致 CalculateWithRange
+	// resolveDataRange 把 0 當作 "no end" sentinel，導致範圍
 	// (start=-1, end=0) 這類「指定到 0 為止」的查詢被靜默改寫為「到資料末端」。
 	// 新版用 CalculationOptions.HasEndRange 顯式表達意圖。
 	t.Run("EndRangeZero_ExplicitUpperBound", func(t *testing.T) {
@@ -281,7 +287,7 @@ func TestMaxMeanCalculator_CalculateWithRange(t *testing.T) {
 			},
 		}
 
-		_, err := calc.CalculateWithRange(context.Background(), dataset, 2, -1.0, 0.0)
+		_, err := calc.CalculateInRange(context.Background(), dataset, 2, bothEnds(-1.0, 0.0))
 		require.Error(t, err,
 			"endRange=0 with explicit HasEndRange should treat 0 as upper bound, "+
 				"not 'no end' sentinel; only 1 point ≤ 0 → insufficient for window=2")
@@ -289,7 +295,51 @@ func TestMaxMeanCalculator_CalculateWithRange(t *testing.T) {
 	})
 }
 
-func TestMaxMeanCalculator_CalculateFromRawDataWithRange(t *testing.T) {
+// TestMaxMeanCalculator_CalculateInRange_RunBounds 釘住 MaxMeanRun.Start/End 的語意
+// (ADR-0050):有給的那端是使用者的值,沒給的那端是實際首/末樣本經 FromScaled 轉回原域秒;
+// 兩端都給 0 是 [0,0] 而非整檔。sf=10,時間 1..4 秒,值 50,100,150,200,窗口 2。
+func TestMaxMeanCalculator_CalculateInRange_RunBounds(t *testing.T) {
+	calc := NewMaxMeanCalculator(10)
+	dataset := &models.EMGDataset{
+		Headers: []string{"Time", "Ch1"},
+		Data: []models.EMGData{
+			{Time: 1.0e10, Channels: []float64{50.0}},
+			{Time: 2.0e10, Channels: []float64{100.0}},
+			{Time: 3.0e10, Channels: []float64{150.0}},
+			{Time: 4.0e10, Channels: []float64{200.0}},
+		},
+	}
+	at := func(v float64) *float64 { return &v }
+
+	cases := []struct {
+		name               string
+		r                  MaxMeanRange
+		wantStart, wantEnd float64
+		wantMaxMean        float64
+	}{
+		{"Whole", MaxMeanRange{}, 1, 4, 175},
+		{"StartOnly", MaxMeanRange{Start: at(2.5)}, 2.5, 4, 175},
+		{"EndOnly", MaxMeanRange{End: at(2.5)}, 1, 2.5, 75},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run, err := calc.CalculateInRange(context.Background(), dataset, 2, tc.r)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantStart, run.Start)
+			assert.Equal(t, tc.wantEnd, run.End)
+			require.Len(t, run.Results, 1)
+			assert.Equal(t, tc.wantMaxMean, run.Results[0].MaxMean)
+		})
+	}
+
+	t.Run("BothZeroIsNotWholeFile", func(t *testing.T) {
+		run, err := calc.CalculateInRange(context.Background(), dataset, 2, bothEnds(0, 0))
+		require.ErrorIs(t, err, calcerrors.ErrInvalidTimeRange)
+		require.Nil(t, run)
+	})
+}
+
+func TestMaxMeanCalculator_CalculateFromRawDataInRange(t *testing.T) {
 	calc := NewMaxMeanCalculator(10)
 
 	t.Run("ValidRawDataWithRange", func(t *testing.T) {
@@ -301,13 +351,13 @@ func TestMaxMeanCalculator_CalculateFromRawDataWithRange(t *testing.T) {
 			{"0.4", "200"},
 		}
 
-		results, err := calc.CalculateFromRawDataWithRange(context.Background(), records, 2, 0.15, 0.35)
+		run, err := calc.CalculateFromRawDataInRange(context.Background(), records, 2, bothEnds(0.15, 0.35))
 		require.NoError(t, err)
-		require.Len(t, results, 1)
+		require.Len(t, run.Results, 1)
 
 		// Should process data points at 0.2 and 0.3 seconds
 		// With scaling factor 10: (100*10^10 + 150*10^10)/2 = 1.25e+12
-		assert.Equal(t, 1.25e+12, results[0].MaxMean)
+		assert.Equal(t, 1.25e+12, run.Results[0].MaxMean)
 	})
 
 	t.Run("InvalidRawDataWithRange", func(t *testing.T) {
@@ -316,10 +366,10 @@ func TestMaxMeanCalculator_CalculateFromRawDataWithRange(t *testing.T) {
 			{"invalid", "100"},
 		}
 
-		results, err := calc.CalculateFromRawDataWithRange(context.Background(), records, 1, 0.0, 1.0)
+		run, err := calc.CalculateFromRawDataInRange(context.Background(), records, 1, bothEnds(0.0, 1.0))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "解析數據失敗")
-		require.Nil(t, results)
+		require.Nil(t, run)
 	})
 }
 

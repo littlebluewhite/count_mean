@@ -58,6 +58,7 @@ _Avoid_: baseline, MVIC file, reference signal, max reference.
 
 **Max-mean**
 滑動視窗演算法在每個 channel 上計算「window 平均值」並取其最大者，輸出 channel 的最佳起訖時間與 max-mean 數值。MaxMeanCalculator 的核心操作。
+**範圍語意**：可限定時間範圍（`calculator.MaxMeanRange`，原域秒），起點、終點各自可省略 —— 沒給起點從資料首樣本算起，沒給終點算到資料末樣本，兩端都沒給 = 整檔；`0` 是合法邊界值，不代表「未給」。輸出 CSV 的「開始/結束範圍秒數」列印實際採用的範圍：有給的那端是使用者的值，沒給的那端是實際首 / 末樣本時間。範圍語意由 calculator 單獨持有（[[ADR-0050]]）。
 _Avoid_: window max, rolling average, peak mean.
 
 **Format-aware write**

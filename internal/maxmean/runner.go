@@ -5,14 +5,13 @@ import (
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/logging"
-	"count_mean/internal/models"
 )
 
 // BatchParams 是批次計算的輸入參數(時間窗口與時間範圍)。
+// Range 套用到每一個檔案;兩端各自可省略(見 calculator.MaxMeanRange)。
 type BatchParams struct {
 	WindowSize int
-	StartTime  float64
-	EndTime    float64
+	Range      calculator.MaxMeanRange
 }
 
 // BatchResult 是 compute 端累積的成敗計數;GUI 負責 presentation
@@ -54,16 +53,7 @@ func RunBatch(
 			continue
 		}
 
-		startRange, endRange := calculator.ResolveTimeRange(records, params.StartTime, params.EndTime)
-
-		var results []models.MaxMeanResult
-
-		if startRange == 0 && endRange == 0 {
-			results, err = calc.CalculateFromRawData(ctx, records, params.WindowSize)
-		} else {
-			results, err = calc.CalculateFromRawDataWithRange(ctx, records, params.WindowSize, startRange, endRange)
-		}
-
+		run, err := calc.CalculateFromRawDataInRange(ctx, records, params.WindowSize, params.Range)
 		if err != nil {
 			failCount++
 			logger.Error("處理檔案失敗", err, map[string]any{"file": f.Name})
@@ -71,7 +61,7 @@ func RunBatch(
 			continue
 		}
 
-		if _, err := writer.Write(f.Name, records[0], results, startRange, endRange); err != nil {
+		if _, err := writer.Write(f.Name, records[0], run.Results, run.Start, run.End); err != nil {
 			failCount++
 			logger.Error("處理檔案失敗", err, map[string]any{"file": f.Name})
 
@@ -82,7 +72,7 @@ func RunBatch(
 
 		logger.Info("檔案處理成功", map[string]any{
 			"file":          f.Name,
-			"results_count": len(results),
+			"results_count": len(run.Results),
 		})
 	}
 

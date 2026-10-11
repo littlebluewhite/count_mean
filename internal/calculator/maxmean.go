@@ -20,7 +20,7 @@ const MaxWorkerCount = 16
 //
 // HasEndRange 是顯式 sentinel，取代過去「EndRange == 0 = no end」的
 // overloaded 約定。EndRange == 0 在時間軸從 0 開始的情境是合法上界（例如
-// CalculateWithRange(start=-1, end=0)），舊版會被靜默改寫為「到資料末端」。
+// 範圍 [-1, 0]），舊版會被靜默改寫為「到資料末端」。
 // 新版只有 HasEndRange == false 才略過 end 比對。
 //
 // HasStartRange 對 StartRange 提供同樣的「顯式 sentinel」契約。
@@ -32,13 +32,41 @@ const MaxWorkerCount = 16
 // HasStartRange == false 視為「不限制下界」,從資料最早 sample 開始。
 // HasStartRange == true 即使 StartRange == 0 也視為顯式下界。
 //
-// 既有 CalculateWithRange 同時設 StartRange + EndRange,此 API 自動 set 兩個
-// Has* 為 true,既有 caller 行為不變。
+// 對外由 MaxMeanRange 表達範圍;MaxMeanRange.options 只為有給的那端設 Has*。
 type CalculationOptions struct {
 	StartRange    float64 // 起始時間範圍
 	EndRange      float64 // 結束時間範圍（語意由 HasEndRange 決定）
 	HasStartRange bool    // true：StartRange 為顯式下界；false：從資料起點
 	HasEndRange   bool    // true：EndRange 為顯式上界；false：到資料末端
+}
+
+// MaxMeanRange 是 [[Max-mean]] 的時間範圍,單位為原域秒(使用者輸入的單位)。
+// 兩端各自可省略:Start == nil 從資料首樣本起算,End == nil 算到資料末樣本。
+// 0 是合法邊界值(時間軸可從負值開始),不代表「未給」。
+// 命名避開既有的 models.TimeRange。
+type MaxMeanRange struct{ Start, End *float64 }
+
+// options 把 MaxMeanRange 轉成內部 CalculationOptions:只有給了的那端設 Has* 旗標。
+func (r MaxMeanRange) options() CalculationOptions {
+	var opts CalculationOptions
+
+	if r.Start != nil {
+		opts.StartRange, opts.HasStartRange = *r.Start, true
+	}
+
+	if r.End != nil {
+		opts.EndRange, opts.HasEndRange = *r.End, true
+	}
+
+	return opts
+}
+
+// MaxMeanRun 是一次 [[Max-mean]] 計算的結果,連同實際採用的時間範圍。
+// Start / End 為原域秒:有給的那端是使用者的值;沒給的那端是資料實際首 / 末樣本的
+// 時間(縮放域經 UnitScale.FromScaled 轉回)。CSV 的「開始/結束範圍秒數」列印這兩個值。
+type MaxMeanRun struct {
+	Results    []models.MaxMeanResult
+	Start, End float64
 }
 
 // MaxMeanCalculator 處理最大平均值計算.
@@ -148,20 +176,35 @@ func (c *MaxMeanCalculator) Calculate(
 	return c.calculateWithOptions(ctx, dataset, windowSize, CalculationOptions{})
 }
 
-// CalculateWithRange 計算指定時間範圍內的最大平均值.
-// 此 API 同時設定 StartRange / EndRange，故 HasStartRange = HasEndRange = true。
-func (c *MaxMeanCalculator) CalculateWithRange(
+// CalculateInRange 計算 r 範圍內的最大平均值;r 的兩端各自可省略(見 MaxMeanRange)。
+// 回傳的 MaxMeanRun 帶實際採用的範圍,供 CSV 的範圍列使用。
+func (c *MaxMeanCalculator) CalculateInRange(
 	ctx context.Context,
 	dataset *models.EMGDataset,
 	windowSize int,
-	startRange, endRange float64,
-) ([]models.MaxMeanResult, error) {
-	return c.calculateWithOptions(ctx, dataset, windowSize, CalculationOptions{
-		StartRange:    startRange,
-		EndRange:      endRange,
-		HasStartRange: true,
-		HasEndRange:   true,
-	})
+	r MaxMeanRange,
+) (*MaxMeanRun, error) {
+	results, err := c.calculateWithOptions(ctx, dataset, windowSize, r.options())
+	if err != nil {
+		return nil, err
+	}
+
+	// calculateWithOptions 成功即保證 dataset 非空。
+	run := &MaxMeanRun{
+		Results: results,
+		Start:   c.unitScale.FromScaled(dataset.Data[0].Time),
+		End:     c.unitScale.FromScaled(dataset.Data[len(dataset.Data)-1].Time),
+	}
+
+	if r.Start != nil {
+		run.Start = *r.Start
+	}
+
+	if r.End != nil {
+		run.End = *r.End
+	}
+
+	return run, nil
 }
 
 // calculateWithOptions 統一的計算入口點.
@@ -794,18 +837,16 @@ func (c *MaxMeanCalculator) CalculateFromRawData(
 	return c.Calculate(ctx, dataset, windowSize)
 }
 
-// CalculateFromRawDataWithRange 從原始字符串數據計算指定時間範圍內的最大平均值.
-func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(
+// CalculateFromRawDataInRange 從原始字符串數據計算 r 範圍內的最大平均值(見 CalculateInRange).
+func (c *MaxMeanCalculator) CalculateFromRawDataInRange(
 	ctx context.Context,
 	records [][]string,
 	windowSize int,
-	startRange, endRange float64,
-) ([]models.MaxMeanResult, error) {
-	c.logger.Info("開始從原始數據計算指定範圍內的最大平均值", map[string]any{
+	r MaxMeanRange,
+) (*MaxMeanRun, error) {
+	c.logger.Info("開始從原始數據計算最大平均值", map[string]any{
 		"record_count": len(records),
 		"window_size":  windowSize,
-		"start_range":  startRange,
-		"end_range":    endRange,
 	})
 
 	dataset, err := c.dataParser.ParseRawData(records)
@@ -814,5 +855,5 @@ func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(
 		return nil, fmt.Errorf("解析數據失敗: %w", err)
 	}
 
-	return c.CalculateWithRange(ctx, dataset, windowSize, startRange, endRange)
+	return c.CalculateInRange(ctx, dataset, windowSize, r)
 }

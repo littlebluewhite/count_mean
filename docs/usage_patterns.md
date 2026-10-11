@@ -64,24 +64,25 @@ func StandardEMGAnalysis() {
         return
     }
 
-    // 3. 計算最大平均值（傳 ctx 以支援取消）
+    // 3. 計算最大平均值（傳 ctx 以支援取消；MaxMeanRange{} = 整檔，兩端各自可給）
     calc := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
-    results, err := calc.CalculateFromRawData(context.Background(), records, 100)
+    run, err := calc.CalculateFromRawDataInRange(context.Background(), records, 100, calculator.MaxMeanRange{})
     if err != nil {
         logger.Error("計算失敗", err, nil)
         return
     }
 
-    // 4. 寫入 OutputDir（writer 持有 row layout，回傳實際寫入的路徑）
+    // 4. 寫入 OutputDir（writer 持有 row layout，回傳實際寫入的路徑；
+    //    範圍列印 run.Start/End = 實際採用的範圍）
     if _, err := csvHandler.WriteMaxMean(
-        io.WriteRequest{Filename: "max_mean_results.csv"}, records[0], results, 0, 0,
+        io.WriteRequest{Filename: "max_mean_results.csv"}, records[0], run.Results, run.Start, run.End,
     ); err != nil {
         logger.Error("結果保存失敗", err, nil)
         return
     }
 
     logger.Info("分析完成", map[string]interface{}{
-        "results_count": len(results),
+        "results_count": len(run.Results),
         "rows":          len(records) - 1,
     })
     _ = log.Default

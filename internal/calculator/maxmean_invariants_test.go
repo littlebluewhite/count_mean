@@ -222,7 +222,7 @@ func TestMaxMean_TimeRangeOverflow_Saturated(t *testing.T) {
 			}
 		}
 
-		_, err := calc.CalculateWithRange(context.Background(), dataset, 3, math.Inf(1), math.Inf(1))
+		_, err := calc.CalculateInRange(context.Background(), dataset, 3, bothEnds(math.Inf(1), math.Inf(1)))
 		require.Error(t, err, "+Inf start range should not silently compute a result")
 		require.True(t, errors.Is(err, calcerrors.ErrInvalidTimeRange),
 			"saturated range with no matching rows should return ErrInvalidTimeRange, got %v", err)
@@ -244,11 +244,11 @@ func TestMaxMean_TimeRangeOverflow_Saturated(t *testing.T) {
 			}
 		}
 
-		results, err := calc.CalculateWithRange(context.Background(), dataset, 3, 0, math.Inf(1))
+		run, err := calc.CalculateInRange(context.Background(), dataset, 3, bothEnds(0, math.Inf(1)))
 		require.NoError(t, err)
-		require.Len(t, results, 1)
+		require.Len(t, run.Results, 1)
 		// 最大平均窗口應為 idx 7..9: (7+8+9)/3 = 8.0
-		assert.InDelta(t, 8.0, results[0].MaxMean, 1e-9)
+		assert.InDelta(t, 8.0, run.Results[0].MaxMean, 1e-9)
 	})
 
 	t.Run("NormalizeTimeContract", func(t *testing.T) {
@@ -590,11 +590,11 @@ func TestMaxMean_ScaledTimeOverflow_WindowMiscompute(t *testing.T) {
 		}
 	}
 
-	// CalculateWithRange 收的是「秒」,內部自乘 10^sf,與 dataset.Time 同域。
-	results, err := calc.CalculateWithRange(context.Background(), dataset, 3, 1000.0, 1002.0)
+	// CalculateInRange 收的是「秒」,內部自乘 10^sf,與 dataset.Time 同域。
+	run, err := calc.CalculateInRange(context.Background(), dataset, 3, bothEnds(1000.0, 1002.0))
 	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.InDelta(t, 1.0, results[0].MaxMean, 1e-9,
+	require.Len(t, run.Results, 1)
+	assert.InDelta(t, 1.0, run.Results[0].MaxMean, 1e-9,
 		"SF=10 下 >922s 的 range 必須 float64 直比鎖住 idx 0..2 (MaxMean=1);"+
 			"舊 ×1e6 溢位會誤納 idx 3..5 算成 100 (錯窗)")
 
@@ -613,10 +613,10 @@ func TestMaxMean_ScaledTimeOverflow_WindowMiscompute(t *testing.T) {
 	// range = [1003s, 1005s] → 正確 startIdx=3,in-range idx 3..5,唯一窗 = 1.0。
 	// 舊 bug:startRangeUs clamp MaxInt64,start 迴圈第一個 dataTimeUs(MaxInt64)
 	// >= startRangeUs(MaxInt64) 即 i=0 命中 → startIdx=0,誤納前緣高值 → 100。
-	results2, err := calc.CalculateWithRange(context.Background(), dataset2, 3, 1003.0, 1005.0)
+	run2, err := calc.CalculateInRange(context.Background(), dataset2, 3, bothEnds(1003.0, 1005.0))
 	require.NoError(t, err)
-	require.Len(t, results2, 1)
-	assert.InDelta(t, 1.0, results2[0].MaxMean, 1e-9,
+	require.Len(t, run2.Results, 1)
+	assert.InDelta(t, 1.0, run2.Results[0].MaxMean, 1e-9,
 		"SF=10 下 startIdx 必須 float64 直比鎖在 idx 3 (MaxMean=1);"+
 			"舊 ×1e6 溢位會把 startIdx clamp 到 0 誤納前緣 100 (錯窗)")
 }
@@ -645,23 +645,23 @@ func TestMaxMean_FractionalScaledTimeBoundary(t *testing.T) {
 	}
 
 	// endRange 略小於 1.5 → idx 3 在界外,endIdx=2;in-range idx 0..2 唯一窗 = 10。
-	results, err := calc.CalculateWithRange(context.Background(), dataset, 2, 0.0, 1.4999)
+	run, err := calc.CalculateInRange(context.Background(), dataset, 2, bothEnds(0.0, 1.4999))
 	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.InDelta(t, 10.0, results[0].MaxMean, 1e-9,
+	require.Len(t, run.Results, 1)
+	assert.InDelta(t, 10.0, run.Results[0].MaxMean, 1e-9,
 		"endRange=1.4999 必須精確排除 Time=1.5 的 idx 3,只算 idx 0..2 → MaxMean=10")
 
 	// endRange 恰等於 1.5 → idx 3 在界內 (<=),endIdx=3;in-range idx 0..3,
 	// max 窗 = (1+100)/2 = 50.5 (idx 2..3),驗證邊界值「等於上界」被納入。
-	results2, err := calc.CalculateWithRange(context.Background(), dataset, 2, 0.0, 1.5)
+	run2, err := calc.CalculateInRange(context.Background(), dataset, 2, bothEnds(0.0, 1.5))
 	require.NoError(t, err)
-	require.Len(t, results2, 1)
-	assert.InDelta(t, 50.5, results2[0].MaxMean, 1e-9,
+	require.Len(t, run2.Results, 1)
+	assert.InDelta(t, 50.5, run2.Results[0].MaxMean, 1e-9,
 		"endRange=1.5 恰等於 Time=1.5 必須納入 idx 3 (<=),max 窗 (1+100)/2=50.5")
 }
 
 // TestMaxMean_DirectDataset_NonFiniteTime 驗證 direct-dataset caller
-// (CalculateWithRange) 繞過上游 Str2Number 的非有限攔截時 (validateChannelValues
+// (CalculateInRange) 繞過上游 Str2Number 的非有限攔截時 (validateChannelValues
 // 只掃 channel 不掃 Time),非有限 row.Time 走 float64 比較不 panic 且語意正確:
 // NaN→0、+Inf→極大、−Inf→極小 (normalizeTime 契約)。
 func TestMaxMean_DirectDataset_NonFiniteTime(t *testing.T) {
@@ -677,11 +677,11 @@ func TestMaxMean_DirectDataset_NonFiniteTime(t *testing.T) {
 				{Time: 0.2, Channels: []float64{5}},
 			},
 		}
-		results, err := calc.CalculateWithRange(context.Background(), dataset, 3, 0.0, 0.2)
+		run, err := calc.CalculateInRange(context.Background(), dataset, 3, bothEnds(0.0, 0.2))
 		require.NoError(t, err, "NaN time row 經 normalizeTime→0 不應 panic")
-		require.Len(t, results, 1)
+		require.Len(t, run.Results, 1)
 		// NaN→0 命中 startIdx=0,endIdx=2,唯一窗 (5+5+5)/3 = 5。
-		assert.InDelta(t, 5.0, results[0].MaxMean, 1e-9,
+		assert.InDelta(t, 5.0, run.Results[0].MaxMean, 1e-9,
 			"NaN time 視為 0,idx 0 為合法下界,MaxMean=5")
 	})
 
@@ -697,11 +697,11 @@ func TestMaxMean_DirectDataset_NonFiniteTime(t *testing.T) {
 				{Time: math.Inf(1), Channels: []float64{100}}, // 界外 (> endRange)
 			},
 		}
-		results, err := calc.CalculateWithRange(context.Background(), dataset, 3, 0.0, 0.2)
+		run, err := calc.CalculateInRange(context.Background(), dataset, 3, bothEnds(0.0, 0.2))
 		require.NoError(t, err, "+Inf time row 不應 panic")
-		require.Len(t, results, 1)
+		require.Len(t, run.Results, 1)
 		// +Inf > 0.2 → 不納入,endIdx=2,唯一窗 (10+10+10)/3 = 10 (不含 +Inf 的 100)。
-		assert.InDelta(t, 10.0, results[0].MaxMean, 1e-9,
+		assert.InDelta(t, 10.0, run.Results[0].MaxMean, 1e-9,
 			"+Inf time 視為極大,> endRange=0.2 不納入,MaxMean=10")
 	})
 
@@ -717,11 +717,11 @@ func TestMaxMean_DirectDataset_NonFiniteTime(t *testing.T) {
 				{Time: 1.2, Channels: []float64{10}},
 			},
 		}
-		results, err := calc.CalculateWithRange(context.Background(), dataset, 3, 1.0, 1.2)
+		run, err := calc.CalculateInRange(context.Background(), dataset, 3, bothEnds(1.0, 1.2))
 		require.NoError(t, err, "−Inf time row 不應 panic")
-		require.Len(t, results, 1)
+		require.Len(t, run.Results, 1)
 		// −Inf < 1.0 → 不納入 startIdx;startIdx=1,endIdx=3,唯一窗 (10+10+10)/3=10。
-		assert.InDelta(t, 10.0, results[0].MaxMean, 1e-9,
+		assert.InDelta(t, 10.0, run.Results[0].MaxMean, 1e-9,
 			"−Inf time 視為極小,< startRange=1.0 不納入,MaxMean=10")
 	})
 }

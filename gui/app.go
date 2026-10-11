@@ -141,7 +141,7 @@ func (a *App) Shutdown(_ context.Context) {
 // Wails invokes Startup before any user-facing method.
 //
 // 用此 helper 取代各 entry method 散落的 context.Background(),讓
-// calculateWithTimeRange 等接 ctx 的 long-running 計算能真的被 Wails Shutdown
+// calculateMaxMeanSingle 等接 ctx 的 long-running 計算能真的被 Wails Shutdown
 // 取消(否則 cancellation chain 等於「實作了沒接線」)。
 //
 // 讀 ctx 走 atomic.Pointer.Load,Wails runtime 並發 dispatch 時不會與 Startup race。

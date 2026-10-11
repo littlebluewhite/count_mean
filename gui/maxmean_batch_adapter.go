@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"count_mean/internal/calculator"
 	"count_mean/internal/errors"
 	"count_mean/internal/io"
 	"count_mean/internal/maxmean"
@@ -28,7 +29,10 @@ func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error
 	writer := &maxMeanResultWriter{csvHandler: s.csvHandler, subDir: outputDirName}
 
 	res, err := maxmean.RunBatch(a.context(), s.maxMeanCalc, source, writer,
-		maxmean.BatchParams{WindowSize: params.WindowSize, StartTime: params.StartTime, EndTime: params.EndTime})
+		maxmean.BatchParams{
+			WindowSize: params.WindowSize,
+			Range:      calculator.MaxMeanRange{Start: params.StartTime, End: params.EndTime},
+		})
 	if err != nil {
 		return nil, err
 	}

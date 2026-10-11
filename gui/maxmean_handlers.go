@@ -18,7 +18,17 @@ func (a *App) CalculateMaxMean(params MaxMeanParams) (result *MaxMeanResult, err
 		"is_batch":    params.IsBatch,
 	})
 
-	a.logger.Debug("計算參數", map[string]any{"params": params})
+	// StartTime/EndTime 是 *float64:直接記 params 會印出指標位址,改記解參考後的值(nil = 未給)。
+	rangeCtx := map[string]any{"start_time": nil, "end_time": nil}
+	if params.StartTime != nil {
+		rangeCtx["start_time"] = *params.StartTime
+	}
+
+	if params.EndTime != nil {
+		rangeCtx["end_time"] = *params.EndTime
+	}
+
+	a.logger.Debug("計算參數", rangeCtx)
 
 	// 批次處理模式
 	if params.IsBatch {
@@ -45,10 +55,10 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	// 取得檔案名稱（不含路徑和副檔名）
 	originalFileName := TrimCSVExtension(filepath.Base(params.InputPath))
 
-	// 解析時間範圍並計算
-	startRange, endRange := calculator.ResolveTimeRange(records, params.StartTime, params.EndTime)
-
-	results, err := a.calculateWithTimeRange(a.context(), s, records, params.WindowSize, startRange, endRange)
+	// 計算:範圍兩端是否有給由 calculator 解讀(ADR-0050)。ctx 取自 Wails lifecycle,
+	// Shutdown 時取消長計算;s.maxMeanCalc 與 s.csvHandler 出自同一份 snapshot。
+	run, err := s.maxMeanCalc.CalculateFromRawDataInRange(a.context(), records, params.WindowSize,
+		calculator.MaxMeanRange{Start: params.StartTime, End: params.EndTime})
 	if err != nil {
 		return nil, fmt.Errorf("計算失敗: %w", err)
 	}
@@ -58,7 +68,7 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 
 	outputPath, writeErr := s.csvHandler.WriteMaxMean(
 		io.WriteRequest{Filename: outputFile},
-		records[0], results, startRange, endRange,
+		records[0], run.Results, run.Start, run.End,
 	)
 	if writeErr != nil {
 		return nil, fmt.Errorf("寫入輸出檔案失敗: %w", writeErr)
@@ -75,12 +85,13 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 }
 
 // MaxMeanParams holds parameters for maximum mean calculation.
+// StartTime/EndTime 為原域秒;nil(前端欄位留空)= 未給,0 是合法邊界值。
 type MaxMeanParams struct {
-	InputPath  string  `json:"inputPath"`
-	WindowSize int     `json:"windowSize"`
-	StartTime  float64 `json:"startTime"`
-	EndTime    float64 `json:"endTime"`
-	IsBatch    bool    `json:"isBatch"`
+	InputPath  string   `json:"inputPath"`
+	WindowSize int      `json:"windowSize"`
+	StartTime  *float64 `json:"startTime,omitempty"`
+	EndTime    *float64 `json:"endTime,omitempty"`
+	IsBatch    bool     `json:"isBatch"`
 }
 
 // MaxMeanResult holds the result of maximum mean calculation.

@@ -167,7 +167,9 @@ func (cb *CSVBenchmarks) BenchmarkMaxMeanCalculation() {
 			fileSize,
 			func() error {
 				calc := calculator.NewMaxMeanCalculator(cb.config.ScalingFactor)
-				_, calcErr := calc.CalculateFromRawDataWithRange(context.Background(), data, windowSize, 0.0, float64(rowCount))
+				start, end := 0.0, float64(rowCount)
+				_, calcErr := calc.CalculateFromRawDataInRange(context.Background(), data, windowSize,
+					calculator.MaxMeanRange{Start: &start, End: &end})
 
 				return calcErr //nolint:wrapcheck // benchmark errors don't need wrapping
 			},
@@ -281,7 +283,9 @@ func (cb *CSVBenchmarks) BenchmarkConcurrentProcessing() {
 						}
 
 						calc := calculator.NewMaxMeanCalculator(cb.config.ScalingFactor)
-						_, calcErr := calc.CalculateFromRawDataWithRange(context.Background(), data, 100, 0.0, float64(rowCount))
+						start, end := 0.0, float64(rowCount)
+						_, calcErr := calc.CalculateFromRawDataInRange(context.Background(), data, 100,
+							calculator.MaxMeanRange{Start: &start, End: &end})
 						results <- calcErr
 					}(file)
 				}
@@ -333,7 +337,9 @@ func (cb *CSVBenchmarks) BenchmarkMemoryUsage() {
 
 				calc := calculator.NewMaxMeanCalculator(cb.config.ScalingFactor)
 
-				_, calcErr := calc.CalculateFromRawDataWithRange(context.Background(), data, 100, 0.0, float64(rowCount))
+				start, end := 0.0, float64(rowCount)
+				_, calcErr := calc.CalculateFromRawDataInRange(context.Background(), data, 100,
+					calculator.MaxMeanRange{Start: &start, End: &end})
 				if calcErr != nil {
 					return calcErr //nolint:wrapcheck // benchmark errors don't need wrapping
 				}

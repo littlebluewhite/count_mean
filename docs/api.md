@@ -97,41 +97,53 @@ for _, result := range results {
 }
 ```
 
-**CalculateWithRange**
+**CalculateInRange**
 
 ```go
-func (c *MaxMeanCalculator) CalculateWithRange(
+type MaxMeanRange struct{ Start, End *float64 } // 原域秒；nil = 未給
+
+type MaxMeanRun struct {
+    Results    []models.MaxMeanResult
+    Start, End float64 // 實際採用的範圍（原域秒）
+}
+
+func (c *MaxMeanCalculator) CalculateInRange(
     ctx context.Context,
     dataset *models.EMGDataset,
     windowSize int,
-    startRange, endRange float64,
-) ([]models.MaxMeanResult, error)
+    r MaxMeanRange,
+) (*MaxMeanRun, error)
 ```
 
-計算指定時間範圍內的最大平均值。`startRange == 0 && endRange == 0` 表示使用整段資料。
+計算時間範圍 `r` 內的最大平均值。範圍兩端各自可省略（ADR-0050）：
+
+- `Start == nil`：從資料首樣本起算；`End == nil`：算到資料末樣本；兩端皆 nil = 整段資料。
+- `0` 是合法邊界值（時間軸可從負值開始），不代表「未給」。兩端都給 `0` 就是 `[0, 0]`，資料不足時回 `ErrInvalidTimeRange`。
+- `MaxMeanRun.Start/End`：有給的那端是使用者的值；沒給的那端是實際首 / 末樣本的時間（`UnitScale.FromScaled` 轉回原域秒）。CSV 的「開始/結束範圍秒數」列印的就是這兩個值。
 
 **參數：**
 - `ctx` (context.Context): 取消用 context
 - `dataset` (*models.EMGDataset): EMG 數據集
 - `windowSize` (int): 滑動窗口大小，範圍：1-10000
-- `startRange` (float64): 開始時間（秒），範圍：≥0
-- `endRange` (float64): 結束時間（秒），範圍：>startRange；0 表示不限
+- `r` (MaxMeanRange): 時間範圍（秒），兩端各自可為 nil
 
 **示例：**
 ```go
-// 計算特定時間範圍的最大平均值
-results, err := calc.CalculateWithRange(context.Background(), dataset, 100, 2.0, 5.0)
+// 只給起點：2.0 秒到資料末端
+start := 2.0
+run, err := calc.CalculateInRange(context.Background(), dataset, 100,
+    calculator.MaxMeanRange{Start: &start})
 if err != nil {
     log.Fatal(err)
 }
 
-fmt.Printf("時間範圍 2.0-5.0 秒內的最大平均值：\n")
-for _, result := range results {
+fmt.Printf("時間範圍 %.1f-%.1f 秒內的最大平均值：\n", run.Start, run.End)
+for _, result := range run.Results {
     fmt.Printf("通道 %d: %.6f\n", result.ColumnIndex, result.MaxMean)
 }
 ```
 
-**CalculateFromRawData / CalculateFromRawDataWithRange**
+**CalculateFromRawData / CalculateFromRawDataInRange**
 
 ```go
 func (c *MaxMeanCalculator) CalculateFromRawData(
@@ -140,15 +152,15 @@ func (c *MaxMeanCalculator) CalculateFromRawData(
     windowSize int,
 ) ([]models.MaxMeanResult, error)
 
-func (c *MaxMeanCalculator) CalculateFromRawDataWithRange(
+func (c *MaxMeanCalculator) CalculateFromRawDataInRange(
     ctx context.Context,
     records [][]string,
     windowSize int,
-    startRange, endRange float64,
-) ([]models.MaxMeanResult, error)
+    r MaxMeanRange,
+) (*MaxMeanRun, error)
 ```
 
-從 CSV 原始字串資料計算最大平均值。內部會呼叫 `parsers.DataParser` 解析。
+從 CSV 原始字串資料計算最大平均值。內部會呼叫 `parsers.DataParser` 解析；`CalculateFromRawDataInRange` 的範圍語意同 `CalculateInRange`。
 
 **參數：**
 - `ctx` (context.Context): 取消用 context

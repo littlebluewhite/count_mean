@@ -24,6 +24,7 @@ import { bridge } from './charts/iframeBridge.mjs';
 // 各 panel 差異由 spec object 注入(makeXxxSpec(this))。
 import { ManifestPanel } from './manifestPanel.mjs';
 import { handleLegacyResult } from './legacyResult.mjs';
+import { parseOptionalSeconds } from './timeRangeInput.mjs';
 import { makeCciSpec } from './panels/cci_spec.mjs';
 import { makeChartComposerSpec } from './panels/chart_composer_spec.mjs';
 import { makePhaseSyncSpec } from './panels/phase_sync_spec.mjs';
@@ -704,8 +705,8 @@ class EMGAnalysisApp {
     async calculateMaxMean() {
         const mode = document.getElementById('processMode').value;
         const windowSize = parseInt(document.getElementById('windowSize').value);
-        const startTime = parseFloat(document.getElementById('startTime').value) || 0;
-        const endTime = parseFloat(document.getElementById('endTime').value) || 0;
+        const startTime = parseOptionalSeconds(document.getElementById('startTime').value);
+        const endTime = parseOptionalSeconds(document.getElementById('endTime').value);
 
         let inputPath;
         if (mode === 'single') {
