@@ -918,3 +918,60 @@ func TestPaths_DocumentedOverRedaction(t *testing.T) {
 		})
 	}
 }
+
+// TestFilePath_RendersBaseNameOnly 釘住 FilePath 的渲染 policy(ADR-0059):不論路徑
+// 形狀,%s / %v / %q 都只看到檔名 —— 包括 Paths 會留下目錄段的形狀(相對路徑、不符
+// 目錄段文法的段、以 `\` 分隔的 manifest 檔名)。
+func TestFilePath_RendersBaseNameOnly(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"posix_absolute", "/Users/alice/PatientAlice/emg.csv"},
+		{"relative_one_dir", "PatientAlice/emg.csv"},
+		{"manifest_backslash", `PatientAlice\emg.csv`},
+		{"windows_drive_letter", `C:\Users\alice\PatientAlice\emg.csv`},
+		{"grammar_breaking_segment", "/Users/x/Study: Phase 1/PatientAlice/emg.csv"},
+		{"windows_leading_space_segment", `C:\Users\x\ PatientAlice\S01\emg.csv`},
+		{"bare_name", "emg.csv"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := FilePath(tc.input)
+
+			got := fmt.Sprintf("%s|%v|%q|%s", p, p, p, p.String())
+			if want := `emg.csv|emg.csv|"emg.csv"|emg.csv`; got != want {
+				t.Errorf("FilePath(%q) rendered %q, want %q", tc.input, got, want)
+			}
+		})
+	}
+}
+
+// TestDirPath_HidesEveryComponent 釘住 DirPath 的渲染 policy(ADR-0059):整條換成 Paths
+// 換目錄段用的同一個字樣 `<redacted-path>/`,末段(資料夾名本身)也不留;sink 端再跑
+// Paths 不改變結果。
+func TestDirPath_HidesEveryComponent(t *testing.T) {
+	inputs := []string{
+		"/Users/alice/PatientAlice",
+		"/Volumes/pCloud Drive/PatientAlice/",
+		"PatientAlice",
+		`C:\Users\x\ PatientAlice`,
+	}
+
+	for _, in := range inputs {
+		t.Run(in, func(t *testing.T) {
+			p := DirPath(in)
+
+			got := fmt.Sprintf("%s|%v|%q|%s", p, p, p, p.String())
+			if want := `<redacted-path>/|<redacted-path>/|"<redacted-path>/"|<redacted-path>/`; got != want {
+				t.Errorf("DirPath(%q) rendered %q, want %q", in, got, want)
+			}
+
+			msg := fmt.Sprintf("資料夾不存在 (%s): base folder not found", p)
+			if again := Paths(msg); again != msg {
+				t.Errorf("Paths 應不改變 DirPath 的渲染:\n got: %q\nwant: %q", again, msg)
+			}
+		})
+	}
+}

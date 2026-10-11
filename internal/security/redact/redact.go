@@ -25,6 +25,13 @@
 // L2 line-fallback path(gui/recover.go 原本對未被 regex 抓到的「以 / 開頭的 line」
 // 走 trim + basename + <redacted-path> 拼接的 fallback)。把 Paths() 包成單一進入點
 // 才能保證 caller 都吃到完整 redact pipeline,未來新增 fallback rule 也只改一處。
+//
+// # Typed path args(FilePath / DirPath,ADR-0059)
+//
+// Paths 是 sink 端的安全網:它保留末段,也有文法留存的段(ADR-0036 Decision 5)。
+// 錯誤建構點自己內插的路徑改以 FilePath / DirPath 傳入,由型別的 String() 決定渲染:
+// 檔案只留檔名、資料夾整段隱藏。fmt 的 %s / %v / %q、i18n.Error 的 Args(Error() 的
+// zh-TW 與 Localize 的各 locale)與 logger 都經 String(),不必各自特判。
 package redact
 
 import (
@@ -118,7 +125,7 @@ var lineFallbackPathPrefix = regexp.MustCompile(`^(?:/|\\\\|[A-Za-z]:[\\/])`)
 //
 // 與 gui/recover.go 原版的 redactPathsInStack 行為等價(搬家)。
 func Paths(s string) string {
-	redacted := pathRedactPattern.ReplaceAllString(s, "<redacted-path>/")
+	redacted := pathRedactPattern.ReplaceAllString(s, redactedDir)
 
 	// 處理少數沒被 regex 抓到但仍含 path-like 字串的邊角(例:custom $GOPATH,
 	// 不在標準 system root 下)。保守再過一輪:任何 trim 後以 absolute path
@@ -128,9 +135,30 @@ func Paths(s string) string {
 	for i, ln := range lines {
 		trimmed := strings.TrimSpace(ln)
 		if lineFallbackPathPrefix.MatchString(trimmed) {
-			lines[i] = "<redacted-path>/" + filepath.Base(trimmed)
+			lines[i] = redactedDir + filepath.Base(trimmed)
 		}
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// redactedDir 是被隱藏的目錄在文字裡的字樣:Paths 換掉的目錄段、DirPath 的整條渲染。
+const redactedDir = "<redacted-path>/"
+
+// FilePath 是錯誤建構點內插的檔案路徑(typed arg,ADR-0059):渲染時只留檔名。
+// `\` 也當分隔字元 —— Windows 產生的 manifest 檔名(`S01\emg.csv`)在各 OS 一致。
+type FilePath string
+
+// String 回檔名(最後一段),不含任何目錄段。
+func (p FilePath) String() string {
+	return filepath.Base(strings.ReplaceAll(string(p), `\`, "/"))
+}
+
+// DirPath 是錯誤建構點內插的資料夾路徑(typed arg,ADR-0059):渲染時整條隱藏。資料夾
+// 名本身常是病患名,而 Paths 保留末段,所以資料夾不能只靠 sink 端的 Paths。
+type DirPath string
+
+// String 回 `<redacted-path>/`(與 Paths 換掉目錄段的字樣相同),不含 p 的任何一段。
+func (DirPath) String() string {
+	return redactedDir
 }
