@@ -599,97 +599,61 @@ if err := config.Validate(); err != nil {
 
 ### 錯誤類型
 
-系統定義了多種錯誤類型以提供詳細的錯誤信息。
+使用者會看到的錯誤是帶 catalog key 的 `i18n.Error`（`internal/i18n/error.go`，ADR-0048）；計算層另有 sentinel 與 `CalculatorError`（`internal/errors`）。舊的 `AppError` / `ValidationError` / `ErrorCode` / `IsRecoverable` 已刪除（ADR-0058）。
 
-#### AppError
+#### i18n.Error
 
 ```go
-type AppError struct {
-    Code    ErrorCode              `json:"code"`
-    Message string                 `json:"message"`
-    Cause   error                  `json:"cause,omitempty"`
-    Context map[string]interface{} `json:"context,omitempty"`
+type Error struct {
+    Key   string // catalog key，例如 i18n.KeyErrorIOFileTooLarge
+    Args  []any  // 以 Key 的 catalog 文字格式化
+    Cause error  // 非 nil 時訊息接「: 」+ Cause 的文字
 }
-```
 
-**ErrorCode 常數（節錄，完整列表見 `internal/errors/errors.go`）：**
-```go
-const (
-    ErrCodeFileNotFound    ErrorCode = "FILE_NOT_FOUND"
-    ErrCodeFilePermission  ErrorCode = "FILE_PERMISSION"
-    ErrCodeFileFormat      ErrorCode = "FILE_FORMAT"
-    ErrCodePathValidation  ErrorCode = "PATH_VALIDATION"
-    ErrCodeFileTooLarge    ErrorCode = "FILE_TOO_LARGE"
-    ErrCodeDataParsing     ErrorCode = "DATA_PARSING"
-    ErrCodeDataValidation  ErrorCode = "DATA_VALIDATION"
-    ErrCodeCalculation     ErrorCode = "CALCULATION"
-    ErrCodeConfigValidation ErrorCode = "CONFIG_VALIDATION"
-)
+func NewError(key string, args ...any) error              // 只有訊息
+func WrapError(cause error, key string, args ...any) error // 「訊息: cause」
+func (e *Error) Error() string  // 固定以內建 zh-TW catalog 渲染（log 跨 locale 一致）
+func (e *Error) Unwrap() error  // 回 Cause
+func Localize(err error) string // 依目前 locale 渲染給使用者看
 ```
 
 **示例：**
 ```go
-// 使用 constructor 而非直接 struct literal — Recoverable 旗標會根據 ErrCode 自動推斷。
-err := errors.NewAppError(errors.ErrCodeFileNotFound, "找不到指定的 CSV 文件")
+// 產生：帶 key；路徑只進 log，不放進訊息
+if sizeMB > 100 {
+    return i18n.NewError(i18n.KeyErrorIOFileTooLarge, sizeMB)
+}
+if err != nil {
+    // Cause 保留原 error，errors.Is(err, os.ErrNotExist) 照常成立
+    return i18n.WrapError(err, i18n.KeyErrorIOOpenFailed)
+}
 
-// 若需附加 context 細節，用 NewAppErrorWithDetails。
-err = errors.NewAppErrorWithDetails(
-    errors.ErrCodeFileNotFound,
-    "找不到指定的 CSV 文件",
-    fmt.Sprintf("file_path=%s operation=read_csv", filePath),
-)
-
-// 檢查錯誤類型
-if appErr, ok := err.(*errors.AppError); ok {
-    switch appErr.Code {
-    case errors.ErrCodeFileNotFound:
-        // 處理文件不存在錯誤
-    case errors.ErrCodeFileFormat:
-        // 處理格式錯誤
+// 分類：以 errors.As 取 Key，不比對錯誤文字
+var keyed *i18n.Error
+if errors.As(err, &keyed) {
+    switch keyed.Key {
+    case i18n.KeyErrorIOFileTooLarge:
+        // 處理檔案過大
+    case i18n.KeyErrorIOFilenameInvalid:
+        // 處理檔名不合法
     }
 }
+
+// 顯示：依目前 locale 渲染（zh-TW 下與 err.Error() 相同）
+msg := i18n.Localize(err)
 ```
 
-#### ValidationError
+**送進前端**：GUI handler 不自行渲染 err。bound method 回的 err 由 `recoverHandlerPanic` 出口統一送出 `redact.Paths(i18n.Localize(err))`（先在地化、後脫敏；文字沒變時回原 err）；result 的 `Message` 經 `gui/envelope.go` 的 `failMessage` / `inputMessage` / `redactText`，同樣先在地化、後脫敏。兩條通道見 GLOSSARY.md 的 **Webview envelope**。
+
+#### 計算層 sentinel 與 CalculatorError
+
+`internal/errors` 只放計算層錯誤：`ErrEmptyDataset`、`ErrWindowTooLarge`、`ErrInsufficientData` 等 sentinel（以 `errors.Is` 比對），以及包住 sentinel、帶情境訊息的 `CalculatorError`。
 
 ```go
-type ValidationError struct {
-    Field   string `json:"field"`
-    Message string `json:"message"`
-    Value   string `json:"value,omitempty"`
-}
-```
+err := apperrors.NewCalculatorError(apperrors.ErrWindowTooLarge, "窗口大小超過資料長度")
 
-**示例：**
-```go
-// 創建驗證錯誤
-err := &errors.ValidationError{
-    Field:   "window_size",
-    Message: "視窗大小必須在 1-10000 之間",
-    Value:   "15000",
-}
-
-fmt.Printf("驗證錯誤：%v\n", err)
-```
-
-**IsRecoverable**
-
-```go
-func IsRecoverable(err error) bool
-```
-
-判斷錯誤是否可恢復。
-
-**示例：**
-```go
-if err := processFile(filePath); err != nil {
-    if errors.IsRecoverable(err) {
-        // 嘗試恢復操作
-        log.Printf("錯誤可恢復，嘗試重試：%v", err)
-    } else {
-        // 嚴重錯誤，停止處理
-        log.Fatal("不可恢復的錯誤：", err)
-    }
+if errors.Is(err, apperrors.ErrWindowTooLarge) {
+    // 處理窗口過大
 }
 ```
 
@@ -1009,10 +973,10 @@ if err != nil {
 
 ### 錯誤處理
 
-1. **使用結構化錯誤（建議用 constructor，Recoverable 自動由 ErrCode 推斷）**
+1. **使用者會看到的錯誤帶 i18n key（caller 以 `errors.As(...).Key` 分類、以 `i18n.Localize` 顯示）**
    ```go
    if err != nil {
-       return errors.WrapError(err, errors.ErrCodeCalculation, "處理失敗")
+       return i18n.WrapError(err, i18n.KeyErrorHandlerCalculateFailed)
    }
    ```
 

@@ -106,8 +106,8 @@ func StandardEMGAnalysis() {
 
 目前**沒有**串流處理大檔的 API。串流 Max-mean 路徑（`LargeFileHandler`）已刪除（見
 [ADR-0033](adr/0033-remove-streaming-maxmean.md)）；`CSVHandler.ReadCSV` 對超過 100 MB
-的檔案直接回 `ErrCodeFileTooLarge`（「檔案過大（上限 100 MB），請分割檔案後再試」），
-請先分割檔案再分析。
+的檔案直接回帶 key `error.io.file_too_large` 的 `i18n.Error`（「檔案過大（N MB，上限 100 MB），
+請分割檔案後再試」；以 `errors.As(err, &keyed)` 後比對 `keyed.Key` 判斷），請先分割檔案再分析。
 
 ---
 
@@ -567,84 +567,51 @@ func (p *ErrorHandlingProcessor) processFile(filePath string) error {
     csvHandler := io.NewCSVHandler(cfg)
     dataset, err := csvHandler.ReadCSV(filePath)
     if err != nil {
-        return &errors.AppError{
-            Code:    errors.ErrCodeFileNotFound,
-            Message: "文件讀取失敗",
-            Cause:   err,
-            Context: map[string]interface{}{
-                "file_path": filePath,
-                "stage":     "read_csv",
-            },
-        }
+        // ReadCSV 已回帶 key 的 i18n.Error（error.io.*）；外層只補階段、以 %w 保留 chain，
+        // 不改寫原文（i18n.Localize 靠原文定位）。路徑等細節記在 log，不放進訊息。
+        return fmt.Errorf("read_csv: %w", err)
     }
     
     // 階段 2: 數據驗證（dataset 為 ReadCSV 回傳的 [][]string）
     validator := csv.NewValidator()
     err = validator.ValidateCSVData(dataset)
     if err != nil {
-        return &errors.AppError{
-            Code:    errors.ErrCodeDataValidation,
-            Message: "數據驗證失敗",
-            Cause:   err,
-            Context: map[string]interface{}{
-                "file_path": filePath,
-                "stage":     "validate_data",
-            },
-        }
+        return fmt.Errorf("validate_data: %w", err) // error.csv.*
     }
     
     // 階段 3: 數據處理
     calculator := calculator.NewMaxMeanCalculator(cfg.ScalingFactor)
     results, err := calculator.Calculate(ctx, dataset, 100)
     if err != nil {
-        return &errors.AppError{
-            Code:    errors.ErrCodeCalculation,
-            Message: "數據處理失敗",
-            Cause:   err,
-            Context: map[string]interface{}{
-                "file_path": filePath,
-                "stage":     "calculate",
-            },
-        }
+        return fmt.Errorf("calculate: %w", err) // CalculatorError(sentinel)
     }
     
     // 階段 4: 結果保存（WriteMaxMean 回傳實際寫入的路徑）
     outputName := fmt.Sprintf("recovered_%s", filepath.Base(filePath))
     _, err = csvHandler.WriteMaxMean(io.WriteRequest{Filename: outputName}, dataset.Headers, results, 0, 0)
     if err != nil {
-        return &errors.AppError{
-            Code:    errors.ErrCodeFileNotFound,
-            Message: "結果保存失敗",
-            Cause:   err,
-            Context: map[string]interface{}{
-                "file_path":   filePath,
-                "output_name": outputName,
-                "stage":       "save_results",
-            },
-        }
+        return fmt.Errorf("save_results: %w", err)
     }
     
     return nil
 }
 
 func (p *ErrorHandlingProcessor) shouldRetry(err error) bool {
-    // 檢查錯誤類型，決定是否重試
-    if appErr, ok := err.(*errors.AppError); ok {
-        switch appErr.Code {
-        case errors.ErrCodeFileNotFound:
-            return false // 文件不存在不需要重試
-        case errors.ErrCodeDataValidation:
-            return false // 數據格式錯誤不需要重試
-        case errors.ErrCodeFileTooLarge:
-            return true // 記憶體不足可以重試
-        case errors.ErrCodeCalculation:
-            return true // 處理失敗可以重試
-        default:
-            return true
+    // 以 errors.Is（sentinel）與 errors.As(*i18n.Error).Key 分類，不比對錯誤文字
+    if errors.Is(err, os.ErrNotExist) {
+        return false // 文件不存在不需要重試
+    }
+
+    var keyed *i18n.Error
+    if errors.As(err, &keyed) {
+        switch keyed.Key {
+        case i18n.KeyErrorIOFileTooLarge, i18n.KeyErrorIOFilenameInvalid,
+            i18n.KeyErrorIOCSVValidationFailed:
+            return false // 檔案過大 / 檔名不合法 / 數據格式錯誤，重試結果相同
         }
     }
-    
-    return errors.IsRecoverable(err)
+
+    return true // 其他（暫時性 I/O、計算失敗）可以重試
 }
 
 func (p *ErrorHandlingProcessor) fallbackProcess(ctx context.Context, cfg *config.AppConfig, filePath string) error {
@@ -675,7 +642,7 @@ func (p *ErrorHandlingProcessor) fallbackProcess(ctx context.Context, cfg *confi
 
 ### 最佳實踐
 1. 實現分層錯誤處理機制
-2. 使用結構化錯誤提供詳細信息
+2. 使用者可見的錯誤帶 i18n key（`errors.As(...).Key` 分類、`i18n.Localize` 顯示）
 3. 實現智能重試邏輯
 4. 提供降級處理選項
 5. 記錄詳細的錯誤日誌
