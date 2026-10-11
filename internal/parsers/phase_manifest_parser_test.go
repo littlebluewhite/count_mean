@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"math"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,7 +19,7 @@ func TestNewPhaseManifestParser(t *testing.T) {
 	assert.NotNil(t, parser)
 }
 
-func TestPhaseManifestParser_ParseFile(t *testing.T) {
+func TestPhaseManifestParser_Parse(t *testing.T) {
 	tests := []struct {
 		name       string
 		csvContent string
@@ -134,17 +132,9 @@ Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,inval
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// 創建臨時測試文件
-			tmpFile, err := os.CreateTemp(t.TempDir(), "test_manifest_*.csv")
-			require.NoError(t, err)
-
-			_, err = tmpFile.WriteString(tt.csvContent)
-			require.NoError(t, err)
-			tmpFile.Close()
-
 			// 測試解析
 			parser := NewPhaseManifestParser()
-			manifests, err := parser.ParseFile(tmpFile.Name())
+			manifests, err := parser.Parse(strings.NewReader(tt.csvContent), "test_manifest.csv")
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -158,13 +148,6 @@ Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,inval
 			}
 		})
 	}
-}
-
-func TestPhaseManifestParser_ParseFile_FileNotFound(t *testing.T) {
-	parser := NewPhaseManifestParser()
-	_, err := parser.ParseFile("nonexistent_file.csv")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "無法開啟檔案")
 }
 
 func TestGetPhaseValue(t *testing.T) {
@@ -561,15 +544,8 @@ func TestPhaseManifestParser_parseFloat(t *testing.T) {
 			csvContent := "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n"
 			csvContent += "Subject1,motion1.csv,force1.anc,emg1.csv,100," + tt.value + ",2,3,4,5,150,6,7,200,8"
 
-			tmpFile, err := os.CreateTemp(t.TempDir(), "test_float_*.csv")
-			require.NoError(t, err)
-
-			_, err = tmpFile.WriteString(csvContent)
-			require.NoError(t, err)
-			tmpFile.Close()
-
 			parser := NewPhaseManifestParser()
-			manifests, err := parser.ParseFile(tmpFile.Name())
+			manifests, err := parser.Parse(strings.NewReader(csvContent), "test_float.csv")
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -611,15 +587,8 @@ func TestPhaseManifestParser_parseInt(t *testing.T) {
 			csvContent := "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n"
 			csvContent += "Subject1,motion1.csv,force1.anc,emg1.csv,100,1,2,3,4,5," + tt.value + ",6,7,200,8"
 
-			tmpFile, err := os.CreateTemp(t.TempDir(), "test_int_*.csv")
-			require.NoError(t, err)
-
-			_, err = tmpFile.WriteString(csvContent)
-			require.NoError(t, err)
-			tmpFile.Close()
-
 			parser := NewPhaseManifestParser()
-			manifests, err := parser.ParseFile(tmpFile.Name())
+			manifests, err := parser.Parse(strings.NewReader(csvContent), "test_int.csv")
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -640,17 +609,9 @@ Subject001,motion001.csv,force001.anc,emg001.csv,125,0.500,1.200,2.100,2.850,3.2
 Subject002,motion002.csv,force002.anc,emg002.csv,110,0.480,1.150,2.050,2.800,3.150,760,4.050,4.600,910,5.150
 Subject003,motion003.csv,force003.anc,emg003.csv,130,NA,1.250,x,2.900,3.250,780,-,4.700,X,5.250`
 
-		// 創建臨時文件
-		tmpFile, err := os.CreateTemp(t.TempDir(), "integration_test_*.csv")
-		require.NoError(t, err)
-
-		_, err = tmpFile.WriteString(manifestContent)
-		require.NoError(t, err)
-		tmpFile.Close()
-
 		// 解析文件
 		parser := NewPhaseManifestParser()
-		manifests, err := parser.ParseFile(tmpFile.Name())
+		manifests, err := parser.Parse(strings.NewReader(manifestContent), "integration_test.csv")
 		require.NoError(t, err)
 
 		// 檢查解析結果
@@ -730,14 +691,8 @@ Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,-150,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmpFile, err := os.CreateTemp(t.TempDir(), "test_neg_motion_*.csv")
-			require.NoError(t, err)
-			_, err = tmpFile.WriteString(tt.csvContent)
-			require.NoError(t, err)
-			require.NoError(t, tmpFile.Close())
-
 			parser := NewPhaseManifestParser()
-			manifests, err := parser.ParseFile(tmpFile.Name())
+			manifests, err := parser.Parse(strings.NewReader(tt.csvContent), "test_neg_motion.csv")
 			require.NoError(t, err, "parse 階段可成功(parseInt 允許負值),validate 階段才 reject")
 			require.Len(t, manifests, 1)
 
@@ -813,14 +768,8 @@ Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,10000
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmpFile, err := os.CreateTemp(t.TempDir(), "test_absurd_motion_*.csv")
-			require.NoError(t, err)
-			_, err = tmpFile.WriteString(tt.csvContent)
-			require.NoError(t, err)
-			require.NoError(t, tmpFile.Close())
-
 			parser := NewPhaseManifestParser()
-			_, err = parser.ParseFile(tmpFile.Name())
+			_, err := parser.Parse(strings.NewReader(tt.csvContent), "test_absurd_motion.csv")
 			require.Error(t, err, "absurd motion-index 必須在 parse 階段被 reject,不可依賴 monotonicity")
 			assert.Contains(t, err.Error(), tt.field,
 				"錯誤訊息要指出哪個 motion-index 欄位 (%s)", tt.field)
@@ -848,26 +797,20 @@ Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,150,6
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmpFile, err := os.CreateTemp(t.TempDir(), "test_boundary_motion_*.csv")
-			require.NoError(t, err)
-			_, err = tmpFile.WriteString(tt.csvContent)
-			require.NoError(t, err)
-			require.NoError(t, tmpFile.Close())
-
 			parser := NewPhaseManifestParser()
-			manifests, err := parser.ParseFile(tmpFile.Name())
+			manifests, err := parser.Parse(strings.NewReader(tt.csvContent), "test_boundary_motion.csv")
 			require.NoError(t, err, "上限內的合法 motion-index 不可被誤殺")
 			require.Len(t, manifests, 1)
 		})
 	}
 }
 
-// TestPhaseManifestParser_ParseFile_StripsBOM 釘住 Wave 6 PR1 BOM 對稱補完:
-// ParseFile 過去直接 csv.NewReader(file) — 不包 bufio + 不剝 BOM。Excel 匯出的
+// TestPhaseManifestParser_Parse_StripsBOM 釘住 Wave 6 PR1 BOM 對稱補完:
+// 解析過去直接 csv.NewReader(file) — 不包 bufio + 不剝 BOM。Excel 匯出的
 // UTF-8 manifest CSV 帶 0xEF 0xBB 0xBF 前綴時,records[1][0] 會帶 U+FEFF,
 // Subject 比對失敗(整個 LoadManifestSubjects 流程因為「找不到 subject」中斷)。
 // 修法:bufio.NewReaderSize + csvutil.PeekBOM,對稱於 csv_handler.go。
-func TestPhaseManifestParser_ParseFile_StripsBOM(t *testing.T) {
+func TestPhaseManifestParser_Parse_StripsBOM(t *testing.T) {
 	parser := NewPhaseManifestParser()
 
 	bom := []byte{0xEF, 0xBB, 0xBF}
@@ -875,14 +818,8 @@ func TestPhaseManifestParser_ParseFile_StripsBOM(t *testing.T) {
 		"SubjectBOM,motion.csv,force.anc,emg.csv,100,1.000,2.000,3.000,4.000,5.000,150,6.000,7.000,200,8.000\n"
 	content := append(append([]byte{}, bom...), []byte(csvBody)...)
 
-	tmpFile, err := os.CreateTemp(t.TempDir(), "manifest_bom_*.csv")
-	require.NoError(t, err)
-	_, err = tmpFile.Write(content)
-	require.NoError(t, err)
-	require.NoError(t, tmpFile.Close())
-
-	manifests, err := parser.ParseFile(tmpFile.Name())
-	require.NoError(t, err, "ParseFile 失敗 — BOM 未被剝除可能造成欄位數錯誤")
+	manifests, err := parser.Parse(bytes.NewReader(content), "manifest_bom.csv")
+	require.NoError(t, err, "Parse 失敗 — BOM 未被剝除可能造成欄位數錯誤")
 	require.Len(t, manifests, 1)
 	assert.Equal(t, "SubjectBOM", manifests[0].Subject,
 		"Subject 不能含 U+FEFF — manifest 必須在剝除 BOM 後 parse")
@@ -935,14 +872,8 @@ Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,150,6
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmpFile, err := os.CreateTemp(t.TempDir(), "test_v14_*.csv")
-			require.NoError(t, err)
-			_, err = tmpFile.WriteString(tt.csvContent)
-			require.NoError(t, err)
-			require.NoError(t, tmpFile.Close())
-
 			parser := NewPhaseManifestParser()
-			manifests, err := parser.ParseFile(tmpFile.Name())
+			manifests, err := parser.Parse(strings.NewReader(tt.csvContent), "test_v14.csv")
 			require.NoError(t, err, "V.10 / V.14 manifest 皆必須解析成功")
 			require.Len(t, manifests, 1)
 
@@ -959,11 +890,11 @@ Subject1,motion1.csv,force1.anc,emg1.csv,100,1.000,2.000,3.000,4.000,5.000,150,6
 }
 
 // TestPhaseManifest_StripsBOM對齊 ANC 版本 TestANCParser_StripsBOM 的契約:
-// (1) BOM-prefixed manifest CSV 必須能順利 ParseFile,不報錯;
+// (1) BOM-prefixed manifest CSV 必須能順利 Parse,不報錯;
 // (2) Subject / MotionFile / ForceFile / EMGFile 都不能殘留 BOM bytes;
 // (3) 多列 BOM 檔案 — 只有 file 起點有 BOM,中間任何欄位都不該帶 0xEF 0xBB 0xBF。
 //
-// 與既有的 *_ParseFile_StripsBOM(單列、單欄驗證)互補:這份明確列出 ANC 對應的
+// 與既有的 *_Parse_StripsBOM(單列、單欄驗證)互補:這份明確列出 ANC 對應的
 // 「不含 BOM bytes」契約,日後若 PeekBOM / BOMBytes 改動,此 test 會與
 // TestANCParser_StripsBOM 同步亮紅燈而非只有單側炸掉。
 func TestPhaseManifest_StripsBOM(t *testing.T) {
@@ -973,17 +904,8 @@ func TestPhaseManifest_StripsBOM(t *testing.T) {
 		"Subject1,motion1.csv,force1.anc,emg1.csv,100,1.0,2.0,3.0,4.0,5.0,150,6.0,7.0,200,8.0\n" +
 		"Subject2,motion2.csv,force2.anc,emg2.csv,120,1.1,2.1,3.1,4.1,5.1,160,6.1,7.1,210,8.1\n"
 
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "manifest_bom_multi.csv")
-	f, err := os.Create(path) //nolint:gosec // t.TempDir
-	require.NoError(t, err)
-	_, err = f.Write(csvutil.BOMBytes())
-	require.NoError(t, err)
-	_, err = f.WriteString(csvBody)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	manifests, err := parser.ParseFile(path)
+	content := string(csvutil.BOMBytes()) + csvBody
+	manifests, err := parser.Parse(strings.NewReader(content), "manifest_bom_multi.csv")
 	require.NoError(t, err)
 	require.Len(t, manifests, 2)
 
@@ -1015,10 +937,7 @@ const manifestTestHeader = "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset
 func TestPhaseManifestParser_RejectsOversizeCell(t *testing.T) {
 	content := manifestTestHeader + "\n" +
 		"S1," + strings.Repeat("m", 32769) + ",force.anc,emg.csv,100,1,2,3,4,5,150,6,7,200,8\n"
-	path := filepath.Join(t.TempDir(), "manifest_oversize.csv")
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-
-	_, err := NewPhaseManifestParser().ParseFile(path)
+	_, err := NewPhaseManifestParser().Parse(strings.NewReader(content), "manifest_oversize.csv")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "第 2 行第 2 欄")
 	assert.NotContains(t, err.Error(), "manifest_oversize")
@@ -1030,10 +949,7 @@ func TestPhaseManifestParser_AcceptsBig5Header(t *testing.T) {
 	big5 := "\xa4\xa4\xa4\xe5" // Big5 「中文」,非合法 UTF-8
 	content := manifestTestHeader + "," + big5 + "\n" +
 		"S1,motion.csv,force.anc,emg.csv,100,1,2,3,4,5,150,6,7,200,8,\n"
-	path := filepath.Join(t.TempDir(), "manifest_big5.csv")
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-
-	manifests, err := NewPhaseManifestParser().ParseFile(path)
+	manifests, err := NewPhaseManifestParser().Parse(strings.NewReader(content), "manifest_big5.csv")
 	require.NoError(t, err)
 	require.Len(t, manifests, 1)
 }

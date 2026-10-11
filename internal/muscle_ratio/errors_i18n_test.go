@@ -51,14 +51,6 @@ func TestMuscleRatioErrors_ZhTWTextLocalizedAtHandler(t *testing.T) {
 			enUS: "Muscle ratio batch cancelled: context canceled",
 		},
 		{
-			name: "輸出檔名衝突(%q Args)",
-			build: func(*testing.T) error {
-				return assertUniqueSanitizedSubjects([]models.PhaseManifest{{Subject: "A/B"}, {Subject: "A:B"}})
-			},
-			zhTW: `輸出檔名衝突: subject "A/B" 與 "A:B" 經檔名安全化後同為 "A_B" (case-insensitive)`,
-			enUS: `Output filename collision: subjects "A/B" and "A:B" both sanitize to "A_B" (case-insensitive)`,
-		},
-		{
 			name: "SubjectResult.Err:Subject 名稱為空",
 			build: func(*testing.T) error {
 				return NewAnalyzer().analyzeSubject(&models.PhaseManifest{Subject: "   "}, &Params{}).Err

@@ -211,17 +211,6 @@ func TestResolveLenientPath_RejectsWhitespace(t *testing.T) {
 		"err 應來自 whitespace 守門，實際 err=%v", err)
 }
 
-// TestResolveLenientPath_RejectsLongFilename 釘住 filename base > 255 字元被拒。
-// 與 PathValidator 的 maxFilenameLength=255 對齊。
-func TestResolveLenientPath_RejectsLongFilename(t *testing.T) {
-	base := t.TempDir()
-	longName := strings.Repeat("a", 256) + ".csv"
-	_, err := resolveLenientPath(base, longName)
-	require.Error(t, err, "filename > 255 chars 應被拒")
-	assert.Contains(t, err.Error(), "檔名過長",
-		"err 應來自 filename length 守門，實際 err=%v", err)
-}
-
 // TestResolveLenientPath_ZeroWidthIsExplicitlyRejectedEarly 釘住 L13 的契約：
 // 即使 baseFolder 與 parent 都存在（path resolution happy path），含零寬字元
 // 的 element 仍必須被 *早期 traversal check* 擋下，**錯誤訊息必須來自 traversal
@@ -470,7 +459,7 @@ func TestResolveLenientPath_DepthLimitProtectsAgainstPathologicalDepth(t *testin
 // TestResolveLenientPath_RejectsLongPath 釘住 joined path > 4096 字元被拒。
 // 與 PathValidator 的 maxPathLength=4096 對齊。
 // 構造：base (~50 on macOS) + "a/" * 2048 + "a.csv" (~4101 chars) 使 joined > 4096，
-// 但每個 component 個別 < 255 不會觸發 filename cap、無 ".." 不會觸發 HasTraversalElement。
+// 但每個 component 個別 < 255、無 ".." 不會觸發 HasTraversalElement。
 func TestResolveLenientPath_RejectsLongPath(t *testing.T) {
 	base := t.TempDir()
 	longPath := strings.Repeat("a/", 2048) + "a.csv"

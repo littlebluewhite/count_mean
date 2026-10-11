@@ -94,3 +94,20 @@ func TestSubjectOutputName_AlwaysValidName(t *testing.T) {
 		}
 	}
 }
+
+// TestSubjectOutputKey 釘住 ADR-0056 的撞名身分:key 相同 ⇔ SubjectOutputName 在 macOS /
+// Windows 上落到同一個檔(Sanitize 後同名、大小寫不同、NFC / NFD)。
+func TestSubjectOutputKey(t *testing.T) {
+	same := [][2]string{
+		{"A/B", "A:B"},              // Sanitize 後都是 A_B
+		{"SF8", "sf8"},              // case-insensitive
+		{"caf\u00e9", "cafe\u0301"}, // NFC vs NFD
+		{"", "untitled"},            // 空 subject 走 Sanitize 的 untitled fallback
+	}
+	for _, pair := range same {
+		assert.Equal(t, SubjectOutputKey(pair[0]), SubjectOutputKey(pair[1]), "%q vs %q", pair[0], pair[1])
+	}
+
+	assert.NotEqual(t, SubjectOutputKey("SF8"), SubjectOutputKey("SF9"))
+	assert.Equal(t, "a_b", SubjectOutputKey("A/B"), "key = NFC(ToLower(Sanitize(subject)))")
+}

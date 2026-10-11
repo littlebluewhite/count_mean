@@ -437,9 +437,8 @@ func (h *CSVHandler) ReadCSV(path string) ([][]string, error)
 
 1. `ValidateFilename(Base(path))`：只擋檔案系統非法的檔名（ADR-0041），並要求 `.csv` 副檔名（不分大小寫；ADR-0054）。
 2. `PathValidator.ValidateExternalPath(path)`：擋 `..` traversal 與系統敏感位置（ADR-0038 / ADR-0039）。路徑不做 URL-decode，`%`、`+` 皆為字面字元。
-3. open 前先 `stat`，非 regular file（目錄、FIFO 等）直接拒絕，避免 FIFO 讓 open 阻塞。
-4. 以 `fsperm.ReadFlags`（含 `O_NOFOLLOW`）開檔，再對 fd `fstat`：必須是 regular file 且 ≤ 100 MB，超過回 `ErrCodeFileTooLarge`。
-5. 單次解析，再做讀取側 sanity check（儲存格 ≤ 32 KB、CSV 結構、user-picked 檔案的 UTF-8）；讀取側不做 injection 偵測（寫入側由 `csvutil` 負責逸出）。
+3. `fsperm.OpenRegularLimited(path, fsperm.MaxReadBytes)`：open 前先 `stat`，非 regular file（目錄、FIFO 等）直接拒絕；以 `fsperm.ReadFlags`（含 `O_NOFOLLOW`）開檔，再對 fd `fstat`：必須是 regular file 且 ≤ 100 MB，超過回 `ErrCodeFileTooLarge`；讀取中檔案變大，讀到第 100 MB + 1 byte 時同樣回 `ErrCodeFileTooLarge`（ADR-0056）。
+4. 單次解析，再做讀取側 sanity check（儲存格 ≤ 32 KB、CSV 結構、user-picked 檔案的 UTF-8）；讀取側不做 injection 偵測（寫入側由 `csvutil` 負責逸出）。
 
 **參數：**
 - `path` (string): CSV 檔的絕對路徑
@@ -842,7 +841,7 @@ func ValidateName(name string) error                       // 不綁副檔名
 func (v *Validator) ValidateFilename(filename string) error // = ValidateName + .csv
 ```
 
-`ValidateName` 擋空白、tab / 控制字元、Unicode Cf / Cs、路徑分隔符、Windows 磁碟代號前綴、`<>:"|?*`、Windows 保留名（**每個點分段**比對，`CON.txt.csv`、`a.NUL.png` 都擋）與長度 > 255。`ValidateFilename` 另要求副檔名為 `.csv`（TrimSpace 後取、不分大小寫；尾點與無副檔名拒絕）。`manifest.LoadManifests` 開檔前對 `Base(path)` 呼叫 `ValidateName`；`CSVHandler.ReadCSV` 與 CSV 輸出（Output placement 的 CSV payload）呼叫 `ValidateFilename`，PNG 輸出呼叫 `ValidateName`。`filename.Sanitize` 用同一條逐段保留名規則（`a.NUL.b` → `a.NUL_safe.b`），所以 `SubjectOutputName(subject, suffix) + ext` 必過 `ValidateName`（property 測試釘住）。
+`ValidateName` 擋空白、tab / 控制字元、Unicode Cf / Cs、路徑分隔符、Windows 磁碟代號前綴、`<>:"|?*`、Windows 保留名（**每個點分段**比對，`CON.txt.csv`、`a.NUL.png` 都擋）與長度 > 255。`ValidateFilename` 另要求副檔名為 `.csv`（TrimSpace 後取、不分大小寫；尾點與無副檔名拒絕）。`manifest.LoadManifests` 開檔前對 `Base(path)` 呼叫 `ValidateName`，`manifest.OpenDataFile` 對資料檔名（`\` 正規化成 `/` 後的 Base）呼叫 `ValidateName`（ADR-0056）；`CSVHandler.ReadCSV` 與 CSV 輸出（Output placement 的 CSV payload）呼叫 `ValidateFilename`，PNG 輸出呼叫 `ValidateName`。`filename.Sanitize` 用同一條逐段保留名規則（`a.NUL.b` → `a.NUL_safe.b`），所以 `SubjectOutputName(subject, suffix) + ext` 必過 `ValidateName`（property 測試釘住）。
 
 ---
 
@@ -898,6 +897,19 @@ var   ReadFlags   = os.O_RDONLY | unix.O_NOFOLLOW
 ```
 
 `O_NOFOLLOW` 在 unix 由 OS 拒絕 symlink 開檔（symmetric 保護讀寫兩端）；Windows build tag 下 fallback 為純基本 flag（Windows ACL 不依 O_NOFOLLOW）。
+
+**OpenRegularLimited / CheckRegularSize**（ADR-0056）
+
+```go
+const MaxReadBytes = 100 * 1024 * 1024
+var ErrNotRegular, ErrTooLarge error             // 一般 error(fsperm 不 import i18n)
+type TooLargeError struct{ Size, Limit int64 } // Unwrap() == ErrTooLarge
+
+func OpenRegularLimited(path string, limit int64) (*LimitedFile, error)
+func CheckRegularSize(f *os.File, limit int64) error
+```
+
+整檔讀進記憶體的輸入檔的讀檔門。`OpenRegularLimited`：pre-stat（非 regular 回 `ErrNotRegular`，FIFO 不必開）→ `ReadFlags` 開檔（錯誤原樣回 `*os.PathError`）→ `CheckRegularSize`（fstat：regular 且 ≤ limit，否則 `ErrNotRegular` / `*TooLargeError`）→ `*LimitedFile`（`Read` / `Close`），讀到第 limit+1 byte 時回 `*TooLargeError{Size: limit+1}`。caller：`CSVHandler.ReadCSV`、`manifest.LoadManifests`（分期總檔案）。`CheckRegularSize` 給已開好 fd 的 `manifest.OpenDataFile` 用（資料檔只在開檔時檢查）。user-facing 訊息由 caller 轉換。
 
 **WriteFileNoFollow**
 

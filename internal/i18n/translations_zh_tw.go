@@ -98,9 +98,10 @@ var translationsZhTW = map[string]string{
 	KeyErrorMuscleRatioSubjectEmptyEMG:           "EMG 資料為空",
 	KeyErrorMuscleRatioSubjectInsufficientPhases: "有效分期點不足 2 個，跳過 Output 2",
 	KeyErrorMuscleRatioSubjectPhaseOutOfEMGRange: "phase %s 時間 %.4f 落在 EMG 範圍 [%.4f, %.4f] 外，跳過 Output 2",
-	KeyErrorMuscleRatioSubjectCollision:          "輸出檔名衝突: subject %q 與 %q 經檔名安全化後同為 %q (case-insensitive)",
 	// 批次取消。
 	KeyErrorMuscleRatioCancelled: "肌肉比值批次已中止",
+	// Manifest 讀檔門(ADR-0056)。
+	KeyErrorManifestSubjectCollision: "輸出檔名衝突: subject %q 與 %q 經檔名安全化後同為 %q (case-insensitive)",
 	// CCI Analysis Messages (backend i18n).
 	KeyErrorCCIParseManifestFailed:     "解析分期總檔案失敗",
 	KeyErrorCCIInvalidSubjectIndex:     "無效的主題索引: %d (共有 %d 個主題)",

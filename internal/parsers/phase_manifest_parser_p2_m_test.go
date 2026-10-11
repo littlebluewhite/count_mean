@@ -2,8 +2,7 @@ package parsers
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -43,7 +42,7 @@ func TestPhaseManifestParser_RejectsUnreasonablePhase(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			// 透過完整 ParseFile 路徑驗證:parseFloat 內呼 maxReasonablePhase。
+			// 透過完整 Parse 路徑驗證:parseFloat 內呼 maxReasonablePhase。
 			// P0 = tt.phaseVal,其餘填極小合法 phase 值(避開 monotonicity 與 86400 上限)
 			// L 設為很大值,讓某些測試的 tt.phaseVal=86399.9 仍能維持 monotonicity。
 			csvContent := "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n"
@@ -53,11 +52,8 @@ func TestPhaseManifestParser_RejectsUnreasonablePhase(t *testing.T) {
 			csvContent += "Subject1,motion.csv,force.anc,emg.csv,100," + tt.phaseVal +
 				",86400,86400,86400,86400,1,86400,86400,2,86400"
 
-			tmpFile := filepath.Join(t.TempDir(), "test_phase.csv")
-			require.NoError(t, os.WriteFile(tmpFile, []byte(csvContent), 0o600))
-
 			parser := NewPhaseManifestParser()
-			_, err := parser.ParseFile(tmpFile)
+			_, err := parser.Parse(strings.NewReader(csvContent), "test_phase.csv")
 
 			if tt.wantErr {
 				require.Error(t, err, "phase=%s 應該被 reject", tt.phaseVal)

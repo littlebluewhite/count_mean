@@ -94,9 +94,10 @@ var translationsEnUS = map[string]string{
 	KeyErrorMuscleRatioSubjectEmptyEMG:           "EMG data is empty",
 	KeyErrorMuscleRatioSubjectInsufficientPhases: "Fewer than 2 valid phase points; skipping Output 2",
 	KeyErrorMuscleRatioSubjectPhaseOutOfEMGRange: "Phase %s at time %.4f is outside EMG range [%.4f, %.4f]; skipping Output 2",
-	KeyErrorMuscleRatioSubjectCollision:          "Output filename collision: subjects %q and %q both sanitize to %q (case-insensitive)",
 	// batch cancellation.
 	KeyErrorMuscleRatioCancelled: "Muscle ratio batch cancelled",
+	// Manifest read door (ADR-0056).
+	KeyErrorManifestSubjectCollision: "Output filename collision: subjects %q and %q both sanitize to %q (case-insensitive)",
 	// CCI Analysis Messages (backend i18n).
 	KeyErrorCCIParseManifestFailed:     "Failed to parse manifest file",
 	KeyErrorCCIInvalidSubjectIndex:     "Invalid subject index: %d (%d subjects available)",

@@ -8,7 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"count_mean/internal/i18n"
 	"count_mean/internal/models"
+	"count_mean/internal/security"
+	"count_mean/internal/security/fsperm"
 )
 
 // writeFileHelper 在 base 下寫一個含 content 的檔，回傳寫入的 bytes 供讀回比對。
@@ -198,6 +201,54 @@ func TestLoadEMG_ParseErrorIsEMGParseError(t *testing.T) {
 const loadManifestsTestCSV = "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n" +
 	"S1,motion1.csv,force1.anc,emg1.csv,100,1.0,2.0,3.0,4.0,5.0,150,6.0,7.0,200,8.0\n"
 
+// writeSparseFile 在 dir 下建一個 size bytes 的 sparse file(Truncate,不佔磁碟)。
+func writeSparseFile(t *testing.T, dir, name string, size int64) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	f, err := os.Create(path) //nolint:gosec // path 位於 t.TempDir()
+	if err != nil {
+		t.Fatalf("setup Create %s: %v", name, err)
+	}
+	if err := f.Truncate(size); err != nil {
+		t.Fatalf("setup Truncate %s: %v", name, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("setup Close %s: %v", name, err)
+	}
+	return path
+}
+
+// TestLoadManifests_RejectsOversize 釘住 ADR-0056:分期總檔案超過 100 MB 在開檔時以 fstat
+// 拒絕(fsperm.ErrTooLarge),不整檔讀進記憶體。
+func TestLoadManifests_RejectsOversize(t *testing.T) {
+	t.Parallel()
+
+	path := writeSparseFile(t, t.TempDir(), "manifest.csv", fsperm.MaxReadBytes+1)
+
+	_, err := LoadManifests(path)
+	if !errors.Is(err, fsperm.ErrTooLarge) {
+		t.Fatalf("err = %v; want errors.Is(fsperm.ErrTooLarge)", err)
+	}
+}
+
+// TestOpenDataFile_RejectsOversize 釘住 ADR-0056:manifest 資料檔超過 100 MB 在開檔後以
+// fstat 拒絕,錯誤同時命中 ErrManifestDataFilePathInvalid 與 fsperm.ErrTooLarge。
+func TestOpenDataFile_RejectsOversize(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	writeSparseFile(t, base, "emg.csv", fsperm.MaxReadBytes+1)
+
+	f, err := OpenDataFile(base, "emg.csv")
+	if f != nil {
+		_ = f.Close()
+		t.Error("OpenDataFile 失敗時必須回 nil file")
+	}
+	if !errors.Is(err, ErrManifestDataFilePathInvalid) || !errors.Is(err, fsperm.ErrTooLarge) {
+		t.Fatalf("err = %v; want ErrManifestDataFilePathInvalid + fsperm.ErrTooLarge", err)
+	}
+}
+
 // TestLoadManifests_RejectsReservedName 釘住 ADR-0054:分期總檔的檔名由 filename 套件
 // (ValidateName)把關,每個點分段都比對 Windows 保留名。舊的 security.checkFilename 只剝
 // 最後一個副檔名,`CON.txt.csv` → `CON.txt` 不命中而放行;Windows 上開檔會導向 console device。
@@ -228,4 +279,137 @@ func TestLoadManifests_RejectsReservedName(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLoadManifests_FileNotFound 釘住開檔錯誤原樣保留:訊息「無法開啟檔案」(原 parsers
+// ParseFile 的測試,ADR-0056 開檔搬到 LoadManifests),且仍可 errors.Is(os.ErrNotExist)。
+func TestLoadManifests_FileNotFound(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadManifests(filepath.Join(t.TempDir(), "nonexistent_file.csv"))
+	if err == nil || !strings.Contains(err.Error(), "無法開啟檔案") {
+		t.Fatalf("err = %v; want 「無法開啟檔案」", err)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("errors.Is(err, os.ErrNotExist) = false; err=%v", err)
+	}
+}
+
+// TestLoadManifests_RejectsTraversalPath 釘住讀檔門第一步 ValidateExternalPath:含 ".."
+// element 的路徑在檔名檢查與開檔之前被擋。
+func TestLoadManifests_RejectsTraversalPath(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	writeFileHelper(t, base, "manifest.csv", loadManifestsTestCSV)
+
+	_, err := LoadManifests(filepath.Join(base, "sub") + "/../manifest.csv")
+	if !errors.Is(err, security.ErrPathTraversal) {
+		t.Fatalf("err = %v; want security.ErrPathTraversal", err)
+	}
+}
+
+// manifestCSV 組出 header + 每個 subject 一列的分期總檔內容(其餘欄位固定合法值)。
+func manifestCSV(subjects ...string) string {
+	var b strings.Builder
+	b.WriteString("Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n")
+	for _, s := range subjects {
+		b.WriteString(s + ",motion.csv,force.anc,emg.csv,100,1.0,2.0,3.0,4.0,5.0,150,6.0,7.0,200,8.0\n")
+	}
+	return b.String()
+}
+
+// TestLoadManifests_RejectsSubjectCollision 釘住 ADR-0056:兩列 Subject 的輸出檔名身分
+// (filename.SubjectOutputKey)相同時整份 manifest 拒絕。撞名檢查從 muscle_ratio 搬到讀檔門,
+// 所有 caller 一致;兩列都是空 Subject(都 Sanitize 成 untitled)也拒絕,與搬家前 MR 相同。
+func TestLoadManifests_RejectsSubjectCollision(t *testing.T) {
+	t.Parallel()
+
+	for name, subjects := range map[string][2]string{
+		"sanitize 後同名":  {"A/B", "A:B"},
+		"只差大小寫":         {"SF8", "sf8"},
+		"NFC vs NFD":    {"caf\u00e9", "cafe\u0301"},
+		"兩列都是空 Subject": {"", ""},
+		"完全相同的 Subject": {"SF1", "SF1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			base := t.TempDir()
+			writeFileHelper(t, base, "manifest.csv", manifestCSV(subjects[0], "OK", subjects[1]))
+
+			_, err := LoadManifests(filepath.Join(base, "manifest.csv"))
+			e, ok := errors.AsType[*i18n.Error](err)
+			if !ok || e.Key != i18n.KeyErrorManifestSubjectCollision {
+				t.Fatalf("err = %v; want i18n key %s", err, i18n.KeyErrorManifestSubjectCollision)
+			}
+		})
+	}
+
+	base := t.TempDir()
+	writeFileHelper(t, base, "manifest.csv", manifestCSV("SF1", "SF2", "NSF7&SF9"))
+	if _, err := LoadManifests(filepath.Join(base, "manifest.csv")); err != nil {
+		t.Errorf("不撞名的 manifest 不該失敗:%v", err)
+	}
+}
+
+// TestLoadManifests_SubjectCollisionMessage 釘住撞名錯誤的文字:Error() 是 zh-TW,與搬家前
+// (muscle_ratio)逐位元組相同;i18n.Localize 依目前 locale 渲染(ADR-0048)。
+func TestLoadManifests_SubjectCollisionMessage(t *testing.T) {
+	_ = i18n.InitI18n("./nonexistent") // 不存在路徑 → 內建 catalog
+	t.Cleanup(func() { i18n.SetLocale(i18n.LocaleZhTW) })
+	i18n.SetLocale(i18n.LocaleEnUS)
+
+	base := t.TempDir()
+	writeFileHelper(t, base, "manifest.csv", manifestCSV("A/B", "A:B"))
+	_, err := LoadManifests(filepath.Join(base, "manifest.csv"))
+
+	const zhTW = `輸出檔名衝突: subject "A/B" 與 "A:B" 經檔名安全化後同為 "A_B" (case-insensitive)`
+	const enUS = `Output filename collision: subjects "A/B" and "A:B" both sanitize to "A_B" (case-insensitive)`
+	if err == nil || err.Error() != zhTW {
+		t.Fatalf("Error() = %v; want %q", err, zhTW)
+	}
+	if got := i18n.Localize(err); got != enUS {
+		t.Errorf("Localize = %q; want %q", got, enUS)
+	}
+}
+
+// TestOpenDataFile_RejectsInvalidName 釘住 ADR-0056:manifest 資料檔名開檔前經
+// filename.ValidateName(Base) —— 新擋 `<>:"|?*`、控制字元、磁碟代號、每個點分段的保留名、
+// 過長(原 security 的 RejectsLongFilename 搬來此處)。檔案不建在磁碟上:擋在開檔之前。
+func TestOpenDataFile_RejectsInvalidName(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	for _, name := range []string{
+		"a<b.csv", "a|b.csv", "a?b.csv", `a"b.csv`, "a\x01b.csv", "C:emg.csv",
+		"CON.csv", "emg.NUL.csv", `sub\LPT1.x.csv`,
+		strings.Repeat("a", 256) + ".csv",
+	} {
+		f, err := OpenDataFile(base, name)
+		if f != nil {
+			_ = f.Close()
+		}
+		if !errors.Is(err, ErrManifestDataFilePathInvalid) || errors.Is(err, ErrManifestDataFileMissing) {
+			t.Errorf("OpenDataFile(%q) err = %v; want ErrManifestDataFilePathInvalid(檔名檢查)", name, err)
+		}
+	}
+}
+
+// TestOpenDataFile_BackslashSubdir 釘住 `\` 正規化:Windows 產生的 manifest 以 `\` 分隔子目錄,
+// ValidateName 只看正規化後的 Base,不把 `\` 當成檔名裡的非法分隔符。
+func TestOpenDataFile_BackslashSubdir(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	if err := os.Mkdir(filepath.Join(base, "sub"), 0o750); err != nil {
+		t.Fatalf("setup Mkdir: %v", err)
+	}
+	writeFileHelper(t, filepath.Join(base, "sub"), "emg.csv", "x\n")
+
+	f, err := OpenDataFile(base, `sub\emg.csv`)
+	if err != nil {
+		t.Fatalf("OpenDataFile(`sub\\emg.csv`) 不該失敗:%v", err)
+	}
+	_ = f.Close()
 }

@@ -41,15 +41,15 @@ _Avoid_: synced time range(已刪的 `GetSyncedTimeRange`)、phase times map(那
 _Avoid_: 切片用 ±ε、caller 內私有的 epsilon、strict-0 邊界比較、在 caller 內自行毫秒取整切片.
 
 **Manifest**
-描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析與 [[Chart Composer]] 都先經 `manifest.LoadManifests` 解析 manifest 取得 row 集合，再經 [[Subject source]] 載入該列的 EMG。`MotionFile` / `ForceFile` 只有會開該檔的 consumer 要求非空：PhaseSync 兩者都要求，[[Chart Composer]] 要求 `MotionFile`（`internal/composer/load.go` 的 `ErrMotionFileEmpty`），CCI 與 MuscleRatio 兩者都不要求（[[ADR-0045]]）。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有三個 analyzer 不消費此欄位（僅 [[Chart Composer]] 使用），向後相容。
+描述「一場量測」由哪些 EMG 檔、motion 檔與 phase 切點組成的設定檔。CCI、MuscleRatio、PhaseSync 三個分析與 [[Chart Composer]] 都先經 `manifest.LoadManifests` 解析 manifest 取得 row 集合，再經 [[Subject source]] 載入該列的 EMG。`LoadManifests` 是分期總檔案的讀檔門：`ValidateExternalPath` → `filename.ValidateName(Base)` → `fsperm.OpenRegularLimited`（一般檔案、≤100 MB，讀取中變大也封頂）→ 解析（不檢查編碼，V.16 為 Big5）→ 撞名檢查：兩列 [[Subject]] 的 `filename.SubjectOutputKey` 相同即整份拒絕（見 [[ADR-0056]]）。`MotionFile` / `ForceFile` 只有會開該檔的 consumer 要求非空：PhaseSync 兩者都要求，[[Chart Composer]] 要求 `MotionFile`（`internal/composer/load.go` 的 `ErrMotionFileEmpty`），CCI 與 MuscleRatio 兩者都不要求（[[ADR-0045]]）。V.14 之後新增 `MuscleRatioFile` 欄位（filename only、相對數據資料夾、可空 — 空表示該 subject 跳過肌肉比值來源），供 [[Chart Composer]] 使用；既有三個 analyzer 不消費此欄位（僅 [[Chart Composer]] 使用），向後相容。
 _Avoid_: config, batch file, descriptor, sheet.
 
 **Subject**
-[[Manifest]] 一列代表的「一個分析對象」，是 [[Domain analyzer]]、NormalizedPhaseSync 與 [[Chart Composer]] 的 unit of work。在程式碼裡是 `PhaseManifest.Subject` 字串欄位（首欄）；在 UI 上 CCI / PhaseSync / Chart Composer panel 統一以「分析主題」呈現 — 兩個詞**同義**。Subject 名稱經檔名安全化後成為 muscle_ratio output1 (`{safeSubject}_muscle_ratio.csv`) 等下游檔名的 prefix。
+[[Manifest]] 一列代表的「一個分析對象」，是 [[Domain analyzer]]、NormalizedPhaseSync 與 [[Chart Composer]] 的 unit of work。在程式碼裡是 `PhaseManifest.Subject` 字串欄位（首欄）；在 UI 上 CCI / PhaseSync / Chart Composer panel 統一以「分析主題」呈現 — 兩個詞**同義**。Subject 名稱經檔名安全化後成為 muscle_ratio output1 (`{safeSubject}_muscle_ratio.csv`) 等下游檔名的 prefix。同一份 manifest 內，Subject 的輸出檔名身分 `SubjectOutputKey`（= NFC(ToLower(Sanitize(subject)))，與 `SubjectOutputName` 同在 filename 套件）必須唯一，否則 `LoadManifests` 整份拒絕 —— `A/B` 與 `A:B`、`SF8` 與 `sf8`、兩列空 Subject 都算撞名（[[ADR-0056]]）。
 _Avoid_: trial, sample, case, 分析主題（UI label only — 內部以 Subject 為準）.
 
 **Subject source**
-`internal/manifest` 持有的「[[Manifest]] 一列 + 資料夾 → 該 [[Subject]] 的 EMG」入口：`manifest.LoadEMG(dataFolder, row)` 經 `OpenDataFile`（硬化讀檔門）開檔、`EMGParser` 解析、關檔，回傳 [[PhaseSyncEMGData]]。開檔失敗原樣回 `OpenDataFile` 的錯誤；解析失敗包成 `*manifest.EMGParseError`（`Error()` 與內層相同），caller 以 `errors.As` 區分兩階段並保有自己的失敗 policy（CCI fail-fast、MuscleRatio per-subject、Composer 轉 UI 訊息）。不攜帶取樣頻率（與 CCI 的 sample interval 估計同源）。見 [[ADR-0044]]。
+`internal/manifest` 持有的「[[Manifest]] 一列 + 資料夾 → 該 [[Subject]] 的 EMG」入口：`manifest.LoadEMG(dataFolder, row)` 經 `OpenDataFile`（硬化讀檔門：`ValidateName` 檢查 base 檔名、lenient 解析 + validated-open、fstat 一般檔案且 ≤100 MB，[[ADR-0056]]）開檔、`EMGParser` 解析、關檔，回傳 [[PhaseSyncEMGData]]。開檔失敗原樣回 `OpenDataFile` 的錯誤；解析失敗包成 `*manifest.EMGParseError`（`Error()` 與內層相同），caller 以 `errors.As` 區分兩階段並保有自己的失敗 policy（CCI fail-fast、MuscleRatio per-subject、Composer 轉 UI 訊息）。不攜帶取樣頻率（與 CCI 的 sample interval 估計同源）。見 [[ADR-0044]]。
 _Avoid_: EMG loader, data source.
 
 **Reference EMG**
@@ -69,7 +69,7 @@ CSVHandler 對外的一種寫入操作 —— caller 傳入 result struct（MaxM
 _Avoid_: structured write, typed write, formatted output.
 
 **User-picked CSV read**
-讀取使用者在 GUI 選取之 CSV 的唯一入口 `CSVHandler.ReadCSV`：base filename 驗證 → `ValidateExternalPath` → 以 `fsperm.ReadFlags` 開檔 → fstat（regular file、≤100MB）→ 解析 → 內容驗證。路徑不 URL-decode。見 [[ADR-0039]]。
+讀取使用者在 GUI 選取之 CSV 的唯一入口 `CSVHandler.ReadCSV`：base filename 驗證 → `ValidateExternalPath` → `fsperm.OpenRegularLimited`（pre-stat → `fsperm.ReadFlags` 開檔 → fstat：regular file、≤100MB；讀取中變大也封頂，與分期總檔案共用，[[ADR-0056]]）→ 解析 → 內容驗證。路徑不 URL-decode。見 [[ADR-0039]]。
 與 manifest-driven 的 lenient 讀取（`OpenLenientValidated`）不同：後者的檔名來自 manifest、相對於 baseFolder。
 _Avoid_: raw read, direct open.
 

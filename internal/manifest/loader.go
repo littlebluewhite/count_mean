@@ -5,7 +5,8 @@
 //   - LoadEMG：一個 manifest row + 資料夾 → 該 Subject 的 EMG（開檔、解析、關檔）
 //   - OpenDataFile：把 manifest 內相對檔名解析為 baseFolder 下的路徑、邊界檢查、原子化開檔
 //
-// 開檔走 OpenDataFile → security.OpenLenientValidated（允許 BTS 匯出含字面 "%" 的檔名）。
+// 兩道讀檔門(ADR-0056):分期總檔案本身走 LoadManifests,資料檔走 OpenDataFile →
+// security.OpenLenientValidated（允許 BTS 匯出含字面 "%" 的檔名）。
 // 本套件只負責「載入」並回傳 (data, err)；caller 對錯誤的處置仍各自決定（cci 是 fail-fast，
 // muscle_ratio 是 per-subject batch，Composer 轉成 UI 訊息），LoadEMG 不替它們選 policy。
 // 見 [[ADR-0044]]。
@@ -16,34 +17,80 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"count_mean/internal/i18n"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security"
+	"count_mean/internal/security/fsperm"
 	"count_mean/internal/validation/filename"
 )
 
 // data-file sentinels:OpenDataFile 這道門服務 EMG / Motion / Force / muscle_ratio
 // 四類 manifest 資料檔，message 採泛化「資料檔案…」措辭（非 EMG-specific）。
-// caller 用 errors.Is 區分三類失敗：路徑驗證失敗（traversal/escape/絕對路徑/null-byte/
-// 過長）vs 檔案不存在 vs baseFolder 本身無法解析。
+// caller 用 errors.Is 區分三類失敗：路徑驗證失敗（檔名不合法/traversal/escape/絕對路徑/
+// null-byte/非一般檔案/過大）vs 檔案不存在 vs baseFolder 本身無法解析。
 var (
 	ErrManifestDataFileMissing     = errors.New("資料檔案不存在")
 	ErrManifestDataFilePathInvalid = errors.New("資料檔案路徑驗證失敗")
 	ErrBaseFolderNotFound          = errors.New("baseFolder 不存在或無法解析")
 )
 
-// LoadManifests 解析分期總檔案，回傳所有 manifest 紀錄。
+// LoadManifests 是分期總檔案的讀檔門(ADR-0056),依序:
 //
-// 開檔前先以 filename.ValidateName 檢查檔名（Windows 保留名逐段比對、非法字元、長度等）：
-// 檔名規則只由 filename 套件裁判，security 只管路徑位置（ADR-0054）。所有讀分期總檔的
-// 路徑（cci / muscle_ratio / phase_sync / Composer）都經過這裡。
+//  1. ValidateExternalPath:traversal、系統敏感位置(含 symlink resolve)。
+//  2. filename.ValidateName(Base):檔名規則只由 filename 套件裁判(ADR-0054)。
+//  3. fsperm.OpenRegularLimited:必須是一般檔案(FIFO 不阻塞)且 ≤ 100 MB,讀取中變大也封頂。
+//  4. PhaseManifestParser.Parse。
+//  5. 撞名檢查:兩列 Subject 的 filename.SubjectOutputKey 相同即整份拒絕(含兩列都是空 Subject)。
+//
+// 所有讀分期總檔的路徑(cci / muscle_ratio / phase_sync / Composer)都經過這裡。編碼不檢查:
+// 真實 V.16 manifest 是 Big5。
 func LoadManifests(path string) ([]models.PhaseManifest, error) {
+	if err := security.DefaultValidator().ValidateExternalPath(path); err != nil {
+		return nil, fmt.Errorf("路徑驗證失敗: %w", err)
+	}
+
 	if err := filename.ValidateName(filepath.Base(path)); err != nil {
 		return nil, err
 	}
 
-	return parsers.NewPhaseManifestParser().ParseFile(path)
+	f, err := fsperm.OpenRegularLimited(path, fsperm.MaxReadBytes)
+	if err != nil {
+		return nil, fmt.Errorf("無法開啟檔案 %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
+
+	manifests, err := parsers.NewPhaseManifestParser().Parse(f, filepath.Base(path))
+	if err != nil {
+		return nil, err
+	}
+
+	if err := assertUniqueSubjectOutputs(manifests); err != nil {
+		return nil, err
+	}
+
+	return manifests, nil
+}
+
+// assertUniqueSubjectOutputs 拒絕兩列 Subject 會寫到同一個輸出檔的 manifest:輸出檔名由
+// filename.SubjectOutputName 從 Subject 推導,兩列的 SubjectOutputKey 相同時,後寫的會靜默
+// 覆蓋先寫的("A/B" 與 "A:B" 都寫成 "A_B_muscle_ratio.csv";"SF8" 與 "sf8"、NFC 與 NFD 的
+// "café" 在 macOS / Windows 上是同一檔)。
+func assertUniqueSubjectOutputs(manifests []models.PhaseManifest) error {
+	seen := make(map[string]string, len(manifests))
+
+	for _, m := range manifests {
+		key := filename.SubjectOutputKey(m.Subject)
+		if prev, exists := seen[key]; exists {
+			return i18n.NewError(i18n.KeyErrorManifestSubjectCollision, prev, m.Subject, filename.Sanitize(m.Subject))
+		}
+
+		seen[key] = m.Subject
+	}
+
+	return nil
 }
 
 // EMGParseError 表示 [[Subject source]] 的 EMG 檔已開成功、但解析失敗。
@@ -82,10 +129,13 @@ func LoadEMG(dataFolder string, row *models.PhaseManifest) (*models.PhaseSyncEMG
 // **單一加固讀檔門**：整合過去散落的手寫 security.ResolveLenientPath 站點，把
 // 「解析路徑 → 邊界檢查 → 原子化開檔」收斂成一道入口。
 //
-// 流程：EvalSymlinks(baseFolder) → security.OpenLenientValidated（lenient 解析 + 原子
-// validated-open，fused 一道門關閉 validate-vs-open TOCTOU 縫隙）。回傳「已開啟且已驗證」
-// 的 *os.File，**caller 必須自行 defer Close**（直接交出開好的 fd，避免 caller 拿 path
-// 重開時再生 TOCTOU）。
+// 流程：EvalSymlinks(baseFolder) → filename.ValidateName(Base(name))（先把 `\` 正規化成 `/`,
+// Windows 產生的 manifest 可能用 `\` 分隔子目錄;ADR-0056）→ security.OpenLenientValidated
+// （lenient 解析 + 原子 validated-open，fused 一道門關閉 validate-vs-open TOCTOU 縫隙）→
+// fsperm.CheckRegularSize（fstat:一般檔案且 ≤ 100 MB;失敗先 Close 再回錯）。回傳「已開啟
+// 且已驗證」的 *os.File，**caller 必須自行 defer Close**（直接交出開好的 fd，避免 caller 拿
+// path 重開時再生 TOCTOU;phase_sync 用 f.Name() 取解析後路徑）。大小只在開檔時檢查,
+// xlsx 解壓後的大小不在此限。
 //
 // # 錯誤分類契約（caller 用 errors.Is 區分）
 //
@@ -93,27 +143,37 @@ func LoadEMG(dataFolder string, row *models.PhaseManifest) (*models.PhaseSyncEMG
 //     本門明確 fail-closed。
 //   - ErrManifestDataFileMissing — 路徑合法但檔案不存在（OpenLenientValidated 的 ENOENT
 //     經雙層 %w 包裝仍保留 os.ErrNotExist，故以 errors.Is(err, os.ErrNotExist) 判定）。
-//   - ErrManifestDataFilePathInvalid — 其餘一切「路徑本身有問題」的 catch-all：traversal
-//     (".." element) / 絕對路徑 / null-byte / 過長 / 解析後落在 base 外（fsperm 的
-//     ErrPathEscapesBase）。這些在 lenient 解析或 open 階段被擋，皆非 os.ErrNotExist。
+//   - ErrManifestDataFilePathInvalid — 其餘一切「路徑本身有問題」的 catch-all：檔名不合法
+//     （ValidateName）/ traversal (".." element) / 絕對路徑 / null-byte / 解析後落在 base 外
+//     （fsperm 的 ErrPathEscapesBase）/ 非一般檔案（另命中 fsperm.ErrNotRegular）/ 過大
+//     （另命中 fsperm.ErrTooLarge）。這些皆非 os.ErrNotExist。
 //
 // # 字面 "%" 不可 regress
 //
-// BTS EMG 匯出檔名常含字面 "%"（例 "SF_8_BTS%_*.csv"）。OpenLenientValidated 端到端接受
-// 字面 "%"，本門不另加 "%" 處理 — 只需不誤拒。
-func OpenDataFile(baseFolder, filename string) (*os.File, error) {
+// BTS EMG 匯出檔名常含字面 "%"（例 "SF_8_BTS%_*.csv"）。ValidateName 與
+// OpenLenientValidated 都接受字面 "%"，本門不另加 "%" 處理 — 只需不誤拒。
+func OpenDataFile(baseFolder, name string) (*os.File, error) {
 	resolvedBase, err := filepath.EvalSymlinks(baseFolder)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrBaseFolderNotFound, baseFolder)
 	}
 
-	f, err := security.OpenLenientValidated(resolvedBase, filename)
+	if err := filename.ValidateName(filepath.Base(strings.ReplaceAll(name, `\`, "/"))); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrManifestDataFilePathInvalid, err)
+	}
+
+	f, err := security.OpenLenientValidated(resolvedBase, name)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// wrap inner err (含解析後的 *os.PathError 路徑),保留 MissingRow UI
 			// 「期待的檔放在哪」affordance;雙層 %w 不影響 errors.Is(ErrManifestDataFileMissing)。
 			return nil, fmt.Errorf("%w: %w", ErrManifestDataFileMissing, err)
 		}
+		return nil, fmt.Errorf("%w: %w", ErrManifestDataFilePathInvalid, err)
+	}
+
+	if err := fsperm.CheckRegularSize(f, fsperm.MaxReadBytes); err != nil {
+		_ = f.Close() //nolint:errcheck // 已在錯誤路徑;read-only fd 的 close 錯誤不影響結果
 		return nil, fmt.Errorf("%w: %w", ErrManifestDataFilePathInvalid, err)
 	}
 

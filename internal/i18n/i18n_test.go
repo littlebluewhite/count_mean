@@ -217,7 +217,7 @@ func TestGlobalI18n(t *testing.T) {
 	}
 }
 
-// muscleRatioKeys 是 migration 新增的 i18n key（11 keys + 4 (3c) follow-up − 2 (ADR-0052 刪 OutputDir 驗證 / 建目錄) = 13 keys），供下方守門測試共用。
+// muscleRatioKeys 是 migration 新增的 i18n key（11 keys + 4 (3c) follow-up − 2 (ADR-0052 刪 OutputDir 驗證 / 建目錄) − 1 (ADR-0056 撞名 key 移到 manifest 層) = 12 keys），供下方守門測試共用。
 var muscleRatioKeys = []string{
 	KeyErrorMuscleRatioParseManifestFailed,
 	KeyErrorMuscleRatioEmptyManifest,
@@ -231,7 +231,6 @@ var muscleRatioKeys = []string{
 	KeyErrorMuscleRatioSubjectEmptyEMG,
 	KeyErrorMuscleRatioSubjectInsufficientPhases,
 	KeyErrorMuscleRatioSubjectPhaseOutOfEMGRange,
-	KeyErrorMuscleRatioSubjectCollision,
 	KeyErrorMuscleRatioCancelled, // 批次取消
 }
 

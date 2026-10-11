@@ -19,7 +19,8 @@ import (
 // 就把整個 LoadChartComposerSubjects(subject dropdown)卡死。
 //
 // 修正:ReadFlags 加 O_NONBLOCK(對 regular file 是 no-op,只擋 FIFO/special 阻塞)
-// + ValidateAllEMGFiles 對開出來的檔 fstat,非 regular file 直接列為 MissingRow。
+// + 對開出來的檔 fstat,非 regular file 直接列為 MissingRow(fstat 自 ADR-0056 起由
+// OpenDataFile 的 fsperm.CheckRegularSize 負責)。
 //
 // 紅綠:修正前此測試會在 OpenDataFile 開 FIFO 時 hang,被 time.After 守門轉成
 // t.Fatal(紅);修正後 ValidateAllEMGFiles 立即返回、FIFO row 列入 missing、

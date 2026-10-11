@@ -94,9 +94,10 @@ var translationsJaJP = map[string]string{
 	KeyErrorMuscleRatioSubjectEmptyEMG:           "EMGデータが空です",
 	KeyErrorMuscleRatioSubjectInsufficientPhases: "有効なフェーズポイントが 2 つ未満のため、Output 2 をスキップします",
 	KeyErrorMuscleRatioSubjectPhaseOutOfEMGRange: "フェーズ %s の時刻 %.4f は EMG 範囲 [%.4f, %.4f] 外です。Output 2 をスキップします",
-	KeyErrorMuscleRatioSubjectCollision:          "出力ファイル名の競合: サブジェクト %q と %q はファイル名安全化後に同じ %q になります (case-insensitive)",
 	// バッチキャンセル。
 	KeyErrorMuscleRatioCancelled: "筋肉比率バッチがキャンセルされました",
+	// マニフェスト読み込みゲート (ADR-0056)。
+	KeyErrorManifestSubjectCollision: "出力ファイル名の競合: サブジェクト %q と %q はファイル名安全化後に同じ %q になります (case-insensitive)",
 	// CCI Analysis Messages (backend i18n).
 	KeyErrorCCIParseManifestFailed:     "マニフェストファイルの解析に失敗しました",
 	KeyErrorCCIInvalidSubjectIndex:     "無効なサブジェクトインデックス: %d (合計 %d 件)",

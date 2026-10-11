@@ -190,10 +190,13 @@ const (
 	KeyErrorMuscleRatioSubjectEmptyEMG           = "error.muscle_ratio.subject.empty_emg"
 	KeyErrorMuscleRatioSubjectInsufficientPhases = "error.muscle_ratio.subject.insufficient_phases"
 	KeyErrorMuscleRatioSubjectPhaseOutOfEMGRange = "error.muscle_ratio.subject.phase_out_of_emg_range"
-	KeyErrorMuscleRatioSubjectCollision          = "error.muscle_ratio.subject_collision"
 
 	// 批次取消(Wails Shutdown / user cancel)時 caller 訊息。
 	KeyErrorMuscleRatioCancelled = "error.muscle_ratio.cancelled"
+
+	// Manifest 讀檔門(ADR-0056):manifest.LoadManifests 以 i18n.NewError 回帶 key 的錯誤,
+	// caller 層 Localize。兩個 Subject 的輸出檔名身分(filename.SubjectOutputKey)相同時整份拒絕。
+	KeyErrorManifestSubjectCollision = "error.manifest.subject_collision"
 
 	// CCI Analysis Messages — cci 以 i18n.NewError / WrapError 回帶 key 的錯誤,handler
 	// 層 Localize(ADR-0048);catalog 字串只含 fmt.Sprintf-compatible verbs

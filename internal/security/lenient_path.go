@@ -94,11 +94,8 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 		return "", fmt.Errorf("檔名無效（空 / 純 whitespace / dot-only）: %q", shown)
 	}
 
-	// 長度上限：strict 路徑有 absPath 4096（PathValidator）/ filename 255（filename.ValidateName，
-	// ADR-0054）守門；lenient 路徑取代後曾遺失此防護，回補。
-	if base := filepath.Base(cleaned); len(base) > maxFilenameLength {
-		return "", fmt.Errorf("檔名過長（> %d）: %d 字元", maxFilenameLength, len(base))
-	}
+	// 檔名規則（長度、非法字元、保留名）不在這裡：OpenLenientValidated 的唯一 caller manifest.OpenDataFile
+	// 開檔前先以 filename.ValidateName 檢查 base 檔名（ADR-0054 / ADR-0056）。
 
 	// 同時擋 native absolute path 與 Unix-style leading-slash:
 	//   - filepath.IsAbs 在 Windows 只認 `C:\...` / UNC,**不**認 `/etc/passwd`

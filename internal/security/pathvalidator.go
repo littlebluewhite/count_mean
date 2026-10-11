@@ -38,9 +38,8 @@ var (
 
 // Path length constants.
 const (
-	maxPathLength     = 4096
-	maxFilenameLength = 255
-	nonASCIIVisible   = 0x00A0 // Non-ASCII but visible characters start here
+	maxPathLength   = 4096
+	nonASCIIVisible = 0x00A0 // Non-ASCII but visible characters start here
 )
 
 // PathValidator provides secure path validation functionality.

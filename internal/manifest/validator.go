@@ -1,10 +1,6 @@
 package manifest
 
-import (
-	"fmt"
-
-	"count_mean/internal/models"
-)
+import "count_mean/internal/models"
 
 // MissingRow 標示一筆 manifest row 對應的 EMG 檔在 disk 上開檔失敗(可能是
 // 不存在,也可能是路徑驗證失敗如 traversal 等)。
@@ -21,10 +17,10 @@ type MissingRow struct {
 }
 
 // ValidateAllEMGFiles 掃過整批 manifest,把每筆 EMGFile 走 OpenDataFile(開檔即
-// 存在性確認),再 fstat 確認是一般檔案後立即 Close,收集所有失敗 row 給 caller 在
-// Load 階段早一步 surface(而非等到 per-subject Generate 才炸)。non-regular file
-// (FIFO / device 等)被明確列為 MissingRow;ReadFlags 的 O_NONBLOCK 確保 FIFO open
-// 不阻塞,避免一筆壞 row 卡死整批載入(codex P2 DoS)。
+// 存在性確認;OpenDataFile 另以 fstat 拒絕非一般檔案與過大的檔,ADR-0056)後立即 Close,
+// 收集所有失敗 row 給 caller 在 Load 階段早一步 surface(而非等到 per-subject Generate
+// 才炸)。non-regular file(FIFO / device 等)因此列為 MissingRow;ReadFlags 的 O_NONBLOCK
+// 確保 FIFO open 不阻塞,避免一筆壞 row 卡死整批載入(codex P2 DoS)。
 //
 // 動機:V.14 manifest 升級 NSF1/2/3 EMGFile 欄誤改 → user 在 Chart Composer
 // Generate 才看到「EMG 檔案不存在」,沒有早期警示。Load 階段跑 validator
@@ -39,7 +35,7 @@ func ValidateAllEMGFiles(manifests []models.PhaseManifest, dataFolder string) []
 	var missing []MissingRow
 
 	for _, m := range manifests {
-		// OpenDataFile 開檔成功即確認存在;立即 Close(此處只做存在性檢查,不讀內容)。
+		// OpenDataFile 開檔成功即確認存在且是一般檔案;立即 Close(此處只做存在性檢查,不讀內容)。
 		// 失敗則 append + continue — 不在首個 error abort,自然保留 order-aligned、
 		// one-row-per-failure 的 cardinality(含 baseFolder 不存在時每筆 row 同樣失敗)。
 		f, err := OpenDataFile(dataFolder, m.EMGFile)
@@ -51,24 +47,7 @@ func ValidateAllEMGFiles(manifests []models.PhaseManifest, dataFolder string) []
 			})
 			continue
 		}
-
-		// fstat 已開檔再 Close — 拒絕 non-regular file(FIFO / device / socket 等)。
-		// ReadFlags 帶 O_NONBLOCK 讓 FIFO open 不阻塞(否則一筆壞 row 卡死整批載入,
-		// codex P2 DoS);這裡的 fstat 把這類「開得起來但非一般檔」的 row 明確列為
-		// MissingRow,避免後續 ParseFile 在 special file 上有非預期行為。
-		info, statErr := f.Stat()
 		_ = f.Close() //nolint:errcheck // existence-check only; close error not actionable
-		if statErr != nil {
-			missing = append(missing, MissingRow{Subject: m.Subject, EMGFile: m.EMGFile, Err: statErr})
-			continue
-		}
-		if !info.Mode().IsRegular() {
-			missing = append(missing, MissingRow{
-				Subject: m.Subject, EMGFile: m.EMGFile,
-				Err: fmt.Errorf("%w: 非一般檔案 (mode %s)", ErrManifestDataFilePathInvalid, info.Mode().Type()),
-			})
-			continue
-		}
 	}
 
 	return missing

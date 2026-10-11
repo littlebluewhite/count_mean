@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/text/unicode/norm"
-
 	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
@@ -17,7 +15,6 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/musclemap"
 	"count_mean/internal/synchronizer"
-	"count_mean/internal/validation/filename"
 	"count_mean/internal/windowmean"
 )
 
@@ -68,10 +65,9 @@ func NewAnalyzer() *Analyzer {
 }
 
 // Analyze runs the full batch pipeline:
-//  1. Parse manifest → []PhaseManifest
-//  2. Assert sanitized-subject uniqueness (no two manifests resolve to the same output file)
-//  3. Build a request-scoped PathValidator rooted at DataFolder
-//  4. For each subject: load EMG → computeSubject → write 2 CSVs
+//  1. Parse manifest → []PhaseManifest(manifest.LoadManifests 已擋 Subject 輸出檔名撞名,ADR-0056)
+//  2. Build a request-scoped PathValidator rooted at DataFolder
+//  3. For each subject: load EMG → computeSubject → write 2 CSVs
 //
 // ctx 帶 Wails Shutdown / 使用者中止訊號。subject 迴圈間檢查 ctx.Done(),
 // 收到取消立即停止 — 已完成的 subject 結果保留,未開始的不處理。caller 可以
@@ -100,10 +96,6 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 
 	if len(manifests) == 0 {
 		return nil, i18n.NewError(i18n.KeyErrorMuscleRatioEmptyManifest)
-	}
-
-	if err := assertUniqueSanitizedSubjects(manifests); err != nil {
-		return nil, err
 	}
 
 	// EMG 開檔走 manifest.OpenDataFile（內部走 security.OpenLenientValidated，
@@ -158,7 +150,7 @@ func (*Analyzer) analyzeSubject(
 	// Subject 為空時擋下：filename.Sanitize("") 會 fallback 成 "untitled"，
 	// 經 SubjectOutputName 組出 "untitled_muscle_ratio.csv"。
 	//   - 多筆空 Subject 共用此 "untitled" 前綴 → 全寫同一檔、後者 O_TRUNC 覆寫前者；
-	//     此情境其實已由 assertUniqueSanitizedSubjects(批次層,同 key 即拒)先擋下。
+	//     此情境其實已由 manifest.LoadManifests 的撞名檢查(同 SubjectOutputKey 即整份拒絕)先擋下。
 	//   - 單筆空 Subject 能通過批次唯一性檢查，但 "untitled_muscle_ratio.csv" 是
 	//     非預期且易與真實命名碰撞的檔名。故在此 per-subject 再 fail-fast，要求顯式 Subject。
 	if strings.TrimSpace(m.Subject) == "" {
@@ -438,36 +430,6 @@ func appendIntervalMidpoints(
 	}
 
 	return points
-}
-
-// assertUniqueSanitizedSubjects rejects batches whose subjects collapse to the same output filename
-// after filename.Sanitize. Without this check, "A/B" + "A:B" both write to "A_B_muscle_ratio.csv" and
-// the latter silently overwrites the former.
-//
-// 衝突 key 用 NFC + strings.ToLower：
-//   - case-insensitive：macOS 與 Windows 預設使用 case-insensitive filesystem，
-//     "SF8" 與 "sf8" 雖然 case-sensitive 不同，但寫入磁碟時實為同檔，後者 O_TRUNC 會覆寫前者。
-//   - NFC normalization：macOS APFS/HFS+ 對 "café" (NFC, U+00E9) 與 "café" (NFD, e+U+0301)
-//     hash 同 on-disk name，但 strings.ToLower 視為相異 — 若不 NFC normalize，會放行兩筆
-//     manifest 然後第二筆覆寫第一筆。
-func assertUniqueSanitizedSubjects(manifests []models.PhaseManifest) error {
-	seen := make(map[string]string, len(manifests))
-
-	for _, m := range manifests {
-		safe := filename.Sanitize(m.Subject)
-		key := norm.NFC.String(strings.ToLower(safe))
-
-		if prev, exists := seen[key]; exists {
-			return i18n.NewError(
-				i18n.KeyErrorMuscleRatioSubjectCollision,
-				prev, m.Subject, safe,
-			)
-		}
-
-		seen[key] = m.Subject
-	}
-
-	return nil
 }
 
 // defaultRatioLabels 提取 DefaultRatios() 的 pair name slice,供 CSVHandler payload 用。

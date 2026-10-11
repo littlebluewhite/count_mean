@@ -5,14 +5,13 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 
 	"count_mean/internal/csvutil"
 	"count_mean/internal/models"
-	"count_mean/internal/security/fsperm"
 	csvvalidation "count_mean/internal/validation/csv"
 )
 
@@ -61,25 +60,16 @@ func NewPhaseManifestParser() *PhaseManifestParser {
 	}
 }
 
-// ParseFile 解析分期總檔案.
+// Parse 從 io.Reader 解析分期總檔案,比照 EMG / Motion / ANC 的 reader 形狀(ADR-0017 D4)。
+// 開檔、檔名與大小上限由 caller 負責(manifest.LoadManifests,ADR-0056)。name 保留與其他
+// parser 對稱的簽章;錯誤訊息只帶 row/col、不帶檔名(見 CheckCells),故未使用。
 //
 //nolint:err113 // dynamic errors with Chinese messages for user-facing output
-func (p *PhaseManifestParser) ParseFile(filepath string) ([]models.PhaseManifest, error) {
-	file, err := os.OpenFile(filepath, fsperm.ReadFlags, 0) //nolint:gosec // filepath validated by caller; fsperm.ReadFlags adds O_NOFOLLOW (symmetric with write-side)
-	if err != nil {
-		return nil, fmt.Errorf("無法開啟檔案 %s: %w", filepath, err)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
+func (p *PhaseManifestParser) Parse(r io.Reader, _ string) ([]models.PhaseManifest, error) {
 	// BOM 處理: Excel 匯出的 UTF-8 manifest CSV 帶 0xEF 0xBB 0xBF 前綴若不剝除,
 	// records[startRow][0] 會帶 U+FEFF,Subject 比對失敗。
 	// 與 internal/io/csv_handler.go（parseCSV）對稱: bufio + PeekBOM。
-	bufReader := bufio.NewReaderSize(file, phaseManifestReaderBufSize)
+	bufReader := bufio.NewReaderSize(r, phaseManifestReaderBufSize)
 	if _, err := csvutil.PeekBOM(bufReader); err != nil {
 		return nil, fmt.Errorf("BOM 偵測失敗: %w", err)
 	}
