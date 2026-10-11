@@ -183,6 +183,17 @@ var translationsJaJP = map[string]string{
 	KeyErrorFilenameTooLong:        "ファイル名が長すぎます (最大 255 文字)",
 	KeyErrorFilenameNoExtension:    "ファイル名に拡張子がありません",
 	KeyErrorFilenameUnsupportedExt: "サポートされていないファイル拡張子です: %s",
+	// 使用者選取 CSV 的讀取入口(io.ReadCSV);過大只帶 MB 數。
+	KeyErrorIOFilenameInvalid:     "ファイル名の検証に失敗しました",
+	KeyErrorIOPathInvalid:         "パスの検証に失敗しました",
+	KeyErrorIONotRegularFile:      "通常のファイルではありません",
+	KeyErrorIOFileTooLarge:        "ファイルが大きすぎます（%d MB、上限 100 MB）。ファイルを分割してから再試行してください",
+	KeyErrorIOFileNotFound:        "ファイル情報を取得できません",
+	KeyErrorIOOpenFailed:          "ファイルを開けません",
+	KeyErrorIOBOMDetectFailed:     "BOM の検出に失敗しました",
+	KeyErrorIOReadCSVDataFailed:   "CSV データを読み取れません",
+	KeyErrorIOInsufficientRows:    "データが不足しています。ファイルにはヘッダー行と少なくとも 1 行のデータが必要です",
+	KeyErrorIOCSVValidationFailed: "CSV データの検証に失敗しました",
 	// ConfigPanel — Phase 1 frontend i18n MVP entries (2026-05-14).
 	KeyConfigPanelTitle:            "システム設定",
 	KeyConfigButtonBack:            "戻る",

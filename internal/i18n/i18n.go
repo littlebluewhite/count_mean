@@ -300,6 +300,21 @@ const (
 	KeyErrorFilenameNoExtension    = "error.filename.no_extension"
 	KeyErrorFilenameUnsupportedExt = "error.filename.unsupported_extension"
 
+	// 使用者選取 CSV 的讀取入口(io.CSVHandler.ReadCSV,ADR-0039 / ADR-0056):以
+	// i18n.NewError / WrapError 回帶 key 的錯誤,caller 層 Localize。fsperm 的 plain
+	// sentinel(ErrNotRegular、*TooLargeError)在 io 轉成 key、不當 Cause(避免文字重複);
+	// 過大只帶 MB 數,不帶路徑。
+	KeyErrorIOFilenameInvalid     = "error.io.filename_invalid"
+	KeyErrorIOPathInvalid         = "error.io.path_invalid"
+	KeyErrorIONotRegularFile      = "error.io.not_regular_file"
+	KeyErrorIOFileTooLarge        = "error.io.file_too_large"
+	KeyErrorIOFileNotFound        = "error.io.file_not_found"
+	KeyErrorIOOpenFailed          = "error.io.open_failed"
+	KeyErrorIOBOMDetectFailed     = "error.io.bom_detect_failed"
+	KeyErrorIOReadCSVDataFailed   = "error.io.read_csv_data_failed"
+	KeyErrorIOInsufficientRows    = "error.io.insufficient_rows"
+	KeyErrorIOCSVValidationFailed = "error.io.csv_validation_failed"
+
 	// ConfigPanel — Phase 1 frontend i18n MVP keys (2026-05-14).
 	// 用於前端 frontend/src/main.js showConfigPanel() 字串 catalog 化。
 	// 命名前綴 "config." 避免與既有泛用 Key 衝突(KeyLabelLanguage 等仍保留供他處 reuse)。

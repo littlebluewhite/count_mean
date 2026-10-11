@@ -183,6 +183,17 @@ var translationsZhCN = map[string]string{
 	KeyErrorFilenameTooLong:        "文件名过长 (最大 255 字符)",
 	KeyErrorFilenameNoExtension:    "文件名缺少扩展名",
 	KeyErrorFilenameUnsupportedExt: "不支持的文件扩展名: %s",
+	// 使用者選取 CSV 的讀取入口(io.ReadCSV);過大只帶 MB 數。
+	KeyErrorIOFilenameInvalid:     "文件名验证失败",
+	KeyErrorIOPathInvalid:         "路径验证失败",
+	KeyErrorIONotRegularFile:      "不是普通文件",
+	KeyErrorIOFileTooLarge:        "文件过大（%d MB，上限 100 MB），请分割文件后再试",
+	KeyErrorIOFileNotFound:        "无法获取文件信息",
+	KeyErrorIOOpenFailed:          "无法打开文件",
+	KeyErrorIOBOMDetectFailed:     "BOM 检测失败",
+	KeyErrorIOReadCSVDataFailed:   "无法读取 CSV 数据",
+	KeyErrorIOInsufficientRows:    "数据不足，文件至少需要包含标题行和一行数据",
+	KeyErrorIOCSVValidationFailed: "CSV 数据验证失败",
 	// ConfigPanel — Phase 1 frontend i18n MVP entries (2026-05-14).
 	KeyConfigPanelTitle:            "系统配置",
 	KeyConfigButtonBack:            "返回",

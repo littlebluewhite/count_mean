@@ -187,6 +187,17 @@ var translationsZhTW = map[string]string{
 	KeyErrorFilenameTooLong:        "檔案名稱過長 (最大 255 字符)",
 	KeyErrorFilenameNoExtension:    "檔案名稱缺少副檔名",
 	KeyErrorFilenameUnsupportedExt: "不支援的檔案副檔名: %s",
+	// 使用者選取 CSV 的讀取入口(io.ReadCSV);過大只帶 MB 數。
+	KeyErrorIOFilenameInvalid:     "檔案名稱驗證失敗",
+	KeyErrorIOPathInvalid:         "路徑驗證失敗",
+	KeyErrorIONotRegularFile:      "不是一般檔案",
+	KeyErrorIOFileTooLarge:        "檔案過大（%d MB，上限 100 MB），請分割檔案後再試",
+	KeyErrorIOFileNotFound:        "無法獲取文件信息",
+	KeyErrorIOOpenFailed:          "無法開啟檔案",
+	KeyErrorIOBOMDetectFailed:     "BOM 偵測失敗",
+	KeyErrorIOReadCSVDataFailed:   "無法讀取 CSV 資料",
+	KeyErrorIOInsufficientRows:    "資料不足，檔案至少需要包含標題行和一行數據",
+	KeyErrorIOCSVValidationFailed: "CSV 資料驗證失敗",
 	// ConfigPanel — Phase 1 frontend i18n MVP entries (2026-05-14).
 	KeyConfigPanelTitle:            "系統配置",
 	KeyConfigButtonBack:            "返回",

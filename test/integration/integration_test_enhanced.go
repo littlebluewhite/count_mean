@@ -12,7 +12,7 @@ import (
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/config"
-	"count_mean/internal/errors"
+	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
 	"count_mean/internal/security"
@@ -127,11 +127,11 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 		_, err := csvHandler.ReadCSV(filepath.Join(inputDir, "nonexistent.csv"))
 		require.Error(t, err)
 
-		// Should be an AppError
-		var appErr *errors.AppError
+		// 帶 key 的 i18n.Error(error.io.file_not_found)
+		var keyed *i18n.Error
 
-		assert.ErrorAs(t, err, &appErr)
-		assert.Equal(t, errors.ErrCodeFileNotFound, appErr.Code)
+		require.ErrorAs(t, err, &keyed)
+		assert.Equal(t, i18n.KeyErrorIOFileNotFound, keyed.Key)
 
 		// Test writing to invalid path(逸出 OutputDir 的檔名被拒)
 		_, err = csvHandler.WriteFileCSV(io.WriteRequest{Filename: "../../invalid/test.csv"}, [][]string{{"test"}})
@@ -176,9 +176,9 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 		logger.Info("info message")
 		logger.Warn("warn message")
 
-		// Test error logging with AppError
-		appErr := errors.NewAppError(errors.ErrCodeFileNotFound, "test error")
-		logger.Error("operation failed", appErr)
+		// Test error logging with a keyed i18n.Error
+		keyedErr := i18n.NewError(i18n.KeyErrorIOFileNotFound)
+		logger.Error("operation failed", keyedErr)
 
 		// Test context logging
 		contextLogger := logger.WithContext("operation", "test").WithContext("file", "test.csv")
@@ -255,14 +255,14 @@ func TestIntegrationErrorRecovery(t *testing.T) {
 		badFilePath, err := csvHandler.WriteFileCSV(io.WriteRequest{Filename: "bad_data.csv"}, badData)
 		require.NoError(t, err)
 
-		// Reading should fail with validation error
+		// Reading should fail: 欄數不一致先被 csv.Reader(FieldsPerRecord)擋下
 		_, err = csvHandler.ReadCSV(badFilePath)
 		require.Error(t, err)
 
-		// Should be a validation error
-		var validationErr *errors.ValidationError
+		var keyed *i18n.Error
 
-		assert.ErrorAs(t, err, &validationErr)
+		require.ErrorAs(t, err, &keyed)
+		assert.Equal(t, i18n.KeyErrorIOReadCSVDataFailed, keyed.Key)
 	})
 
 	t.Run("RecoveryFromInvalidNumbers", func(t *testing.T) {

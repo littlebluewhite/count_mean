@@ -183,6 +183,17 @@ var translationsEnUS = map[string]string{
 	KeyErrorFilenameTooLong:        "File name is too long (max 255 characters)",
 	KeyErrorFilenameNoExtension:    "File name has no extension",
 	KeyErrorFilenameUnsupportedExt: "Unsupported file extension: %s",
+	// 使用者選取 CSV 的讀取入口(io.ReadCSV);過大只帶 MB 數。
+	KeyErrorIOFilenameInvalid:     "File name validation failed",
+	KeyErrorIOPathInvalid:         "Path validation failed",
+	KeyErrorIONotRegularFile:      "Not a regular file",
+	KeyErrorIOFileTooLarge:        "File too large (%d MB, limit 100 MB); please split the file and try again",
+	KeyErrorIOFileNotFound:        "Unable to get file information",
+	KeyErrorIOOpenFailed:          "Unable to open file",
+	KeyErrorIOBOMDetectFailed:     "BOM detection failed",
+	KeyErrorIOReadCSVDataFailed:   "Unable to read CSV data",
+	KeyErrorIOInsufficientRows:    "Insufficient data: the file must contain a header row and at least one data row",
+	KeyErrorIOCSVValidationFailed: "CSV data validation failed",
 	// ConfigPanel — Phase 1 frontend i18n MVP entries (2026-05-14).
 	KeyConfigPanelTitle:            "System Configuration",
 	KeyConfigButtonBack:            "Back",

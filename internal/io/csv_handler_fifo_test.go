@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	apperrors "count_mean/internal/errors"
+	"count_mean/internal/i18n"
 )
 
 // TestReadCSV_RejectsFIFO 釘住:名為 *.csv 的 FIFO 在 open 前就被擋下,不會阻塞。
@@ -32,9 +32,9 @@ func TestReadCSV_RejectsFIFO(t *testing.T) {
 
 	select {
 	case err := <-done:
-		var appErr *apperrors.AppError
-		require.True(t, errors.As(err, &appErr), "應為 AppError,實際 %T", err)
-		require.Equal(t, apperrors.ErrCodeFileFormat, appErr.Code)
+		var keyed *i18n.Error
+		require.True(t, errors.As(err, &keyed), "應為 *i18n.Error,實際 %T", err)
+		require.Equal(t, i18n.KeyErrorIONotRegularFile, keyed.Key)
 	case <-time.After(5 * time.Second):
 		t.Fatal("ReadCSV 對 FIFO 阻塞")
 	}

@@ -437,8 +437,10 @@ func (h *CSVHandler) ReadCSV(path string) ([][]string, error)
 
 1. `ValidateFilename(Base(path))`：只擋檔案系統非法的檔名（ADR-0041），並要求 `.csv` 副檔名（不分大小寫；ADR-0054）。
 2. `PathValidator.ValidateExternalPath(path)`：擋 `..` traversal 與系統敏感位置（ADR-0038 / ADR-0039）。路徑不做 URL-decode，`%`、`+` 皆為字面字元。
-3. `fsperm.OpenRegularLimited(path, fsperm.MaxReadBytes)`：open 前先 `stat`，非 regular file（目錄、FIFO 等）直接拒絕；以 `fsperm.ReadFlags`（含 `O_NOFOLLOW`）開檔，再對 fd `fstat`：必須是 regular file 且 ≤ 100 MB，超過回 `ErrCodeFileTooLarge`；讀取中檔案變大，讀到第 100 MB + 1 byte 時同樣回 `ErrCodeFileTooLarge`（ADR-0056）。
+3. `fsperm.OpenRegularLimited(path, fsperm.MaxReadBytes)`：open 前先 `stat`，非 regular file（目錄、FIFO 等）直接拒絕；以 `fsperm.ReadFlags`（含 `O_NOFOLLOW`）開檔，再對 fd `fstat`：必須是 regular file 且 ≤ 100 MB，超過回 `error.io.file_too_large`；讀取中檔案變大，讀到第 100 MB + 1 byte 時同樣回 `error.io.file_too_large`（ADR-0056）。
 4. 單次解析，再做讀取側 sanity check（儲存格 ≤ 32 KB、CSV 結構、user-picked 檔案的 UTF-8）；讀取側不做 injection 偵測（寫入側由 `csvutil` 負責逸出）。
+
+錯誤是帶 key 的 `i18n.Error`（`error.io.*`；內層為 `error.filename.*` / `error.csv.*`），caller 層以 `i18n.Localize` 渲染（ADR-0048）。非一般檔案與過大不帶路徑（過大只帶 MB 數）；CSV 驗證錯誤只帶行號 / 欄號。開檔錯誤以原 error 為 Cause，`errors.Is(err, os.ErrNotExist)` 照常成立。
 
 **參數：**
 - `path` (string): CSV 檔的絕對路徑
@@ -1027,7 +1029,7 @@ if err != nil {
 ## 常見問題
 
 ### Q: 如何處理大文件？
-A: 超過 100 MB 的 CSV 會被 `CSVHandler.ReadCSV` 以 `ErrCodeFileTooLarge` 拒絕（串流路徑已刪除，見 ADR-0033），請先分割檔案。
+A: 超過 100 MB 的 CSV 會被 `CSVHandler.ReadCSV` 以 `error.io.file_too_large` 拒絕（串流路徑已刪除，見 ADR-0033），請先分割檔案。
 
 ### Q: 如何處理多語言支持？
 A: 使用 `i18n` 模組：

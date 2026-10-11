@@ -20,7 +20,7 @@ import (
 	"count_mean/internal/cci"
 	"count_mean/internal/config"
 	"count_mean/internal/csvutil"
-	"count_mean/internal/errors"
+	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
 	"count_mean/internal/security"
@@ -150,10 +150,10 @@ func (h *CSVHandler) parseCSV(file *fsperm.LimitedFile, path string) ([][]string
 	// 不會把空檔的 EOF 提前丟出）。
 	bufReader := bufio.NewReaderSize(file, csvReaderBufSize)
 	if _, err := csvutil.PeekBOM(bufReader); err != nil {
-		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "BOM 偵測失敗")
-		h.logger.Error("BOM 偵測失敗", appErr, map[string]any{"path": path})
+		keyed := i18n.WrapError(err, i18n.KeyErrorIOBOMDetectFailed)
+		h.logger.Error("BOM 偵測失敗", keyed, map[string]any{"path": path})
 
-		return nil, appErr
+		return nil, keyed
 	}
 
 	// 明確套用 strict defaults，把 csv.NewReader 的 DoS / quote-injection
@@ -176,10 +176,10 @@ func (h *CSVHandler) parseCSV(file *fsperm.LimitedFile, path string) ([][]string
 	}
 
 	if err != nil {
-		appErr := errors.WrapError(err, errors.ErrCodeDataParsing, "無法讀取 CSV 資料")
-		h.logger.Error("CSV 資料讀取失敗", appErr, map[string]any{"path": path})
+		keyed := i18n.WrapError(err, i18n.KeyErrorIOReadCSVDataFailed)
+		h.logger.Error("CSV 資料讀取失敗", keyed, map[string]any{"path": path})
 
-		return nil, appErr
+		return nil, keyed
 	}
 
 	return records, nil
@@ -188,9 +188,7 @@ func (h *CSVHandler) parseCSV(file *fsperm.LimitedFile, path string) ([][]string
 // validateCSVRecords validates CSV records have sufficient data.
 func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) error {
 	if len(records) < 2 {
-		err := errors.NewAppErrorWithDetails(
-			errors.ErrCodeInsufficientData, "資料不足", "檔案至少需要包含標題行和一行數據",
-		)
+		err := i18n.NewError(i18n.KeyErrorIOInsufficientRows)
 		h.logger.Error("CSV 資料驗證失敗", err, map[string]any{
 			"path": cleanPath, "record_count": len(records),
 		})
@@ -201,7 +199,7 @@ func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) er
 	if err := h.csvValidator.ValidateCSVData(records); err != nil {
 		h.logger.Error("CSV 資料結構驗證失敗", err, map[string]any{"path": cleanPath})
 
-		return fmt.Errorf("CSV 資料驗證失敗: %w", err)
+		return i18n.WrapError(err, i18n.KeyErrorIOCSVValidationFailed)
 	}
 
 	return nil
@@ -215,19 +213,22 @@ func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) er
 // 讀取中變大也封頂;ADR-0056)→ 單次解析 → validateCSVRecords。
 //
 // 路徑不做 URL-decode,`%`、`+` 皆為字面檔名字元。
+//
+// 錯誤是帶 key 的 i18n.Error(error.io.*;內層為 validation 的 error.filename.* /
+// error.csv.*),caller 層 Localize。
 func (h *CSVHandler) ReadCSV(path string) ([][]string, error) {
 	h.logger.Debug("開始讀取 CSV 檔案", map[string]any{"filename": path})
 
 	if err := h.filenameValidator.ValidateFilename(filepath.Base(path)); err != nil {
 		h.logger.Error("檔案名稱驗證失敗", err, map[string]any{"filename": path})
 
-		return nil, fmt.Errorf("檔案名稱驗證失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorIOFilenameInvalid)
 	}
 
 	if err := h.pathValidator.ValidateExternalPath(path); err != nil {
 		h.logger.Error("路徑驗證失敗", err, map[string]any{"filename": path})
 
-		return nil, fmt.Errorf("路徑驗證失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorIOPathInvalid)
 	}
 
 	file, err := fsperm.OpenRegularLimited(path, fsperm.MaxReadBytes)
@@ -259,34 +260,29 @@ func (h *CSVHandler) ReadCSV(path string) ([][]string, error) {
 	return records, nil
 }
 
-// notRegularError 建立「不是一般檔案」錯誤(目錄、FIFO、device 等)。
-func (h *CSVHandler) notRegularError(path string) *errors.AppError {
-	appErr := errors.NewAppErrorWithDetails(
-		errors.ErrCodeFileFormat, "檔案格式無效",
-		fmt.Sprintf("'%s' 不是一般檔案", path),
-	)
-	h.logger.Error("檔案類型驗證失敗", appErr, map[string]any{"path": path})
+// notRegularError 建立「不是一般檔案」錯誤(目錄、FIFO、device 等)。不帶路徑;
+// fsperm.ErrNotRegular 不當 Cause(它的文字與 key 重複)。
+func (h *CSVHandler) notRegularError(path string) error {
+	err := i18n.NewError(i18n.KeyErrorIONotRegularFile)
+	h.logger.Error("檔案類型驗證失敗", err, map[string]any{"path": path})
 
-	return appErr
+	return err
 }
 
 // tooLargeError 建立超過 100MB 的錯誤。MB 數無條件進位,超過上限時一律顯示 >= 101,
-// 避免「100 MB，上限 100 MB」的矛盾訊息。
-func (h *CSVHandler) tooLargeError(path string, size int64) *errors.AppError {
+// 避免「100 MB，上限 100 MB」的矛盾訊息。只帶 MB 數、不帶路徑;*fsperm.TooLargeError
+// 不當 Cause(它的文字與 key 重複)。路徑與確切大小只進 log。
+func (h *CSVHandler) tooLargeError(path string, size int64) error {
 	const mb = 1024 * 1024
 
 	h.logger.Info("檢測到大文件，拒絕讀取", map[string]any{"filename": path, "file_size": size})
 
-	return errors.NewAppErrorWithDetails(
-		errors.ErrCodeFileTooLarge,
-		fmt.Sprintf("檔案過大（%d MB，上限 100 MB），請分割檔案後再試", (size+mb-1)/mb),
-		fmt.Sprintf("文件 %s 過大 (至少 %d bytes)，超過 100 MB 上限", path, size),
-	)
+	return i18n.NewError(i18n.KeyErrorIOFileTooLarge, (size+mb-1)/mb)
 }
 
-// openError 把 fsperm.OpenRegularLimited 的錯誤轉成 AppError:非一般檔案、過大各用既有
-// 訊息,其餘是開檔錯誤(openFailure)。
-func (h *CSVHandler) openError(path string, err error) *errors.AppError {
+// openError 把 fsperm.OpenRegularLimited 的錯誤轉成帶 key 的錯誤:非一般檔案、過大各用
+// 自己的 key,其餘是開檔錯誤(openFailure)。
+func (h *CSVHandler) openError(path string, err error) error {
 	if stderrors.Is(err, fsperm.ErrNotRegular) {
 		return h.notRegularError(path)
 	}
@@ -295,19 +291,20 @@ func (h *CSVHandler) openError(path string, err error) *errors.AppError {
 		return h.tooLargeError(path, tooLarge.Size)
 	}
 
-	appErr := openFailure(err)
-	h.logger.Error("檔案開啟失敗", appErr, map[string]any{"path": path})
+	keyed := openFailure(err)
+	h.logger.Error("檔案開啟失敗", keyed, map[string]any{"path": path})
 
-	return appErr
+	return keyed
 }
 
-// openFailure 把 OpenFile 錯誤轉成 AppError。不存在沿用既有的「無法獲取文件信息」訊息。
-func openFailure(err error) *errors.AppError {
+// openFailure 把 OpenFile 錯誤包成帶 key 的錯誤(Cause 是原 error,errors.Is(os.ErrNotExist)
+// 照常成立)。不存在沿用既有的「無法獲取文件信息」訊息。
+func openFailure(err error) error {
 	if stderrors.Is(err, os.ErrNotExist) {
-		return errors.WrapError(err, errors.ErrCodeFileNotFound, "無法獲取文件信息")
+		return i18n.WrapError(err, i18n.KeyErrorIOFileNotFound)
 	}
 
-	return errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟檔案")
+	return i18n.WrapError(err, i18n.KeyErrorIOOpenFailed)
 }
 
 // errEmptyPhaseAnalysis 標示 WritePhaseAnalysis 收到沒有 phase 結果可寫的請求。

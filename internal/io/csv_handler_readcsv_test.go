@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/config"
-	apperrors "count_mean/internal/errors"
+	"count_mean/internal/i18n"
 	"count_mean/internal/security/fsperm"
 )
 
@@ -63,8 +63,8 @@ func TestReadCSV_PlusFilenameReadsExactFile(t *testing.T) {
 	require.Equal(t, [][]string{{"H"}, {"exact"}}, records)
 }
 
-// TestReadCSV_OverLimitMessage 釘住:超過 100MB 回 ErrCodeFileTooLarge,
-// 訊息帶實際 MB 數(無條件進位,至少 101)與上限。用 sparse file,不佔磁碟。
+// TestReadCSV_OverLimitMessage 釘住:超過 100MB 回 key error.io.file_too_large,
+// 訊息帶實際 MB 數(無條件進位,至少 101)與上限,不帶路徑。用 sparse file,不佔磁碟。
 func TestReadCSV_OverLimitMessage(t *testing.T) {
 	t.Parallel()
 
@@ -92,10 +92,11 @@ func TestReadCSV_OverLimitMessage(t *testing.T) {
 			_, err = handler.ReadCSV(p)
 			require.Error(t, err)
 
-			var appErr *apperrors.AppError
-			require.True(t, errors.As(err, &appErr), "應為 AppError,實際 %T", err)
-			require.Equal(t, apperrors.ErrCodeFileTooLarge, appErr.Code)
-			require.Equal(t, tc.want, appErr.Message)
+			var keyed *i18n.Error
+			require.True(t, errors.As(err, &keyed), "應為 *i18n.Error,實際 %T", err)
+			require.Equal(t, i18n.KeyErrorIOFileTooLarge, keyed.Key)
+			require.Equal(t, tc.want, err.Error())
+			require.NotContains(t, err.Error(), dir, "過大訊息不得帶路徑")
 		})
 	}
 }
@@ -113,7 +114,8 @@ func TestReadCSV_RejectsNonRegular(t *testing.T) {
 	records, err := handler.ReadCSV(p)
 	require.Nil(t, records)
 
-	var appErr *apperrors.AppError
-	require.True(t, errors.As(err, &appErr), "應為 AppError,實際 %T", err)
-	require.Equal(t, apperrors.ErrCodeFileFormat, appErr.Code)
+	var keyed *i18n.Error
+	require.True(t, errors.As(err, &keyed), "應為 *i18n.Error,實際 %T", err)
+	require.Equal(t, i18n.KeyErrorIONotRegularFile, keyed.Key)
+	require.NotContains(t, err.Error(), dir, "非一般檔案訊息不得帶路徑")
 }
