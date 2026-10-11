@@ -133,7 +133,6 @@ const (
 	KeyLabelScalingFactor  = "label.scaling_factor"
 	KeyLabelPrecision      = "label.precision"
 	KeyLabelOutputFormat   = "label.output_format"
-	KeyLabelBOMEnabled     = "label.bom_enabled"
 	KeyLabelInputDir       = "label.input_dir"
 	KeyLabelOutputDir      = "label.output_dir"
 	KeyLabelOperateDir     = "label.operate_dir"

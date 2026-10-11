@@ -206,7 +206,6 @@ count_mean/
 │   └── testdata/             # 測試資料
 ├── docs/                      # 文檔
 │   ├── api.md
-│   ├── architecture.md
 │   ├── usage.md
 │   └── testing_automation.md
 └── config.json               # 應用配置
@@ -271,7 +270,6 @@ make ci                     # 完整 CI：test, bench, coverage, lint, security
 ## 文檔
 
 - [API 參考](docs/api.md)
-- [架構說明](docs/architecture.md)
 - [使用指南](docs/usage.md)
 - [測試自動化](docs/testing_automation.md)
 

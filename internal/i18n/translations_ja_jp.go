@@ -46,7 +46,6 @@ var translationsJaJP = map[string]string{
 	KeyLabelScalingFactor:  "スケーリング係数",
 	KeyLabelPrecision:      "精度",
 	KeyLabelOutputFormat:   "出力形式",
-	KeyLabelBOMEnabled:     "BOM有効",
 	KeyLabelInputDir:       "入力ディレクトリ",
 	KeyLabelOutputDir:      "出力ディレクトリ",
 	KeyLabelOperateDir:     "操作ディレクトリ",

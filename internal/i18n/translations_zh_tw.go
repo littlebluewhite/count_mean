@@ -50,7 +50,6 @@ var translationsZhTW = map[string]string{
 	KeyLabelScalingFactor:  "縮放因子",
 	KeyLabelPrecision:      "精度",
 	KeyLabelOutputFormat:   "輸出格式",
-	KeyLabelBOMEnabled:     "啟用 BOM",
 	KeyLabelInputDir:       "輸入目錄",
 	KeyLabelOutputDir:      "輸出目錄",
 	KeyLabelOperateDir:     "操作目錄",

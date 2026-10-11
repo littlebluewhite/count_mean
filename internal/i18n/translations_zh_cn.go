@@ -46,7 +46,6 @@ var translationsZhCN = map[string]string{
 	KeyLabelScalingFactor:  "缩放因子",
 	KeyLabelPrecision:      "精度",
 	KeyLabelOutputFormat:   "输出格式",
-	KeyLabelBOMEnabled:     "启用 BOM",
 	KeyLabelInputDir:       "输入目录",
 	KeyLabelOutputDir:      "输出目录",
 	KeyLabelOperateDir:     "操作目录",

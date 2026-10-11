@@ -46,7 +46,6 @@ var translationsEnUS = map[string]string{
 	KeyLabelScalingFactor:  "Scaling Factor",
 	KeyLabelPrecision:      "Precision",
 	KeyLabelOutputFormat:   "Output Format",
-	KeyLabelBOMEnabled:     "Enable BOM",
 	KeyLabelInputDir:       "Input Directory",
 	KeyLabelOutputDir:      "Output Directory",
 	KeyLabelOperateDir:     "Operation Directory",
