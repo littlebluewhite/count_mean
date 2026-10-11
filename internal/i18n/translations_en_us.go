@@ -82,10 +82,8 @@ var translationsEnUS = map[string]string{
 	KeyHelpScalingFactor: "Data scaling factor (power of 10)",
 	KeyHelpPhaseLabels:   "Phase labels separated by newlines",
 	// Muscle Ratio Analysis Messages (migration — backend i18n).
-	KeyErrorMuscleRatioOutputDirInvalid:          "OutputDir validation failed",
 	KeyErrorMuscleRatioParseManifestFailed:       "Failed to parse manifest file",
 	KeyErrorMuscleRatioEmptyManifest:             "Manifest file has no subject records",
-	KeyErrorMuscleRatioMkdirFailed:               "Failed to create output directory",
 	KeyErrorMuscleRatioSubjectEmptyName:          "Subject name is empty",
 	KeyErrorMuscleRatioSubjectParseEMGFailed:     "Failed to parse EMG file: %v",
 	KeyErrorMuscleRatioSubjectWriteOutput1Failed: "Failed to write Output 1: %v",

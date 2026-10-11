@@ -82,10 +82,8 @@ var translationsJaJP = map[string]string{
 	KeyHelpScalingFactor: "データスケーリング係数（10の累乗）",
 	KeyHelpPhaseLabels:   "改行で区切られた段階ラベル",
 	// Muscle Ratio Analysis Messages (migration — backend i18n).
-	KeyErrorMuscleRatioOutputDirInvalid:          "OutputDir の検証に失敗しました",
 	KeyErrorMuscleRatioParseManifestFailed:       "マニフェストファイルの解析に失敗しました",
 	KeyErrorMuscleRatioEmptyManifest:             "マニフェストファイルにサブジェクトレコードがありません",
-	KeyErrorMuscleRatioMkdirFailed:               "出力ディレクトリの作成に失敗しました",
 	KeyErrorMuscleRatioSubjectEmptyName:          "サブジェクト名が空です",
 	KeyErrorMuscleRatioSubjectParseEMGFailed:     "EMGファイルの解析に失敗しました: %v",
 	KeyErrorMuscleRatioSubjectWriteOutput1Failed: "Output 1 の書き込みに失敗しました: %v",

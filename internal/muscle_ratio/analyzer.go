@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -17,18 +16,18 @@ import (
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/musclemap"
-	"count_mean/internal/security"
-	"count_mean/internal/security/fsperm"
 	"count_mean/internal/synchronizer"
 	"count_mean/internal/validation/filename"
 	"count_mean/internal/windowmean"
 )
 
 // Params holds inputs for a batch muscle-ratio analysis run.
+//
+// 輸出目錄就是 CSVHandler 的 config.OutputDir:每次寫檔由 CSVHandler 驗證路徑並建目錄,
+// analyzer 不另持有輸出目錄(ADR-0052)。
 type Params struct {
 	ManifestFile string
 	DataFolder   string
-	OutputDir    string
 	CSVHandler   *io.CSVHandler // ADR-0004 Boundary 1: row layout 透過 CSVHandler 落實
 }
 
@@ -37,7 +36,7 @@ type Params struct {
 // Success 與 Err 的語意：
 //   - Success=true + Err=nil → 兩個 CSV 都產出
 //   - Success=true + Err 非 nil → Output 1 產出、Output 2 跳過（warning），Err 解釋原因
-//   - Success=false → Output 1 也沒產出（檔案不存在、解析失敗、缺通道等），Err 必填
+//   - Success=false → Output 1 也沒產出（檔案不存在、解析失敗、缺通道、輸出目錄不可寫等），Err 必填
 //
 // Err 多為帶 i18n key 的 i18n.Error(Error() 是 zh-TW),呈現給使用者時由 gui 以
 // i18n.Localize 依目前 locale 渲染(ADR-0048);下游套件的錯誤(開檔、缺通道)原樣保留。
@@ -72,8 +71,7 @@ func NewAnalyzer() *Analyzer {
 //  1. Parse manifest → []PhaseManifest
 //  2. Assert sanitized-subject uniqueness (no two manifests resolve to the same output file)
 //  3. Build a request-scoped PathValidator rooted at DataFolder
-//  4. Ensure OutputDir exists
-//  5. For each subject: load EMG → channel map → compute ratios → write 2 CSVs
+//  4. For each subject: load EMG → computeSubject → write 2 CSVs
 //
 // ctx 帶 Wails Shutdown / 使用者中止訊號。subject 迴圈間檢查 ctx.Done(),
 // 收到取消立即停止 — 已完成的 subject 結果保留,未開始的不處理。caller 可以
@@ -95,13 +93,6 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 		return nil, fmt.Errorf("params.CSVHandler 不能為 nil (ADR-0004: muscle_ratio 寫檔須透過 CSVHandler)")
 	}
 
-	// Defense-in-depth：config 載入時已驗證 OutputDir，但 GUI file dialog 等繞過
-	// config 的 caller 仍可能傳壞值。ValidateExternalDir 擋
-	// traversal / system-dir prefix，避免後續 os.MkdirAll 走到 /etc 等敏感目錄。
-	if err := security.DefaultValidator().ValidateExternalDir(params.OutputDir); err != nil {
-		return nil, i18n.WrapError(err, i18n.KeyErrorMuscleRatioOutputDirInvalid)
-	}
-
 	manifests, err := manifest.LoadManifests(params.ManifestFile)
 	if err != nil {
 		return nil, i18n.WrapError(err, i18n.KeyErrorMuscleRatioParseManifestFailed)
@@ -113,10 +104,6 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 
 	if err := assertUniqueSanitizedSubjects(manifests); err != nil {
 		return nil, err
-	}
-
-	if err := os.MkdirAll(params.OutputDir, fsperm.DirPerm); err != nil {
-		return nil, i18n.WrapError(err, i18n.KeyErrorMuscleRatioMkdirFailed)
 	}
 
 	// EMG 開檔走 manifest.OpenDataFile（內部走 security.OpenLenientValidated，
@@ -150,11 +137,16 @@ func (a *Analyzer) Analyze(ctx context.Context, params *Params) ([]SubjectResult
 	return results, nil
 }
 
-// analyzeSubject processes one subject. Errors are captured in SubjectResult.Err and never abort the batch.
+// analyzeSubject 是單一 subject 的 I/O adapter(ADR-0052):檢查 blank Subject → LoadEMG →
+// computeSubject → 寫 Output 1 → 沒有 warn 才寫 Output 2 → sticky-success。
+// Errors are captured in SubjectResult.Err and never abort the batch.
+//
+// 錯誤優先序:core err > Output 1 寫檔錯誤 > warn > Output 2 寫檔錯誤。Output 1 沒寫成時,
+// Output 2 的 warn 沒有意義,故 Output 1 寫檔錯誤優先於 warn。
 //
 // 計時：用 named return + defer 在所有 return 路徑（含 error fast-path）統一寫入 DurationMs，
-// 避免 11 個 return point 各自重複呼叫 time.Since。
-func (a *Analyzer) analyzeSubject(
+// 避免各 return point 各自重複呼叫 time.Since。
+func (*Analyzer) analyzeSubject(
 	m *models.PhaseManifest,
 	params *Params,
 ) (result SubjectResult) {
@@ -185,18 +177,12 @@ func (a *Analyzer) analyzeSubject(
 		return result
 	}
 
-	if len(emg.Time) == 0 {
-		result.Err = i18n.NewError(i18n.KeyErrorMuscleRatioSubjectEmptyEMG)
-		return result
-	}
-
-	channelMap, err := musclemap.RightSideChannels(emg.Headers)
+	computed, warn, err := computeSubject(emg, m)
 	if err != nil {
 		result.Err = err
 		return result
 	}
 
-	ratiosAll := ComputeAllRatios(emg, channelMap)
 	pairLabels := defaultRatioLabels()
 
 	outAllPath, writeAllErr := params.CSVHandler.WriteMuscleRatioOutputAll(
@@ -204,8 +190,8 @@ func (a *Analyzer) analyzeSubject(
 		io.MuscleRatioOutputAllPayload{
 			Subject:    m.Subject,
 			PairLabels: pairLabels,
-			Times:      emg.Time,
-			Ratios:     ratiosAll,
+			Times:      computed.times,
+			Ratios:     computed.ratios,
 		},
 	)
 	if writeAllErr != nil {
@@ -216,16 +202,13 @@ func (a *Analyzer) analyzeSubject(
 	result.OutputAllPath = outAllPath
 
 	// Output 2 — phases + midpoints (ADR-0004 Boundary 1: sticky-success 規則
-	// 留在 Analyzer。collectPhasePoints warn-path 與 Output 2 寫檔失敗都讓
+	// 留在 Analyzer。computeSubject 的 warn 與 Output 2 寫檔失敗都讓
 	// Output 1 視為 sticky-success)。
-	points, warn := a.collectPhasePoints(m, emg)
 	if warn != nil {
 		result.Success = true
 		result.Err = warn
 		return result
 	}
-
-	ioPhasePoints := buildPhasePoints(points, ratiosAll, emg.Time)
 
 	avgLabels := make([]string, len(pairLabels))
 	for i, l := range pairLabels {
@@ -237,12 +220,12 @@ func (a *Analyzer) analyzeSubject(
 		io.MuscleRatioOutputPhasesPayload{
 			Subject:    m.Subject,
 			PairLabels: avgLabels,
-			Points:     ioPhasePoints,
+			Points:     computed.points,
 		},
 	)
 	if writePhaseErr != nil {
 		// Output 1 已寫入磁碟，依 SubjectResult 文件契約 Output 1 success 為 sticky：
-		// 與 collectPhasePoints warn-path 對稱（Success=true + Err 解釋為何 Output 2 跳過）。
+		// 與 warn-path 對稱（Success=true + Err 解釋為何 Output 2 跳過）。
 		result.Success = true
 		result.Err = i18n.NewError(i18n.KeyErrorMuscleRatioSubjectWriteOutput2Failed, writePhaseErr)
 		return result
@@ -252,6 +235,49 @@ func (a *Analyzer) analyzeSubject(
 	result.Success = true
 
 	return result
+}
+
+// subjectCompute 是 computeSubject 算好、交給 analyzeSubject 寫檔的值(ADR-0052)。
+type subjectCompute struct {
+	times  []float64                  // Output 1 時間軸(EMG 秒數)
+	ratios [][]float64                // Output 1:ratios[k][i] 是 DefaultRatios()[k] 在第 i 筆 sample 的比值
+	points []io.MuscleRatioPhasePoint // Output 2 的列(phase + 中點,11 點 window mean);warn 非 nil 時為 nil
+}
+
+// computeSubject 是 muscle_ratio 的 compute core(ADR-0052,仿 ADR-0024 的 computeCCI):
+// 對已載入的 EMG 與 manifest row 依序做空 EMG 檢查 → RightSideChannels → ComputeAllRatios →
+// collectPhasePoints → buildPhasePoints,不碰檔案系統。analyzeSubject 是它的 I/O adapter。
+//
+// 回傳值:
+//   - err 非 nil:連 Output 1 都算不出來(EMG 為空、缺通道),computed 為零值。
+//   - warn 非 nil:Output 1 的值已算好,Output 2 要跳過([[Phase timeline]] 分期點不足或
+//     落在 EMG 範圍外),computed.points 為 nil。
+//   - 兩者皆 nil:Output 1 與 Output 2 的值都已算好。
+func computeSubject(
+	emg *models.PhaseSyncEMGData, m *models.PhaseManifest,
+) (computed subjectCompute, warn, err error) {
+	if len(emg.Time) == 0 {
+		return subjectCompute{}, nil, i18n.NewError(i18n.KeyErrorMuscleRatioSubjectEmptyEMG)
+	}
+
+	channelMap, err := musclemap.RightSideChannels(emg.Headers)
+	if err != nil {
+		return subjectCompute{}, nil, err
+	}
+
+	computed = subjectCompute{
+		times:  emg.Time,
+		ratios: ComputeAllRatios(emg, channelMap),
+	}
+
+	points, warn := collectPhasePoints(m, emg)
+	if warn != nil {
+		return computed, warn, nil
+	}
+
+	computed.points = buildPhasePoints(points, computed.ratios, emg.Time)
+
+	return computed, nil, nil
 }
 
 // phasePoint represents one row in Output 2 — either an actual phase or a midpoint between two phases.
@@ -308,7 +334,7 @@ var biomechanicalIntervalMidpoints = []struct {
 // Output length is up to 2N-1+K rows where K = len(biomechanicalIntervalMidpoints).
 //
 // 第二個回傳值是 warning — 非 nil 表示 Output 2 該跳過（Output 1 已成功）。
-func (*Analyzer) collectPhasePoints(
+func collectPhasePoints(
 	m *models.PhaseManifest, emg *models.PhaseSyncEMGData,
 ) ([]phasePoint, error) {
 	timeline := synchronizer.NewPhaseTimeline(m)

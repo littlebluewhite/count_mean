@@ -369,7 +369,7 @@ func (analyzer *PhaseSyncAnalyzer) load(
 // 注意:這只 reject 對應到 force-time 的 phase point(P0/P1/P2/S/C/T0/T/L);
 // motion-index 型 phase point(D/O)是 frame number,非時間,負值已由 ValidatePhaseManifest
 // 在 validateMotionIndexOrder 攔下。負時間在 parseFloat 階段是合法的(機械校準前
-// 偏移,見 muscle_ratio TestAnalyze_NegativeTime_Handled),但只能存活到 batch
+// 偏移,見 muscle_ratio TestComputeSubject_NegativeTime_Handled),但只能存活到 batch
 // 時間序列 dump(Output 1);phase_sync 真正取 time-range 才必須擋。
 //
 // 帶 i18n key 的 sentinel(ADR-0048):Error() 固定 zh-TW,errors.Is 照常以指標比對。
@@ -385,7 +385,7 @@ var ErrNegativePhaseTime = i18n.NewError(i18n.KeyErrorPhaseSyncNegativePhaseTime
 // 錯誤訊息全文維持既有字樣（含「計算分期時間範圍失敗」「計算同步時間範圍失敗」前綴）。
 //
 // 在計算 PhaseTimeRange 之前先 reject「對應到 force-time 的負 phase point」。
-// 參考 muscle_ratio TestAnalyze_NegativeTime_Handled 的設計取捨 — 負時間在
+// 參考 muscle_ratio TestComputeSubject_NegativeTime_Handled 的設計取捨 — 負時間在
 // manifest parse / muscle_ratio batch 是合法輸入,但 phase_sync 用「time × frequency」
 // 算 motion-index 對負時間沒有有效意義,fail-fast 比 silently 計算錯誤 index 安全。
 func resolvePhaseRange(

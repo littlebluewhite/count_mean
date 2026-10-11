@@ -126,480 +126,6 @@ func makeRow15(subject, emgFile, offset string, phases [10]string) []string {
 
 // ------------------ Tests ------------------
 
-func TestAnalyze_MissingChannelFailFast(t *testing.T) {
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeEMG7(t, filepath.Join(dataDir, "s1.csv"), 100)
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{"0.001", "0.002", "0.003", "0.004", "0.005", "100", "0.007", "0.008", "100", "0.010"}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-	require.Len(t, result, 1)
-
-	sr := result[0]
-	assert.False(t, sr.Success, "缺通道時 Subject 應失敗")
-	assert.ErrorContains(t, sr.Err, "缺少必要的肌肉通道")
-}
-
-func TestAnalyze_PhasePoints_FullPhasesYieldRows(t *testing.T) {
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	// 200 samples × 0.001s = EMG time 0.000~0.199s
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	// offset=1 → MotionIndexToEMGTime(idx, 1) = (idx-1)/250；ForceTimeToEMGTime(t, 1) = t
-	// 10 個齊全分期：P0..L
-	// P0=0.01, P1=0.02, P2=0.03, S=0.04, C=0.05 (force times)
-	// D=20 (motion idx, → (20-1)/250 = 0.076s)
-	// T0=0.09, T=0.10 (force)
-	// O=30 (motion idx → 29/250 = 0.116s)
-	// L=0.15 (force)
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.01", "0.02", "0.03", "0.04", "0.05",
-			"20", "0.09", "0.10", "30", "0.15",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-	require.Len(t, result, 1)
-
-	sr := result[0]
-	assert.True(t, sr.Success, "Err=%v", sr.Err)
-	assert.NoError(t, sr.Err)
-	assert.NotEmpty(t, sr.OutputPhasePath)
-
-	rows := readCSV(t, sr.OutputPhasePath)
-	// 1 header + 10 phases + 9 adjacent-pair midpoints + 2 biomechanical-interval midpoints
-	// (mid_S_D, mid_D_T) = 22 rows total (1 header + 21 data rows)
-	assert.Equal(t, 1+21, len(rows), "10 phases → 19 adjacent + 2 interval = 21 data rows expected")
-	assert.Equal(t, []string{"Phase", "Time (s)", "RA/ES (11pt avg)", "IL/GMax (11pt avg)", "RF/BF (11pt avg)", "TAIO/MF (11pt avg)"}, rows[0])
-
-	// 抽查一個 data row 的 ratio：RA/ES = 2/1 = 2.000000
-	for _, row := range rows[1:] {
-		require.Len(t, row, 6)
-		// 跳過 phase name 與 time 欄位，檢查 4 個比值正確
-		assert.Equal(t, "2.000000", row[2], "RA/ES at row %v", row)
-		assert.Equal(t, "2.000000", row[3], "IL/GMax at row %v", row)
-		assert.Equal(t, "0.500000", row[4], "RF/BF at row %v", row)
-		assert.Equal(t, "2.000000", row[5], "TAIO/MF at row %v", row)
-	}
-
-	// 驗證兩個 biomechanical-interval midpoints 都被生成,且時間欄正確
-	var midSD, midDT []string
-	for _, row := range rows[1:] {
-		switch row[0] {
-		case "mid_S_D":
-			midSD = row
-		case "mid_D_T":
-			midDT = row
-		}
-	}
-	require.NotNil(t, midSD, "biomechanical-interval midpoint mid_S_D missing")
-	require.NotNil(t, midDT, "biomechanical-interval midpoint mid_D_T missing")
-	assert.Equal(t, "0.0580", midSD[1], "mid_S_D time should be (S=0.04 + D=0.076)/2 = 0.058")
-	assert.Equal(t, "0.0880", midDT[1], "mid_D_T time should be (D=0.076 + T=0.10)/2 = 0.088")
-
-	// rows 依時間嚴格遞增 — 穿插式排序契約（time-sorted interleave）。
-	// 由於 time 欄統一用 "%.4f" 4 位小數格式,且所有時間正值且 < 1,字典序比較與
-	// 數值序等價,無需 parse 回 float。
-	for i := 2; i < len(rows); i++ {
-		prev := rows[i-1][1]
-		curr := rows[i][1]
-		assert.Less(t, prev, curr, "row %d time=%s must be < row %d time=%s", i-1, prev, i, curr)
-	}
-}
-
-func TestAnalyze_PhasePoints_NoIntervalMidpointsWhenSDTAbsent(t *testing.T) {
-	// 5 個有效分期 P0–C(無 S/D/T)→ 5 + 4 adjacent-pair midpoints = 9 列。
-	// 因 D 缺失,mid_S_D 與 mid_D_T 都無法生成;biomechanical-interval midpoints 為 0。
-	// 釘住「S/D/T 任一缺失 → 對應 skip-midpoint 完全不生成」契約。
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	// 只填 5 個分期，其餘留空
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.01", "0.02", "0.03", "0.04", "0.05",
-			"", "", "", "", "",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	require.True(t, sr.Success, "Err=%v", sr.Err)
-	rows := readCSV(t, sr.OutputPhasePath)
-	assert.Equal(t, 1+9, len(rows), "5 phases without S/D/T → 9 data rows (2N-1, no interval midpoints)")
-
-	// 進一步釘住:rows 中沒有任何 mid_S_D / mid_D_T
-	for _, row := range rows[1:] {
-		assert.NotEqual(t, "mid_S_D", row[0], "mid_S_D should not exist when D is absent")
-		assert.NotEqual(t, "mid_D_T", row[0], "mid_D_T should not exist when D/T are absent")
-	}
-}
-
-// hasPhaseRow scans rows[1:] (skipping header) for a row whose Phase column equals name.
-// 共用於 edge case 測試。
-func hasPhaseRow(rows [][]string, name string) bool {
-	for _, row := range rows[1:] {
-		if row[0] == name {
-			return true
-		}
-	}
-	return false
-}
-
-// countPhaseRow returns how many rows[1:] have the given Phase column value.
-// 用於釘住「不重複」契約 — 若某 midpoint 被誤生兩次,計數會抓到。
-func countPhaseRow(rows [][]string, name string) int {
-	count := 0
-	for _, row := range rows[1:] {
-		if row[0] == name {
-			count++
-		}
-	}
-	return count
-}
-
-func TestAnalyze_PhasePoints_MissingS_OnlyMidDT(t *testing.T) {
-	// 9 phases without S → 9 phase rows + 8 adjacent midpoints + 1 interval (mid_D_T) = 18 rows。
-	// mid_S_D 無法生成（S 缺失）;mid_D_T 仍可生成（D 與 T 都在）。
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.01", "0.02", "0.03", "", "0.05",
-			"20", "0.09", "0.10", "30", "0.15",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	require.True(t, sr.Success, "Err=%v", sr.Err)
-	rows := readCSV(t, sr.OutputPhasePath)
-	assert.Equal(t, 1+18, len(rows), "9 phases (no S) → 17 adjacent + 1 interval (mid_D_T) = 18 data rows")
-
-	assert.False(t, hasPhaseRow(rows, "mid_S_D"), "mid_S_D should not exist when S is absent")
-	assert.True(t, hasPhaseRow(rows, "mid_D_T"), "mid_D_T should still be generated when D and T are present")
-}
-
-func TestAnalyze_PhasePoints_MissingD_NoIntervalMidpoints(t *testing.T) {
-	// 9 phases without D → 9 phase rows + 8 adjacent midpoints + 0 interval = 17 rows。
-	// 兩個 interval midpoints 都無法生成,因為 D 同時是 mid_S_D 與 mid_D_T 的端點。
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.01", "0.02", "0.03", "0.04", "0.05",
-			"", "0.09", "0.10", "30", "0.15",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	require.True(t, sr.Success, "Err=%v", sr.Err)
-	rows := readCSV(t, sr.OutputPhasePath)
-	assert.Equal(t, 1+17, len(rows), "9 phases (no D) → 17 adjacent + 0 interval = 17 data rows")
-
-	assert.False(t, hasPhaseRow(rows, "mid_S_D"), "mid_S_D should not exist when D is absent")
-	assert.False(t, hasPhaseRow(rows, "mid_D_T"), "mid_D_T should not exist when D is absent")
-}
-
-func TestAnalyze_PhasePoints_MissingT_OnlyMidSD(t *testing.T) {
-	// 9 phases without T → 9 phase rows + 8 adjacent midpoints + 1 interval (mid_S_D) = 18 rows。
-	// mid_S_D 仍可生成（S 與 D 都在）;mid_D_T 無法生成（T 缺失）。
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.01", "0.02", "0.03", "0.04", "0.05",
-			"20", "0.09", "", "30", "0.15",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	require.True(t, sr.Success, "Err=%v", sr.Err)
-	rows := readCSV(t, sr.OutputPhasePath)
-	assert.Equal(t, 1+18, len(rows), "9 phases (no T) → 17 adjacent + 1 interval (mid_S_D) = 18 data rows")
-
-	assert.True(t, hasPhaseRow(rows, "mid_S_D"), "mid_S_D should still be generated when S and D are present")
-	assert.False(t, hasPhaseRow(rows, "mid_D_T"), "mid_D_T should not exist when T is absent")
-}
-
-// TestAnalyze_PhasePoints_MissingC_NoDuplicateMidSD 釘住 codex review (P2) 發現的
-// duplicate-row bug:當 C 缺失但 S 與 D 都在,sort 後 S 與 D 變成相鄰,adjacent-pair
-// loop 自己會生出 mid_S_D — 此時 biomechanical-interval append 不能再加一次。
-//
-// Bug 復現前:Output 2 含兩列 mid_S_D,總列數 19;修復後:mid_S_D 只一列,總列數 18。
-func TestAnalyze_PhasePoints_MissingC_NoDuplicateMidSD(t *testing.T) {
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	// 9 phases without C: P0, P1, P2, S(0.04), D(0.076), T0, T(0.10), O, L
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.01", "0.02", "0.03", "0.04", "",
-			"20", "0.09", "0.10", "30", "0.15",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	require.True(t, sr.Success, "Err=%v", sr.Err)
-	rows := readCSV(t, sr.OutputPhasePath)
-	// 9 phases + 8 adjacent midpoints (含 mid_S_D 由 adjacent loop 產生) + 1 interval (mid_D_T)
-	// = 18 rows;若 mid_S_D 重複生成則會是 19。
-	assert.Equal(t, 1+18, len(rows), "missing C with S+D adjacent should not duplicate mid_S_D")
-	assert.Equal(t, 1, countPhaseRow(rows, "mid_S_D"), "mid_S_D must appear exactly once")
-	assert.Equal(t, 1, countPhaseRow(rows, "mid_D_T"), "mid_D_T must appear exactly once")
-}
-
-// TestAnalyze_PhasePoints_MissingT0_NoDuplicateMidDT 釘住 codex review (P2) 的對稱情境:
-// T0 缺失但 D 與 T 都在,adjacent-pair loop 自己會生出 mid_D_T — 此時 biomechanical-interval
-// append 不能再加一次。
-func TestAnalyze_PhasePoints_MissingT0_NoDuplicateMidDT(t *testing.T) {
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	// 9 phases without T0: P0, P1, P2, S, C, D(0.076), T(0.10), O, L
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.01", "0.02", "0.03", "0.04", "0.05",
-			"20", "", "0.10", "30", "0.15",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	require.True(t, sr.Success, "Err=%v", sr.Err)
-	rows := readCSV(t, sr.OutputPhasePath)
-	// 9 phases + 8 adjacent midpoints (含 mid_D_T 由 adjacent loop 產生) + 1 interval (mid_S_D)
-	// = 18 rows;若 mid_D_T 重複生成則會是 19。
-	assert.Equal(t, 1+18, len(rows), "missing T0 with D+T adjacent should not duplicate mid_D_T")
-	assert.Equal(t, 1, countPhaseRow(rows, "mid_D_T"), "mid_D_T must appear exactly once")
-	assert.Equal(t, 1, countPhaseRow(rows, "mid_S_D"), "mid_S_D must appear exactly once")
-}
-
-// TestAnalyze_PhasePoints_MissingC_ReversedSDOrder_NoDuplicate 釘住 codex 第二輪 (P2)
-// 發現的「反向命名 dedup 失效」bug:當 C 缺失且 D 的 motion-index → EMG time 換算後
-// 比 S 還早,sort 後相鄰兩點是 D, S(反向),adjacent-pair loop 產生 `mid_D_S`(非
-// canonical 的 `mid_S_D`)。dedup 必須同時比對反向名稱,否則 biomechanical-interval
-// 會再加 `mid_S_D`,兩列 label 不同但 time 與 ratios 完全相同 — 重複資料的偽裝。
-//
-// 端點對(endpoint pair){S, D} 在輸出中應只出現一次,**不論 label 方向**。
-func TestAnalyze_PhasePoints_MissingC_ReversedSDOrder_NoDuplicate(t *testing.T) {
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	// offset=1: ForceTimeToEMGTime(t,1)=t, MotionIndexToEMGTime(idx,1)=(idx-1)/250
-	// D=10 motion → 0.036 EMG; S=0.04 force → 0.04 EMG → D < S → 反序。C 缺失讓
-	// D 與 S 在 sort 後相鄰,adjacent-pair 產 mid_D_S。
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.001", "0.002", "0.003", "0.04", "",
-			"10", "0.09", "0.10", "30", "0.15",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	require.True(t, sr.Success, "Err=%v", sr.Err)
-	rows := readCSV(t, sr.OutputPhasePath)
-	// 9 phases + 8 adjacent midpoints (含 mid_D_S 反序產生) + 1 interval (mid_D_T)
-	// = 18 rows。若反向 dedup 失效,mid_S_D 也會被加 → 19 rows。
-	assert.Equal(t, 1+18, len(rows), "endpoint pair {S,D} must appear once regardless of label direction")
-	// 端點對 {S,D} 在輸出中無論 label 方向只能合計出現一次
-	totalSDPair := countPhaseRow(rows, "mid_S_D") + countPhaseRow(rows, "mid_D_S")
-	assert.Equal(t, 1, totalSDPair, "endpoint pair {S,D} must appear exactly once total (mid_S_D + mid_D_S)")
-	// mid_D_T 此情境下不涉及反序,正常生成一次
-	assert.Equal(t, 1, countPhaseRow(rows, "mid_D_T"), "mid_D_T must appear exactly once")
-}
-
-// TestAnalyze_PhasePoints_MissingT0_ReversedDTOrder_NoDuplicate 是 P2 修復的對稱
-// 情境:T0 缺失且 T 的 force-time 比 D 的 motion-index 換算時間還早(T.emg < D.emg),
-// sort 後 T 在 D 之前,adjacent-pair 產 `mid_T_D`(反向)。biomechanical-interval
-// 想加 `mid_D_T` 必須被反向 dedup 攔住。
-func TestAnalyze_PhasePoints_MissingT0_ReversedDTOrder_NoDuplicate(t *testing.T) {
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	// D=20 motion → 0.076 EMG; T=0.01 force → 0.01 EMG → T < D → 反序。T0 缺失讓
-	// T 與 D 在 sort 後相鄰,adjacent-pair 產 mid_T_D。
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.001", "0.002", "0.003", "0.005", "0.006",
-			"20", "", "0.01", "30", "0.15",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	require.True(t, sr.Success, "Err=%v", sr.Err)
-	rows := readCSV(t, sr.OutputPhasePath)
-	// 9 phases + 8 adjacent midpoints (含 mid_T_D 反序產生) + 1 interval (mid_S_D)
-	// = 18 rows。若反向 dedup 失效,mid_D_T 也會被加 → 19 rows。
-	assert.Equal(t, 1+18, len(rows), "endpoint pair {D,T} must appear once regardless of label direction")
-	totalDTPair := countPhaseRow(rows, "mid_D_T") + countPhaseRow(rows, "mid_T_D")
-	assert.Equal(t, 1, totalDTPair, "endpoint pair {D,T} must appear exactly once total (mid_D_T + mid_T_D)")
-	assert.Equal(t, 1, countPhaseRow(rows, "mid_S_D"), "mid_S_D must appear exactly once")
-}
-
-func TestAnalyze_PhaseTimeOutOfRange(t *testing.T) {
-	// EMG 範圍 0~0.099，但 ForceTimeToEMGTime with huge offset 會讓 phase time 變成負數
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 100, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	// offset=10000 → ForceTimeToEMGTime(0.01, 10000) = 0.01 - 9999/250 = -39.986 → 落在 EMG [0, 0.099] 外
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "10000", [10]string{
-			"0.01", "0.02", "0.03", "0.04", "0.05",
-			"100", "0.07", "0.08", "200", "0.10",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	assert.True(t, sr.Success, "Output 1 should still succeed even if Output 2 is skipped")
-	assert.NotEmpty(t, sr.OutputAllPath, "Output 1 應該已產生")
-	assert.Empty(t, sr.OutputPhasePath, "Output 2 應該被跳過")
-	assert.ErrorContains(t, sr.Err, "落在 EMG 範圍")
-	assert.ErrorContains(t, sr.Err, "外")
-}
-
 // TestAnalyze_ConcurrentCallsNoRace 釘住「並行 Analyze 不應觸發 race」這個 invariant。
 // 之後 EMGParser 改 stateless，但 Wails 並行 RPC 仍可能在未來 refactor 引入新的 shared
 // mutable state — 此 test 用 race detector 守門。
@@ -637,7 +163,6 @@ func TestAnalyze_ConcurrentCallsNoRace(t *testing.T) {
 				_, err := a.Analyze(context.Background(), &Params{
 					ManifestFile: manifestPath,
 					DataFolder:   dataDir,
-					OutputDir:    outDir,
 					CSVHandler:   newTestCSVHandler(outDir),
 				})
 				// 不 assert err — concurrent writes 到同個 outDir 可能有檔案 race（O_TRUNC），
@@ -676,7 +201,6 @@ func TestAnalyze_EMGFileWithLiteralPercent(t *testing.T) {
 	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
@@ -705,7 +229,6 @@ func TestAnalyze_EMGFileTraversalRejected(t *testing.T) {
 	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
@@ -738,7 +261,6 @@ func TestAnalyze_CaseOnlySubjectCollision_FailFast(t *testing.T) {
 	_, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.Error(t, err, "case-only 不同的 subject 在 case-insensitive FS 上會互覆蓋，應 fail-fast")
@@ -776,7 +298,6 @@ func TestAnalyze_NFCvsNFDSubjectCollision_FailFast(t *testing.T) {
 	_, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.Error(t, err, "NFC 與 NFD 的 \"café\" 在 macOS HFS+/APFS 上為同檔，應 fail-fast")
@@ -806,7 +327,6 @@ func TestAnalyze_FormulaInjectionSubject_Sanitized(t *testing.T) {
 	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
@@ -817,46 +337,6 @@ func TestAnalyze_FormulaInjectionSubject_Sanitized(t *testing.T) {
 	assert.NotContains(t, outName, ":", "output 檔名不該含 `:` (路徑分隔字元)")
 	assert.NotContains(t, outName, "/", "output 檔名不該含 `/`")
 	assert.NotContains(t, outName, "\\", "output 檔名不該含 `\\`")
-}
-
-// TestAnalyze_NegativeTime_Handled 釘住測試補洞：EMG Time 欄為負值（如校準前的時間軸偏移）
-// 仍應通過 parse 與 Analyze，不該因為 negative time 觸發 panic 或誤判為 invalid。
-func TestAnalyze_NegativeTime_Handled(t *testing.T) {
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	emgPath := filepath.Join(dataDir, "neg.csv")
-	var b strings.Builder
-	b.WriteString(emgHeaderLine)
-	b.WriteByte('\n')
-	for i := 0; i < 200; i++ {
-		negTime := -0.5 + float64(i)*0.001
-		fmt.Fprintf(&b, "%.4f,2.0,1.0,3.0,1.5,1.0,2.0,4.0,2.0\n", negTime)
-	}
-	require.NoError(t, os.WriteFile(emgPath, []byte(b.String()), 0o600))
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	writeManifest(t, manifestPath, [][]string{
-		// phase points 落在 [-0.5, -0.301] 內（負時間範圍），對應 motion index 也用負數模擬上下文
-		makeRow15("NegT", "neg.csv", "1", [10]string{
-			"-0.49", "-0.48", "-0.47", "-0.46", "-0.45",
-			"20", "-0.43", "-0.42", "30", "-0.41",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err, "負時間 EMG 不應讓批次 Analyze 整體失敗")
-	require.Len(t, result, 1)
-	// Output 1 應產出（時間序列 dump 不依賴 phase 範圍）
-	assert.True(t, result[0].Success || result[0].OutputAllPath != "",
-		"負時間 EMG 至少應有 Output 1 產出，實際：success=%v err=%v", result[0].Success, result[0].Err)
 }
 
 func TestAnalyze_DuplicateSanitizedSubjects_FailFast(t *testing.T) {
@@ -878,7 +358,6 @@ func TestAnalyze_DuplicateSanitizedSubjects_FailFast(t *testing.T) {
 	_, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.Error(t, err, "重複 sanitized subject 應 fail-fast")
@@ -905,7 +384,6 @@ func TestAnalyze_TwoSubjects_BothExported(t *testing.T) {
 	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
@@ -942,6 +420,11 @@ func TestAnalyze_TwoSubjects_BothExported(t *testing.T) {
 			assert.Contains(t, string(content), "\n", "%s 應有換行（至少一筆資料）", p)
 		}
 	}
+
+	// Output 2 的 "(11pt avg)" 欄名由 analyzeSubject 組出(寫檔端),compute core 的測試看不到,在此釘住。
+	assert.Equal(t,
+		[]string{"Phase", "Time (s)", "RA/ES (11pt avg)", "IL/GMax (11pt avg)", "RF/BF (11pt avg)", "TAIO/MF (11pt avg)"},
+		readCSV(t, result[0].OutputPhasePath)[0])
 }
 
 func TestAnalyze_NaNCellWrittenAsEmpty(t *testing.T) {
@@ -962,7 +445,6 @@ func TestAnalyze_NaNCellWrittenAsEmpty(t *testing.T) {
 	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
@@ -1007,7 +489,6 @@ func TestAnalyze_EMGUpstreamNaN_OutputCellEmpty(t *testing.T) {
 	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
@@ -1053,7 +534,6 @@ func TestAnalyze_EmptyManifest_FailFast(t *testing.T) {
 	_, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.Error(t, err)
@@ -1068,6 +548,9 @@ func TestAnalyze_EmptySubject_Rejected(t *testing.T) {
 	outDir := filepath.Join(tempDir, "output")
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 
+	// Analyze 不再預先建輸出目錄(ADR-0052);先建好,下方才能斷言目錄內沒有 CSV。
+	require.NoError(t, os.MkdirAll(outDir, 0o755))
+
 	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 100, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
 
 	manifestPath := filepath.Join(tempDir, "manifest.csv")
@@ -1078,7 +561,6 @@ func TestAnalyze_EmptySubject_Rejected(t *testing.T) {
 	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
@@ -1114,7 +596,6 @@ func TestAnalyze_EMGFileNotFound(t *testing.T) {
 	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
@@ -1123,82 +604,6 @@ func TestAnalyze_EMGFileNotFound(t *testing.T) {
 	sr := result[0]
 	assert.False(t, sr.Success)
 	assert.ErrorContains(t, sr.Err, "資料檔案不存在")
-}
-
-// TestAnalyze_PhaseTimeAtBoundary 釘住 collectPhasePoints bounds check 為 inclusive：
-// `p.time < emgStart || p.time > emgEnd` 是排除嚴格在外，邊界（== emgStart / == emgEnd）
-// 應該被接受。Refactor 若收緊為 `<=/>=`，gait 開始正好落在 t=0 的真實資料會被誤拒。
-func TestAnalyze_PhaseTimeAtBoundary(t *testing.T) {
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	// 200 samples × 0.001s = EMG time 0.000 ~ 0.199s
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	// offset=1 → ForceTimeToEMGTime(t,1)=t；P0=0.000 (恰為 emgStart)；L=0.199 (恰為 emgEnd)
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.000", "0.05", "0.06", "0.07", "0.08",
-			"20", "0.10", "0.11", "30", "0.199",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	assert.True(t, sr.Success, "邊界 phase 不該被拒絕，Err=%v", sr.Err)
-	assert.NotEmpty(t, sr.OutputPhasePath, "Output 2 應該產出")
-}
-
-// TestAnalyze_PhaseTimeWithinEpsilon 釘住 ADR-0030 的行為變更:phase EMG time 落在 emgEnd
-// 之外但在 1e-6 ULP 容差帶內(force-plate↔EMG 同步飄移),collectPhasePoints 經
-// ResolveTimeIndex 的 inRange 旗標應「接受」,而非舊 strict-0 的「拒收+跳 Output 2」。
-// 對照 TestAnalyze_PhaseTimeAtBoundary(測 == 邊界);此處測 (emgEnd, emgEnd+1e-6) 開區間。
-func TestAnalyze_PhaseTimeWithinEpsilon(t *testing.T) {
-	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
-	outDir := filepath.Join(tempDir, "output")
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	// 200 samples × 0.001s,EMG helper 寫 %.4f → 末筆 "0.1990" → emgEnd = 0.199。
-	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
-
-	// Precondition:把 in-band 浮點假設釘進 test,一破即大聲 fail(不藏在 runtime 算式)。
-	// offset=1 → ForceTimeToEMGTime(L,1)=L。L=0.1990005 落在 (emgEnd, emgEnd+1e-6) 開區間。
-	const emgEnd = 0.199
-	const phaseL = 0.1990005
-	require.Greater(t, phaseL, emgEnd, "L 必須嚴格超出 emgEnd(否則測的是 boundary 非 epsilon)")
-	require.Less(t, phaseL, emgEnd+1e-6, "L 必須在 1e-6 容差帶內(否則會被當真 typo 拒收)")
-
-	manifestPath := filepath.Join(tempDir, "manifest.csv")
-	// offset=1;L=0.1990005 (force time → EMG time 同值,容差內);其餘 phase 均在範圍內。
-	writeManifest(t, manifestPath, [][]string{
-		makeRow15("S1", "s1.csv", "1", [10]string{
-			"0.000", "0.05", "0.06", "0.07", "0.08",
-			"20", "0.10", "0.11", "30", "0.1990005",
-		}),
-	})
-
-	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
-		ManifestFile: manifestPath,
-		DataFolder:   dataDir,
-		OutputDir:    outDir,
-		CSVHandler:   newTestCSVHandler(outDir),
-	})
-	require.NoError(t, err)
-
-	sr := result[0]
-	assert.True(t, sr.Success, "容差內 phase 不該被拒,Err=%v", sr.Err)
-	assert.NotEmpty(t, sr.OutputPhasePath, "Output 2 應產出(舊 strict-0 會跳過→此處空)")
 }
 
 // TestAnalyze_Output2WriteFailure_StickyOutput1Success 釘住 SubjectResult doc 契約：
@@ -1228,7 +633,6 @@ func TestAnalyze_Output2WriteFailure_StickyOutput1Success(t *testing.T) {
 	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 	require.NoError(t, err)
@@ -1240,6 +644,99 @@ func TestAnalyze_Output2WriteFailure_StickyOutput1Success(t *testing.T) {
 	assert.FileExists(t, sr.OutputAllPath, "Output 1 檔案應存在")
 	assert.Empty(t, sr.OutputPhasePath, "Output 2 失敗時 OutputPhasePath 應為空")
 	assert.ErrorContains(t, sr.Err, "寫入 Output 2 失敗", "Err 應解釋 Output 2 跳過原因")
+}
+
+// TestAnalyze_SubjectOutcomes_RoutedPerSubject 釘住 analyzeSubject 怎麼處理 computeSubject 的
+// 三種結果(ADR-0052),三個 subject 同一批、互不影響:
+//   - core err(缺通道)→ Success=false,不寫任何檔
+//   - warn(分期點落在 EMG 範圍外)→ Output 1 照寫、Output 2 跳過,Success 仍為 true(sticky-success)
+//   - 兩者皆無 → 兩個 CSV 都寫
+//
+// core 何時回 err / warn 由 computeSubject_test.go 負責,這裡只看 adapter 的分流。
+func TestAnalyze_SubjectOutcomes_RoutedPerSubject(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	outDir := filepath.Join(tempDir, "output")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	writeEMG8(t, filepath.Join(dataDir, "ok.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+	writeEMG7(t, filepath.Join(dataDir, "missing.csv"), 100)
+	writeEMG8(t, filepath.Join(dataDir, "warn.csv"), 100, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	phases := [10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("OK", "ok.csv", "1", phases),
+		makeRow15("Missing", "missing.csv", "1", phases),
+		// offset=10000 → 力板時間換算成 EMG 秒數約 -40s,落在 EMG [0, 0.099] 外 → warn
+		makeRow15("Warn", "warn.csv", "10000", phases),
+	})
+
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		CSVHandler:   newTestCSVHandler(outDir),
+	})
+	require.NoError(t, err)
+	require.Len(t, result, 3)
+
+	ok, missing, warn := result[0], result[1], result[2]
+
+	assert.True(t, ok.Success, "Err=%v", ok.Err)
+	assert.NoError(t, ok.Err)
+	assert.FileExists(t, ok.OutputAllPath)
+	assert.FileExists(t, ok.OutputPhasePath)
+
+	assert.False(t, missing.Success, "core err 時 subject 應失敗")
+	assert.ErrorContains(t, missing.Err, "缺少必要的肌肉通道")
+	assert.Empty(t, missing.OutputAllPath, "core err 時不該寫 Output 1")
+	assert.Empty(t, missing.OutputPhasePath)
+
+	assert.True(t, warn.Success, "warn 只跳過 Output 2,Output 1 仍算成功")
+	assert.FileExists(t, warn.OutputAllPath, "warn 時 Output 1 照寫")
+	assert.Empty(t, warn.OutputPhasePath, "warn 時 Output 2 應跳過")
+	assert.ErrorContains(t, warn.Err, "落在 EMG 範圍")
+}
+
+// TestAnalyze_OutputDirUnwritable_PerSubjectOutput1Failure 釘住 ADR-0052 的行為變更:Analyze
+// 不再預先驗證 / 建立輸出目錄,輸出目錄不可寫時不再是一筆整批錯誤,而是每個 subject 各一筆
+// 「寫入 Output 1 失敗」。S2 的分期點落在 EMG 範圍外(core 會回 warn),仍應回 Output 1
+// 寫檔錯誤 —— Output 1 寫檔錯誤優先於 warn。
+//
+// 讓輸出目錄不可寫的招式:輸出目錄指向一般檔案,寫檔時 MkdirAll 必失敗。
+func TestAnalyze_OutputDirUnwritable_PerSubjectOutput1Failure(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	outDir := filepath.Join(tempDir, "not_a_dir")
+	require.NoError(t, os.WriteFile(outDir, []byte("x"), 0o600))
+
+	writeEMG8(t, filepath.Join(dataDir, "s1.csv"), 200, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+	writeEMG8(t, filepath.Join(dataDir, "s2.csv"), 100, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+
+	phases := [10]string{"0.01", "0.02", "0.03", "0.04", "0.05", "20", "0.07", "0.08", "30", "0.09"}
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	writeManifest(t, manifestPath, [][]string{
+		makeRow15("S1", "s1.csv", "1", phases),
+		makeRow15("S2", "s2.csv", "10000", phases), // 分期點落在 EMG 範圍外 → core 回 warn
+	})
+
+	result, err := NewAnalyzer().Analyze(context.Background(), &Params{
+		ManifestFile: manifestPath,
+		DataFolder:   dataDir,
+		CSVHandler:   newTestCSVHandler(outDir),
+	})
+	require.NoError(t, err, "輸出目錄不可寫不再是整批錯誤")
+	require.Len(t, result, 2)
+
+	for _, sr := range result {
+		assert.False(t, sr.Success, "%s:Output 1 寫不出來應失敗", sr.Subject)
+		assert.Empty(t, sr.OutputAllPath, sr.Subject)
+		assert.Empty(t, sr.OutputPhasePath, sr.Subject)
+		assert.ErrorContains(t, sr.Err, "寫入 Output 1 失敗", "%s:Output 1 寫檔錯誤優先於 warn", sr.Subject)
+		assert.ErrorContains(t, sr.Err, "輸出目錄建立失敗", "%s:失敗原因應是輸出目錄不可寫", sr.Subject)
+	}
 }
 
 // TestAnalyze_ConcurrentCallsNoRace_IsolatedFiles 強化原 race 測試：原版 8 goroutine 共寫
@@ -1274,7 +771,6 @@ func TestAnalyze_ConcurrentCallsNoRace_IsolatedFiles(t *testing.T) {
 			_, err := a.Analyze(context.Background(), &Params{
 				ManifestFile: manifestPath,
 				DataFolder:   dataDir,
-				OutputDir:    perOut,
 				CSVHandler:   newTestCSVHandler(perOut),
 			})
 			_ = err
@@ -1308,7 +804,6 @@ func TestAnalyze_ContextCancelledBeforeStart(t *testing.T) {
 	results, err := NewAnalyzer().Analyze(ctx, &Params{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		OutputDir:    outDir,
 		CSVHandler:   newTestCSVHandler(outDir),
 	})
 
@@ -1324,7 +819,6 @@ func TestAnalyze_NilContext(t *testing.T) {
 	_, err := NewAnalyzer().Analyze(nil, &Params{ //nolint:staticcheck // intentional nil ctx
 		ManifestFile: filepath.Join(tempDir, "no-manifest.csv"),
 		DataFolder:   tempDir,
-		OutputDir:    tempDir,
 		CSVHandler:   newTestCSVHandler(tempDir),
 	})
 	require.Error(t, err, "nil ctx 必須回 error")
@@ -1337,9 +831,8 @@ func TestAnalyze_NilContext(t *testing.T) {
 func TestAnalyze_NilCSVHandlerReturnsErr(t *testing.T) {
 	a := NewAnalyzer()
 	_, err := a.Analyze(context.Background(), &Params{
-		ManifestFile: "/nonexistent.csv", // 不會被讀到 — nil check 在 path validation 前
+		ManifestFile: "/nonexistent.csv", // 不會被讀到 — nil check 在讀 manifest 前
 		DataFolder:   t.TempDir(),
-		OutputDir:    t.TempDir(),
 		// CSVHandler 故意 omit
 	})
 	require.Error(t, err)

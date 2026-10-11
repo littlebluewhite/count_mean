@@ -86,10 +86,8 @@ var translationsZhTW = map[string]string{
 	KeyHelpScalingFactor: "數據縮放因子（10的冪次）",
 	KeyHelpPhaseLabels:   "用換行分隔的階段標籤",
 	// Muscle Ratio Analysis Messages (migration — backend i18n).
-	KeyErrorMuscleRatioOutputDirInvalid:          "OutputDir 驗證失敗",
 	KeyErrorMuscleRatioParseManifestFailed:       "解析分期總檔案失敗",
 	KeyErrorMuscleRatioEmptyManifest:             "分期總檔案沒有任何主題記錄",
-	KeyErrorMuscleRatioMkdirFailed:               "建立輸出目錄失敗",
 	KeyErrorMuscleRatioSubjectEmptyName:          "Subject 名稱為空",
 	KeyErrorMuscleRatioSubjectParseEMGFailed:     "解析 EMG 檔案失敗:%v",
 	KeyErrorMuscleRatioSubjectWriteOutput1Failed: "寫入 Output 1 失敗:%v",

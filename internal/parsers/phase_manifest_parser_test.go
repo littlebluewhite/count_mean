@@ -531,7 +531,7 @@ func TestPhaseManifestParser_parseFloat(t *testing.T) {
 		// Batch T regression: "0" 是合法 t=0，與「空字串/NA/-」嚴格區分。
 		{"zero value is Set=true Value=0", "0", "test", models.MakeOpt(0.0), false},
 		// NOT IMPLEMENTED：負值 phase point 為「校準前時間偏移」合法設計（見
-		// muscle_ratio analyzer_test.go TestAnalyze_NegativeTime_Handled）。
+		// muscle_ratio computeSubject_test.go TestComputeSubject_NegativeTime_Handled）。
 		{"negative value allowed (校準偏移)", "-123.45", "test", models.MakeOpt(-123.45), false},
 		// P1-A10-2 + 超過 maxReasonablePhase（|v| > 86400 = 1 day）拒絕。
 		// 1e10 / -1e10 仍然超過上限，行為與 修補後一致。

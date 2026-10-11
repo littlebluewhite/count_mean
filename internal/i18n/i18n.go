@@ -178,10 +178,8 @@ const (
 	// 的錯誤(Analyze 的 err、SubjectResult.Err),gui 以 i18n.Localize 渲染(ADR-0048);
 	// status.* 兩個 key 由 gui 直接 T。%w verb 禁止:catalog 字串只能含 fmt.Sprintf-
 	// compatible verbs (%s %v %d %q);「: cause」由 WrapError 接上。
-	KeyErrorMuscleRatioOutputDirInvalid          = "error.muscle_ratio.output_dir_invalid"
 	KeyErrorMuscleRatioParseManifestFailed       = "error.muscle_ratio.parse_manifest_failed"
 	KeyErrorMuscleRatioEmptyManifest             = "error.muscle_ratio.empty_manifest"
-	KeyErrorMuscleRatioMkdirFailed               = "error.muscle_ratio.mkdir_failed"
 	KeyErrorMuscleRatioSubjectEmptyName          = "error.muscle_ratio.subject.empty_name"
 	KeyErrorMuscleRatioSubjectParseEMGFailed     = "error.muscle_ratio.subject.parse_emg_failed"
 	KeyErrorMuscleRatioSubjectWriteOutput1Failed = "error.muscle_ratio.subject.write_output1_failed"

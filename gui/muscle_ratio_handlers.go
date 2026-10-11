@@ -28,7 +28,7 @@ type MuscleRatioSubjectDTO struct {
 //
 // 三種狀態語意（與 cci / normalized_phase_sync peer 對稱）：
 //
-//  1. Pre-analysis fail（manifest 解析失敗、OutputDir 驗證失敗、subject 衝突等）：
+//  1. Pre-analysis fail（manifest 解析失敗、subject 衝突等）：
 //     Success=false, Subjects=nil, Message=描述失敗原因。
 //     前端依此呈現「整批未啟動」。Go error 返回 nil（避免雙通道 error 與 message 重複）。
 //
@@ -59,9 +59,9 @@ type MuscleRatioResult struct {
 //	前端因此可以單一路徑檢查 result.success / result.subjects。
 //
 // 失敗策略：
-//   - 整體性錯誤（參數驗證失敗、manifest 解析失敗、輸出目錄無法建立、subject 名稱衝突）
+//   - 整體性錯誤（參數驗證失敗、manifest 解析失敗、subject 名稱衝突）
 //     → result.Success=false, result.Subjects=nil, result.Message=描述失敗原因
-//   - 單一 subject 失敗（檔案不存在、缺通道、phase 時間越界等）→ 包進對應的 MuscleRatioSubjectDTO.Error，
+//   - 單一 subject 失敗（檔案不存在、缺通道、輸出目錄不可寫、phase 時間越界等）→ 包進對應的 MuscleRatioSubjectDTO.Error，
 //     不阻斷其他 subject 處理；前端依 Subjects[i].Success 判斷是否該行成功
 func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioResult, err error) {
 	defer recoverHandlerPanic("肌肉比值分析", a.logger, &err)
@@ -86,7 +86,6 @@ func (a *App) AnalyzeMuscleRatio(params MuscleRatioParams) (result *MuscleRatioR
 	subjectResults, analyzeErr := a.muscleRatioAnalyzer.Analyze(a.context(), &muscle_ratio.Params{
 		ManifestFile: params.ManifestFile,
 		DataFolder:   params.DataFolder,
-		OutputDir:    s.config.OutputDir,
 		CSVHandler:   s.csvHandler,
 	})
 	if analyzeErr != nil {

@@ -148,7 +148,6 @@ func TestPhaseTimelineAgreement_AllCallers(t *testing.T) {
 		results, err := muscle_ratio.NewAnalyzer().Analyze(context.Background(), &muscle_ratio.Params{
 			ManifestFile: manifestPath,
 			DataFolder:   dataFolder,
-			OutputDir:    outDir,
 			CSVHandler: io.NewCSVHandler(&config.AppConfig{
 				OutputDir: outDir, ScalingFactor: 3, Precision: 6,
 			}),

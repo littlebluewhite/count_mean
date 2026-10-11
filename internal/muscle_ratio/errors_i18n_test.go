@@ -14,7 +14,7 @@ import (
 
 // TestMuscleRatioErrors_ZhTWTextLocalizedAtHandler 釘住 ADR-0048:muscle_ratio 回帶 i18n
 // key 的錯誤 —— 整批錯誤(Analyze 的 err)、逐 subject 錯誤(SubjectResult.Err)與 Output 2
-// 跳過的 warning(collectPhasePoints)都一樣:
+// 跳過的 warning(computeSubject 的 warn)都一樣:
 //
 //   - err.Error() 一律是 zh-TW 文字,與 key 化之前逐位元組相同,不隨建構時的 locale 變
 //   - i18n.Localize(err) 依呈現當下的 locale(en-US)渲染
@@ -41,7 +41,6 @@ func TestMuscleRatioErrors_ZhTWTextLocalizedAtHandler(t *testing.T) {
 				_, err := NewAnalyzer().Analyze(ctx, &Params{
 					ManifestFile: manifestPath,
 					DataFolder:   tempDir,
-					OutputDir:    tempDir,
 					CSVHandler:   newTestCSVHandler(tempDir),
 				})
 				require.ErrorIs(t, err, context.Canceled)
@@ -69,14 +68,16 @@ func TestMuscleRatioErrors_ZhTWTextLocalizedAtHandler(t *testing.T) {
 		},
 		{
 			name: "Output 2 warning:phase 落在 EMG 範圍外(%s %.4f Args)",
-			build: func(*testing.T) error {
+			build: func(t *testing.T) error {
 				// EMGMotionOffset=1:力板時間即 EMG 時間。
 				m := &models.PhaseManifest{
 					Subject:         "S",
 					EMGMotionOffset: 1,
 					PhasePoints:     models.PhasePoints{S: models.MakeOpt(0.5), L: models.MakeOpt(5.0)},
 				}
-				_, warn := NewAnalyzer().collectPhasePoints(m, &models.PhaseSyncEMGData{Time: []float64{0.0, 1.0}})
+				emg := buildInMemoryEMG([]float64{0.0, 1.0}, [8]float64{2, 1, 3, 1.5, 1, 2, 4, 2})
+				_, warn, err := computeSubject(emg, m)
+				require.NoError(t, err)
 
 				return warn
 			},
