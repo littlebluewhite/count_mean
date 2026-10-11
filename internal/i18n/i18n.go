@@ -272,6 +272,26 @@ const (
 	KeyErrorHandlerParseMotionFailed        = "error.handler.parse_motion_failed"
 	KeyErrorHandlerParseMuscleRatioFailed   = "error.handler.parse_muscle_ratio_failed"
 
+	// Legacy panel(MaxMean / Normalize / Phase 與 MaxMean 批次 adapter)走 err 通道:
+	// handler 以 i18n.WrapError 包住下游錯誤,值只是前綴(無 verb、無冒號),「: cause」由
+	// WrapError 接上;KeyErrorHandlerDirPathEmpty 是批次空路徑的訊息本身。
+	KeyErrorHandlerReadFileFailed          = "error.handler.read_file_failed"
+	KeyErrorHandlerCalculateFailed         = "error.handler.calculate_failed"
+	KeyErrorHandlerWriteOutputFailed       = "error.handler.write_output_failed"
+	KeyErrorHandlerReadMainFileFailed      = "error.handler.read_main_file_failed"
+	KeyErrorHandlerReadReferenceFileFailed = "error.handler.read_reference_file_failed"
+	KeyErrorHandlerNormalizeCalcFailed     = "error.handler.normalize_calc_failed"
+	KeyErrorHandlerSaveResultFailed        = "error.handler.save_result_failed"
+	KeyErrorHandlerReadDataFileFailed      = "error.handler.read_data_file_failed"
+	KeyErrorHandlerPhaseAnalysisFailed     = "error.handler.phase_analysis_failed"
+	KeyErrorHandlerDirPathInvalid          = "error.handler.dir_path_invalid"
+	KeyErrorHandlerDirPathEmpty            = "error.handler.dir_path_empty"
+	KeyErrorHandlerRelPathFailed           = "error.handler.rel_path_failed"
+	KeyErrorHandlerListCSVFailed           = "error.handler.list_csv_failed"
+	KeyErrorHandlerGlobCSVFailed           = "error.handler.glob_csv_failed"
+	// MaxMean 批次的 result Message(全部失敗時前端以 showError 顯示),handler 直接 T。
+	KeyStatusMaxMeanBatchSummary = "status.maxmean.batch_summary"
+
 	// CSV 讀取側 sanity(validation/csv,ADR-0041):以 i18n.NewError 回帶 key 的錯誤,
 	// caller 層 Localize。Args 只有行號 / 欄號(1-based),不回顯 cell 內容或檔名。
 	KeyErrorCSVEmpty             = "error.csv.empty"

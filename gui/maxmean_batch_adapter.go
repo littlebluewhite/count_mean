@@ -1,11 +1,10 @@
 package gui
 
 import (
-	"fmt"
 	"path/filepath"
 
 	"count_mean/internal/calculator"
-	"count_mean/internal/errors"
+	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/maxmean"
 	"count_mean/internal/models"
@@ -17,8 +16,7 @@ func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error
 	s := a.state.Load()
 
 	if params.InputPath == "" {
-		return nil, fmt.Errorf("目錄路徑驗證失敗: %w",
-			errors.NewValidationError("directory_path", params.InputPath, "目錄路徑不能為空"))
+		return nil, i18n.WrapError(i18n.NewError(i18n.KeyErrorHandlerDirPathEmpty), i18n.KeyErrorHandlerDirPathInvalid)
 	}
 
 	source, outputDirName, err := a.buildMaxMeanFileSource(s, params.InputPath)
@@ -47,7 +45,7 @@ func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error
 	return &MaxMeanResult{
 		OutputPath: outputPath,
 		Success:    res.SuccessCount > 0,
-		Message:    fmt.Sprintf("批次處理完成：成功 %d 個檔案，失敗 %d 個檔案", res.SuccessCount, res.FailCount),
+		Message:    i18n.T(i18n.KeyStatusMaxMeanBatchSummary, res.SuccessCount, res.FailCount),
 	}, nil
 }
 
@@ -67,7 +65,7 @@ func (a *App) buildMaxMeanFileSource(s *appState, inputPath string) (maxmean.Fil
 	// IsWithin 為 true 蘊含 Rel 成功。
 	relPath, err := filepath.Rel(s.config.InputDir, inputPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("計算相對路徑失敗: %w", err)
+		return nil, "", i18n.WrapError(err, i18n.KeyErrorHandlerRelPathFailed)
 	}
 
 	// 絕對路徑但在 InputDir 下
@@ -83,7 +81,7 @@ type dirFileSource struct {
 func (d *dirFileSource) Discover() ([]maxmean.BatchFile, error) {
 	names, err := d.csvHandler.ListCSVFilesInDirectory(d.dirName)
 	if err != nil {
-		return nil, fmt.Errorf("列出CSV文件失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorHandlerListCSVFailed)
 	}
 
 	files := make([]maxmean.BatchFile, len(names))
@@ -107,7 +105,7 @@ type externalFileSource struct {
 func (e *externalFileSource) Discover() ([]maxmean.BatchFile, error) {
 	paths, err := filepath.Glob(filepath.Join(e.dirPath, "*.csv"))
 	if err != nil {
-		return nil, fmt.Errorf("搜尋CSV文件失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorHandlerGlobCSVFailed)
 	}
 
 	files := make([]maxmean.BatchFile, len(paths))

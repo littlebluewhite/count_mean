@@ -1,9 +1,9 @@
 package gui
 
 import (
-	"fmt"
 	"path/filepath"
 
+	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 )
 
@@ -31,19 +31,19 @@ func (a *App) NormalizeData(params NormalizeParams) (result *NormalizeResult, er
 	// 讀取主要資料檔案（包含路徑驗證）
 	mainRecords, err := s.csvHandler.ReadCSV(params.MainFile)
 	if err != nil {
-		return nil, fmt.Errorf("讀取主要資料檔案失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorHandlerReadMainFileFailed)
 	}
 
 	// 讀取參考資料檔案（包含路徑驗證）
 	refRecords, err := s.csvHandler.ReadCSV(params.ReferenceFile)
 	if err != nil {
-		return nil, fmt.Errorf("讀取參考資料檔案失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorHandlerReadReferenceFileFailed)
 	}
 
 	// 執行標準化
 	normalizedData, err := s.normalizer.NormalizeFromRawData(mainRecords, refRecords)
 	if err != nil {
-		return nil, fmt.Errorf("標準化計算失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorHandlerNormalizeCalcFailed)
 	}
 
 	// 生成輸出檔名並保存結果
@@ -54,7 +54,7 @@ func (a *App) NormalizeData(params NormalizeParams) (result *NormalizeResult, er
 		io.WriteRequest{Filename: outputName}, normalizedData,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("保存結果失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorHandlerSaveResultFailed)
 	}
 
 	a.logger.Info("資料標準化完成", map[string]any{

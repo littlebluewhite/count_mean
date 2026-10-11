@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 )
 
@@ -49,7 +50,7 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	// 使用統一的 CSV 讀取方法（包含路徑驗證）
 	records, err := s.csvHandler.ReadCSV(params.InputPath)
 	if err != nil {
-		return nil, fmt.Errorf("讀取檔案失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorHandlerReadFileFailed)
 	}
 
 	// 取得檔案名稱（不含路徑和副檔名）
@@ -60,7 +61,7 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 	run, err := s.maxMeanCalc.CalculateFromRawDataInRange(a.context(), records, params.WindowSize,
 		calculator.MaxMeanRange{Start: params.StartTime, End: params.EndTime})
 	if err != nil {
-		return nil, fmt.Errorf("計算失敗: %w", err)
+		return nil, i18n.WrapError(err, i18n.KeyErrorHandlerCalculateFailed)
 	}
 
 	// 輸出結果
@@ -71,7 +72,7 @@ func (a *App) calculateMaxMeanSingle(params MaxMeanParams) (*MaxMeanResult, erro
 		records[0], run.Results, run.Start, run.End,
 	)
 	if writeErr != nil {
-		return nil, fmt.Errorf("寫入輸出檔案失敗: %w", writeErr)
+		return nil, i18n.WrapError(writeErr, i18n.KeyErrorHandlerWriteOutputFailed)
 	}
 
 	// 準備回傳結果。Success/Message 必須顯式設定 — 前端依 result.success 判定成敗,

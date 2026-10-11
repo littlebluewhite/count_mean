@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"count_mean/internal/calculator"
+	"count_mean/internal/i18n"
 	"count_mean/internal/io"
 	"count_mean/internal/models"
 )
@@ -89,7 +90,7 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 	// 2 讀檔
 	records, readErr := s.csvHandler.ReadCSV(params.InputFile)
 	if readErr != nil {
-		return nil, fmt.Errorf("讀取資料檔案失敗: %w", readErr)
+		return nil, i18n.WrapError(readErr, i18n.KeyErrorHandlerReadDataFileFailed)
 	}
 
 	// 3 分析:per-call analyzer,phase 名稱用前端 labels、邊界用前端 ranges
@@ -98,7 +99,7 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 
 	analysisResult, analyzeErr := analyzer.AnalyzeFromRawDataWithRanges(records, ranges)
 	if analyzeErr != nil {
-		return nil, fmt.Errorf("階段分析失敗: %w", analyzeErr)
+		return nil, i18n.WrapError(analyzeErr, i18n.KeyErrorHandlerPhaseAnalysisFailed)
 	}
 
 	// 4 寫檔。Multi-phase merge 與 time-index dedup 由 CSVHandler.WritePhaseAnalysis
@@ -110,7 +111,7 @@ func (a *App) AnalyzePhases(params PhaseParams) (result *PhaseResult, err error)
 		io.WriteRequest{Filename: outputName}, records[0], analysisResult,
 	)
 	if writeErr != nil {
-		return nil, fmt.Errorf("保存結果失敗: %w", writeErr)
+		return nil, i18n.WrapError(writeErr, i18n.KeyErrorHandlerSaveResultFailed)
 	}
 
 	a.logger.Info("階段分析完成", nil)
