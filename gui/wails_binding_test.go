@@ -46,7 +46,7 @@ func TestGetAvailablePhases_ReturnsStringMapForWailsCompatibility(t *testing.T) 
 
 // TestApplyConfig_RebuildsComponents 是 cross-compare review 補的 Wave 2 P1 fix
 // (SaveConfig component rebuild) 的 regression test。
-// 過去 SaveConfig 只更新 a.config 不重建 csvHandler/maxMeanCalc/normalizer/phaseAnalyzer，
+// 過去 SaveConfig 只更新 a.config 不重建 csvHandler/maxMeanCalc/normalizer，
 // 使用者改 ScalingFactor 後計算仍用舊值 — user-visible silent bug。修法用 applyConfig
 // 在更新 config 時同步重建受影響元件。本 test 驗證重建確實發生（pointer 改變）。
 func TestApplyConfig_RebuildsComponents(t *testing.T) {
@@ -69,7 +69,6 @@ func TestApplyConfig_RebuildsComponents(t *testing.T) {
 	assert.NotSame(t, oldState.csvHandler, newState.csvHandler, "csvHandler 必須是新實例（會持有 cfg2）")
 	assert.NotSame(t, oldState.maxMeanCalc, newState.maxMeanCalc, "maxMeanCalc 必須是新實例（持有 ScalingFactor=10）")
 	assert.NotSame(t, oldState.normalizer, newState.normalizer, "normalizer 必須是新實例")
-	assert.NotSame(t, oldState.phaseAnalyzer, newState.phaseAnalyzer, "phaseAnalyzer 必須是新實例")
 
 	// 行為斷言: 單純比 pointer 不能保證重建用的是「新 cfg」。
 	// 例如未來若 buildAppState 被改成 `buildAppState(stale_cfg)` 或漏傳 cfg 參數,
@@ -83,8 +82,8 @@ func TestApplyConfig_RebuildsComponents(t *testing.T) {
 }
 
 // TestApp_ApplyConfigConcurrentWithReads_NoRace 釘住 fresh bug hunt 找到的真 race:
-// applyConfig 在 SaveConfig/ResetConfig 路徑下連續寫 5 個 pointer 欄位
-// (config / csvHandler / maxMeanCalc / normalizer / phaseAnalyzer),App struct
+// applyConfig 在 SaveConfig/ResetConfig 路徑下連續寫 4 個 pointer 欄位
+// (config / csvHandler / maxMeanCalc / normalizer),App struct
 // 無 mutex/atomic 保護。Wails v2 預設並行 RPC 場景下 in-flight 讀方法
 // (GetConfig 等 35 個 binding) 與 applyConfig 並行讀寫，會觸發 data race —
 // 嚴重時造成「半新半舊」mixed state 下的 silent 錯誤計算結果。

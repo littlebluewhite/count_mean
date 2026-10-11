@@ -192,11 +192,11 @@ func TestFullWorkflow_PhaseAnalysis(t *testing.T) {
 	records, err := csvHandler.ReadCSV(dataFile)
 	require.NoError(t, err)
 
-	// 定義階段時間點（5個時間點定義4個階段）
-	phaseStrings := []string{"0.0", "1.0", "2.0", "3.0", "4.0"}
+	// 定義階段時間區間（秒）
+	ranges := []models.TimeRange{{Start: 0, End: 1}, {Start: 1, End: 2}, {Start: 2, End: 3}, {Start: 3, End: 4}}
 
 	// 執行階段分析
-	result, err := analyzer.AnalyzeFromRawData(records, phaseStrings)
+	result, err := analyzer.AnalyzeFromRawDataWithRanges(records, ranges)
 	require.NoError(t, err)
 	require.Len(t, result.PhaseResults, 4)
 
@@ -267,7 +267,7 @@ func TestFullWorkflow_ConfigurationManagement(t *testing.T) {
 		Language:      "zh-TW",
 	}
 
-	err := originalConfig.SaveConfig(configFile)
+	err := originalConfig.SaveConfigAtomic(configFile)
 	require.NoError(t, err)
 
 	// 測試配置載入

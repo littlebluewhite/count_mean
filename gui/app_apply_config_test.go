@@ -19,7 +19,7 @@ import (
 // user-configurable knob 改變而被打斷。
 //
 // 設計取捨(option (a) of P1-24):applyConfig 只重設 user-configurable knob
-// (csvHandler / calculator / normalizer / phaseAnalyzer 整個 snapshot,
+// (csvHandler / calculator / normalizer 整個 snapshot,
 // 透過 a.state.Store 原子 swap),不碰 lastUpdateAt / updateBuffer 等
 // transient state。
 //

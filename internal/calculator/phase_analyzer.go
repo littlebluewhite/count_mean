@@ -11,9 +11,6 @@ import (
 	"count_mean/util"
 )
 
-// MinTimePointsForPhases is the minimum number of time points needed to define 4 phases.
-const MinTimePointsForPhases = 5
-
 // PhaseAnalyzer 處理階段分析.
 type PhaseAnalyzer struct {
 	scalingFactor int
@@ -239,35 +236,8 @@ func (p *PhaseAnalyzer) Analyze(dataset *models.EMGDataset, phases []models.Time
 	}, nil
 }
 
-// AnalyzeFromRawData 從原始字符串數據進行階段分析.
-func (p *PhaseAnalyzer) AnalyzeFromRawData(records [][]string, phaseStrings []string) (*AnalyzeResult, error) {
-	if p == nil {
-		return nil, calcerrors.NewCalculatorError(calcerrors.ErrEmptyDataset, "階段分析器為空")
-	}
-
-	p.logger.Info("開始從原始數據進行階段分析", map[string]any{
-		"record_count":  len(records),
-		"phase_strings": phaseStrings,
-	})
-
-	dataset, err := p.dataParser.ParseRawData(records)
-	if err != nil {
-		p.logger.Error("階段分析數據解析失敗", err)
-		return nil, fmt.Errorf("解析數據失敗: %w", err)
-	}
-
-	phases, err := p.parsePhases(phaseStrings)
-	if err != nil {
-		p.logger.Error("階段配置解析失敗", err)
-		return nil, fmt.Errorf("解析階段失敗: %w", err)
-	}
-
-	return p.Analyze(dataset, phases)
-}
-
 // AnalyzeFromRawDataWithRanges 從原始字串資料 + 顯式 phase 時間區間進行分析。
-// 與 AnalyzeFromRawData 不同:phase 邊界由 caller 直接提供(不從 phaseStrings 解析
-// 時間點);phase 名稱來自建構 analyzer 時注入的 phaseLabels。供 GUI 用前端傳入的
+// phase 邊界由 caller 直接提供;phase 名稱來自建構 analyzer 時注入的 phaseLabels。供 GUI 用前端傳入的
 // {name, startTime, endTime} 直接驅動,與 config.PhaseLabels 解耦。
 //
 // phases 以「秒」為單位傳入;本函式會在比對前把 ranges scale 到 parsed-data 時間域。
@@ -285,7 +255,7 @@ func (p *PhaseAnalyzer) AnalyzeFromRawDataWithRanges(
 	}
 
 	// 前端 ranges 以「秒」為單位,但 ParseRawData 已用 Str2Number 把時間欄
-	// × 10^scalingFactor ([[Scaled domain]])。比照 parsePhases 經 util.Str2Number 的縮放,此處以 UnitScale.ToScaled 把 ranges 轉到同域,
+	// × 10^scalingFactor ([[Scaled domain]])。此處以 UnitScale.ToScaled 把 ranges 轉到同域,
 	// 否則已 scale 的 data.Time 永遠落不進原始秒區間 → 每個 phase 統計全 0。
 	// 建新 slice,不就地改 caller 傳入的 phases。
 	scaled := make([]models.TimeRange, len(phases))
@@ -294,55 +264,4 @@ func (p *PhaseAnalyzer) AnalyzeFromRawDataWithRanges(
 	}
 
 	return p.Analyze(dataset, scaled)
-}
-
-// parsePhases 解析階段字符串為時間範圍.
-func (p *PhaseAnalyzer) parsePhases(phaseStrings []string) ([]models.TimeRange, error) {
-	if len(phaseStrings) < MinTimePointsForPhases {
-		return nil, calcerrors.NewCalculatorErrorWithContext(
-			calcerrors.ErrInsufficientData,
-			"需要至少 5 個時間點來定義 4 個階段",
-			map[string]any{
-				"provided_points": len(phaseStrings),
-				"required_points": MinTimePointsForPhases,
-			},
-		)
-	}
-
-	// 解析時間點
-	timePoints := make([]float64, len(phaseStrings))
-
-	for i, timeStr := range phaseStrings {
-		val, err := util.Str2Number[float64, int](timeStr, p.scalingFactor)
-		if err != nil {
-			return nil, fmt.Errorf("解析時間點 '%s' 失敗: %w", timeStr, err)
-		}
-
-		timePoints[i] = val
-	}
-
-	// 驗證時間點數量是否足夠定義所有階段
-	requiredTimePoints := len(p.phaseLabels) + 1
-	if len(timePoints) < requiredTimePoints {
-		return nil, calcerrors.NewCalculatorErrorWithContext(
-			calcerrors.ErrInsufficientData,
-			fmt.Sprintf("需要至少 %d 個時間點來定義 %d 個階段", requiredTimePoints, len(p.phaseLabels)),
-			map[string]any{
-				"provided_points": len(timePoints),
-				"required_points": requiredTimePoints,
-				"phase_count":     len(p.phaseLabels),
-			},
-		)
-	}
-
-	// 創建時間範圍
-	phases := make([]models.TimeRange, len(p.phaseLabels))
-	for i := 0; i < len(p.phaseLabels); i++ {
-		phases[i] = models.TimeRange{
-			Start: timePoints[i],
-			End:   timePoints[i+1],
-		}
-	}
-
-	return phases, nil
 }

@@ -23,11 +23,10 @@ import (
 // in-flight 分析 method 看到的永遠是一致的 snapshot,不會出現「半新半舊」
 // mixed state。
 type appState struct {
-	config        *config.AppConfig
-	csvHandler    *io.CSVHandler
-	maxMeanCalc   *calculator.MaxMeanCalculator
-	normalizer    *calculator.Normalizer
-	phaseAnalyzer *calculator.PhaseAnalyzer
+	config      *config.AppConfig
+	csvHandler  *io.CSVHandler
+	maxMeanCalc *calculator.MaxMeanCalculator
+	normalizer  *calculator.Normalizer
 }
 
 // App struct.
@@ -67,11 +66,10 @@ func (a *App) loadCtx() context.Context {
 // 套到 newState.maxMeanCalc — 因為 callback 來源於 a.progressManager。
 func buildAppState(cfg *config.AppConfig) *appState {
 	return &appState{
-		config:        cfg,
-		csvHandler:    io.NewCSVHandler(cfg),
-		maxMeanCalc:   calculator.NewMaxMeanCalculator(cfg.ScalingFactor),
-		normalizer:    calculator.NewNormalizer(cfg.ScalingFactor),
-		phaseAnalyzer: calculator.NewPhaseAnalyzer(cfg.ScalingFactor, cfg.PhaseLabels),
+		config:      cfg,
+		csvHandler:  io.NewCSVHandler(cfg),
+		maxMeanCalc: calculator.NewMaxMeanCalculator(cfg.ScalingFactor),
+		normalizer:  calculator.NewNormalizer(cfg.ScalingFactor),
 	}
 }
 
@@ -167,7 +165,7 @@ func (a *App) GetConfig() (cfg *config.AppConfig) {
 
 // SaveConfig saves the configuration.
 //
-// 必須一併重建 csvHandler / maxMeanCalc / normalizer / phaseAnalyzer,否則它們
+// 必須一併重建 csvHandler / maxMeanCalc / normalizer,否則它們
 // 仍持有舊 cfg(ScalingFactor、Precision、OutputDir、PhaseLabels),改設定後
 // 計算與輸出仍走舊值 — 屬 user-visible silent bug。
 //
