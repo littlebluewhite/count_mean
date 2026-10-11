@@ -197,6 +197,9 @@ const (
 	// Manifest 讀檔門(ADR-0056):manifest.LoadManifests 以 i18n.NewError 回帶 key 的錯誤,
 	// caller 層 Localize。兩個 Subject 的輸出檔名身分(filename.SubjectOutputKey)相同時整份拒絕。
 	KeyErrorManifestSubjectCollision = "error.manifest.subject_collision"
+	// manifest.LoadSubject 找不到名稱(ADR-0057):sentinel manifest.ErrSubjectNotFound 帶此 key,
+	// 名稱由 fmt.Errorf("Subject %q %w", ...) 接在前面,所以值只是述語、不含 verb。
+	KeyErrorManifestSubjectNotFound = "error.manifest.subject_not_found"
 
 	// CCI Analysis Messages — cci 以 i18n.NewError / WrapError 回帶 key 的錯誤,handler
 	// 層 Localize(ADR-0048);catalog 字串只含 fmt.Sprintf-compatible verbs

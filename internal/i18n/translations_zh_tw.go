@@ -102,6 +102,7 @@ var translationsZhTW = map[string]string{
 	KeyErrorMuscleRatioCancelled: "肌肉比值批次已中止",
 	// Manifest 讀檔門(ADR-0056)。
 	KeyErrorManifestSubjectCollision: "輸出檔名衝突: subject %q 與 %q 經檔名安全化後同為 %q (case-insensitive)",
+	KeyErrorManifestSubjectNotFound:  "不存在於分期總檔案",
 	// CCI Analysis Messages (backend i18n).
 	KeyErrorCCIParseManifestFailed:     "解析分期總檔案失敗",
 	KeyErrorCCIInvalidSubjectIndex:     "無效的主題索引: %d (共有 %d 個主題)",

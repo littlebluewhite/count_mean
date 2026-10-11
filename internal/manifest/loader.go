@@ -2,6 +2,7 @@
 //
 // cci、muscle_ratio、phase_sync 三個 [[Domain analyzer]] 與 [[Chart Composer]] 共用：
 //   - LoadManifests：載入分期總檔（manifest CSV）
+//   - LoadSubjectNames / LoadSubject：以名稱列出、取得一個 Subject 的 row（取得時驗證該列，ADR-0057）
 //   - LoadEMG：一個 manifest row + 資料夾 → 該 Subject 的 EMG（開檔、解析、關檔）
 //   - OpenDataFile：把 manifest 內相對檔名解析為 baseFolder 下的路徑、邊界檢查、原子化開檔
 //
