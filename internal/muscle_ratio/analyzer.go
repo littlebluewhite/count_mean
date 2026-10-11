@@ -66,8 +66,7 @@ func NewAnalyzer() *Analyzer {
 
 // Analyze runs the full batch pipeline:
 //  1. Parse manifest → []PhaseManifest(manifest.LoadManifests 已擋 Subject 輸出檔名撞名,ADR-0056)
-//  2. Build a request-scoped PathValidator rooted at DataFolder
-//  3. For each subject: load EMG → computeSubject → write 2 CSVs
+//  2. For each subject: load EMG(manifest.LoadEMG,以 DataFolder 為 base)→ computeSubject → write 2 CSVs
 //
 // ctx 帶 Wails Shutdown / 使用者中止訊號。subject 迴圈間檢查 ctx.Done(),
 // 收到取消立即停止 — 已完成的 subject 結果保留,未開始的不處理。caller 可以

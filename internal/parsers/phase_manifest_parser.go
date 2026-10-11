@@ -222,9 +222,9 @@ func parseFloat(value, fieldName string) (models.OptFloat, error) {
 		return models.NoOpt(), fmt.Errorf("%s = '%s': %w", fieldName, trimmed, ErrPhaseManifestInvalidNumeric)
 	}
 
-	// NOT IMPLEMENTED：負值 phase point 經測試驗證為「機械測量校準前的時間軸
-	// 偏移」合法設計（見 muscle_ratio computeSubject_test.go TestComputeSubject_NegativeTime_Handled
-	// 「負時間 EMG 不應讓 compute core 失敗」）。TODO 描述為誤判，已記錄。
+	// NOT IMPLEMENTED：負值 phase point 是「機械測量校準前的時間軸偏移」合法設計，
+	// parser 不拒絕（TestPhaseManifestParser_parseFloat 的 negative value 列釘住）。
+	// TODO 描述為誤判，已記錄。
 
 	// 巨型 phase value 拒絕（DoS 防護，> 31 年的時間明顯異常）。
 	if math.Abs(result) > maxReasonablePhase {

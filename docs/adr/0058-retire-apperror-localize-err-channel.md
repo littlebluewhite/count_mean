@@ -24,8 +24,10 @@ W11 的前一步把所有 producer 改為帶 key 的 `i18n.Error`（io `ReadCSV`
 
 - **[[ADR-0048]]**：Option E 附註「err 通道需要時可在 `recoverHandlerPanic` 出口改用 `Localize`，不必讓 `Error()` 變動」由本 ADR 實作；其 Consequences「err 通道不在地化」不再成立。`Error()` 仍固定 zh-TW。
 - **[[ADR-0036]]** Decision 1：無 panic 分支由 `redactForWebview` 改為 `renderForWebview`，`webviewErr` 的文字多了在地化一步；單一出口、`Unwrap` 保留 chain 的設計不變。
+- **[[ADR-0056]]** 行為變更「ReadCSV」與 Why「錯誤分層」：error code 已刪除，「error code 同為 `FILE_NOT_FOUND`」不再成立；ReadCSV 把 fsperm 的錯誤轉成帶 key 的 `i18n.Error`，不再是 AppError。
+- **[[ADR-0054]]** 行為變更「ReadCSV / WriteCSV 無副檔名」：其中的 `ErrCodeFileFormat` 已隨 error code 刪除；ReadCSV 的「檔案名稱驗證失敗」改為帶 key 的 `i18n.Error`，不再有 ValidationError 外框。
 
-兩份 ADR 依 repo 慣例不修改。
+以上 ADR 依 repo 慣例不修改。
 
 ## 行為變更
 

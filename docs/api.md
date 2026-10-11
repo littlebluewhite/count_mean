@@ -166,6 +166,7 @@ func (c *MaxMeanCalculator) CalculateFromRawDataInRange(
 - `ctx` (context.Context): 取消用 context
 - `records` ([][]string): 已解析的 CSV 列／欄陣列（第 0 列為標題列）
 - `windowSize` (int): 滑動窗口大小
+- `r` (MaxMeanRange): 只有 `CalculateFromRawDataInRange`；時間範圍（秒），兩端各自可為 nil
 
 **示例：**
 ```go

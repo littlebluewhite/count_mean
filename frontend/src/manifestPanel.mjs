@@ -412,10 +412,8 @@ export class ManifestPanel {
                 .map((n) => ({ name: n, time: phaseTimes[n] }));
             const pcts = recalcPercents(checkedPhases);
             const payload = checkedPhases.map((p) => ({ ...p, pct: pcts[p.name] }));
-            // CCI 額外送 allChecked(updateCCIPhaseLines:1576);Composer 不需要。
-            // 統一 payload shape 為 { checkedPhases };caller 若需 allChecked 自
-            // 算(用 checkedPhases.length === availableLength)— ADR-0003 §6
-            // payload shape symmetric。
+            // payload shape 只有 { checkedPhases },CCI 與 Composer 同形(ADR-0003 §6
+            // payload shape symmetric);CCI iframe 已不讀 allChecked(ADR-0053 刪除該分支)。
             bridge.send(iframe, `${adapter}-update-phase-markers`, { checkedPhases: payload });
             // onUpdate(M3 prep,CCI-driven):bridge.send 完成後通知 caller。
             // CCI 用來呼 `app._updatePhasePositionDisplay(pcts)` 刷新 pct 文字面板;

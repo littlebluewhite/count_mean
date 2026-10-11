@@ -13,10 +13,10 @@
 //     只 render 空殼結構。
 //
 // **為何 silentSuccess=true + onResult own dialog(有別於 CCI 的 rpc-throw 模式)**:
-//   PhaseSync 後端用 dual/mixed 錯誤通道(gui/app.go:1144-1147):Validate 失敗(必填
-//   缺、路徑 traversal)→ `(nil, err)` 走 err channel(Wails binding reject → envelope
-//   catch → ShowError);Execute/WriteCSV 失敗 → `(failedResult, nil)` 走 result.success
-//   =false。後者不是「分析失敗」exception 而是業務軟失敗,且成功訊息要帶 outputPath。
+//   PhaseSync 後端的可預期失敗(validate、phase 選擇、分析、寫檔)一律 `(failedResult, nil)`
+//   走 result.success=false(ADR-0051,gui/phase_sync_handlers.go);err 通道只剩 panic
+//  (Wails binding reject → envelope catch → ShowError)。result.success=false 不是「分析失敗」
+//   exception 而是業務軟失敗,且成功訊息要帶 outputPath。
 //   故 rpc 只在「缺必填輸入」(exception)時 throw;backend 回的 result 一律交給
 //   onResult,由 onResult 判 result.success → 業務 dialog(success 帶 outputPath /
 //   fail 帶 result.message)。三個 M4 panel 統一此模式。
@@ -119,8 +119,8 @@ export function makePhaseSyncSpec(app) {
          * ctx(shell 的 #mpSubject)。所有必填齊才呼 RPC,缺則 throw(exception →
          * envelope ShowError;對齊 main.js:1141-1144 既有 fill_required_fields guard)。
          *
-         * **不**把 result.success=false 升 throw(見 file header):PhaseSync 後端 dual
-         * 通道,Execute/Write 軟失敗走 result.success=false,結果由 onResult 判並彈
+         * **不**把 result.success=false 升 throw(見 file header):PhaseSync 後端的可預期
+         * 失敗一律走 result.success=false(ADR-0051),結果由 onResult 判並彈
          * 業務 ShowError。rpc 原樣回傳 result。
          *
          * @param {object} ctx - ManifestPanel _gatherCtx 結果

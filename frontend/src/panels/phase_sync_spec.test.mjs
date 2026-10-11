@@ -260,7 +260,7 @@ test('spec.rpc 在 endPhase 缺時 throw', async () => {
 // ---------- spec.rpc happy path:success=false 不升 throw ----------
 
 test('spec.rpc 全必填齊 → 呼到 AnalyzePhaseSync 且 success=false 不升 throw(dual 通道,onResult own dialog)', async () => {
-    // PhaseSync 後端 dual 通道:Execute/Write 軟失敗走 result.success=false。rpc 不升
+    // PhaseSync 後端的可預期失敗一律走 result.success=false(ADR-0051)。rpc 不升
     // throw(對比 CCI),原樣回傳讓 onResult 判 + 彈業務 ShowError。此 test 同時釘
     // rpc 把 DOM 的 startPhase/endPhase + ctx.subjectName 正確 map 到後端 param。
     const window = new Window({ url: 'http://localhost:34115/' });

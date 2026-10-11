@@ -12,7 +12,6 @@ import (
 	"count_mean/internal/config"
 	"count_mean/internal/io"
 	"count_mean/internal/logging"
-	"count_mean/internal/security/fsperm"
 )
 
 // 示範結構化日誌使用
@@ -55,13 +54,9 @@ func main() {
 		"channels": len(testData[0]) - 1,
 	})
 
-	// 寫入測試文件
-	testFile := filepath.Join(cfg.InputDir, "demo_test.csv")
-	if err := os.MkdirAll(cfg.InputDir, fsperm.DirPerm); err != nil {
-		logger.Fatal("無法創建輸入目錄", err)
-	}
-
-	if err := csvHandler.WriteCSV(testFile, testData); err != nil {
+	// 寫入測試文件(File-based 寫入落在 OutputDir,回傳實際寫入路徑,ADR-0055)
+	testFile, err := csvHandler.WriteFileCSV(io.WriteRequest{Filename: "demo_test.csv"}, testData)
+	if err != nil {
 		logger.Error("寫入測試文件失敗", err)
 		return
 	}
@@ -79,7 +74,7 @@ func main() {
 	})
 
 	// 寫入結果 — WriteMaxMean 內部會 MkdirAll(cfg.OutputDir) 並走 BOM/sanitize/fsync 完整路徑
-	if err := csvHandler.WriteMaxMean(
+	if _, err := csvHandler.WriteMaxMean(
 		io.WriteRequest{Filename: "demo_results.csv"},
 		testData[0], results, 0.1, 0.5,
 	); err != nil {

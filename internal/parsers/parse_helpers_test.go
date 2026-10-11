@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// 6 exported helpers + 1 unexported (joinDataName)
+// 3 exported helpers + 1 unexported (joinDataName)
 // refactor 改 trim/Fields/rounding 邏輯時靠上游 parser test 間接覆蓋造成 silent
 // regression。
 

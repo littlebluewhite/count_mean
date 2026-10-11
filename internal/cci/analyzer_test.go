@@ -115,9 +115,10 @@ func TestCCIAnalyzer_ConcurrentCallsNoRace(t *testing.T) {
 	}
 }
 
-// TestCCIAnalyzer_RejectsInvalidPhaseManifest 釘住 loadAndValidate 新增的分期不變量驗證
-// （對齊 phase_sync.validateManifestData）。manifest 帶 P0(0.5) > P1(0.02) 違反 force-time
-// 單調序;但 P0/P1/P2 是 pre-gait 事件,calculateGaitCycle 會 continue 跳過、dropOutOfRangePhases
+// TestCCIAnalyzer_RejectsInvalidPhaseManifest 釘住 CCI 取 row 時的分期不變量驗證
+// （loadAndValidate → manifest.LoadSubject → ValidatePhaseManifest，ADR-0057）。
+// manifest 帶 P0(0.5) > P1(0.02) 違反 force-time 單調序;但 P0/P1/P2 是 pre-gait 事件,
+// calculateGaitCycle 會 continue 跳過、dropOutOfRangePhases
 // 也會移除,故下游 gait 計算「看不到」這個違規 → 沒有驗證門時整段會被放行跑完。
 // 加門後必須 fail-fast 回 error,且錯誤訊息來自 ValidatePhaseManifest（force-time 順序）。
 // 這個 discriminator 確保鎖的是「驗證門」而非任何下游 gait/anchor 守門。
