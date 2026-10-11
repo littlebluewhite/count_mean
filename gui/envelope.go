@@ -15,10 +15,11 @@ import (
 // (recoverHandlerPanic → renderForWebview)。
 //
 // 兩條通道都只做 sink-side redact.Paths:目錄段換成 `<redacted-path>/`,**末段
-// (basename)保留**。錯誤若以病患資料夾名結尾(例如 DataFolder 本身不存在),
-// 那一段仍會出現 —— source-side 的 fsperm redactBasePaths 因此保留。不符 redact
-// 目錄段文法的段(含 `"`、`: ` 等)也會原文留存,以 `\` 分隔的 Windows 路徑上連其後
-// 的目錄段一起(見 ADR-0036 Decision 5)。
+// (basename)保留**。錯誤建構點自己內插的路徑因此以 redact.FilePath / DirPath 帶入
+// (檔案只留檔名、資料夾整條隱藏,ADR-0059),fsperm 也保留 source-side 的
+// redactBasePaths;sink 端是 stdlib *PathError 等其餘文字的安全網 —— 這類文字以病患
+// 資料夾名結尾時,那一段仍會出現。不符 redact 目錄段文法的段(含 `"`、`: ` 等)也會
+// 原文留存,以 `\` 分隔的 Windows 路徑上連其後的目錄段一起(見 ADR-0036 Decision 5)。
 //
 // i18n 規則:handler 層 localize —— failMessage 的前綴,以及 err 文字裡 analyzer 回的
 // *i18n.Error(i18n.Localize 依目前 locale 渲染,ADR-0048);analyzer 只回 error。

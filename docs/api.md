@@ -645,6 +645,23 @@ msg := i18n.Localize(err)
 
 **送進前端**：GUI handler 不自行渲染 err。bound method 回的 err 由 `recoverHandlerPanic` 出口統一送出 `redact.Paths(i18n.Localize(err))`（先在地化、後脫敏；文字沒變時回原 err）；result 的 `Message` 經 `gui/envelope.go` 的 `failMessage` / `inputMessage` / `redactText`，同樣先在地化、後脫敏。兩條通道見 GLOSSARY.md 的 **Webview envelope**。
 
+#### 路徑型參數：redact.FilePath / redact.DirPath
+
+錯誤文字要帶路徑時，以 `internal/security/redact` 的型別傳入，不傳原字串（ADR-0059）：
+
+```go
+type FilePath string // String() 只回檔名（`\` 也當分隔字元）
+type DirPath string  // String() 回 "<redacted-path>/"，不含任何一段
+```
+
+渲染 policy 在 `String()`，所以 `fmt.Errorf` 的 `%s` / `%v` / `%q`、`i18n.Error` 的 Args（`Error()` 與 `Localize`）與 log 都只看到檔名或 `<redacted-path>/`。sink 端的 `redact.Paths` 保留路徑末段，資料夾名（常是病患名）只能靠 `DirPath` 隱藏。
+
+```go
+return i18n.WrapError(ErrBaseFolderNotFound, i18n.KeyErrorPhaseSyncDataFolderNotFound,
+    redact.DirPath(baseFolder)) // 「資料夾不存在 (<redacted-path>/)」
+return fmt.Errorf("無法開啟檔案 %s: %w", redact.FilePath(path), err) // 「無法開啟檔案 manifest.csv: …」
+```
+
 #### 計算層 sentinel 與 CalculatorError
 
 `internal/errors` 只放計算層錯誤：`ErrEmptyDataset`、`ErrWindowTooLarge`、`ErrInsufficientData` 等 sentinel（以 `errors.Is` 比對），以及包住 sentinel、帶情境訊息的 `CalculatorError`。

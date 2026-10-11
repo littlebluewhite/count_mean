@@ -453,8 +453,8 @@ type outputPayload struct {
 //   - containment 失敗(errOutputPathEscapesOutputDir):固定哨兵,不帶 SubDir / 目錄路徑。
 //   - 檔名驗證失敗:validator error 帶檔名(base),不帶目錄。
 //   - MkdirAll 失敗:只包底層 errno(去掉 *fs.PathError 的路徑),不帶目錄路徑。
-//   - ValidateExternalPath 失敗:以 %w 包 validator error,可帶輸出「檔案」路徑
-//     (webview sink 只保留檔名,見 ADR-0036 D5)。
+//   - ValidateExternalPath 失敗:以 %w 包 validator error,只帶輸出檔名
+//     (validator 以 redact.FilePath 帶入被拒路徑,ADR-0059)。
 //   - AtomicWriteFile 失敗:原樣回傳底層 error,不另加前綴。
 func (h *CSVHandler) placeOutput(subDir, name string, payload outputPayload) (string, error) {
 	outputPath, err := h.safeJoinOutput(subDir, name)
