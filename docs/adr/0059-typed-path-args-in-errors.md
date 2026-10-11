@@ -14,7 +14,7 @@ W12 是選做，條件是「會到 webview 的路徑內插點 ≥ 10 處」。�
 ## Decision
 
 1. **`internal/security/redact` 新增兩個型別**，渲染 policy 放在型別的 `String()`：
-   - `FilePath`：只留檔名。`\` 也當分隔字元（Windows 產生的 manifest 檔名 `S01\emg.csv` 在各 OS 一致，同原 `lenientShownName`）。
+   - `FilePath`：只留檔名。`\` 正規化成 `/` 後用 `path.Base`（只認 `/`），結果與 OS 無關 —— Windows 產生的 manifest 檔名 `S01\emg.csv` 在各 OS 都是 `emg.csv`（同 `manifest.OpenDataFile`，[[ADR-0056]]）。不用 `filepath.Base`：它在 Windows 會先剝掉 volume（`C:emg.csv` → `emg.csv`），在其他 OS 不會。
    - `DirPath`：整條換成 `<redacted-path>/`，不含任何一段。字樣與 `Paths` 換掉目錄段的相同（抽成常數 `redactedDir`，`Paths` 也改用它）。
    - fmt 的 `%s` / `%v` / `%q`、`i18n.Error` 的 Args（`Error()` 的 zh-TW 與 `Localize` 的各 locale）、`fmt.Errorf` 的即時格式化都經 `String()`。i18n、logger、envelope 都不必改。logger 記的是 `err.Error()`，同一套 policy 自然生效，**logger 不改**。
    - 型別放 redact 而不是 i18n：redact 是 leaf package，fsperm、security、manifest、phase_sync、config 都能 import；i18n 會 import fsperm，fsperm 與 security 不能反過來 import i18n。
@@ -25,7 +25,7 @@ W12 是選做，條件是「會到 webview 的路徑內插點 ≥ 10 處」。�
    - `PathValidator`：traversal、絕對化、symlink 解析失敗時的被拒路徑由 `shownPath(path, isDir)` 帶入 —— `ValidateExternalPath` 用 `FilePath`，`ValidateExternalDir` 用 `DirPath`。`validatePathFormat` 多一個 `isDir` 參數。`ErrSensitiveDirectory` 帶的是固定 pattern（`/etc/`），不是使用者路徑，不變。
    - `manifest.LoadManifests` 的「無法開啟檔案 %s」→ `FilePath`。這是原 `phase_manifest_parser` 的站點，[[ADR-0056]] 把開檔搬到這裡。
    - `config.SaveConfigAtomic` 的「無法建立 config parent 目錄 %s」→ `DirPath`。
-   - 刪除 `lenientShownName`，`lenient_path.go` 的 7 個站點改用 `FilePath`（渲染不變）。
+   - 刪除 `lenientShownName`，`lenient_path.go` 的 7 個站點改用 `FilePath`（macOS / Linux 上渲染不變；Windows 見行為變更）。
 4. **保留**：
    - fsperm 的 `redactBasePaths` / `redactDir`（[[ADR-0036]] Option C）。
    - 兩個出口的 sink 端 `redact.Paths`（[[ADR-0036]] Decision 1 / 2），作為 stdlib `*PathError` / `*LinkError`、panic 文字與未轉換站點的安全網。
@@ -38,10 +38,10 @@ W12 是選做，條件是「會到 webview 的路徑內插點 ≥ 10 處」。�
 ### 延伸 / 修訂既有 ADR
 
 - **[[ADR-0048]]（延伸）**：`i18n.Error` 的路徑型 Args 改以 `FilePath` / `DirPath` 傳入。`Error()` 仍固定 zh-TW；policy 與 locale 無關，所以 `Error()` 與 `Localize` 對路徑的渲染相同。Decision 3「先在地化、後脫敏」不變，只是路徑型 Args 在 `Paths` 之前就已不含目錄。
-- **[[ADR-0036]] Decision 5（縮短留存清單）**。具體移除兩項：
-  - 「**末段保留**」的 DataFolder 例子：資料夾不存在、非目錄、無法解析，以及 config parent 目錄建立失敗、`PathValidator` 拒絕的目錄，產生點自己內插的資料夾都以 `DirPath` 帶入，不再出現資料夾名。
-  - 「**不符文法的目錄段原文留存**」不再適用於 typed arg：`FilePath` / `DirPath` 不經 regex，`Study: Phase 1`、以空白開頭的 Windows 段、相對路徑首段都不會出現。
-  - 仍留在清單上的：stdlib / 第三方錯誤文字（`os.Stat`、`MkdirAll`、`open` 的 `*PathError` —— 檔案只剩檔名，與 `FilePath` 一致；資料夾留末段），以及下方 Consequences 列出的未轉換站點。Decision 5 的文法說明與「刻意接受的過度脫敏」不變。Option C 不變。
+- **[[ADR-0036]] Decision 5（縮短留存清單）**。移除一項、縮窄一項：
+  - **移除**「**末段保留**」的 DataFolder 例子：資料夾不存在、非目錄、無法解析，以及 config parent 目錄建立失敗、`PathValidator` 拒絕的目錄，產生點自己內插的資料夾都以 `DirPath` 帶入，那段文字不再出現資料夾名。
+  - **縮窄**「**不符文法的目錄段原文留存**」：不再適用於 typed arg 本身的文字（`FilePath` / `DirPath` 不經 regex，`Study: Phase 1`、以空白開頭的 Windows 段、相對路徑首段都不會從 typed arg 出現），但仍適用於 stdlib / 第三方錯誤文字與未轉換的站點 —— 包括已轉換站點以 `%w` 帶著的 `*PathError` cause。例：`LoadManifests` 開檔失敗經 sink 端 `Paths` 後是 `無法開啟檔案 manifest.csv: open <redacted-path>/Study: Phase 1/manifest.csv: …`；相對路徑的 cause 完全不遮（`無法開啟檔案 manifest.csv: open Patient/manifest.csv: …`）。
+  - 仍留在清單上的：stdlib / 第三方錯誤文字（`os.Stat`、`MkdirAll`、`open` 的 `*PathError`）—— 檔案只有在路徑是絕對路徑、且每個目錄段都符合文法時才只剩檔名（與 `FilePath` 一致）；資料夾留末段（例：`資料夾狀態檢查失敗 (<redacted-path>/): stat <redacted-path>/PatientAlice: permission denied`）。以及下方 Consequences 列出的未轉換站點。Decision 5 的文法說明與「刻意接受的過度脫敏」不變。Option C 不變。
 
 兩份 ADR 依 repo 慣例不修改。
 
@@ -51,10 +51,10 @@ zh-TW 與其他 locale 相同（policy 在 `String()`，與 locale 無關）。�
 
 - **PhaseSync / NPS 資料夾錯誤**（Message）：「資料夾不存在 (`<redacted-path>/missing`)」→「資料夾不存在 (`<redacted-path>/`)」；「資料夾路徑非目錄 (…)」與「資料夾狀態檢查失敗 (…)」的 Arg 同樣整條隱藏。狀態檢查失敗的 cause 是 `os.Stat` 的 `*PathError`，那段仍是 `stat <redacted-path>/<資料夾名>: …`。
 - **CCI / MR / Composer 資料夾不存在**（Message；MR 在 `Subjects[i].Error`）：「baseFolder 不存在或無法解析: `<redacted-path>/<資料夾名>`」→「…: `<redacted-path>/`」。
-- **分期總檔案開檔失敗**（所有 manifest handler 與 `LoadManifestSubjects` 的 Message）：「無法開啟檔案 `<redacted-path>/manifest.csv`: open …」→「無法開啟檔案 `manifest.csv`: open …」。cause 那段不變。相對路徑不再帶目錄。
+- **分期總檔案開檔失敗**（所有 manifest handler 與 `LoadManifestSubjects` 的 Message）：「無法開啟檔案 `<redacted-path>/manifest.csv`: open …」→「無法開啟檔案 `manifest.csv`: open …」。前段的檔名不再帶目錄（相對路徑也一樣）；cause 那段（`open <path>: …`）不變，仍只靠 sink 端 `Paths` —— 相對路徑與不符文法的目錄段照樣出現（見上方 Decision 5 的縮窄）。
 - **`PathValidator` 拒絕**（handler 入口驗證 → Message；`SaveConfig` 的設定目錄驗證、legacy panel 的 `ReadCSV` → err 通道；`LoadManifests` 的「路徑驗證失敗」；Output placement）：「路徑包含可疑的遍歷模式」「絕對路徑仍包含遍歷字符」「無法解析路徑」「無法解析路徑符號連結」後面的路徑，檔案只剩檔名（過去是 `<redacted-path>/x.csv`，相對路徑則首段原文留存），目錄是 `<redacted-path>/`。
 - **`SaveConfig` 的 config parent 目錄建立失敗**（err 通道）：「無法建立 config parent 目錄 `<redacted-path>/count_mean`: mkdir …」→「…目錄 `<redacted-path>/`: mkdir …」。cause 那段不變。
-- **lenient 檔名錯誤**：文字不變（原本就只帶檔名）。
+- **lenient 檔名錯誤**：macOS / Linux 上文字不變（原本就只帶檔名）。Windows 上原 `lenientShownName` 用 `filepath.Base`，現在用 `path.Base`：volume 後直接接檔名（`C:emg.csv`）時保留 `C:`，只有 UNC 根（`\\server\share`）時是 `share` —— 與其他 OS 相同。
 - **log**：上述錯誤的 `error=` 欄位同樣不含資料夾名（過去 logger 的 `Paths` 留末段）。handler 入口的參數 log（`params={… <redacted-path>/<資料夾名> …}`）不是錯誤文字，不變。
 - golden（真實 V.16 資料走 GUI handler，預設 zh-TW）與 W11 逐位元組相同。
 
@@ -88,7 +88,7 @@ fsperm、security 不能 import i18n（i18n import fsperm），這些站點用�
 
 ### F. 另實作 `fmt.Formatter`（不需要）
 
-`Stringer` 已涵蓋 `%s`、`%v`、`%q`、`%x`；catalog 裡沒有 `%#v`（`%#v` 不走 `String()`）。
+`Stringer` 已涵蓋 `%s`、`%v`、`%q`、`%x`；catalog 裡沒有 `%#v`（`%#v` 不走 `String()`）。錯的動詞也印出原值：fmt 回報動詞錯誤時不呼叫方法，`%d` 會得到 `%!d(redact.DirPath=/Users/x/PatientAlice)`。目前不會發生 —— 帶 typed arg 的位置全是 `%s` / `%q`（三個資料夾 key 在四個 locale 都是 `%s`，`TestI18n_VerbConsistencyAcrossLocales` 讓各 locale 的動詞序列一致）。
 
 ## Consequences
 

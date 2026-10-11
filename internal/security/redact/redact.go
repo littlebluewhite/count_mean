@@ -31,10 +31,15 @@
 // Paths 是 sink 端的安全網:它保留末段,也有文法留存的段(ADR-0036 Decision 5)。
 // 錯誤建構點自己內插的路徑改以 FilePath / DirPath 傳入,由型別的 String() 決定渲染:
 // 檔案只留檔名、資料夾整段隱藏。fmt 的 %s / %v / %q、i18n.Error 的 Args(Error() 的
-// zh-TW 與 Localize 的各 locale)與 logger 都經 String(),不必各自特判。
+// zh-TW 與 Localize 的各 locale)與 logger 都經 String(),不必各自特判。不經 String()
+// 的只有 %#v 與錯的動詞:fmt 回報動詞錯誤時不呼叫方法,`%d` 印出原值
+// (`%!d(redact.DirPath=/Users/x/PatientAlice)`)。目前不會發生 —— 帶 typed arg 的位置全是
+// %s / %q(catalog 的三個資料夾 key 在四個 locale 都是 %s,TestI18n_VerbConsistencyAcrossLocales
+// 讓各 locale 的動詞序列一致)。
 package redact
 
 import (
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -149,9 +154,11 @@ const redactedDir = "<redacted-path>/"
 // `\` 也當分隔字元 —— Windows 產生的 manifest 檔名(`S01\emg.csv`)在各 OS 一致。
 type FilePath string
 
-// String 回檔名(最後一段),不含任何目錄段。
+// String 回檔名(最後一段),不含任何目錄段。`\` 正規化成 `/` 後用 path.Base(只認 `/`),
+// 結果與 OS 無關(同 manifest.OpenDataFile,ADR-0056);filepath.Base 在 Windows 會先剝掉
+// volume,`C:emg.csv` 變 `emg.csv`。
 func (p FilePath) String() string {
-	return filepath.Base(strings.ReplaceAll(string(p), `\`, "/"))
+	return path.Base(strings.ReplaceAll(string(p), `\`, "/"))
 }
 
 // DirPath 是錯誤建構點內插的資料夾路徑(typed arg,ADR-0059):渲染時整條隱藏。資料夾

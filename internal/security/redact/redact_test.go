@@ -948,6 +948,24 @@ func TestFilePath_RendersBaseNameOnly(t *testing.T) {
 	}
 }
 
+// TestFilePath_SameOnEveryOS 釘住 FilePath 的渲染與執行的 OS 無關:`\` 正規化成 `/` 後
+// 用 path.Base(同 manifest.OpenDataFile,ADR-0056)。filepath.Base 在 Windows 會先剝掉
+// volume,`C:emg.csv` 變 `emg.csv`;本表的期望值在每個 OS 都成立。
+func TestFilePath_SameOnEveryOS(t *testing.T) {
+	cases := map[string]string{
+		`C:\a\b.csv`: "b.csv",
+		`a\b.csv`:    "b.csv",
+		`C:emg.csv`:  "C:emg.csv",
+		`/x/y.csv`:   "y.csv",
+	}
+
+	for in, want := range cases {
+		if got := FilePath(in).String(); got != want {
+			t.Errorf("FilePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestDirPath_HidesEveryComponent 釘住 DirPath 的渲染 policy(ADR-0059):整條換成 Paths
 // 換目錄段用的同一個字樣 `<redacted-path>/`,末段(資料夾名本身)也不留;sink 端再跑
 // Paths 不改變結果。
