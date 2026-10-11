@@ -20,6 +20,7 @@ import (
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
 	"count_mean/internal/security"
+	"count_mean/internal/validation/filename"
 )
 
 // data-file sentinels:OpenDataFile 這道門服務 EMG / Motion / Force / muscle_ratio
@@ -33,8 +34,16 @@ var (
 )
 
 // LoadManifests 解析分期總檔案，回傳所有 manifest 紀錄。
-func LoadManifests(filepath string) ([]models.PhaseManifest, error) {
-	return parsers.NewPhaseManifestParser().ParseFile(filepath)
+//
+// 開檔前先以 filename.ValidateName 檢查檔名（Windows 保留名逐段比對、非法字元、長度等）：
+// 檔名規則只由 filename 套件裁判，security 只管路徑位置（ADR-0054）。所有讀分期總檔的
+// 路徑（cci / muscle_ratio / phase_sync / Composer）都經過這裡。
+func LoadManifests(path string) ([]models.PhaseManifest, error) {
+	if err := filename.ValidateName(filepath.Base(path)); err != nil {
+		return nil, err
+	}
+
+	return parsers.NewPhaseManifestParser().ParseFile(path)
 }
 
 // EMGParseError 表示 [[Subject source]] 的 EMG 檔已開成功、但解析失敗。

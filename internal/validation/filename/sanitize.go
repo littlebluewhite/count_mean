@@ -11,7 +11,7 @@ import (
 // 補強：除了原本字元替換外，加：
 //   - 空字串 fallback 為 "untitled"
 //   - 超長 (> 200 chars，預留 prefix/suffix 空間) 截斷
-//   - Windows reserved name (CON / PRN / COMx / LPTx) 加 "_safe" 後綴
+//   - Windows reserved name (CON / PRN / COMx / LPTx) 的點分段加 "_safe" 後綴
 //
 // 補強：在路徑分隔符替換之外，**移除**下列 rune 以防止視覺欺騙 /
 // 終端機 escape / 檔系統 reject：
@@ -56,39 +56,30 @@ func Sanitize(name string) string {
 		return "untitled"
 	}
 
-	// Windows reserved base name → 加 _safe 後綴避開。
+	// Windows reserved name → 在該點分段後補 _safe 避開。
 	//
-	// Windows reserved name 規則是「stem (first dot 前的 segment)」匹配,
-	// 不是「整個 filename」匹配。"CON.csv" / "CON.tar.gz" / "PRN.log" 在 Windows
-	// 上仍會被當成 reserved device file 而 reject (或更糟,寫入打開實體裝置)。
-	// 過去用 `strings.ToUpper(cleaned)` 比對整段,只擋住 "CON" alone,
-	// 把 "CON.csv" 放過 — 在 macOS/Linux 開發跑 PASS 但 Windows 部署炸開。
-	// 改成 strings.SplitN 取 stem,涵蓋多副檔名 (.tar.gz) 情境。
+	// 與 ValidateName 用同一條規則:逐個點分段比對(ADR-0054)。只看 stem(第一段)
+	// 會讓 "a.NUL.b" 原樣通過 Sanitize、卻被 ValidateName 拒絕 —— SubjectOutputName
+	// 的產物必須過得了 ValidateName。逐段也自然涵蓋多副檔名與 leading dot
+	// (Windows NT path parser 比對 reserved name 前會 strip leading dot):
+	// "CON.csv"    → "CON_safe.csv"
+	// "CON.tar.gz" → "CON_safe.tar.gz"
+	// ".CON.csv"   → ".CON_safe.csv"(保留 dot prefix,僅插入 _safe)
+	// "a.NUL.b"    → "a.NUL_safe.b"
 	//
-	// leading-dot bypass 加固。past stem 取法 `SplitN(".CON.csv", ".", 2)[0]`
-	// 會回 "" — 空 stem 跑進 switch 永遠不命中任何 reserved name,讓 ".CON.csv" /
-	// ".NUL.txt" 之類 leading-dot 變形直接逃過 reserved-name 守門。Windows NT
-	// path parser 在比對 reserved name table 之前會 strip leading dot,所以
-	// ".CON.csv" 在 Windows 上仍會被當成 device。修法:用 strings.TrimLeft 把
-	// leading dot 先剝掉再取 stem 比對,保留原 cleaned 作為 splice 基準以保留
-	// dot prefix 在輸出 (".CON.csv" → ".CON_safe.csv")。
+	// ValidateName 先 TrimSpace 再切段,這裡也只對去掉頭尾空白後的部分切段
+	// (否則首段「全形空白 U+3000 + CON」不命中、ValidateName 卻命中);頭尾空白
+	// 原樣留在輸出,不改變非保留名的結果。
 	const reservedSuffix = "_safe"
-	dotPrefixLen := len(cleaned) - len(strings.TrimLeft(cleaned, "."))
-	afterDots := cleaned[dotPrefixLen:]
-	stemAfterDots := strings.SplitN(afterDots, ".", 2)[0]
-	if isReservedName(stemAfterDots) {
-		// 在 stem 末尾插入 _safe,保留原本副檔名 (含多副檔名) 與 leading dot:
-		// "CON.csv"    → "CON_safe.csv"
-		// "CON.tar.gz" → "CON_safe.tar.gz"
-		// ".CON.csv"   → ".CON_safe.csv" (P2-C:保留 dot prefix,僅插入 _safe)
-		// "..NUL.txt"  → "..NUL_safe.txt"
-		stemEnd := dotPrefixLen + len(stemAfterDots)
-		if rest := cleaned[stemEnd:]; rest != "" {
-			cleaned = cleaned[:stemEnd] + reservedSuffix + rest
-		} else {
-			cleaned += reservedSuffix
+	lead := len(cleaned) - len(strings.TrimLeftFunc(cleaned, unicode.IsSpace))
+	core := strings.TrimRightFunc(cleaned[lead:], unicode.IsSpace)
+	segments := strings.Split(core, ".")
+	for i, segment := range segments {
+		if isReservedName(segment) {
+			segments[i] = segment + reservedSuffix
 		}
 	}
+	cleaned = cleaned[:lead] + strings.Join(segments, ".") + cleaned[lead+len(core):]
 
 	// 截斷過長 filename — 保留前 200 個 **byte**（預留 prefix / extension / index 空間）。
 	//

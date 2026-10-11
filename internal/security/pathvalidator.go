@@ -8,6 +8,9 @@
 //   - OpenLenientValidated (lenient_path.go)：manifest-driven user files（檔名可能含 BTS 字面 "%"）
 //
 // 路徑一律不做 URL-decode：`%`、`+` 皆為字面檔名字元（ADR-0039）。
+//
+// PathValidator 只管路徑位置（traversal、敏感位置、symlink、路徑長度），不檢查檔名；
+// 檔名規則（Windows 保留名、非法字元、長度、副檔名）由 validation/filename 單一裁判（ADR-0054）。
 package security
 
 import (
@@ -27,7 +30,6 @@ var (
 	ErrPathOutOfScope     = errors.New("路徑超出允許範圍")
 	ErrSensitiveDirectory = errors.New("路徑指向系統敏感目錄")
 	ErrPathTooLong        = errors.New("路徑長度超過限制")
-	ErrFilenameTooLong    = errors.New("文件名長度超過限制")
 	// ErrPathContainsNUL is returned when the input contains a NUL byte
 	// (\x00). NUL is a classic file-path truncation vector on POSIX/Windows
 	// OS APIs — caller must never pass a NUL-containing path to OpenFile.
@@ -110,7 +112,7 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 	// 靈活的白名單驗證機制 - 避免絕對路徑長度限制
 	if len(allowed) == 0 {
 		// 如果沒有設定允許路徑，只進行基本安全檢查
-		return performBasicSecurityChecks(absPath)
+		return checkSensitiveLocation(absPath, false)
 	}
 
 	// 檢查路徑是否在允許的基礎路徑內
@@ -140,8 +142,11 @@ func (pv *PathValidator) ValidateFilePath(path string) error {
 //	                                          // os.Open 跟著 symlink 開到 /etc/passwd
 //
 // 因此 absPath 透過 fsperm.EvalSymlinksWithFallback 解析到 nearest existing parent,
-// resolved 路徑也跑一次 performBasicSecurityChecks。lexical check 保留為雙重
+// resolved 路徑也跑一次敏感位置檢查。lexical check 保留為雙重
 // 防護(symlink 不解析但字串本身已含 /etc/ 的直接攻擊)。
+//
+// 不檢查檔名(Windows 保留名、檔名長度):檔案 caller 自行經 validation/filename
+// 把關(ADR-0054)。
 //
 // Windows note:filepath.EvalSymlinks 解析 NTFS junction / reparse point。
 // Windows 沒有 O_NOFOLLOW 等價 flag,caller-side EvalSymlinks 是唯一可靠的
@@ -154,10 +159,9 @@ func (pv *PathValidator) ValidateExternalPath(path string) error {
 // ValidateExternalDir 驗證使用者外部選取的「目錄」(output / data folder / config 目錄),
 // 與 ValidateExternalPath 擋同一組系統敏感位置,但以目錄語意判定。
 //
-// 目錄走自己的檢查:只做「敏感位置 + 路徑長度」(checkSensitiveLocation,isDir=true
-// 時比對前補結尾分隔符,讓目錄根 `/etc`、`~/.ssh` 與其子孫等價命中 `/etc/` 這類
-// pattern),lexical 與 symlink resolve 後各跑一次。「檔名」類規則(檔名長度、
-// Windows reserved device name)只對檔案有意義,不套用到目錄。
+// 兩者都只做「敏感位置 + 路徑長度」(checkSensitiveLocation),lexical 與 symlink
+// resolve 後各跑一次;差別只在 isDir=true 時比對前補結尾分隔符,讓目錄根 `/etc`、
+// `~/.ssh` 與其子孫等價命中 `/etc/` 這類 pattern。
 func (pv *PathValidator) ValidateExternalDir(dir string) error {
 	return pv.validateExternal(dir, true)
 }
@@ -182,16 +186,8 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 		return err
 	}
 
-	// 檔案:位置 + 檔名規則;目錄:只有位置規則。
-	check := func(p string) error {
-		if isDir {
-			return checkSensitiveLocation(p, true)
-		}
-		return performBasicSecurityChecks(p)
-	}
-
 	// Layer 1：lexical absPath 直接擋字串本身就敏感的 case（不依賴 fs 狀態）。
-	if err := check(absPath); err != nil {
+	if err := checkSensitiveLocation(absPath, isDir); err != nil {
 		return err
 	}
 
@@ -206,7 +202,7 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 
 	// Resolved 路徑可能與 absPath 相同（無 symlink）— 重複跑一次也 cheap，且
 	// 程式邏輯簡潔（不需特判 absPath == resolvedPath）。
-	return check(resolvedPath)
+	return checkSensitiveLocation(resolvedPath, isDir)
 }
 
 // validatePathFormat 做 ValidateFilePath / ValidateExternalPath 共用的前置檢查:
@@ -258,24 +254,15 @@ func HasTraversalElement(path string) bool {
 	return false
 }
 
-// IsCSVFile checks if the file has a .csv extension.
+// checkSensitiveLocation 檢查 absPath 是否落在系統敏感位置、或超過路徑長度上限。
+// isDir 為 true 時比對前補結尾分隔符,讓目錄根本身(`/etc`)也命中以 `/` 結尾的
+// pattern(`/etc/`);`/etc-backup` 補完是 `/etc-backup/`,不會誤中。
 //
-// 取 Ext 前先 TrimRight 把尾端空白與點剝掉:Excel 匯出 / Windows 拖拉常在檔名
-// 尾端留 trailing space 或 dot,這類檔名仍能 open,validator 不該誤判為非 CSV。
-//
-// 本函式只判斷副檔名類別,不負責路徑驗證;caller 若要實際開檔請先走
-// ValidateFilePath / ValidateExternalPath。
-func IsCSVFile(path string) bool {
-	return strings.ToLower(filepath.Ext(strings.TrimRight(path, " ."))) == ".csv"
-}
-
-// performBasicSecurityChecks 執行基本安全檢查,適用於無白名單限制的情況。
-//
-// ValidateExternalPath 用此函式檢查 lexical absPath 與 EvalSymlinks 解析後的
-// resolved path 兩條路徑。sensitivePatterns 含 `/private/etc/`(macOS 上
-// EvalSymlinks(/etc) 的真實結果),讓 layer-2 也能擋住經 symlink 跳轉的攻擊;
-// 但**不**加 `/private/var/`、`/private/tmp/`,避免誤擋 macOS `t.TempDir()`
-// 與 GUI app working dir(真實落在 `/private/var/folders/`)。
+// ValidateFilePath(無白名單時)與 ValidateExternalPath / ValidateExternalDir 共用;
+// 後兩者對 lexical absPath 與 EvalSymlinks 解析後的 resolved path 各跑一次。
+// sensitivePatterns 含 `/private/etc/`(macOS 上 EvalSymlinks(/etc) 的真實結果),
+// 讓 layer-2 也能擋住經 symlink 跳轉的攻擊;但**不**加 `/private/var/`、`/private/tmp/`,
+// 避免誤擋 macOS `t.TempDir()` 與 GUI app working dir(真實落在 `/private/var/folders/`)。
 //
 // Windows 端有完全對稱的權衡:`\AppData\` 整段擋(底下含 `Roaming\`、`LocalLow\`、
 // `Local\Microsoft\Credentials\` 等真實 credential / persistence 入口),但對
@@ -283,17 +270,8 @@ func IsCSVFile(path string) bool {
 // 與一般 user 的 `t.TempDir()` 落點,等同 macOS `/private/var/folders/`,屬合法
 // test fixture 與 GUI 暫存區。Carve-out 比「pattern enumeration 列敏感 vendor」
 // 維護成本低、安全姿態更保守(預設擋,明示放行)。
-func performBasicSecurityChecks(absPath string) error {
-	if err := checkSensitiveLocation(absPath, false); err != nil {
-		return err
-	}
-
-	return checkFilename(absPath)
-}
-
-// checkSensitiveLocation 檢查 absPath 是否落在系統敏感位置、或超過路徑長度上限。
-// isDir 為 true 時比對前補結尾分隔符,讓目錄根本身(`/etc`)也命中以 `/` 結尾的
-// pattern(`/etc/`);`/etc-backup` 補完是 `/etc-backup/`,不會誤中。
+//
+// 檔名規則(保留名、檔名長度)不在這裡,由 validation/filename 裁判(ADR-0054)。
 func checkSensitiveLocation(absPath string, isDir bool) error {
 	// 跨平台系統敏感路徑。`.ssh/` / `.aws/` / `.kube/` 用 `/` 開頭涵蓋
 	// Unix home(`~/.ssh/`)與 Windows %USERPROFILE%。Windows 端用 `\Windows\`、
@@ -371,55 +349,6 @@ func checkSensitiveLocation(absPath string, isDir bool) error {
 	}
 
 	return nil
-}
-
-// checkFilename 檢查檔名專屬規則(長度、Windows reserved device name);僅適用檔案。
-func checkFilename(absPath string) error {
-	// 檢查文件名長度
-	filename := filepath.Base(absPath)
-
-	if len(filename) > maxFilenameLength {
-		return fmt.Errorf("%w (%d 字符): %d", ErrFilenameTooLong, maxFilenameLength, len(filename))
-	}
-
-	// Windows reserved device names(CON / PRN / AUX / NUL / COM1-9 / LPT1-9):
-	// 即使加副檔名("CON.txt")仍會 redirect 到實體 console device,後續 OpenFile
-	// 行為怪異(write 對方終端 echo、read 永遠 block)。跨平台都 reject,保守
-	// 一致性遠比「Unix 允許 CON 檔」價值高。
-	if isWindowsReservedFilename(filename) {
-		return fmt.Errorf("%w: %s 為 Windows 保留裝置名稱", ErrSensitiveDirectory, filename)
-	}
-
-	return nil
-}
-
-// windowsReservedDeviceNames 列出 Windows 上 OpenFile 會被 redirect 到實體
-// device 的保留名稱。完整清單見 MSDN Win32 namespace。
-//
-//nolint:gochecknoglobals // 編譯期 static lookup table
-var windowsReservedDeviceNames = map[string]struct{}{
-	"CON": {}, "PRN": {}, "AUX": {}, "NUL": {},
-	"COM1": {}, "COM2": {}, "COM3": {}, "COM4": {}, "COM5": {},
-	"COM6": {}, "COM7": {}, "COM8": {}, "COM9": {},
-	"LPT1": {}, "LPT2": {}, "LPT3": {}, "LPT4": {}, "LPT5": {},
-	"LPT6": {}, "LPT7": {}, "LPT8": {}, "LPT9": {},
-}
-
-// isWindowsReservedFilename 判斷檔名（去除副檔名後）是否為 Windows reserved
-// device name。比對採全字 case-insensitive 比對 — `econom_report.csv` 含子字串
-// `con` 不視為命中，僅 `CON` / `CON.csv` 等真實 reserved name 才回 true。
-func isWindowsReservedFilename(filename string) bool {
-	if filename == "" {
-		return false
-	}
-
-	// 去除副檔名後比對，因為 `CON.txt` 在 Windows 仍 redirect 到 console
-	stem := filename
-	if ext := filepath.Ext(filename); ext != "" {
-		stem = strings.TrimSuffix(filename, ext)
-	}
-	_, ok := windowsReservedDeviceNames[strings.ToUpper(stem)]
-	return ok
 }
 
 // GetAllowedBasePaths 獲取當前允許的基礎路徑.

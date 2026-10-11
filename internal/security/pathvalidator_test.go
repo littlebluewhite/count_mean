@@ -66,43 +66,6 @@ func TestPathValidator_ValidateFilePath(t *testing.T) {
 	}
 }
 
-func TestIsCSVFile(t *testing.T) {
-	tests := []struct {
-		name string
-		path string
-		want bool
-	}{
-		{
-			name: "csv file",
-			path: "test.csv",
-			want: true,
-		},
-		{
-			name: "CSV file uppercase",
-			path: "test.CSV",
-			want: true,
-		},
-		{
-			name: "not csv file",
-			path: "test.txt",
-			want: false,
-		},
-		{
-			name: "no extension",
-			path: "test",
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsCSVFile(tt.path); got != tt.want {
-				t.Errorf("IsCSVFile() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 // ValidateFilePath 對含 NUL byte 的 input 必須回 ErrPathContainsNUL,與
 // lenient_path 契約對稱。NUL 是 POSIX / Windows 檔案 API 的字串 truncation
 // 字元 — 攻擊者送 `/legit/foo.csv\x00/etc/passwd`,部分 syscall 在 NUL 截斷後
@@ -203,7 +166,7 @@ func TestPathValidator_AcceptsLegitimateDotsInFilename(t *testing.T) {
 // 是真實安全破口 — `/tmp/foo → /etc` 之類 symlink 攻擊路徑 `/tmp/foo/passwd`
 // 通過 boundary 後,os.Open 跟著 symlink 讀到 /etc/passwd。ValidateExternalPath
 // 內必須先 EvalSymlinks 到 nearest existing parent,resolved 路徑同樣跑
-// performBasicSecurityChecks。
+// checkSensitiveLocation。
 //
 // 用 t.TempDir() 在 /tmp 之下建立 symlink，再驗證 ValidateExternalPath 對指向 /etc
 // 的 symlink reject。
@@ -218,7 +181,7 @@ func TestPathValidator_ValidateExternalPath_RejectsSymlinkToSensitive(t *testing
 	tmpRoot := t.TempDir()
 	linkPath := filepath.Join(tmpRoot, "etc_link")
 
-	// 建立 symlink 指向 /etc — 一個 performBasicSecurityChecks 明文擋的敏感目錄
+	// 建立 symlink 指向 /etc — 一個 checkSensitiveLocation 明文擋的敏感目錄
 	if err := os.Symlink("/etc", linkPath); err != nil {
 		t.Fatalf("建立 symlink 失敗（測試環境問題）: %v", err)
 	}
@@ -431,7 +394,7 @@ func TestPathValidator_ExternalPath_StillRejectsTraversalEvenWithPercent(t *test
 	}
 }
 
-// performBasicSecurityChecks 擋 Windows 端的 AppData 與 .ssh 路徑(credential
+// checkSensitiveLocation 擋 Windows 端的 AppData 與 .ssh 路徑(credential
 // 洩漏 / token theft 目標)。case-insensitive 路徑命中對齊 sensitivePatterns
 // 的 ToSlash + ToLower 比對。
 func TestPathValidator_ExternalPath_RejectsWindowsSensitivePaths(t *testing.T) {
@@ -462,73 +425,6 @@ func TestPathValidator_ExternalPath_RejectsWindowsSensitivePaths(t *testing.T) {
 			}
 			if !errors.Is(err, ErrSensitiveDirectory) {
 				t.Errorf("ValidateExternalPath(%q) 應回 ErrSensitiveDirectory，got %v", p, err)
-			}
-		})
-	}
-}
-
-// Windows reserved device names(CON / PRN / AUX / NUL / COM1-9 / LPT1-9)即使
-// 加副檔名(`CON.txt`)也會 redirect 到實體 device。caller 送
-// `C:\Users\victim\Downloads\CON.csv` 進 GUI 而 OpenFile 開到 console device
-// 會造成怪異 IO 行為。performBasicSecurityChecks 多檢 filepath.Base 去 ext 後
-// 是否命中 reserved list,跨平台一致 reject(Unix 也擋,保守決策對使用者無害)。
-func TestPathValidator_ExternalPath_RejectsWindowsReservedDeviceNames(t *testing.T) {
-	t.Parallel()
-
-	validator := NewPathValidator(nil)
-
-	tmpRoot := t.TempDir() // 在 safe parent 之下，確保不是因為 parent 敏感而被擋
-
-	// 取一些代表性的 reserved names（不窮舉 COM1-9 / LPT1-9，省 CI 時間）
-	reserved := []string{
-		"CON.csv", "PRN.csv", "AUX.csv", "NUL.csv",
-		"COM1.csv", "COM9.csv",
-		"LPT1.csv", "LPT9.csv",
-		// 大小寫變體
-		"con.csv", "Prn.csv", "cOm3.txt",
-		// 無副檔名也該擋（"CON" alone 也是 reserved）
-		"CON",
-		"lpt5",
-	}
-
-	for _, name := range reserved {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			full := filepath.Join(tmpRoot, name)
-			err := validator.ValidateExternalPath(full)
-			if err == nil {
-				t.Errorf("ValidateExternalPath(%q) 應擋下 Windows reserved device name，got nil", name)
-			}
-		})
-	}
-}
-
-// Sanity check:合法檔名含 reserved name 作為「子字串」(`econom_report.csv` 含
-// `con`、`reconnect.csv` 含 `con`)必須放行 — 比對應基於 base filename 等於
-// reserved name,而非 substring contains。
-func TestPathValidator_ExternalPath_AcceptsNormalFilenameContainingReservedSubstring(t *testing.T) {
-	t.Parallel()
-
-	validator := NewPathValidator(nil)
-
-	tmpRoot := t.TempDir()
-
-	normal := []string{
-		"econom_report.csv", // 含 "con" 子字串
-		"reconnect.csv",     // 含 "con"
-		"prnt_log.csv",      // 含 "prn"
-		"auxiliary.csv",     // 含 "aux"
-		"nullable.csv",      // 含 "nul"
-		"compass.csv",       // 含 "com" 但不是 COM[1-9]
-		"slept.csv",         // 含 "lpt"
-	}
-
-	for _, name := range normal {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			full := filepath.Join(tmpRoot, name)
-			if err := validator.ValidateExternalPath(full); err != nil {
-				t.Errorf("ValidateExternalPath(%q) 應放行（reserved name 子字串不算命中），got %v", name, err)
 			}
 		})
 	}
@@ -620,41 +516,6 @@ func TestPathValidator_ExternalPath_AllowsLookalikeButNotMatchingPaths(t *testin
 	}
 }
 
-// 直接 filepath.Ext 後比對 ".csv" 會誤拒尾端有空白或點的合法檔(`filepath.Ext("file.csv ")`
-// 回 `.csv ` 含後置空白)。Excel 匯出 / Windows 拖拉操作會留下 trailing space / dot,
-// 這類檔名仍能 open,IsCSVFile 取 Ext 前先 TrimRight 把尾端 noise 剝乾淨。
-func TestPathValidator_IsCSVFile_TrailingSpaceAndDot(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		path string
-		want bool
-	}{
-		{"plain csv", "data.csv", true},
-		{"csv with trailing space", "data.csv ", true},
-		{"csv with multiple trailing spaces", "data.csv   ", true},
-		{"csv with trailing dot", "data.csv.", true},
-		{"csv with trailing space and dot mixed", "data.csv. .", true},
-		{"CSV uppercase with trailing space", "DATA.CSV ", true},
-		{"path with trailing space", "/tmp/data.csv ", true},
-		// negatives should remain negative
-		{"txt file", "data.txt", false},
-		{"txt with trailing space", "data.txt ", false},
-		{"no extension", "data", false},
-		{"hidden file no ext", ".data", false},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := IsCSVFile(tt.path); got != tt.want {
-				t.Errorf("IsCSVFile(%q) = %v, want %v", tt.path, got, tt.want)
-			}
-		})
-	}
-}
-
 // Fuzz target:用 URL-encoded traversal payload + unicode mutation 持續攻擊
 // validatePathFormat(經 ValidateFilePath / ValidateExternalPath 兩條入口)。
 //
@@ -717,13 +578,13 @@ func FuzzValidatePathFormat(f *testing.F) {
 //   - **唯一例外**:`\AppData\Local\Temp\` 子樹放行 (Windows runner t.TempDir() 落點,
 //     等同 macOS /private/var/folders/,合法 test fixture + GUI 暫存)
 //
-// 對應 doc:performBasicSecurityChecks 註解中的設計權衡。
+// 對應 doc:checkSensitiveLocation 註解中的設計權衡。
 //
 // 本 test 故意餵 hardcoded Windows-style 字串樣本,讓 macOS/Linux CI 也能驗到
 // 此策略 — 利用 normalizePath 把 `\` 轉 `/` 後雙端正規化的設計(見
 // pathvalidator.go 內 normalizePath 註解)。沒有此 test,fix 只有 Windows CI
 // 能 catch regression,違反 7682042→PR #5 學到的「跨平台 test 必須在所有 OS 跑」教訓。
-func TestPerformBasicSecurityChecks_AppDataPolicy_CrossPlatform(t *testing.T) {
+func TestCheckSensitiveLocation_AppDataPolicy_CrossPlatform(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -785,7 +646,7 @@ func TestPerformBasicSecurityChecks_AppDataPolicy_CrossPlatform(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := performBasicSecurityChecks(tc.path)
+			err := checkSensitiveLocation(tc.path, false)
 			gotBlock := err != nil && errors.Is(err, ErrSensitiveDirectory)
 			if tc.wantBlock && !gotBlock {
 				t.Errorf("path %q 應被 ErrSensitiveDirectory 擋,實際 err=%v", tc.path, err)

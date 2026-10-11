@@ -307,3 +307,87 @@ func TestFilenameValidator_DoubleExt_ReservedRejected(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateName_RejectsWindowsReservedDeviceNames 由 security 搬來(ADR-0054):
+// 保留名(CON / PRN / AUX / NUL / COM1-9 / LPT1-9)即使加副檔名也會導向實體 device,
+// 跨平台一致拒絕。ValidateName 不綁副檔名,所以 `.txt` 與無副檔名也在這裡擋。
+// `CON.txt.csv` 是舊 security.checkFilename 只剝最後一個副檔名而漏放的形式。
+func TestValidateName_RejectsWindowsReservedDeviceNames(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"CON.csv", "PRN.csv", "AUX.csv", "NUL.csv",
+		"COM1.csv", "COM9.csv",
+		"LPT1.csv", "LPT9.csv",
+		"con.csv", "Prn.csv", "cOm3.txt",
+		"CON", "lpt5",
+		"CON.txt.csv", "a.NUL.png", ".CON.csv",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateName(name)
+			if err == nil {
+				t.Fatalf("ValidateName(%q) 應擋下 Windows reserved device name,got nil", name)
+			}
+			if !strings.Contains(err.Error(), "保留字") {
+				t.Errorf("ValidateName(%q) 應回保留字錯誤,got %v", name, err)
+			}
+		})
+	}
+}
+
+// TestValidateName_AcceptsReservedSubstring 由 security 搬來(ADR-0054):保留名只做整段
+// 比對,含保留名子字串的合法檔名必須放行。
+func TestValidateName_AcceptsReservedSubstring(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"econom_report.csv", // 含 "con" 子字串
+		"reconnect.csv",     // 含 "con"
+		"prnt_log.csv",      // 含 "prn"
+		"auxiliary.csv",     // 含 "aux"
+		"nullable.csv",      // 含 "nul"
+		"compass.csv",       // 含 "com" 但不是 COM[1-9]
+		"slept.csv",         // 含 "lpt"
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := ValidateName(name); err != nil {
+				t.Errorf("ValidateName(%q) 應放行(reserved name 子字串不算命中),got %v", name, err)
+			}
+		})
+	}
+}
+
+// TestValidateName_ExtensionAgnosticAndLength 釘住 ValidateName 不綁副檔名,且長度上限 255。
+func TestValidateName_ExtensionAgnosticAndLength(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"S1_CCI_Rudolph.png", "data.txt", "README", strings.Repeat("a", 255)} {
+		if err := ValidateName(name); err != nil {
+			t.Errorf("ValidateName(%q) 應放行,got %v", name, err)
+		}
+	}
+	if err := ValidateName(strings.Repeat("a", 256)); err == nil {
+		t.Error("ValidateName 應拒絕 256 字元的檔名")
+	}
+}
+
+// TestValidateFilename_CSVExtension 釘住 ValidateFilename = ValidateName + .csv(ADR-0054,
+// 取代已刪的 security.IsCSVFile):副檔名不分大小寫,TrimSpace 後取,尾端空白放行、
+// 尾點與無副檔名拒絕。
+func TestValidateFilename_CSVExtension(t *testing.T) {
+	t.Parallel()
+
+	v := NewValidator()
+	for _, name := range []string{"data.csv", "DATA.CSV", "data.Csv", "data.csv ", "data.csv   "} {
+		if err := v.ValidateFilename(name); err != nil {
+			t.Errorf("ValidateFilename(%q) 應放行,got %v", name, err)
+		}
+	}
+	for _, name := range []string{"data", ".data", "data.txt", "data.txt ", "data.csv.", "data.csv. ."} {
+		if err := v.ValidateFilename(name); err == nil {
+			t.Errorf("ValidateFilename(%q) 應拒絕,got nil", name)
+		}
+	}
+}

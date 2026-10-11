@@ -34,6 +34,8 @@ var ErrOddArityValidatorArgs = errors.New("validateExternalPathInputs: 參數數
 // 通常落在 InputDir 白名單外（使用者可選 Desktop / pCloud 等任意目錄）。
 // ValidateFilePath 會把它擋掉；ValidateExternalPath 不檢查 allowedBasePaths，
 // 只做 traversal / 系統敏感目錄 / 路徑長度等基本檢查，正合需求。
+// 檔名規則（Windows 保留名等）不在這一層：分期總檔由 manifest.LoadManifests 以
+// filename.ValidateName 把關，PNG 輸出名由 filename.SubjectOutputName 保證合法（ADR-0054）。
 //
 // 為何用 DefaultValidator singleton：避免每次 handler 呼叫都建一個新 instance
 // （無 base paths 的場景共用即可，建構後 immutable，並行讀取安全）。

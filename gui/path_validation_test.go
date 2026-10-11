@@ -41,7 +41,7 @@ func setupHandlerTestApp(t *testing.T) *App {
 //   - 顯式 ".." element（最常見的 traversal）
 //   - 系統敏感目錄（/etc, /root, C:\Windows）
 //
-// 不放 "/etc/passwd" raw 字串本身——performBasicSecurityChecks 比對 substring，
+// 不放 "/etc/passwd" raw 字串本身——checkSensitiveLocation 比對 substring，
 // 大小寫不敏感、forward-slash 規範化後仍命中 /etc/。
 func traversalPaths() []struct {
 	name string
@@ -426,27 +426,6 @@ func TestValidateExternalPathInputs_OddArityReturnsError(t *testing.T) {
 				assert.Contains(t, err.Error(), "programmer error",
 					"err 應含 programmer error 標誌方便 audit log 區分")
 			})
-		})
-	}
-}
-
-// TestValidateExternalPathInputs_RejectsWindowsReservedDevice 釘住 Windows
-// reserved device name(CON / NUL / COM1 等)的 cross-platform 拒絕:
-// 即使在 Unix 上,boundary 也應該擋(避免 manifest CSV 帶 reserved name 在
-// Windows 端 deploy 時行為失常)。
-func TestValidateExternalPathInputs_RejectsWindowsReservedDevice(t *testing.T) {
-	cases := []string{
-		"/tmp/CON",
-		"/tmp/PRN.csv",
-		"/tmp/COM1",
-		"/tmp/NUL.txt",
-		"/tmp/LPT1.csv",
-	}
-
-	for _, p := range cases {
-		t.Run(p, func(t *testing.T) {
-			err := validateExternalPathInputs("分期總檔案", p)
-			require.Error(t, err, "Windows reserved device name 必須被擋下: %s", p)
 		})
 	}
 }

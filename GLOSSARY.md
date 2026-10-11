@@ -79,7 +79,7 @@ Subject-based write 把輸出落檔的唯一步驟 `placeSubjectOutput`：`Subje
 _Avoid_: phase-sync atomic write, output dir validation.
 
 **Read sanity / write escape**
-驗證詞彙依 context 分開：讀端（`ValidateCSVData`、`ReadCSVRecords`、manifest parser）只做 sanity —— 結構、cell ≤32KB（`CheckCells`），user-picked pipeline 另加 UTF-8；不判斷內容像不像攻擊。注入防禦只在寫端，由 `csvutil` 逸出 formula starter。filename 驗證只擋檔案系統非法（`<>:"|?*`、控制字元、分隔符、磁碟代號、保留裝置名）。見 [[ADR-0041]]。
+驗證詞彙依 context 分開：讀端（`ValidateCSVData`、`ReadCSVRecords`、manifest parser）只做 sanity —— 結構、cell ≤32KB（`CheckCells`），user-picked pipeline 另加 UTF-8；不判斷內容像不像攻擊。注入防禦只在寫端，由 `csvutil` 逸出 formula starter。filename 驗證只擋檔案系統非法（`<>:"|?*`、控制字元、分隔符、磁碟代號、保留裝置名）。見 [[ADR-0041]]。檔名規則只有 `validation/filename` 一個裁判（`ValidateName`，保留名逐個點分段比對），security 只管路徑位置、不檢查檔名（[[ADR-0054]]）。
 _Avoid_: injection detection on read, dangerous-pattern registry.
 
 **WriteRequest**

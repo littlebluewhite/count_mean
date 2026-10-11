@@ -99,6 +99,11 @@ func TestSanitize_ReservedNameWithExtension(t *testing.T) {
 		{"PRINT.log", "PRINT.log"},
 		// reserved word 在 stem 中間不算 reserved
 		{"my_CON_file.csv", "my_CON_file.csv"},
+		// 逐個點分段比對,與 ValidateName 同一條規則(ADR-0054)
+		{"a.NUL.b", "a.NUL_safe.b"},
+		{"x.con.CON.csv", "x.con_safe.CON_safe.csv"},
+		// 頭尾空白不參與比對(與 ValidateName 的 TrimSpace 一致),原樣留在輸出
+		{string(rune(0x3000)) + "CON.x", string(rune(0x3000)) + "CON_safe.x"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {

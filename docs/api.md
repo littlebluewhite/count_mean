@@ -435,7 +435,7 @@ func (h *CSVHandler) ReadCSV(path string) ([][]string, error)
 
 使用者選取 CSV 的**唯一讀取入口**，回傳原始列／欄陣列（**未解析**為 EMGDataset；要解析請串接 `parsers.DataParser.ParseRawData`）。`path` 可為任意絕對路徑（GUI 檔案對話框回傳的路徑），不再限定於 InputDir 之下。流程：
 
-1. `ValidateFilename(Base(path))`：只擋檔案系統非法的檔名（ADR-0041）。
+1. `ValidateFilename(Base(path))`：只擋檔案系統非法的檔名（ADR-0041），並要求 `.csv` 副檔名（不分大小寫；ADR-0054）。
 2. `PathValidator.ValidateExternalPath(path)`：擋 `..` traversal 與系統敏感位置（ADR-0038 / ADR-0039）。路徑不做 URL-decode，`%`、`+` 皆為字面字元。
 3. open 前先 `stat`，非 regular file（目錄、FIFO 等）直接拒絕，避免 FIFO 讓 open 阻塞。
 4. 以 `fsperm.ReadFlags`（含 `O_NOFOLLOW`）開檔，再對 fd `fstat`：必須是 regular file 且 ≤ 100 MB，超過回 `ErrCodeFileTooLarge`。
@@ -826,7 +826,7 @@ if err := validator.ValidateFilePath(userInputPath); err != nil {
 func (v *PathValidator) ValidateExternalPath(path string) error
 ```
 
-驗證使用者外部選取的**檔案**路徑（GUI 檔案對話框、CSV 讀寫目標），**不**要求落在 allow-list 內。擋 `..` traversal、系統敏感位置（`/etc`、`~/.ssh` …）、過長路徑與 Windows reserved device name；並把路徑經 symlink 解析後再檢查一次（`ln -s /etc /tmp/foo` 不能繞過）。路徑不做 URL-decode。`CSVHandler.ReadCSV` 與 Subject output placement 都經此驗證（ADR-0038 / ADR-0039）。
+驗證使用者外部選取的**檔案**路徑（GUI 檔案對話框、CSV 讀寫目標），**不**要求落在 allow-list 內。擋 `..` traversal、系統敏感位置（`/etc`、`~/.ssh` …）與過長路徑；並把路徑經 symlink 解析後再檢查一次（`ln -s /etc /tmp/foo` 不能繞過）。路徑不做 URL-decode。`CSVHandler.ReadCSV` 與 Subject output placement 都經此驗證（ADR-0038 / ADR-0039）。**不檢查檔名**（Windows 保留名、檔名長度）：檔名規則由 `filename.ValidateName` 單一裁判，檔案 caller 自己呼叫（ADR-0054）。
 
 **ValidateExternalDir**
 
@@ -834,7 +834,7 @@ func (v *PathValidator) ValidateExternalPath(path string) error
 func (v *PathValidator) ValidateExternalDir(dir string) error
 ```
 
-驗證使用者外部選取的**目錄**（output / data folder / config 目錄）。與 `ValidateExternalPath` 擋同一組敏感位置，但以目錄語意判定：比對前補結尾分隔符，使目錄根本身（`/etc`、`~/.ssh`）也命中；檔名專屬規則不套用。取代舊的「附 dummy child 再驗檔案」手法（ADR-0038）。
+驗證使用者外部選取的**目錄**（output / data folder / config 目錄）。與 `ValidateExternalPath` 擋同一組敏感位置，但以目錄語意判定：比對前補結尾分隔符，使目錄根本身（`/etc`、`~/.ssh`）也命中。取代舊的「附 dummy child 再驗檔案」手法（ADR-0038）。
 
 **示例：**
 ```go
@@ -849,6 +849,15 @@ if err := validator.ValidateExternalPath(csvPath); err != nil {
 ### 輸入驗證
 
 輸入驗證由子驗證器直接提供：`validation/csv`（`csv.NewValidator()`）負責 CSV 結構與內容驗證，`validation/filename`（`filename.NewValidator()`）負責檔名安全性驗證。
+
+`validation/filename` 是檔名規則的**單一裁判**（ADR-0054）：
+
+```go
+func ValidateName(name string) error                       // 不綁副檔名
+func (v *Validator) ValidateFilename(filename string) error // = ValidateName + .csv
+```
+
+`ValidateName` 擋空白、tab / 控制字元、Unicode Cf / Cs、路徑分隔符、Windows 磁碟代號前綴、`<>:"|?*`、Windows 保留名（**每個點分段**比對，`CON.txt.csv`、`a.NUL.png` 都擋）與長度 > 255。`ValidateFilename` 另要求副檔名為 `.csv`（TrimSpace 後取、不分大小寫；尾點與無副檔名拒絕）。`manifest.LoadManifests` 開檔前對 `Base(path)` 呼叫 `ValidateName`；`CSVHandler.ReadCSV` / `WriteCSV` 呼叫 `ValidateFilename`。`filename.Sanitize` 用同一條逐段保留名規則（`a.NUL.b` → `a.NUL_safe.b`），所以 `SubjectOutputName(subject, suffix) + ext` 必過 `ValidateName`（property 測試釘住）。
 
 ---
 

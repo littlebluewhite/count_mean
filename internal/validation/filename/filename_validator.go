@@ -56,22 +56,37 @@ func NewValidator() *Validator {
 	}
 }
 
-// ValidateFilename validates a *base* filename for safety and correctness.
+// ValidateFilename 驗證 CSV 的 base 檔名：ValidateName 加上副檔名白名單（.csv，不分大小寫）。
 //
-// Contract: 本 validator 只驗 base filename — 含 path separator 即 reject。
-// Path 安全（traversal、symlink）由 security.PathValidator 負責，不要混用。
+// 副檔名在 TrimSpace 之後取，所以尾端空白照舊放行（`data.csv ` → `.csv`），尾點照舊
+// 拒絕（`data.csv.` 的副檔名是 `.`）。沒有副檔名也拒絕：這條原本由 security.IsCSVFile
+// 在 ReadCSV / WriteCSV 另外把關，現在只在這裡（ADR-0054）。
+func (v *Validator) ValidateFilename(filename string) error {
+	if err := ValidateName(filename); err != nil {
+		return err
+	}
+
+	return v.checkExtension(strings.TrimSpace(filename))
+}
+
+// ValidateName 驗證不綁副檔名的 *base* 檔名，是檔名規則的單一裁判（ADR-0054）。
+// 分期總檔（manifest.LoadManifests）、CSV 讀寫（ValidateFilename）都經過這裡；
+// security 套件不再檢查檔名。
+//
+// Contract: 只驗 base filename — 含 path separator 即 reject。
+// Path 安全（traversal、敏感位置、symlink）由 security.PathValidator 負責，不要混用。
 //
 // 防護面向：
 //   - Empty / whitespace-only
-//   - ASCII control chars (除 \t)
+//   - tab 與其他控制字元
 //   - Path separators `/` `\` （base filename 不可含）
+//   - Windows 磁碟代號前綴（`C:foo`）
 //   - Unicode format chars (\p{Cf}) / surrogate (\p{Cs})：阻擋 RTL override
 //     (U+202E) 顯示欺騙、ZWSP smuggling。
 //   - 檔案系統非法字元 `<>:"|?*`（注入防禦不在此層，見 ADR-0041）
-//   - Windows reserved names (CON / PRN / AUX / NUL / COMx / LPTx)
+//   - Windows reserved names (CON / PRN / AUX / NUL / COMx / LPTx)，逐個點分段比對
 //   - 長度上限 255
-//   - 限定副檔名白名單
-func (v *Validator) ValidateFilename(filename string) error {
+func ValidateName(filename string) error {
 	if filename == "" {
 		return errors.NewValidationError("filename", filename, "檔案名稱不能為空")
 	}
@@ -106,7 +121,7 @@ func (v *Validator) ValidateFilename(filename string) error {
 
 	// Check for null bytes, control characters, and Unicode format/surrogate
 	// characters (RTL override, ZWSP 等視覺欺騙 vector).
-	if err := v.checkControlChars(filename); err != nil {
+	if err := checkControlChars(filename); err != nil {
 		return err
 	}
 
@@ -124,11 +139,10 @@ func (v *Validator) ValidateFilename(filename string) error {
 	// 同理 `PRN.bak.csv`、`AUX.log.csv`、`NUL.dat.csv`、`COM1.x.csv`、`LPT1.y.csv` 全部 bypass。
 	//
 	// 修法:對 `strings.Split(filename, ".")` 每一段做 case-insensitive 比對 reserved list,
-	// 任一段命中即 reject。與 `internal/calculator/emg_statistics.go` 的 first-segment 比對
-	// 思路一致,但更嚴格(對全部 segments 而非只 first segment),涵蓋如 `foo.CON.csv` 這類
-	// middle-segment 情境 — 雖然 Windows 對 middle segment 的 device routing 行為較弱,
-	// 保守 reject 不會誤殺合法名稱(reserved list 是 `CON`/`PRN`/`COMx`/`LPTx` 等明確 short token,
-	// 出現在 segment 中間幾乎都是 attacker 構造)。
+	// 任一段命中即 reject。涵蓋如 `foo.CON.csv` 這類 middle-segment 情境 — 雖然 Windows 對
+	// middle segment 的 device routing 行為較弱,保守 reject 不會誤殺合法名稱(reserved list
+	// 是 `CON`/`PRN`/`COMx`/`LPTx` 等明確 short token,出現在 segment 中間幾乎都是 attacker 構造)。
+	// Sanitize 用同一條逐段規則(ADR-0054),所以 SubjectOutputName 的產物必過這裡。
 	for _, segment := range strings.Split(filename, ".") {
 		if segment == "" {
 			continue
@@ -146,8 +160,7 @@ func (v *Validator) ValidateFilename(filename string) error {
 		return errors.NewValidationError("filename", filename, "檔案名稱過長 (最大 255 字符)")
 	}
 
-	// Check extension
-	return v.checkExtension(filename)
+	return nil
 }
 
 // checkControlChars rejects null bytes, control characters, 以及 Unicode
@@ -163,7 +176,7 @@ func (v *Validator) ValidateFilename(filename string) error {
 // （檔案總管 / CLI 對含 tab 的檔名顯示破碎，shell completion 與拷貝貼上幾乎
 // 一定壞掉）。cell-level CSV 的 \t 鬆綁是 CSV 內容的 quote/escape 需求,filename
 // 不同 context, 統一收緊。
-func (*Validator) checkControlChars(filename string) error {
+func checkControlChars(filename string) error {
 	for _, r := range filename {
 		if !isUnsafeFilenameRune(r) {
 			continue
@@ -181,17 +194,17 @@ func (*Validator) checkControlChars(filename string) error {
 	return nil
 }
 
-// checkExtension validates the file extension.
+// checkExtension 要求副檔名在白名單內（不分大小寫）；沒有副檔名也拒絕。
 func (v *Validator) checkExtension(filename string) error {
 	ext := strings.ToLower(filepath.Ext(filename))
-	if ext == "" {
-		return nil
-	}
-
 	for _, allowedExt := range v.allowedExtensions {
 		if ext == allowedExt {
 			return nil
 		}
+	}
+
+	if ext == "" {
+		return errors.NewValidationError("filename", filename, "檔案名稱缺少副檔名")
 	}
 
 	return errors.NewValidationError("filename", filename,

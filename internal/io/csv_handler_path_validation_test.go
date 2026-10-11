@@ -13,6 +13,7 @@ import (
 
 // TestCSVHandler_ReadCSVRejectsSensitivePaths 釘住 ReadCSV 唯一入口的路徑守門:
 // 任意不含敏感位置的絕對路徑可讀(不再區分 InputDir 內外),/etc 與 traversal 仍擋。
+// 拒絕樣本帶 .csv,讓檔名檢查(ValidateFilename 要求 .csv)通過,失敗只能來自路徑守門。
 func TestCSVHandler_ReadCSVRejectsSensitivePaths(t *testing.T) {
 	t.Parallel()
 
@@ -35,14 +36,14 @@ func TestCSVHandler_ReadCSVRejectsSensitivePaths(t *testing.T) {
 
 	t.Run("sensitive_dir_rejected", func(t *testing.T) {
 		t.Parallel()
-		_, err := handler.ReadCSV("/etc/passwd")
+		_, err := handler.ReadCSV("/etc/passwd.csv")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "路徑")
 	})
 
 	t.Run("traversal_rejected", func(t *testing.T) {
 		t.Parallel()
-		_, err := handler.ReadCSV("../../etc/passwd")
+		_, err := handler.ReadCSV("../../etc/passwd.csv")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "路徑")
 	})

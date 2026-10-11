@@ -29,9 +29,6 @@ import (
 	"count_mean/internal/validation/filename"
 )
 
-// Static errors for err113 compliance.
-var errInvalidCSVFile = stderrors.New("不是有效的 CSV 檔案")
-
 // csvReaderBufSize 是 bufio.Reader 的初始 buffer 大小（64 KiB）。
 // 與 internal/parsers 套件的同名常數對齊；保留 unexported 在各套件各自定義，
 // 避免讓 io 套件直接 reach into parsers 內部。
@@ -139,11 +136,6 @@ func (h *CSVHandler) ReadCSVFromDirectory(dirName, fileName string) ([][]string,
 	return h.ReadCSV(fullPath)
 }
 
-// isCSVFile checks if the file has a CSV extension.
-func (h *CSVHandler) isCSVFile(path string) bool {
-	return security.IsCSVFile(path)
-}
-
 // parseCSV 解析已開啟的 CSV 檔案(單次 ReadAll)。path 只用於 log。
 //
 // 讀取以 LimitReader 封頂在 maxReadCSVBytes+1:fstat 之後檔案若又長大,
@@ -225,9 +217,10 @@ const maxReadCSVBytes = 100 * 1024 * 1024
 
 // ReadCSV 是使用者選取 CSV 的唯一讀取入口。
 //
-// 流程:base filename 驗證 → ValidateExternalPath(任意絕對路徑皆可,仍擋 traversal 與
-// 系統敏感位置)→ OpenFile(fsperm.ReadFlags,O_NOFOLLOW)→ fstat(必須是 regular file
-// 且 ≤ 100MB)→ 單次解析 → validateCSVRecords。
+// 流程:base filename 驗證(ValidateFilename:檔名規則 + .csv 副檔名,ADR-0054)→
+// ValidateExternalPath(任意絕對路徑皆可,仍擋 traversal 與系統敏感位置)→
+// OpenFile(fsperm.ReadFlags,O_NOFOLLOW)→ fstat(必須是 regular file 且 ≤ 100MB)→
+// 單次解析 → validateCSVRecords。
 //
 // 路徑不做 URL-decode,`%`、`+` 皆為字面檔名字元。
 func (h *CSVHandler) ReadCSV(path string) ([][]string, error) {
@@ -243,16 +236,6 @@ func (h *CSVHandler) ReadCSV(path string) ([][]string, error) {
 		h.logger.Error("路徑驗證失敗", err, map[string]any{"filename": path})
 
 		return nil, fmt.Errorf("路徑驗證失敗: %w", err)
-	}
-
-	if !h.isCSVFile(path) {
-		err := errors.NewAppErrorWithDetails(
-			errors.ErrCodeFileFormat, "檔案格式無效",
-			fmt.Sprintf("檔案 '%s' 不是有效的 CSV 檔案", path),
-		)
-		h.logger.Error("檔案格式驗證失敗", err, map[string]any{"path": path})
-
-		return nil, err
 	}
 
 	// open 前先 stat 擋非 regular(FIFO 等會讓 OpenFile 阻塞)。stat 失敗不在此報錯,
@@ -378,15 +361,6 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 		return fmt.Errorf("路徑驗證失敗: %w", err)
 	}
 
-	if !security.IsCSVFile(filename) {
-		err := fmt.Errorf("檔案 '%s': %w", filename, errInvalidCSVFile)
-		h.logger.Error("檔案格式驗證失敗", err, map[string]any{
-			"path": filename,
-		})
-
-		return err
-	}
-
 	// 空 data 的處理必須區分「target 是否已存在」:
 	//   (a) target 不存在 → return nil(no-op 安全;不建檔案,caller 期望「空輸入
 	//       產不出檔案」)。
@@ -472,7 +446,7 @@ func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
 //   - target 已存在:用 fsperm.OpenWriteValidated 重開檔(O_TRUNC),寫入空內容
 //     (BOMEnabled → BOM-only 維持 CSV 語意 hint;else → 0 byte)。
 //
-// caller (WriteCSV) 已完成 ValidateFilename / ValidateFilePath / IsCSVFile 三段守門,
+// caller (WriteCSV) 已完成 ValidateFilename / ValidateFilePath 兩段守門,
 // 此 helper 不重覆驗證以避免 lexical/resolved 兩條路徑不一致;但仍走 fsperm
 // safe-open(保留 symlink / parent-symlink 攻擊面的 kernel-level reject)。
 func (h *CSVHandler) handleEmptyDataWrite(filename string) (err error) {

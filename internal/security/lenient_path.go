@@ -94,8 +94,8 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 		return "", fmt.Errorf("檔名無效（空 / 純 whitespace / dot-only）: %q", shown)
 	}
 
-	// 長度上限：strict 路徑（PathValidator）對 absPath/filename 有 4096/255 守門；
-	// lenient 路徑取代後曾遺失此防護，回補。
+	// 長度上限：strict 路徑有 absPath 4096（PathValidator）/ filename 255（filename.ValidateName，
+	// ADR-0054）守門；lenient 路徑取代後曾遺失此防護，回補。
 	if base := filepath.Base(cleaned); len(base) > maxFilenameLength {
 		return "", fmt.Errorf("檔名過長（> %d）: %d 字元", maxFilenameLength, len(base))
 	}

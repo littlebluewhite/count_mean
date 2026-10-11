@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"count_mean/internal/models"
@@ -191,5 +192,36 @@ func TestLoadEMG_ParseErrorIsEMGParseError(t *testing.T) {
 	}
 	if err.Error() != pe.Err.Error() {
 		t.Errorf("Error() = %q; want inner %q", err.Error(), pe.Err.Error())
+	}
+}
+
+const loadManifestsTestCSV = "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n" +
+	"S1,motion1.csv,force1.anc,emg1.csv,100,1.0,2.0,3.0,4.0,5.0,150,6.0,7.0,200,8.0\n"
+
+// TestLoadManifests_RejectsReservedName 釘住 ADR-0054:分期總檔的檔名由 filename 套件
+// (ValidateName)把關,每個點分段都比對 Windows 保留名。舊的 security.checkFilename 只剝
+// 最後一個副檔名,`CON.txt.csv` → `CON.txt` 不命中而放行;Windows 上開檔會導向 console device。
+// 檔案內容合法,失敗只能來自檔名檢查。
+func TestLoadManifests_RejectsReservedName(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	writeFileHelper(t, base, "manifest.csv", loadManifestsTestCSV)
+	if _, err := LoadManifests(filepath.Join(base, "manifest.csv")); err != nil {
+		t.Fatalf("合法檔名的分期總檔不該失敗:%v", err)
+	}
+
+	for _, name := range []string{"CON.txt.csv", "CON.csv", "a.NUL.csv", "lpt1.bak.csv"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			writeFileHelper(t, base, name, loadManifestsTestCSV)
+			_, err := LoadManifests(filepath.Join(base, name))
+			if err == nil {
+				t.Fatalf("LoadManifests(%q) 必須拒絕 Windows 保留名", name)
+			}
+			if !strings.Contains(err.Error(), "保留字") {
+				t.Errorf("LoadManifests(%q) 應回保留字錯誤,got %v", name, err)
+			}
+		})
 	}
 }
