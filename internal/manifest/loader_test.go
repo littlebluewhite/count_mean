@@ -380,18 +380,27 @@ func TestLoadManifests_SubjectCollisionMessage(t *testing.T) {
 func TestOpenDataFile_RejectsInvalidName(t *testing.T) {
 	t.Parallel()
 
+	// want 是 ValidateName 的訊息:只斷言 PathInvalid 不夠,OS 也可能因自己的理由拒開
+	// (macOS 256 字元 → ENAMETOOLONG、Windows `a<b` → ERROR_INVALID_NAME),同樣落到 PathInvalid。
 	base := t.TempDir()
-	for _, name := range []string{
-		"a<b.csv", "a|b.csv", "a?b.csv", `a"b.csv`, "a\x01b.csv", "C:emg.csv",
-		"CON.csv", "emg.NUL.csv", `sub\LPT1.x.csv`,
-		strings.Repeat("a", 256) + ".csv",
+	for _, tc := range []struct{ name, want string }{
+		{"a<b.csv", "檔案名稱包含非法字符: <"},
+		{"a|b.csv", "檔案名稱包含非法字符: |"},
+		{"a?b.csv", "檔案名稱包含非法字符: ?"},
+		{`a"b.csv`, `檔案名稱包含非法字符: "`},
+		{"a\x01b.csv", "檔案名稱包含非法控制字符"},
+		{"C:emg.csv", "Windows 磁碟代號"},
+		{"CON.csv", "保留字: CON"},
+		{"emg.NUL.csv", "保留字: NUL"},
+		{`sub\LPT1.x.csv`, "保留字: LPT1"},
+		{strings.Repeat("a", 256) + ".csv", "檔案名稱過長 (最大 255 字符)"},
 	} {
-		f, err := OpenDataFile(base, name)
+		f, err := OpenDataFile(base, tc.name)
 		if f != nil {
 			_ = f.Close()
 		}
-		if !errors.Is(err, ErrManifestDataFilePathInvalid) || errors.Is(err, ErrManifestDataFileMissing) {
-			t.Errorf("OpenDataFile(%q) err = %v; want ErrManifestDataFilePathInvalid(檔名檢查)", name, err)
+		if !errors.Is(err, ErrManifestDataFilePathInvalid) || err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("OpenDataFile(%q) err = %v; want ErrManifestDataFilePathInvalid + %q", tc.name, err, tc.want)
 		}
 	}
 }

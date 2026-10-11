@@ -36,7 +36,7 @@
 
 5. **撞名檢查從 muscle_ratio 搬到 manifest**：刪 `assertUniqueSanitizedSubjects`；i18n key `error.muscle_ratio.subject_collision` 改為 `error.manifest.subject_collision`（4 locale 文字不變，zh-TW 逐位元組相同）。muscle_ratio 的 3 支撞名測試照舊走 `Analyze`；`LoadManifests` 另有直接測試。
 
-6. **`manifest.OpenDataFile(baseFolder, name)`** 仍回 `*os.File`（phase_sync 用 `f.Name()`），流程：`EvalSymlinks(baseFolder)` → `filename.ValidateName(Base(name))`（先把 `\` 正規化成 `/`）→ `security.OpenLenientValidated` → `fsperm.CheckRegularSize(f, MaxReadBytes)`（失敗先 Close 再回錯）。檔名與 fstat 失敗都包成 `ErrManifestDataFilePathInvalid` + 原錯誤（`fsperm.ErrNotRegular` / `ErrTooLarge` 可 `errors.Is`），phase_sync 的 `mapOpenDataFileErr` 因此對應到「檔案路徑驗證失敗」。刪除：`resolveLenientPath` 的長度檢查與 `security.maxFilenameLength`（`RejectsLongFilename` 測試搬到 manifest）、`ValidateAllEMGFiles` 自己的 fstat（改由 `OpenDataFile` 承擔，FIFO 的錯誤文字逐位元組相同）。
+6. **`manifest.OpenDataFile(baseFolder, name)`** 仍回 `*os.File`（phase_sync 用 `f.Name()`），流程：`EvalSymlinks(baseFolder)` → `filename.ValidateName(path.Base(name))`（先把 `\` 正規化成 `/`；用只認 `/` 的 `path.Base` 而非 `filepath.Base`，各 OS 結果相同）→ `security.OpenLenientValidated` → `fsperm.CheckRegularSize(f, MaxReadBytes)`（失敗先 Close 再回錯）。檔名與 fstat 失敗都包成 `ErrManifestDataFilePathInvalid` + 原錯誤（`fsperm.ErrNotRegular` / `ErrTooLarge` 可 `errors.Is`），phase_sync 的 `mapOpenDataFileErr` 因此對應到「檔案路徑驗證失敗」。刪除：`resolveLenientPath` 的長度檢查與 `security.maxFilenameLength`（`RejectsLongFilename` 測試搬到 manifest）、`ValidateAllEMGFiles` 自己的 fstat（改由 `OpenDataFile` 承擔，FIFO 的錯誤文字逐位元組相同）。
 
 7. **`CSVHandler.ReadCSV` 改用 `fsperm.OpenRegularLimited`**：`ErrNotRegular` → 既有 `notRegularError`；`*TooLargeError` → 既有 `tooLargeError(path, Size)`（「檔案過大（101 MB，上限 100 MB），請分割檔案後再試」逐位元組相同）；其餘 → 既有 `openFailure`。
 
@@ -84,7 +84,7 @@
 3. **fsperm 回帶 i18n key 的錯誤**：不可行，i18n import fsperm。
 4. **撞名檢查留在 muscle_ratio，或每個 analyzer 各自檢查**：拒。輸出檔名身分屬於 Subject，同一條規則寫多份必然漂移；放在讀檔門，所有讀 manifest 的路徑一致。
 5. **刪 GUI prelude 對分期總檔案的 `ValidateExternalPath`**：拒。prelude 在 RPC 邊界先擋、錯誤帶「分期總檔案」label，且與 dataFolder 的目錄檢查同一步；改由 `LoadManifests` 擋會改變 UI 文字與檢查順序，換不到東西。
-6. **`ValidateName` 直接吃原字串、不正規化 `\`**：拒。Windows 產生的 manifest 用 `\` 分隔子目錄（`sub\emg.csv`），在 Unix 上 `filepath.Base` 不切 `\`，`ValidateName` 會把整串當檔名、以「路徑分隔符」誤拒；lenient path 本來就把 `\` 當分隔符。
+6. **`ValidateName` 直接吃原字串、不正規化 `\`**：拒。Windows 產生的 manifest 用 `\` 分隔子目錄（`sub\emg.csv`），在 Unix 上 `filepath.Base` 不切 `\`，`ValidateName` 會把整串當檔名、以「路徑分隔符」誤拒；lenient path 本來就把 `\` 當分隔符。正規化後也不用 `filepath.Base`：它在 Windows 會先剝掉 volume，`C:emg.csv` 變成 `emg.csv`，磁碟代號規則就不會觸發；manifest 內的檔名不是本機路徑，取 base 不該依 OS。
 
 ## Related
 

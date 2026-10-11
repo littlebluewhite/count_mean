@@ -841,7 +841,7 @@ func ValidateName(name string) error                       // 不綁副檔名
 func (v *Validator) ValidateFilename(filename string) error // = ValidateName + .csv
 ```
 
-`ValidateName` 擋空白、tab / 控制字元、Unicode Cf / Cs、路徑分隔符、Windows 磁碟代號前綴、`<>:"|?*`、Windows 保留名（**每個點分段**比對，`CON.txt.csv`、`a.NUL.png` 都擋）與長度 > 255。`ValidateFilename` 另要求副檔名為 `.csv`（TrimSpace 後取、不分大小寫；尾點與無副檔名拒絕）。`manifest.LoadManifests` 開檔前對 `Base(path)` 呼叫 `ValidateName`，`manifest.OpenDataFile` 對資料檔名（`\` 正規化成 `/` 後的 Base）呼叫 `ValidateName`（ADR-0056）；`CSVHandler.ReadCSV` 與 CSV 輸出（Output placement 的 CSV payload）呼叫 `ValidateFilename`，PNG 輸出呼叫 `ValidateName`。`filename.Sanitize` 用同一條逐段保留名規則（`a.NUL.b` → `a.NUL_safe.b`），所以 `SubjectOutputName(subject, suffix) + ext` 必過 `ValidateName`（property 測試釘住）。
+`ValidateName` 擋空白、tab / 控制字元、Unicode Cf / Cs、路徑分隔符、Windows 磁碟代號前綴、`<>:"|?*`、Windows 保留名（**每個點分段**比對，`CON.txt.csv`、`a.NUL.png` 都擋）與長度 > 255。`ValidateFilename` 另要求副檔名為 `.csv`（TrimSpace 後取、不分大小寫；尾點與無副檔名拒絕）。`manifest.LoadManifests` 開檔前對 `Base(path)` 呼叫 `ValidateName`，`manifest.OpenDataFile` 對資料檔名（`\` 正規化成 `/` 後取 `path.Base`，各 OS 結果相同）呼叫 `ValidateName`（ADR-0056）；`CSVHandler.ReadCSV` 與 CSV 輸出（Output placement 的 CSV payload）呼叫 `ValidateFilename`，PNG 輸出呼叫 `ValidateName`。`filename.Sanitize` 用同一條逐段保留名規則（`a.NUL.b` → `a.NUL_safe.b`），所以 `SubjectOutputName(subject, suffix) + ext` 必過 `ValidateName`（property 測試釘住）。`SubjectOutputKey(subject) string` = NFC(ToLower(Sanitize(subject)))，是 Subject 在 macOS / Windows 上的輸出檔名身分：兩個 Subject 的 key 相同即寫到同一檔，`manifest.LoadManifests` 以它拒絕撞名的 manifest（ADR-0056）。
 
 ---
 

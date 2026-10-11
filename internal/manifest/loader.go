@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -129,8 +130,8 @@ func LoadEMG(dataFolder string, row *models.PhaseManifest) (*models.PhaseSyncEMG
 // **單一加固讀檔門**：整合過去散落的手寫 security.ResolveLenientPath 站點，把
 // 「解析路徑 → 邊界檢查 → 原子化開檔」收斂成一道入口。
 //
-// 流程：EvalSymlinks(baseFolder) → filename.ValidateName(Base(name))（先把 `\` 正規化成 `/`,
-// Windows 產生的 manifest 可能用 `\` 分隔子目錄;ADR-0056）→ security.OpenLenientValidated
+// 流程：EvalSymlinks(baseFolder) → filename.ValidateName(path.Base(name))（先把 `\` 正規化成 `/`,
+// Windows 產生的 manifest 可能用 `\` 分隔子目錄;用 path.Base 各 OS 一致,ADR-0056）→ security.OpenLenientValidated
 // （lenient 解析 + 原子 validated-open，fused 一道門關閉 validate-vs-open TOCTOU 縫隙）→
 // fsperm.CheckRegularSize（fstat:一般檔案且 ≤ 100 MB;失敗先 Close 再回錯）。回傳「已開啟
 // 且已驗證」的 *os.File，**caller 必須自行 defer Close**（直接交出開好的 fd，避免 caller 拿
@@ -158,7 +159,10 @@ func OpenDataFile(baseFolder, name string) (*os.File, error) {
 		return nil, fmt.Errorf("%w: %s", ErrBaseFolderNotFound, baseFolder)
 	}
 
-	if err := filename.ValidateName(filepath.Base(strings.ReplaceAll(name, `\`, "/"))); err != nil {
+	// name 是 manifest 內的相對檔名、不是本機路徑:`\` 正規化成 `/` 後用 path.Base(只認 `/`),
+	// 各 OS 結果相同。filepath.Base 在 Windows 會先剝掉 volume,`C:emg.csv` 變 `emg.csv`,
+	// 磁碟代號規則就不會觸發。
+	if err := filename.ValidateName(path.Base(strings.ReplaceAll(name, `\`, "/"))); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrManifestDataFilePathInvalid, err)
 	}
 
