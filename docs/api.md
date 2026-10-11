@@ -337,7 +337,16 @@ func (a *Analyzer) Analyze(
 ) (*CCIAnalysisResult, error)
 ```
 
-接受 phase-sync 後的 EMG 資料與肌肉對清單，使用 errgroup 並行計算每對 CCI 時間序列，並產出步態週期內的 mean curve。
+接受 phase-sync 後的 EMG 資料與肌肉對清單，使用 errgroup 並行計算每對 CCI 時間序列，並產出 `CCIAnalysisResult`（每對的 CCI 時間序列，與步態週期 gait 區間）。
+
+**CCIAnalysisResult.Validate / GaitPercent**（ADR-0053）
+
+```go
+func (r *CCIAnalysisResult) Validate() error
+func (r *CCIAnalysisResult) GaitPercent(t float64) float64
+```
+
+`Validate` 檢查結果不變式：非 nil（`ErrNilResult`）、`GaitStartTime` / `GaitEndTime` 為有限值且 duration > 0（`ErrInvalidGaitCycle`）、每個 `PairResults[i].Values` 長度等於 `len(TimeValues)`（`ErrPairLengthMismatch`）。`computeCCI` 回傳前、`io.WriteCCIResult`、`GenerateCCIInteractiveChart` 入口都呼叫它。`GaitPercent` 把 EMG 時間換算成 gait 百分比，不 clamp。
 
 **Analyzer.ExportToCSV**
 

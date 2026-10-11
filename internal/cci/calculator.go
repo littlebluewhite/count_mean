@@ -3,6 +3,7 @@ package cci
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 
 	"count_mean/internal/i18n"
@@ -14,11 +15,6 @@ import (
 // throughput / cancel-latency 折衷，300k 點上 mid-flight cancel 在 < 1s 內回應，
 // 同時 hot-loop overhead 約 0.02%（每 4096 次 +1 select）。
 const cciCancelCheckInterval = 4096
-
-// Gait cycle normalization constants.
-const (
-	GaitCyclePoints = 101 // 0% to 100% inclusive
-)
 
 // MusclePair defines a pair of EMG channels for CCI calculation.
 type MusclePair struct {
@@ -37,13 +33,57 @@ type CCIResult struct {
 type CCIAnalysisResult struct {
 	Subject       string
 	PairResults   []CCIResult
-	TimeValues    []float64            // actual time in seconds per data point
-	PhasePercents map[string]float64   // phase name -> % position in gait cycle
-	PhaseTimes    map[string]float64   // phase name -> actual time in seconds
-	MeanCurves    map[string][]float64 // pair name -> mean CCI curve
-	GaitStartTime float64              // actual EMG time at gait cycle 0%
-	GaitEndTime   float64              // actual EMG time at gait cycle 100%
-	PhaseStats    []CCIPhaseStatRow    // ADR-0018 Output 2: fixed 32-row phase-window statistics
+	TimeValues    []float64          // actual time in seconds per data point
+	PhasePercents map[string]float64 // phase name -> % position in gait cycle
+	PhaseTimes    map[string]float64 // phase name -> actual time in seconds
+	GaitStartTime float64            // actual EMG time at gait cycle 0%
+	GaitEndTime   float64            // actual EMG time at gait cycle 100%
+	PhaseStats    []CCIPhaseStatRow  // ADR-0018 Output 2: fixed 32-row phase-window statistics
+}
+
+// gaitPercent 把 EMG 時間 t 換算成 [[Gait cycle (CCI)]] 百分比:0% = start、100% = end。
+// 不 clamp(<0% / >100% 為 ±150ms 延伸範圍的合法值);運算順序固定為
+// (t - start) / (end - start) * 100,CSV(%.2f)與圖表軸標(%.1f)的輸出位元組依賴它。
+func gaitPercent(t, start, end float64) float64 {
+	return (t - start) / (end - start) * 100
+}
+
+// GaitPercent 回傳 EMG 時間 t 在本結果 gait cycle 上的百分比(不 clamp)。
+// 先經 Validate 才保證 duration > 0 且為有限值。見 [[ADR-0053]]。
+func (r *CCIAnalysisResult) GaitPercent(t float64) float64 {
+	return gaitPercent(t, r.GaitStartTime, r.GaitEndTime)
+}
+
+// Validate 檢查結果的不變式(ADR-0053),computeCCI、CSV writer、chart 共用同一份:
+//   - 非 nil(ErrNilResult)
+//   - GaitStartTime / GaitEndTime 為有限值且 duration > 0(ErrInvalidGaitCycle)
+//   - 每個 PairResults[i].Values 長度 == len(TimeValues)(ErrPairLengthMismatch)
+func (r *CCIAnalysisResult) Validate() error {
+	if r == nil {
+		return ErrNilResult
+	}
+
+	// NaN 與 +Inf 會讓 `d <= 0` 恆為 false 而 silently 通過,先擋非有限值。
+	if math.IsNaN(r.GaitStartTime) || math.IsInf(r.GaitStartTime, 0) ||
+		math.IsNaN(r.GaitEndTime) || math.IsInf(r.GaitEndTime, 0) {
+		return fmt.Errorf("%w: start=%v end=%v(含非有限值)",
+			ErrInvalidGaitCycle, r.GaitStartTime, r.GaitEndTime)
+	}
+
+	if d := r.GaitEndTime - r.GaitStartTime; d <= 0 {
+		return fmt.Errorf("%w: start=%v end=%v",
+			ErrInvalidGaitCycle, r.GaitStartTime, r.GaitEndTime)
+	}
+
+	timeLen := len(r.TimeValues)
+	for i, pr := range r.PairResults {
+		if len(pr.Values) != timeLen {
+			return fmt.Errorf("%w: pair[%d] %q values=%d, time=%d",
+				ErrPairLengthMismatch, i, pr.PairName, len(pr.Values), timeLen)
+		}
+	}
+
+	return nil
 }
 
 // CCIPhaseStatRow is one row of the phase-window statistics table (ADR-0018 Output 2).
@@ -80,7 +120,7 @@ func DefaultMusclePairs() []MusclePair {
 // where EMG_s is the smaller value and EMG_l is the larger value.
 //
 // Rudolph 公式假設輸入為 rectified EMG（非負、有限數值）。對於 NaN / ±Inf /
-// 負值輸入回傳 math.NaN()，使下游 (writeCSVFile 等) 可以偵測並回報錯誤，
+// 負值輸入回傳 math.NaN()，使下游 (io.WriteCCIResult 等) 可以偵測並回報錯誤，
 // 避免污染統計結果。
 func CalculateCCIRudolph(emg1, emg2 float64) float64 {
 	if math.IsNaN(emg1) || math.IsNaN(emg2) ||

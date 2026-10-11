@@ -102,7 +102,6 @@ func (a *CCIAnalyzer) computeAllPairsSequential(
 ) (*CCIAnalysisResult, error) {
 	pairs := DefaultMusclePairs()
 	pairResults := make([]CCIResult, 0, len(pairs))
-	meanCurves := make(map[string][]float64, len(pairs))
 
 	for _, pair := range pairs {
 		cciValues, err := a.computeSinglePair(ctx, pair, emgData, channelMap)
@@ -118,8 +117,6 @@ func (a *CCIAnalyzer) computeAllPairsSequential(
 			PairName: pair.Name,
 			Values:   cciValues,
 		})
-
-		meanCurves[pair.Name] = cciValues
 	}
 
 	return &CCIAnalysisResult{
@@ -128,6 +125,5 @@ func (a *CCIAnalyzer) computeAllPairsSequential(
 		TimeValues:    emgData.Time,
 		PhasePercents: phasePercents,
 		PhaseTimes:    phaseTimes,
-		MeanCurves:    meanCurves,
 	}, nil
 }

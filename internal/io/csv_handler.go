@@ -837,14 +837,9 @@ func (h *CSVHandler) WriteCCIResult(
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if result == nil {
-		return "", errEmptyCCIResult
-	}
-
-	duration := result.GaitEndTime - result.GaitStartTime
-	if duration <= 0 {
-		return "", fmt.Errorf("%w: start=%v end=%v",
-			cci.ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
+	// ADR-0053:不變式(非 nil / gait 區間有限且 duration > 0 / pair 長度對齊)由結果自己持有。
+	if err := result.Validate(); err != nil {
+		return "", err
 	}
 
 	header := []string{"Time (s)", "Gait Cycle (%)"}
@@ -867,16 +862,12 @@ func (h *CSVHandler) WriteCCIResult(
 				}
 
 				t := result.TimeValues[i]
-				pct := (t - result.GaitStartTime) / duration * 100
+				pct := result.GaitPercent(t)
 
 				pairCells := make([]string, 0, len(result.PairResults))
 				allNonFinite := true
 
 				for _, pr := range result.PairResults {
-					if i >= len(pr.Values) {
-						pairCells = append(pairCells, "")
-						continue
-					}
 					v := pr.Values[i]
 					if math.IsNaN(v) || math.IsInf(v, 0) {
 						pairCells = append(pairCells, "")
@@ -921,9 +912,6 @@ func (h *CSVHandler) WriteCCIResult(
 // cciStreamCtxCheckInterval 是 CCI 寫檔 emit loop 內 ctx 取消檢查間隔,
 // 跟原 cci 套件常數 (cciChartCtxCheckInterval) 對齊,避免每點 select 過熱。
 const cciStreamCtxCheckInterval = 64
-
-// errEmptyCCIResult 標示 WriteCCIResult 收到 nil result。
-var errEmptyCCIResult = stderrors.New("WriteCCIResult: result is nil")
 
 // MuscleRatioOutputAllPayload 是 WriteMuscleRatioOutputAll 的輸入承載結構。
 //

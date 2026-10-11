@@ -17,8 +17,7 @@ func TestDownsampleCCI_BelowThreshold_NoChange(t *testing.T) {
 		},
 	}
 
-	out, err := downsampleCCIResult(result, 100)
-	require.NoError(t, err)
+	out := downsampleCCIResult(result, 100)
 	assert.Same(t, result, out, "threshold 大於資料長度時應直接回傳原物件")
 }
 
@@ -63,8 +62,7 @@ func TestDownsampleCCI_UnionPreservesNonFirstPairPeaks(t *testing.T) {
 
 	const threshold = 50
 
-	out, err := downsampleCCIResult(result, threshold)
-	require.NoError(t, err)
+	out := downsampleCCIResult(result, threshold)
 	require.NotSame(t, result, out, "資料量 > threshold，應產生新降採樣結果")
 	require.Len(t, out.PairResults, 2)
 
@@ -104,8 +102,7 @@ func TestDownsampleCCI_SharedXAxis(t *testing.T) {
 		},
 	}
 
-	out, err := downsampleCCIResult(result, 50)
-	require.NoError(t, err)
+	out := downsampleCCIResult(result, 50)
 	require.Len(t, out.PairResults, 2)
 
 	expectLen := len(out.TimeValues)

@@ -27,12 +27,11 @@ const cciChartCtxCheckInterval = 1024
 // GenerateCCIInteractiveChart renders an interactive CCI chart as HTML.
 //
 // 入口先 fail-fast 校驗：
-//   - duration > 0 (對齊 analyzer.go:464-468 CSV 出口；違反 → ErrInvalidGaitCycle)
-//   - 每個 pair.Values 長度 == TimeValues 長度（CCI invariant；違反 →
-//     ErrPairLengthMismatch）
+// result.Validate()（ADR-0053）：gait 區間有限且 duration > 0（違反 →
+// ErrInvalidGaitCycle）、每個 pair.Values 長度 == TimeValues 長度（違反 →
+// ErrPairLengthMismatch）、result 非 nil（ErrNilResult）。
 //
-// 兩個 invariant 都是 caller 應該保證的；違反時不寫出半成品 HTML，避免下游
-// 覆蓋既有正常檔。
+// 違反時不寫出半成品 HTML，避免下游覆蓋既有正常檔。
 //
 // ctx 為第一個參數,讓 caller (例 GUI Wails lifecycle ctx) 可在大 dataset
 // render 中斷流程。hot loop (downsample / label 建構) 每 cciChartCtxCheckInterval
@@ -46,7 +45,7 @@ func GenerateCCIInteractiveChart(ctx context.Context, result *CCIAnalysisResult,
 		return err
 	}
 
-	if err := validateCCIResultForChart(result); err != nil {
+	if err := result.Validate(); err != nil {
 		return err
 	}
 
@@ -68,56 +67,15 @@ func GenerateCCIInteractiveChart(ctx context.Context, result *CCIAnalysisResult,
 	return nil
 }
 
-// validateCCIResultForChart 校驗 chart pipeline 共用的兩個 invariant：
-// duration > 0、所有 pair.Values 長度與 TimeValues 對齊。
-//
-// 對齊 analyzer.go writeCSVFile 的 duration guard，使用同一個 ErrInvalidGaitCycle
-// sentinel；pair 長度不符回傳 ErrPairLengthMismatch（新 sentinel，detail
-// 在 analyzer.go doc）。
-func validateCCIResultForChart(result *CCIAnalysisResult) error {
-	if result == nil {
-		return ErrNilResult
-	}
-
-	// GaitStartTime/GaitEndTime 為 NaN/±Inf 時,下面的 `d <= 0` 對 NaN 與 +Inf 恆為
-	// false 而 silently 通過,產出含 "NaN%"/"+Inf%" 軸標的圖。先擋非有限值,共用
-	// ErrInvalidGaitCycle sentinel(與 zero/negative duration 同語意:gait 區間不合法)。
-	if math.IsNaN(result.GaitStartTime) || math.IsInf(result.GaitStartTime, 0) ||
-		math.IsNaN(result.GaitEndTime) || math.IsInf(result.GaitEndTime, 0) {
-		return fmt.Errorf("%w: start=%v end=%v(含非有限值)",
-			ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
-	}
-
-	if d := result.GaitEndTime - result.GaitStartTime; d <= 0 {
-		return fmt.Errorf("%w: start=%v end=%v",
-			ErrInvalidGaitCycle, result.GaitStartTime, result.GaitEndTime)
-	}
-
-	timeLen := len(result.TimeValues)
-	for i, pr := range result.PairResults {
-		if len(pr.Values) != timeLen {
-			return fmt.Errorf("%w: pair[%d] %q values=%d, time=%d",
-				ErrPairLengthMismatch, i, pr.PairName, len(pr.Values), timeLen)
-		}
-	}
-
-	return nil
-}
-
 // buildCCILine creates and fully configures the go-echarts Line chart.
 // LTTB 降採樣在 setCCIGlobalOptions 之後、X 軸建立之前套用：
 // 12 配對共享同一組索引，TimeValues / Values / PhaseTimes 同步壓縮，
 // 維持所有 series 對齊 shared category X-axis。
 //
-// 回傳 error 用於 propagate downsampleCCIResult 的對齊校驗失敗。
-// GenerateCCIInteractiveChart 入口已先做一次同樣校驗，正常路徑下
-// downsample 不會再 reject — 這層 error 是 defense-in-depth，避免未來
-// 有其他 caller 直接 build line 時繞過 entry guard。
+// 回傳 error 用於 propagate ctx 取消。不變式由 GenerateCCIInteractiveChart
+// 入口的 result.Validate() 唯一把關（ADR-0053），此處不重檢。
 func buildCCILine(ctx context.Context, result *CCIAnalysisResult) (*charts.Line, error) {
-	downsampled, err := downsampleCCIResult(result, cciChartDownsampleThreshold)
-	if err != nil {
-		return nil, err
-	}
+	downsampled := downsampleCCIResult(result, cciChartDownsampleThreshold)
 
 	// downsample 後檢查 ctx,避免後續 series 建構在 cancel 後仍跑完。
 	if err := ctx.Err(); err != nil {
@@ -147,26 +105,14 @@ func buildCCILine(ctx context.Context, result *CCIAnalysisResult) (*charts.Line,
 // apply 到 TimeValues 與所有 PairResults[i].Values，保證所有曲線共享同一個 X 軸。
 // union index 運算（per-pair LTTB + union + threshold*2 cap）委由 chart.UnionLTTBIndices 實施。
 //
-// 為什麼 CCI 在這裡 fail-fast 校驗長度（而非靠 kernel）：
-//   - CCI 的 PairResults[i].Values 與 TimeValues 必須 1:1 對齊，違反是 caller bug。
-//   - chart.UnionLTTBIndices 的 caller invariant 是「長度一致由 adapter 保證」，
-//     mismatch 會在 LTTBDownsample 端 panic。CCI adapter 選擇在 panic 發生前就
-//     fail-fast 回 ErrPairLengthMismatch，避免 half-state HTML 寫出。
-//   - silent passthrough 會讓部分 pair 不被壓縮、X 軸 drift；fail-fast 是 spec 的一部分。
+// Caller invariant：PairResults[i].Values 與 TimeValues 1:1 對齊（長度不符會在
+// LTTBDownsample 端 panic），由入口的 result.Validate() 保證（ADR-0053），此處不重檢。
 //
-// MeanCurves / PhasePercents / PhaseTimes / GaitStartTime / GaitEndTime 不動：
+// PhasePercents / PhaseTimes / GaitStartTime / GaitEndTime 不動：
 // 那些是 phase-domain 元資料（已 normalize 到 0-100% 或單純時間值），不是時序樣本。
-func downsampleCCIResult(result *CCIAnalysisResult, threshold int) (*CCIAnalysisResult, error) {
+func downsampleCCIResult(result *CCIAnalysisResult, threshold int) *CCIAnalysisResult {
 	if result == nil {
-		return result, nil
-	}
-
-	timeLen := len(result.TimeValues)
-	for i, pr := range result.PairResults {
-		if len(pr.Values) != timeLen {
-			return nil, fmt.Errorf("%w: pair[%d] %q values=%d, time=%d",
-				ErrPairLengthMismatch, i, pr.PairName, len(pr.Values), timeLen)
-		}
+		return result
 	}
 
 	matrix := make([][]float64, len(result.PairResults))
@@ -176,7 +122,7 @@ func downsampleCCIResult(result *CCIAnalysisResult, threshold int) (*CCIAnalysis
 
 	indices := chart.UnionLTTBIndices(result.TimeValues, matrix, threshold)
 	if len(indices) == 0 {
-		return result, nil
+		return result
 	}
 
 	downsampledTime := make([]float64, len(indices))
@@ -201,10 +147,9 @@ func downsampleCCIResult(result *CCIAnalysisResult, threshold int) (*CCIAnalysis
 		TimeValues:    downsampledTime,
 		PhasePercents: result.PhasePercents,
 		PhaseTimes:    result.PhaseTimes,
-		MeanCurves:    result.MeanCurves,
 		GaitStartTime: result.GaitStartTime,
 		GaitEndTime:   result.GaitEndTime,
-	}, nil
+	}
 }
 
 // setCCIGlobalOptions configures all global chart options.
@@ -333,15 +278,13 @@ func buildTimeAxisLabels(ctx context.Context, timeValues []float64) ([]string, e
 
 // buildPercentAxisLabels creates percentage labels from actual time values.
 //
-// Caller invariant: GenerateCCIInteractiveChart 在 entry 已校驗 duration > 0
-// (fail-fast, 對齊 analyzer.go:464-468)，因此這裡可以放心除以 duration。
-// 違反契約會在 caller 端就 ErrInvalidGaitCycle，不會走到這個 label builder。
+// Caller invariant: GenerateCCIInteractiveChart 在 entry 已 result.Validate()
+// （duration > 0 且有限），因此 GaitPercent 可放心除以 duration。
 func buildPercentAxisLabels(result *CCIAnalysisResult) []string {
-	duration := result.GaitEndTime - result.GaitStartTime
 	labels := make([]string, len(result.TimeValues))
 
 	for i, t := range result.TimeValues {
-		pct := (t - result.GaitStartTime) / duration * 100
+		pct := result.GaitPercent(t)
 		labels[i] = fmt.Sprintf("%.1f%%", pct)
 	}
 
@@ -476,7 +419,6 @@ func addCCICustomJS(line *charts.Line) {
 					try {
 						const payload = e.data.payload || {};
 						const checkedPhases = Array.isArray(payload.checkedPhases) ? payload.checkedPhases : [];
-						const allChecked = payload.allChecked === true;
 						const option = myChart.getOption();
 						if (!option || !option.xAxis) return;
 						const xLabels = (option.xAxis[0] && option.xAxis[0].data) || [];
@@ -498,13 +440,10 @@ func addCCICustomJS(line *charts.Line) {
 						}
 						const duration = maxT - minT;
 						/* secondary xAxis 百分比 label 重建:
-						   - 全勾 + cache → 還原 cache(避免浮點累積誤差)
 						   - >=2 個勾 + duration > 0 → 線性重算
 						   - else fallback cache 或 0.0% */
 						let newPctLabels;
-						if (allChecked && cached) {
-							newPctLabels = cached;
-						} else if (checkedPhases.length >= 2 && duration > 0 && isFinite(duration)) {
+						if (checkedPhases.length >= 2 && duration > 0 && isFinite(duration)) {
 							newPctLabels = xLabels.map(function(label) {
 								const tVal = parseFloat(label);
 								return ((tVal - minT) / duration * 100).toFixed(1) + '%';

@@ -158,6 +158,11 @@ func (a *CCIAnalyzer) computeCCI(
 	// ADR-0018 Output 2:固定 32-row 分期視窗統計,欄數對齊 result.PairResults。
 	result.PhaseStats = a.buildPhaseStats(result)
 
+	// ADR-0053:出口前驗證不變式,下游 writer / chart 不必各自重檢。
+	if err := result.Validate(); err != nil {
+		return nil, err
+	}
+
 	a.logger.Info("CCI 分析完成", map[string]any{"subject": m.Subject})
 
 	return result, nil
@@ -280,7 +285,7 @@ func (a *CCIAnalyzer) calculateGaitCycle(
 	// 不 Warn — 只對 |超出| > 1e-6 觸發,避免在合法 boundary 噴 spam。
 	const clampWarnEpsilon = 1e-6
 	for name, t := range emgTimes {
-		pct := (t - gaitStart) / duration * 100
+		pct := gaitPercent(t, gaitStart, gaitEnd)
 		if a.logger != nil && (pct < -clampWarnEpsilon || pct > 100+clampWarnEpsilon) {
 			a.logger.Warn(phasePercentClampWarnMsg, map[string]any{
 				"phase":              name,
@@ -460,7 +465,6 @@ func (a *CCIAnalyzer) computeAllPairs(
 	}
 
 	pairResults := make([]CCIResult, 0, len(slots))
-	meanCurves := make(map[string][]float64, len(slots))
 
 	for _, r := range slots {
 		if r.PairName == "" {
@@ -468,7 +472,6 @@ func (a *CCIAnalyzer) computeAllPairs(
 		}
 
 		pairResults = append(pairResults, r)
-		meanCurves[r.PairName] = r.Values
 	}
 
 	return &CCIAnalysisResult{
@@ -477,7 +480,6 @@ func (a *CCIAnalyzer) computeAllPairs(
 		TimeValues:    emgData.Time,
 		PhasePercents: phasePercents,
 		PhaseTimes:    phaseTimes,
-		MeanCurves:    meanCurves,
 	}, nil
 }
 

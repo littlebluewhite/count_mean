@@ -549,6 +549,28 @@ func TestWriteCCIResult_NaNRowSkip(t *testing.T) {
 	require.Len(t, rows, 3) // header + 2 surviving rows (row i=1 全 NaN 被跳過)
 }
 
+// TestWriteCCIResult_NonFiniteGaitTimeRejected 驗證 gait 時間為 NaN 時回錯且不寫檔
+// (ADR-0053:不變式由 CCIAnalysisResult.Validate 持有;舊行為會寫出 NaN 百分比欄)。
+func TestWriteCCIResult_NonFiniteGaitTimeRejected(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	result := &cci.CCIAnalysisResult{
+		Subject:       "subj_NaN",
+		GaitStartTime: math.NaN(),
+		GaitEndTime:   1.0,
+		TimeValues:    []float64{0.0, 0.5, 1.0},
+		PairResults:   []cci.CCIResult{{PairName: "P1", Values: []float64{0.1, 0.2, 0.3}}},
+	}
+
+	_, err := handler.WriteCCIResult(context.Background(), WriteRequest{}, result)
+	require.ErrorIs(t, err, cci.ErrInvalidGaitCycle)
+
+	_, statErr := os.Stat(filepath.Join(tempDir, "subj_NaN_CCI_Rudolph.csv"))
+	require.True(t, os.IsNotExist(statErr), "invalid result 不應留下檔案")
+}
+
 // TestWriteCCIResult_CtxCancel 驗證 pre-cancel 不寫檔。
 func TestWriteCCIResult_CtxCancel(t *testing.T) {
 	t.Parallel()
