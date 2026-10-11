@@ -175,6 +175,18 @@ var translationsZhTW = map[string]string{
 	KeyErrorCSVRowColumnMismatch: "第 %d 行的欄位數量不一致",
 	KeyErrorCSVCellTooLong:       "第 %d 行第 %d 欄的內容過長 (最大 32KB)",
 	KeyErrorCSVCellNotUTF8:       "第 %d 行第 %d 欄包含非 UTF-8 字符",
+	// 檔名規則(validation/filename,ADR-0054)。
+	KeyErrorFilenameEmpty:          "檔案名稱不能為空",
+	KeyErrorFilenameTab:            "檔案名稱不可包含 tab 字元",
+	KeyErrorFilenamePathSeparator:  "檔案名稱不可包含路徑分隔符（/ 或 \\）— 請改用 PathValidator",
+	KeyErrorFilenameDriveLetter:    "檔案名稱不可以 Windows 磁碟代號開頭 (drive letter, 例 C:foo.csv)",
+	KeyErrorFilenameFormatChar:     "檔案名稱包含禁用的 Unicode 格式字元: U+%04X",
+	KeyErrorFilenameControlChar:    "檔案名稱包含非法控制字符",
+	KeyErrorFilenameIllegalChar:    "檔案名稱包含非法字符: %c",
+	KeyErrorFilenameReserved:       "檔案名稱不能使用保留字: %s",
+	KeyErrorFilenameTooLong:        "檔案名稱過長 (最大 255 字符)",
+	KeyErrorFilenameNoExtension:    "檔案名稱缺少副檔名",
+	KeyErrorFilenameUnsupportedExt: "不支援的檔案副檔名: %s",
 	// ConfigPanel — Phase 1 frontend i18n MVP entries (2026-05-14).
 	KeyConfigPanelTitle:            "系統配置",
 	KeyConfigButtonBack:            "返回",

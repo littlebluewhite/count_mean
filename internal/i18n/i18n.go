@@ -285,6 +285,21 @@ const (
 	KeyErrorCSVCellTooLong       = "error.csv.cell_too_long"
 	KeyErrorCSVCellNotUTF8       = "error.csv.cell_not_utf8"
 
+	// 檔名規則(validation/filename,ADR-0054):ValidateName / ValidateFilename 以
+	// i18n.NewError 回帶 key 的錯誤,caller 層 Localize。Args 只有觸發規則的片段
+	// (非法字元、保留字段、副檔名),不回顯整個檔名。
+	KeyErrorFilenameEmpty          = "error.filename.empty"
+	KeyErrorFilenameTab            = "error.filename.tab"
+	KeyErrorFilenamePathSeparator  = "error.filename.path_separator"
+	KeyErrorFilenameDriveLetter    = "error.filename.drive_letter"
+	KeyErrorFilenameFormatChar     = "error.filename.format_char"
+	KeyErrorFilenameControlChar    = "error.filename.control_char"
+	KeyErrorFilenameIllegalChar    = "error.filename.illegal_char"
+	KeyErrorFilenameReserved       = "error.filename.reserved"
+	KeyErrorFilenameTooLong        = "error.filename.too_long"
+	KeyErrorFilenameNoExtension    = "error.filename.no_extension"
+	KeyErrorFilenameUnsupportedExt = "error.filename.unsupported_extension"
+
 	// ConfigPanel — Phase 1 frontend i18n MVP keys (2026-05-14).
 	// 用於前端 frontend/src/main.js showConfigPanel() 字串 catalog 化。
 	// 命名前綴 "config." 避免與既有泛用 Key 衝突(KeyLabelLanguage 等仍保留供他處 reuse)。

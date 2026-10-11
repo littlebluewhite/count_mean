@@ -171,6 +171,18 @@ var translationsJaJP = map[string]string{
 	KeyErrorCSVRowColumnMismatch: "%d 行目の列数が一致しません",
 	KeyErrorCSVCellTooLong:       "%d 行目 %d 列目の内容が長すぎます (最大 32KB)",
 	KeyErrorCSVCellNotUTF8:       "%d 行目 %d 列目に UTF-8 以外の文字が含まれています",
+	// 檔名規則(validation/filename,ADR-0054)。
+	KeyErrorFilenameEmpty:          "ファイル名を空にすることはできません",
+	KeyErrorFilenameTab:            "ファイル名にタブ文字を含めることはできません",
+	KeyErrorFilenamePathSeparator:  "ファイル名にパス区切り文字（/ または \\）を含めることはできません — PathValidator を使用してください",
+	KeyErrorFilenameDriveLetter:    "ファイル名を Windows のドライブ文字で始めることはできません (drive letter, 例 C:foo.csv)",
+	KeyErrorFilenameFormatChar:     "ファイル名に禁止された Unicode 書式文字が含まれています: U+%04X",
+	KeyErrorFilenameControlChar:    "ファイル名に不正な制御文字が含まれています",
+	KeyErrorFilenameIllegalChar:    "ファイル名に不正な文字が含まれています: %c",
+	KeyErrorFilenameReserved:       "ファイル名に予約語は使用できません: %s",
+	KeyErrorFilenameTooLong:        "ファイル名が長すぎます (最大 255 文字)",
+	KeyErrorFilenameNoExtension:    "ファイル名に拡張子がありません",
+	KeyErrorFilenameUnsupportedExt: "サポートされていないファイル拡張子です: %s",
 	// ConfigPanel — Phase 1 frontend i18n MVP entries (2026-05-14).
 	KeyConfigPanelTitle:            "システム設定",
 	KeyConfigButtonBack:            "戻る",

@@ -171,6 +171,18 @@ var translationsEnUS = map[string]string{
 	KeyErrorCSVRowColumnMismatch: "Row %d has an inconsistent number of columns",
 	KeyErrorCSVCellTooLong:       "Cell at row %d, column %d is too long (max 32KB)",
 	KeyErrorCSVCellNotUTF8:       "Cell at row %d, column %d contains non-UTF-8 characters",
+	// 檔名規則(validation/filename,ADR-0054)。
+	KeyErrorFilenameEmpty:          "File name cannot be empty",
+	KeyErrorFilenameTab:            "File name must not contain a tab character",
+	KeyErrorFilenamePathSeparator:  "File name must not contain path separators (/ or \\); use PathValidator instead",
+	KeyErrorFilenameDriveLetter:    "File name must not start with a Windows drive letter (e.g. C:foo.csv)",
+	KeyErrorFilenameFormatChar:     "File name contains a forbidden Unicode format character: U+%04X",
+	KeyErrorFilenameControlChar:    "File name contains illegal control characters",
+	KeyErrorFilenameIllegalChar:    "File name contains an illegal character: %c",
+	KeyErrorFilenameReserved:       "File name must not use a reserved name: %s",
+	KeyErrorFilenameTooLong:        "File name is too long (max 255 characters)",
+	KeyErrorFilenameNoExtension:    "File name has no extension",
+	KeyErrorFilenameUnsupportedExt: "Unsupported file extension: %s",
 	// ConfigPanel — Phase 1 frontend i18n MVP entries (2026-05-14).
 	KeyConfigPanelTitle:            "System Configuration",
 	KeyConfigButtonBack:            "Back",

@@ -2,13 +2,12 @@
 package filename
 
 import (
-	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
 
-	"count_mean/internal/errors"
+	"count_mean/internal/i18n"
 )
 
 // windowsDriveLetterPrefix 識別 Windows DOS-style drive-letter 前綴 (例 `C:foo.csv`)。
@@ -86,9 +85,12 @@ func (v *Validator) ValidateFilename(filename string) error {
 //   - 檔案系統非法字元 `<>:"|?*`（注入防禦不在此層，見 ADR-0041）
 //   - Windows reserved names (CON / PRN / AUX / NUL / COMx / LPTx)，逐個點分段比對
 //   - 長度上限 255
+//
+// 錯誤是帶 key 的 i18n.Error（error.filename.*），caller 層 Localize；Args 只有觸發規則的
+// 片段（非法字元、保留字段、副檔名），不回顯整個檔名。
 func ValidateName(filename string) error {
 	if filename == "" {
-		return errors.NewValidationError("filename", filename, "檔案名稱不能為空")
+		return i18n.NewError(i18n.KeyErrorFilenameEmpty)
 	}
 
 	// L15 — 在 TrimSpace 之前先擋 tab。TrimSpace 把前後 \t 剝掉，會讓
@@ -97,26 +99,24 @@ func ValidateName(filename string) error {
 	// completion / 拷貝貼上）都會壞掉，先擋更保守。中段 tab 由 checkControlChars
 	// 額外覆蓋（已不再例外）。
 	if strings.ContainsRune(filename, '\t') {
-		return errors.NewValidationError("filename", filename, "檔案名稱不可包含 tab 字元")
+		return i18n.NewError(i18n.KeyErrorFilenameTab)
 	}
 
 	filename = strings.TrimSpace(filename)
 	if filename == "" {
-		return errors.NewValidationError("filename", filename, "檔案名稱不能為空")
+		return i18n.NewError(i18n.KeyErrorFilenameEmpty)
 	}
 
 	// Reject path separators — 本 validator 只接受 base filename。
 	if strings.ContainsAny(filename, `/\`) {
-		return errors.NewValidationError("filename", filename,
-			"檔案名稱不可包含路徑分隔符（/ 或 \\）— 請改用 PathValidator")
+		return i18n.NewError(i18n.KeyErrorFilenamePathSeparator)
 	}
 
 	// explicit Windows drive-letter prefix guard。
 	// 在 control-char check 之前,確保 drive-letter 永遠有獨立的 error message,
 	// 不依賴 `:` 仍被列為 dangerous char (defense-in-depth)。
 	if windowsDriveLetterPrefix.MatchString(filename) {
-		return errors.NewValidationError("filename", filename,
-			"檔案名稱不可以 Windows 磁碟代號開頭 (drive letter, 例 C:foo.csv)")
+		return i18n.NewError(i18n.KeyErrorFilenameDriveLetter)
 	}
 
 	// Check for null bytes, control characters, and Unicode format/surrogate
@@ -127,8 +127,7 @@ func ValidateName(filename string) error {
 
 	// 只擋檔案系統非法字元；`'` `&` `--` `sp_` 等是常見 EMG 命名，放行。
 	if i := strings.IndexAny(filename, illegalFilenameChars); i >= 0 {
-		return errors.NewValidationError("filename", filename,
-			fmt.Sprintf("檔案名稱包含非法字符: %c", filename[i]))
+		return i18n.NewError(i18n.KeyErrorFilenameIllegalChar, filename[i])
 	}
 
 	// Check for reserved names (Windows).
@@ -150,14 +149,13 @@ func ValidateName(filename string) error {
 
 		seg := strings.ToUpper(segment)
 		if isReservedName(seg) {
-			return errors.NewValidationError("filename", filename,
-				fmt.Sprintf("檔案名稱不能使用保留字: %s", seg))
+			return i18n.NewError(i18n.KeyErrorFilenameReserved, seg)
 		}
 	}
 
 	// Check length (max 255 characters, common filesystem limit)
 	if len(filename) > 255 { //nolint:mnd // 255 is the standard max filename length
-		return errors.NewValidationError("filename", filename, "檔案名稱過長 (最大 255 字符)")
+		return i18n.NewError(i18n.KeyErrorFilenameTooLong)
 	}
 
 	return nil
@@ -185,10 +183,9 @@ func checkControlChars(filename string) error {
 		// \p{Cf} 包含 BOM(U+FEFF)、RTL override(U+202E)、bidi controls (U+2066-U+2069)、
 		// ZWSP/ZWJ/WJ 等；\p{Cs} 為 UTF-16 surrogate。在 base filename context 都應 reject。
 		if unicode.In(r, unicode.Cf, unicode.Cs) {
-			return errors.NewValidationError("filename", filename,
-				fmt.Sprintf("檔案名稱包含禁用的 Unicode 格式字元: U+%04X", r))
+			return i18n.NewError(i18n.KeyErrorFilenameFormatChar, r)
 		}
-		return errors.NewValidationError("filename", filename, "檔案名稱包含非法控制字符")
+		return i18n.NewError(i18n.KeyErrorFilenameControlChar)
 	}
 
 	return nil
@@ -204,9 +201,8 @@ func (v *Validator) checkExtension(filename string) error {
 	}
 
 	if ext == "" {
-		return errors.NewValidationError("filename", filename, "檔案名稱缺少副檔名")
+		return i18n.NewError(i18n.KeyErrorFilenameNoExtension)
 	}
 
-	return errors.NewValidationError("filename", filename,
-		fmt.Sprintf("不支援的檔案副檔名: %s", ext))
+	return i18n.NewError(i18n.KeyErrorFilenameUnsupportedExt, ext)
 }
