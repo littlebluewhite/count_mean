@@ -17,6 +17,7 @@ import (
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/parsers"
+	"count_mean/internal/security/redact"
 	"count_mean/internal/synchronizer"
 )
 
@@ -155,15 +156,18 @@ func (analyzer *PhaseSyncAnalyzer) validatePhasePair(startPhase, endPhase models
 // baseFolder 的 os.Stat 顯式守門保留：EvalSymlinks 失敗會 silently 落回原始字串，
 // 顯式擋下配合 ErrBaseFolderNotFound 給明確訊息；解析後存入 ctx.baseFolder，
 // 後續 validateMotionFile / validateForceFile 共用（OpenDataFile 接受已解析的 base）。
+//
+// 資料夾以 redact.DirPath 帶入訊息、整條隱藏（末段常是病患名，ADR-0059）。Stat 的其他
+// 失敗以原 *fs.PathError 為 Cause，那段文字仍帶路徑，由 sink 端 redact.Paths 處理。
 func validateEMGFilePath(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
 	baseFolder := ctx.dataFolder
 	if info, err := os.Stat(baseFolder); err != nil {
 		if os.IsNotExist(err) {
-			return i18n.WrapError(ErrBaseFolderNotFound, i18n.KeyErrorPhaseSyncDataFolderNotFound, baseFolder)
+			return i18n.WrapError(ErrBaseFolderNotFound, i18n.KeyErrorPhaseSyncDataFolderNotFound, redact.DirPath(baseFolder))
 		}
-		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncDataFolderStatFailed, baseFolder)
+		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncDataFolderStatFailed, redact.DirPath(baseFolder))
 	} else if !info.IsDir() {
-		return i18n.WrapError(ErrBaseFolderNotFound, i18n.KeyErrorPhaseSyncDataFolderNotDir, baseFolder)
+		return i18n.WrapError(ErrBaseFolderNotFound, i18n.KeyErrorPhaseSyncDataFolderNotDir, redact.DirPath(baseFolder))
 	}
 
 	if resolvedBase, err := filepath.EvalSymlinks(baseFolder); err == nil {

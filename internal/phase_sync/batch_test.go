@@ -24,6 +24,7 @@ import (
 // 不變），然後 PathValidator 才用一個不存在的 base 做舊 isPathWithinBase(已併入 fsperm.IsWithin)比較，得到
 // 含糊的 "EMG 檔案路徑驗證失敗"。修復後需在 EvalSymlinks 失敗且原因非 ENOENT 之外的
 // 情況下顯式 return 「資料夾不存在」class 錯誤，方便使用者快速定位設定錯誤。
+// 資料夾本身不進訊息（redact.DirPath 整條隱藏，末段常是病患名；ADR-0059）。
 func TestValidateEMGFilePath_NonExistentBaseFolder(t *testing.T) {
 	analyzer := NewPhaseSyncAnalyzer()
 
@@ -51,6 +52,6 @@ TestSubject,motion.csv,force.csv,emg.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350
 		"non-existent baseFolder should wrap ErrBaseFolderNotFound; got: %v", err)
 	assert.Contains(t, err.Error(), "資料夾不存在",
 		"error message should be human-readable; got: %v", err)
-	assert.Contains(t, err.Error(), nonExistent,
-		"error should include the offending baseFolder path for debuggability")
+	assert.NotContains(t, err.Error(), "definitely_missing_subdir",
+		"資料夾名不可出現在錯誤文字(含 log)")
 }

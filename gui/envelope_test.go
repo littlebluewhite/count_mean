@@ -209,7 +209,8 @@ func TestEnvelope_LocalizesAnalyzerErrors(t *testing.T) {
 			enUS: "Subject name is empty",
 		},
 		{
-			// DataFolder 不存在:phase_sync 的「資料夾不存在 (%s)」帶路徑 Arg,植入目錄段被 redact。
+			// DataFolder 不存在:phase_sync 的「資料夾不存在 (%s)」路徑 Arg 是 redact.DirPath,
+			// 整條隱藏 —— 植入目錄段與末段 missing 都不出現(ADR-0059)。
 			name: "AnalyzePhaseSync_DataFolderMissing",
 			call: func(t *testing.T) string {
 				app := newRPCRedactTestApp(t, t.TempDir(), "")
@@ -225,8 +226,8 @@ func TestEnvelope_LocalizesAnalyzerErrors(t *testing.T) {
 
 				return result.Message
 			},
-			zhTW: "分析失敗: 資料夾不存在 (<redacted-path>/missing): base folder not found",
-			enUS: "Analysis failed: Data folder does not exist (<redacted-path>/missing): base folder not found",
+			zhTW: "分析失敗: 資料夾不存在 (<redacted-path>/): base folder not found",
+			enUS: "Analysis failed: Data folder does not exist (<redacted-path>/): base folder not found",
 		},
 		{
 			// 同上,經 NPS 的 *phase_sync.AnalysisError(StageLoad → 載入資料失敗前綴)。
@@ -247,8 +248,8 @@ func TestEnvelope_LocalizesAnalyzerErrors(t *testing.T) {
 
 				return result.Message
 			},
-			zhTW: "載入資料失敗: 資料夾不存在 (<redacted-path>/missing): base folder not found",
-			enUS: "Failed to load data: Data folder does not exist (<redacted-path>/missing): base folder not found",
+			zhTW: "載入資料失敗: 資料夾不存在 (<redacted-path>/): base folder not found",
+			enUS: "Failed to load data: Data folder does not exist (<redacted-path>/): base folder not found",
 		},
 	}
 

@@ -129,6 +129,7 @@ func TestOpenDataFile_TraversalErrorsIs(t *testing.T) {
 
 // TestOpenDataFile_BaseFolderNotFound 釘住 base 無法解析的 fail-closed 行為:
 // 不存在的 baseFolder → EvalSymlinks 失敗 → 命中 ErrBaseFolderNotFound、file 回 nil。
+// 錯誤文字不帶資料夾名(末段常是病患名,sink 端 redact.Paths 會保留它;ADR-0059)。
 func TestOpenDataFile_BaseFolderNotFound(t *testing.T) {
 	t.Parallel()
 
@@ -144,6 +145,9 @@ func TestOpenDataFile_BaseFolderNotFound(t *testing.T) {
 
 	if !errors.Is(err, ErrBaseFolderNotFound) {
 		t.Errorf("errors.Is(err, ErrBaseFolderNotFound) = false; err=%v", err)
+	}
+	if strings.Contains(err.Error(), "no_such_base_dir") {
+		t.Errorf("錯誤文字不可帶資料夾名: %v", err)
 	}
 }
 

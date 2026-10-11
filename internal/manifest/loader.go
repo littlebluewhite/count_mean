@@ -26,6 +26,7 @@ import (
 	"count_mean/internal/parsers"
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
+	"count_mean/internal/security/redact"
 	"count_mean/internal/validation/filename"
 )
 
@@ -142,7 +143,7 @@ func LoadEMG(dataFolder string, row *models.PhaseManifest) (*models.PhaseSyncEMG
 // # 錯誤分類契約（caller 用 errors.Is 區分）
 //
 //   - ErrBaseFolderNotFound — baseFolder 本身無法 EvalSymlinks（不存在 / 壞 symlink），
-//     本門明確 fail-closed。
+//     本門明確 fail-closed。資料夾以 redact.DirPath 帶入訊息、整條隱藏（末段常是病患名，ADR-0059）。
 //   - ErrManifestDataFileMissing — 路徑合法但檔案不存在（OpenLenientValidated 的 ENOENT
 //     經雙層 %w 包裝仍保留 os.ErrNotExist，故以 errors.Is(err, os.ErrNotExist) 判定）。
 //   - ErrManifestDataFilePathInvalid — 其餘一切「路徑本身有問題」的 catch-all：檔名不合法
@@ -157,7 +158,7 @@ func LoadEMG(dataFolder string, row *models.PhaseManifest) (*models.PhaseSyncEMG
 func OpenDataFile(baseFolder, name string) (*os.File, error) {
 	resolvedBase, err := filepath.EvalSymlinks(baseFolder)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrBaseFolderNotFound, baseFolder)
+		return nil, fmt.Errorf("%w: %s", ErrBaseFolderNotFound, redact.DirPath(baseFolder))
 	}
 
 	// name 是 manifest 內的相對檔名、不是本機路徑:`\` 正規化成 `/` 後用 path.Base(只認 `/`),

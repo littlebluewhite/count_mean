@@ -3,6 +3,7 @@ package phase_sync //nolint:revive // underscore in package name matches directo
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -16,13 +17,16 @@ import (
 // TestPhaseSyncErrors_ZhTWTextLocalizedAtHandler 釘住 ADR-0048:phase_sync 原本硬編碼的
 // zh 錯誤改為帶 i18n key 的錯誤。
 //
-//   - err.Error() 與改前逐位元組相同(zh-TW),不隨 locale 變;sentinel 仍以 errors.Is 命中
+//   - err.Error() 與改前逐位元組相同(zh-TW),不隨 locale 變;sentinel 仍以 errors.Is 命中。
+//     路徑 Arg 列例外:資料夾以 redact.DirPath 傳入,Error() 與 Localize 都整條隱藏(ADR-0059)
 //   - i18n.Localize(err) 在 en-US 下渲染英文:巢狀前綴各自在地化、sentinel 文字(英文)
 //     原樣、*i18n.Error sentinel 之上的一般 wrapper 保留自己的文字、AnalysisError 透明
 func TestPhaseSyncErrors_ZhTWTextLocalizedAtHandler(t *testing.T) {
 	t.Cleanup(func() { i18n.SetLocale(i18n.LocaleZhTW) })
 
 	missingFolder := filepath.Join(t.TempDir(), "missing")
+	notDirFolder := filepath.Join(t.TempDir(), "file.csv")
+	require.NoError(t, os.WriteFile(notDirFolder, nil, 0o600))
 	emgData := &models.PhaseSyncEMGData{Time: []float64{0.0, 1.0, 2.0}}
 
 	cases := []struct {
@@ -33,13 +37,23 @@ func TestPhaseSyncErrors_ZhTWTextLocalizedAtHandler(t *testing.T) {
 		enUS     string
 	}{
 		{
+			// 路徑 Arg 是 redact.DirPath:資料夾整條隱藏,含末段(ADR-0059)。
 			name: "資料夾不存在(路徑 Arg)",
 			build: func() error {
 				return validateEMGFilePath(nil, &validationContext{dataFolder: missingFolder})
 			},
 			sentinel: ErrBaseFolderNotFound,
-			zhTW:     "資料夾不存在 (" + missingFolder + "): base folder not found",
-			enUS:     "Data folder does not exist (" + missingFolder + "): base folder not found",
+			zhTW:     "資料夾不存在 (<redacted-path>/): base folder not found",
+			enUS:     "Data folder does not exist (<redacted-path>/): base folder not found",
+		},
+		{
+			name: "資料夾路徑非目錄(路徑 Arg)",
+			build: func() error {
+				return validateEMGFilePath(nil, &validationContext{dataFolder: notDirFolder})
+			},
+			sentinel: ErrBaseFolderNotFound,
+			zhTW:     "資料夾路徑非目錄 (<redacted-path>/): base folder not found",
+			enUS:     "Data folder path is not a directory (<redacted-path>/): base folder not found",
 		},
 		{
 			name: "D 分期點超出 Motion 範圍",

@@ -16,6 +16,8 @@ import (
 // plantedDirMarker 是植入目錄的辨識段。每列觸發的路徑都把它放在「非末段」位置
 // (planted/missing.csv、planted/blocker…):redact.Paths 保證砍掉 basename 之前
 // 的所有目錄段,但會留下末段,所以只對非末段斷言才是 redact.Paths 真正的保證。
+// 例外:以 redact.DirPath 帶入錯誤的資料夾整條隱藏,該列可把植入段放在末段
+// (AnalyzeCCI_DataFolderMissing,ADR-0059)。
 const plantedDirMarker = "PatientAlice_PHI_7f3c"
 
 // plantDir 在 t.TempDir() 下建立帶 plantedDirMarker 的目錄,模擬病患資料夾。
@@ -239,6 +241,23 @@ func TestRPCMessage_NoAbsolutePath(t *testing.T) {
 				result, err := app.AnalyzeCCI(CCIParams{
 					ManifestFile: missingManifest(planted),
 					DataFolder:   planted,
+					Subject:      "S1",
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+		},
+		{
+			// DataFolder 本身不存在、末段就是病患資料夾名:manifest.OpenDataFile 的
+			// ErrBaseFolderNotFound 以 redact.DirPath 帶資料夾,末段也隱藏(ADR-0059)。
+			name: "AnalyzeCCI_DataFolderMissing",
+			call: func(t *testing.T, planted string) string {
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzeCCI(CCIParams{
+					ManifestFile: writeEnvelopeTestManifest(t, t.TempDir(), "S1"),
+					DataFolder:   filepath.Join(planted, plantedDirMarker),
 					Subject:      "S1",
 				})
 				require.NoError(t, err)
