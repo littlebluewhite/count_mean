@@ -98,16 +98,18 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 
 	t.Run("SecurityAndValidationIntegration", func(t *testing.T) {
 		validator := filename.NewValidator()
-		pathValidator := security.NewPathValidator([]string{inputDir, outputDir})
+		// ValidateFilePath(allow-list)已刪(ADR-0055,修訂 ADR-0038 §3.2);
+		// 使用者選的檔案走 ValidateExternalPath:traversal / 敏感位置,不限 allow-list。
+		pathValidator := security.DefaultValidator()
 
 		// Test path validation integration
 		validPath := filepath.Join(inputDir, "valid.csv")
-		err := pathValidator.ValidateFilePath(validPath)
+		err := pathValidator.ValidateExternalPath(validPath)
 		assert.NoError(t, err)
 
 		// Test invalid path
 		invalidPath := "../../../etc/passwd"
-		err = pathValidator.ValidateFilePath(invalidPath)
+		err = pathValidator.ValidateExternalPath(invalidPath)
 		assert.Error(t, err)
 
 		// Test filename validation

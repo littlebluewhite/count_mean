@@ -30,10 +30,9 @@ var ErrOddArityValidatorArgs = errors.New("validateExternalPathInputs: 參數數
 // DataFolder 命名，傳 label 才能讓 error message 對應到具體欄位。空字串路徑
 // 直接 skip（由各 handler 自己的「請選擇 XX」哨兵 error 接住）。
 //
-// 為何用 ValidateExternalPath 而非 ValidateFilePath：GUI file dialog 回來的路徑
-// 通常落在 InputDir 白名單外（使用者可選 Desktop / pCloud 等任意目錄）。
-// ValidateFilePath 會把它擋掉；ValidateExternalPath 不檢查 allowedBasePaths，
-// 只做 traversal / 系統敏感目錄 / 路徑長度等基本檢查，正合需求。
+// 為何用 ValidateExternalPath：GUI file dialog 回來的路徑通常落在 InputDir 之外
+// （使用者可選 Desktop / pCloud 等任意目錄）。ValidateExternalPath 不檢查
+// allowedBasePaths，只做 traversal / 系統敏感目錄 / 路徑長度等基本檢查，正合需求。
 // 檔名規則（Windows 保留名等）不在這一層：分期總檔由 manifest.LoadManifests 以
 // filename.ValidateName 把關，PNG 輸出名由 filename.SubjectOutputName 保證合法（ADR-0054）。
 //

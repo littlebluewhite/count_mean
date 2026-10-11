@@ -80,7 +80,7 @@ func (h *AtomicWriteHandle) File() *os.File { return h.file }
 // accepts the already-computed tmpPath and never recomputes it; the random
 // crypto suffix + NAME_MAX truncation live in this package's makeTmpPath (atomic_write_file.go).
 //
-// Flow (cross-platform, mirrors OpenWriteValidated):
+// Flow (cross-platform, mirrors OpenReadValidated):
 //  1. len(basePaths)==0 → ErrBasePathsEmpty.
 //  2. Require filepath.Dir(targetPath) == filepath.Dir(tmpPath) — else error.
 //  3. EvalSymlinksWithFallback(parent, 0) — resolve the parent's symlinks.
@@ -120,7 +120,7 @@ func OpenAtomicWriteValidated(targetPath, tmpPath string, basePaths []string) (*
 	targetDir := filepath.Dir(targetPath)
 	tmpDir := filepath.Dir(tmpPath)
 	if targetDir != tmpDir {
-		//nolint:err113 // caller-facing API-misuse message; not a sentinel callers match on (mirrors OpenWriteValidated's dynamic path errors)
+		//nolint:err113 // caller-facing API-misuse message; not a sentinel callers match on (mirrors OpenReadValidated's dynamic path errors)
 		return nil, fmt.Errorf(
 			"fsperm.OpenAtomicWriteValidated: tmp 與 target 必須同目錄 (tmpDir=%s, targetDir=%s)",
 			redactDir(tmpDir), redactDir(targetDir))

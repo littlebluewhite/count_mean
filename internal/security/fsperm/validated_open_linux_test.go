@@ -15,7 +15,7 @@ import (
 
 // probeOpenat2Supported 檢查當前 kernel 是否實作 openat2 (Linux 5.6+)。
 // 對 "/" 開 dirfd 後試呼一次 openat2;若 ENOSYS 表示舊 kernel 或 LSM 拒絕,
-// 此時 openValidated / openReadValidated 會 fallback 到 os.OpenFile,
+// 此時 openReadValidated / openAtomicWrite 會 fallback 到 os.OpenFile,
 // 而 os.OpenFile 已由 Go stdlib 自動設 CLOEXEC — 本 test 守的是 raw syscall
 // 路徑,故在 ENOSYS 機台直接 skip。
 func probeOpenat2Supported(t *testing.T) {
@@ -47,7 +47,7 @@ func probeOpenat2Supported(t *testing.T) {
 //
 // 跨平台殘餘風險:darwin / windows / other_unix / Linux ENOSYS fallback 都走
 // os.OpenFile,Go stdlib 已自動設 CLOEXEC — 本 test 守的就是 openat2 raw syscall
-// 這條唯一漏網路徑。Test 透過公開 API (OpenWriteValidated / OpenReadValidated)
+// 這條唯一漏網路徑。Test 透過公開 API (OpenAtomicWriteValidated / OpenReadValidated)
 // 開檔以模擬真實 caller,而非直接呼 unix.Openat2 (那只會 test syscall 本身)。
 func TestOpenat2_SetsCloexec(t *testing.T) {
 	t.Parallel()
@@ -57,17 +57,18 @@ func TestOpenat2_SetsCloexec(t *testing.T) {
 
 	t.Run("write_fd_has_FD_CLOEXEC", func(t *testing.T) {
 		t.Parallel()
+		// 寫入端唯一的 open 是 atomic write 的 tmp(OpenWriteValidated 已於 ADR-0055 刪除)。
 		target := filepath.Join(baseDir, "write_cloexec.csv")
-		f, err := fsperm.OpenWriteValidated(target, []string{baseDir})
+		h, err := fsperm.OpenAtomicWriteValidated(target, target+".tmp", []string{baseDir})
 		if err != nil {
-			t.Fatalf("OpenWriteValidated failed: %v", err)
+			t.Fatalf("OpenAtomicWriteValidated failed: %v", err)
 		}
 		defer func() {
-			_ = f.Close()
-			_ = os.Remove(target)
+			_ = h.File().Close()
+			_ = h.Abort()
 		}()
 
-		flags, err := unix.FcntlInt(f.Fd(), unix.F_GETFD, 0)
+		flags, err := unix.FcntlInt(h.File().Fd(), unix.F_GETFD, 0)
 		if err != nil {
 			t.Fatalf("FcntlInt(F_GETFD) failed: %v", err)
 		}

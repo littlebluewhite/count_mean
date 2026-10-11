@@ -3,8 +3,9 @@
 // are restricted to allowed directories.
 //
 // 本套件提供兩條路徑驗證 API，**選用規則見 lenient_path.go 開頭的 Decision matrix**：
-//   - PathValidator (此檔)：strict file（ValidateFilePath，限 allow-list 內）/
-//     external file（ValidateExternalPath）/ external dir（ValidateExternalDir），見 ADR-0038
+//   - PathValidator (此檔)：external file（ValidateExternalPath）/ external dir
+//     （ValidateExternalDir），見 ADR-0038。原 strict file 的 ValidateFilePath 無 production
+//     caller，ADR-0055 刪除；寫入 OutputDir 的檔案由 io 的 Output placement 守門
 //   - OpenLenientValidated (lenient_path.go)：manifest-driven user files（檔名可能含 BTS 字面 "%"）
 //
 // 路徑一律不做 URL-decode：`%`、`+` 皆為字面檔名字元（ADR-0039）。
@@ -27,7 +28,6 @@ import (
 var (
 	ErrPathTraversal      = errors.New("路徑包含可疑的遍歷模式")
 	ErrPathTraversalAbs   = errors.New("絕對路徑仍包含遍歷字符")
-	ErrPathOutOfScope     = errors.New("路徑超出允許範圍")
 	ErrSensitiveDirectory = errors.New("路徑指向系統敏感目錄")
 	ErrPathTooLong        = errors.New("路徑長度超過限制")
 	// ErrPathContainsNUL is returned when the input contains a NUL byte
@@ -84,52 +84,6 @@ func NewPathValidator(allowedBasePaths []string) *PathValidator {
 	}
 }
 
-// ValidateFilePath validates that a file path is within allowed directories.
-//
-// 用於受控的內部讀寫路徑 (InputDir / OutputDir / OperateDir)。對於使用者選的
-// 任意檔（GUI file dialog 回來的絕對路徑），改用 ValidateExternalPath，否則
-// 路徑落在 allowedBasePaths 外會被 reject。
-//
-// 路徑不做 URL-decode:`%`、`+` 等一律是字面檔名字元(見 validatePathFormat)。
-func (pv *PathValidator) ValidateFilePath(path string) error {
-	if path == "" {
-		return nil
-	}
-
-	// NUL byte 早期 reject — 對稱 lenient_path 與 validateExternalPathInputs,
-	// 所有 strict 路徑 API 必須一致拒絕。
-	if strings.ContainsRune(path, '\x00') {
-		return fmt.Errorf("%w", ErrPathContainsNUL)
-	}
-
-	absPath, err := pv.validatePathFormat(path)
-	if err != nil {
-		return err
-	}
-
-	allowed := pv.allowedBasePaths
-
-	// 靈活的白名單驗證機制 - 避免絕對路徑長度限制
-	if len(allowed) == 0 {
-		// 如果沒有設定允許路徑，只進行基本安全檢查
-		return checkSensitiveLocation(absPath, false)
-	}
-
-	// 檢查路徑是否在允許的基礎路徑內
-	for _, basePath := range allowed {
-		// 白名單本應已絕對化(NewPathValidator);再 Abs 一次支援長絕對路徑、容忍手建的 validator。
-		absBase, absErr := filepath.Abs(basePath)
-		if absErr != nil {
-			continue
-		}
-		if fsperm.IsWithin(absBase, absPath) {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("%w: %s", ErrPathOutOfScope, path)
-}
-
 // ValidateExternalPath validates an externally-selected path (e.g. from a GUI
 // file dialog) without enforcing the allowed-base-paths whitelist. Use for
 // CSV reads (CSVHandler.ReadCSV), manifest / data-folder inputs
@@ -173,7 +127,7 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 		return nil
 	}
 
-	// 對稱 ValidateFilePath 的 NUL byte reject — boundary 早期擋下惡意 input。
+	// NUL byte 早期 reject — 對稱 lenient_path,boundary 早期擋下惡意 input。
 	if strings.ContainsRune(path, '\x00') {
 		return fmt.Errorf("%w", ErrPathContainsNUL)
 	}
@@ -205,7 +159,7 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 	return checkSensitiveLocation(resolvedPath, isDir)
 }
 
-// validatePathFormat 做 ValidateFilePath / ValidateExternalPath 共用的前置檢查:
+// validatePathFormat 做 validateExternal 的前置檢查:
 // traversal + 絕對化。回傳 Clean 後的絕對路徑。
 //
 // 不做 URL-decode:path 是檔案系統路徑,不是 URL。`%2E%2E`、`%2F`、`+` 都是字面檔名
@@ -258,8 +212,8 @@ func HasTraversalElement(path string) bool {
 // isDir 為 true 時比對前補結尾分隔符,讓目錄根本身(`/etc`)也命中以 `/` 結尾的
 // pattern(`/etc/`);`/etc-backup` 補完是 `/etc-backup/`,不會誤中。
 //
-// ValidateFilePath(無白名單時)與 ValidateExternalPath / ValidateExternalDir 共用;
-// 後兩者對 lexical absPath 與 EvalSymlinks 解析後的 resolved path 各跑一次。
+// ValidateExternalPath / ValidateExternalDir 共用:對 lexical absPath 與 EvalSymlinks
+// 解析後的 resolved path 各跑一次。
 // sensitivePatterns 含 `/private/etc/`(macOS 上 EvalSymlinks(/etc) 的真實結果),
 // 讓 layer-2 也能擋住經 symlink 跳轉的攻擊;但**不**加 `/private/var/`、`/private/tmp/`,
 // 避免誤擋 macOS `t.TempDir()` 與 GUI app working dir(真實落在 `/private/var/folders/`)。

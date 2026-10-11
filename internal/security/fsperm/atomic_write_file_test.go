@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"count_mean/internal/security/fsperm"
@@ -274,5 +275,95 @@ func TestAtomicWriteFile_Validated_OverwritesExistingTarget(t *testing.T) {
 	}
 	if orphans := tmpOrphanGlob(t, dir); len(orphans) != 0 {
 		t.Errorf("tmp 孤兒應在 rename 後消失, 找到: %v", orphans)
+	}
+}
+
+// 以下三條承接 ADR-0055 刪除的 csvutil.WriteCSVAtomic 測試中屬於落檔協定的部分。
+
+// TestAtomicWriteFile_LongBasenameTmpStaysUnderNameMax 釘住:final basename 本身合法
+// (<=255 bytes)但加上 tmp 後綴(".tmp." + 16 hex = 21 bytes)會跨越 NAME_MAX 時,
+// AtomicWriteFile 仍成功 —— tmp basename 截斷讓中介檔 fit,final 以完整檔名寫出。
+//
+// 回歸來源 (codex Round 2 [P2]):normalized PhaseSync 把 ~200-byte subject 拼成
+// ~238-byte filename,遷 atomic 後 tmp ~259 bytes 在 255 上限的 fs 上 ENAMETOOLONG。
+// 平台前提:ext4 / APFS 等 NAME_MAX=255。basename 取 245 → final 合法,tmp 無截斷會溢位。
+func TestAtomicWriteFile_LongBasenameTmpStaysUnderNameMax(t *testing.T) {
+	t.Parallel()
+
+	dir := resolvedTempDir(t)
+	name := strings.Repeat("a", 245-len(".csv")) + ".csv"
+	path := filepath.Join(dir, name)
+
+	err := fsperm.AtomicWriteFile(path, []string{dir}, func(w io.Writer) error {
+		_, writeErr := io.WriteString(w, "v\n")
+		return writeErr
+	})
+	if err != nil {
+		t.Fatalf("long-but-valid basename 應成功, got %v", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("final 應以完整 basename 寫出: %v", statErr)
+	}
+	if orphans := tmpOrphanGlob(t, dir); len(orphans) != 0 {
+		t.Errorf("tmp 孤兒應在 rename 後消失, 找到: %v", orphans)
+	}
+}
+
+// TestAtomicWriteFile_PredictableStaleTmpDoesNotBlock 釘住 tmp 名不可預測:tmp 走
+// crypto/rand 後綴,上次 crash 留下的 `path.tmp`、或攻擊者預植的可預測樣式都不會撞名
+// 擋住這次寫入(舊版固定 `path + ".tmp"` 可被 plant 造成 DoS)。
+func TestAtomicWriteFile_PredictableStaleTmpDoesNotBlock(t *testing.T) {
+	t.Parallel()
+
+	dir := resolvedTempDir(t)
+	path := filepath.Join(dir, "out.csv")
+	for _, stale := range []string{path + ".tmp", path + ".tmp_0", path + ".tmp_1", path + ".tmp_legacy"} {
+		if err := os.WriteFile(stale, []byte("stale predictable"), 0o600); err != nil {
+			t.Fatalf("setup stale %q: %v", stale, err)
+		}
+	}
+
+	err := fsperm.AtomicWriteFile(path, []string{dir}, func(w io.Writer) error {
+		_, writeErr := io.WriteString(w, "v\n")
+		return writeErr
+	})
+	if err != nil {
+		t.Fatalf("可預測的 stale tmp 存在時仍應成功: %v", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("final path 未建立: %v", statErr)
+	}
+}
+
+// TestAtomicWriteFile_WriteCallbackError_ExistingTargetUntouched 釘住 write 中途失敗時
+// 既有 target 不被改寫(tmp 未 commit),且不留 tmp 孤兒。
+func TestAtomicWriteFile_WriteCallbackError_ExistingTargetUntouched(t *testing.T) {
+	t.Parallel()
+
+	dir := resolvedTempDir(t)
+	path := filepath.Join(dir, "out.csv")
+	old := []byte("old content\n")
+	if err := os.WriteFile(path, old, fsperm.FilePerm); err != nil {
+		t.Fatalf("setup: WriteFile: %v", err)
+	}
+
+	errBoom := errors.New("boom")
+	err := fsperm.AtomicWriteFile(path, []string{dir}, func(w io.Writer) error {
+		_, _ = io.WriteString(w, "partial")
+		return errBoom
+	})
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("errors.Is(err, errBoom) = false; err = %v", err)
+	}
+
+	got, readErr := os.ReadFile(path) //nolint:gosec // test path
+	if readErr != nil {
+		t.Fatalf("ReadFile: %v", readErr)
+	}
+	if string(got) != string(old) {
+		t.Errorf("既有 target 被改寫: got %q want %q", got, old)
+	}
+	if orphans := tmpOrphanGlob(t, dir); len(orphans) != 0 {
+		t.Errorf("失敗後不應有 tmp 孤兒, 找到: %v", orphans)
 	}
 }

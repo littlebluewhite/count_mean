@@ -92,7 +92,7 @@ const ReadFlags = os.O_RDONLY
 // (csv_handler / safe_writer / logging 等多處 caller)。
 //
 // 目前 mitigation 是 caller-side `filepath.EvalSymlinks` (在 PathValidator /
-// ResolveLenientPath / OpenWriteValidated 內已實作),解析 reparse point 後比對
+// ResolveLenientPath / OpenReadValidated / OpenAtomicWriteValidated 內已實作),解析 reparse point 後比對
 // allowed base — Windows 上這是 only line of defense。
 //
 // **追蹤計畫**:見本檔 package doc 的 "Future work" 段;Windows runner 上的

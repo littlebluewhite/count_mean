@@ -1,15 +1,14 @@
-// Package fsperm — validated OpenFile wrapper。
+// Package fsperm — validated OpenFile wrapper(讀端)。
 //
-// # 為何需要 OpenWriteValidated
+// # 為何需要 OpenReadValidated
 //
-// fsperm.WriteFlags / ReadFlags 在 Unix 帶 O_NOFOLLOW、在 Windows 不帶（標準
-// syscall 無等價 flag）。Windows 端的 symlink 防護完全依賴 caller-side
-// filepath.EvalSymlinks，但 repo 內 11+ 條 OpenFile callsite 多數沒這道前置
-// 守門，只有 ResolveLenientPath 與 PathValidator.ValidateExternalPath 有做。
+// fsperm.ReadFlags 在 Unix 帶 O_NOFOLLOW、在 Windows 不帶（標準 syscall 無等價
+// flag）。Windows 端的 symlink 防護完全依賴 caller-side filepath.EvalSymlinks。
 //
-// 本檔提供統一 wrapper：caller 一行 OpenWriteValidated(path, basePaths) 取代
+// 本檔提供統一 wrapper：caller 一行 OpenReadValidated(path, basePaths) 取代
 // 三步驟 EvalSymlinks → Rel-check → OpenFile，避免「caller 忘做、Windows 上
-// 靜默被 reparse point 騙」的反覆撞牆。
+// 靜默被 reparse point 騙」的反覆撞牆。寫入端走 AtomicWriteFile
+// (atomic_write_file.go);原地覆寫的 OpenWriteValidated 已無 caller,ADR-0055 刪除。
 //
 // # parent-symlink TOCTOU 修法
 //
@@ -17,12 +16,12 @@
 //
 //	resolvedPath, _ := EvalSymlinks(path)        // step 1: 校驗
 //	matchAnyBase(resolvedPath, basePaths)        // step 2: rel check
-//	os.OpenFile(path, WriteFlags, FilePerm)      // step 3: 用 unresolved path 開
+//	os.OpenFile(path, ReadFlags, 0)              // step 3: 用 unresolved path 開
 //
 // step 1 與 step 3 之間有 TOCTOU 縫隙:攻擊者 swap symlink 後,kernel 在 step 3
 // re-walk path 跟到新 target,validate-vs-use 結果分歧。即便沒 swap,O_NOFOLLOW
 // 也只擋 leaf component 為 symlink 的 case;parent component 為 symlink (例如
-// allowed/link → outside,寫 allowed/link/out.csv) 不被 O_NOFOLLOW 攔截 — V1
+// allowed/link → outside,讀 allowed/link/secret.txt) 不被 O_NOFOLLOW 攔截 — V1
 // verify report 已重現。
 //
 // 修法分兩層:
@@ -32,14 +31,8 @@
 //     (見 validated_open_linux.go)
 //     - Darwin:O_NOFOLLOW_ANY — 任一 component symlink reject
 //     (見 validated_open_darwin.go)
-//     - Windows / 其他 Unix:os.OpenFile(resolvedPath, WriteFlags, ...)
+//     - Windows / 其他 Unix:os.OpenFile(resolvedPath, ReadFlags, 0)
 //     倚賴 O_NOFOLLOW (Unix) 與 caller-side EvalSymlinks (Windows)
-//
-// # Caller 遷移計畫
-//
-// 不在本 範圍內遷移現有 11+ caller —— 那 scope 過大,留 follow-up。新 caller
-// 應優先用 OpenWriteValidated;舊 caller 將分批改寫並補測試。csv_handler.WriteCSV
-// 已在 切過來。
 package fsperm
 
 import (
@@ -55,55 +48,10 @@ import (
 // ErrBasePathsEmpty 為 caller 傳入 empty basePaths 時的 sentinel — 拒絕 silently
 // 退化到「無 base 守門」模式。如果 caller 真的不需要 base 約束（極罕見場景），
 // 應直接呼 os.OpenFile + fsperm.WriteFlags 並在 commit 訊息說明理由。
-var ErrBasePathsEmpty = errors.New("fsperm.OpenWriteValidated: basePaths 不能為空")
+var ErrBasePathsEmpty = errors.New("fsperm: basePaths 不能為空")
 
 // ErrPathEscapesBase 為 EvalSymlinks 解析後落在所有 basePaths 之外時回傳。
-var ErrPathEscapesBase = errors.New("fsperm.OpenWriteValidated: 解析後路徑落在 basePaths 範圍外")
-
-// OpenWriteValidated 開啟 path 寫入，事前做 symlink-aware boundary check 確保
-// resolved path 落在至少一個 basePaths 之下。
-//
-// 流程：
-//  0. 相對 path 先接 cwd 絕對化(absolutizeKeepDotDot)
-//  1. EvalSymlinks(path) — fallback 到 EvalSymlinks(parent) + base name（path
-//     尚未存在的合理情境，如「即將建立的 .tmp 中介檔」）
-//  2. matchAnyBase — 對每個 basePath 以 IsWithinResolved 解析 base 本身的 symlink
-//     （例 macOS /tmp → /private/tmp）並比對；至少一個 basePath 命中即放行
-//  4. openValidated(resolvedPath, hitBase) — 平台 atomic open。詳見 validated_open_<os>.go
-//
-// 回傳：成功時 *os.File，caller 自行 Close。失敗時 nil + 包裝錯誤。
-//
-// 改動:openat 使用 resolvedPath 而非原始 path,close validate-vs-use 縫隙。
-// 同時委派給 openValidated (平台 dispatch) 使用 Linux openat2(RESOLVE_BENEATH) /
-// Darwin O_NOFOLLOW_ANY 等 kernel-level atomic 保證。
-func OpenWriteValidated(path string, basePaths []string) (*os.File, error) {
-	if len(basePaths) == 0 {
-		return nil, ErrBasePathsEmpty
-	}
-
-	absPath, err := absolutizeKeepDotDot(path)
-	if err != nil {
-		return nil, fmt.Errorf("fsperm.OpenWriteValidated: 無法絕對化路徑 %s: %w", redact.Paths(path), err)
-	}
-
-	resolvedPath, err := EvalSymlinksWithFallback(absPath, 0)
-	if err != nil {
-		// 路徑值過 redact 再進 caller-facing 訊息,避免 PHI 絕對路徑洩漏進 webview。
-		return nil, fmt.Errorf("fsperm.OpenWriteValidated: 無法解析路徑 %s: %w", redact.Paths(path), err)
-	}
-
-	hitBase, ok := matchAnyBase(resolvedPath, basePaths)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s 不在 %s 之下",
-			ErrPathEscapesBase, redact.Paths(resolvedPath), redactBasePaths(basePaths))
-	}
-
-	f, err := openValidated(resolvedPath, hitBase)
-	if err != nil {
-		return nil, fmt.Errorf("fsperm.OpenWriteValidated: OpenFile failed: %w", err)
-	}
-	return f, nil
-}
+var ErrPathEscapesBase = errors.New("fsperm: 解析後路徑落在 basePaths 範圍外")
 
 // absolutizeKeepDotDot 把相對 path 接在 cwd 之後,已是絕對則原樣回傳。刻意不 Clean
 // (filepath.Abs 會):`link/..` 須留給 EvalSymlinks 依 kernel 語義解析。
@@ -146,16 +94,22 @@ func redactDir(dir string) string {
 	return redact.Paths(dir + "/")
 }
 
-// OpenReadValidated 為 OpenWriteValidated 的 read-side 對稱 helper:讀檔前
-// 做相同 symlink-aware boundary check。新增以填補 Windows 上 read 路徑
+// OpenReadValidated 開啟 path 讀取,事前做 symlink-aware boundary check 確保
+// resolved path 落在至少一個 basePaths 之下。填補 Windows 上 read 路徑
 // (例如 config.LoadConfig) 缺 symlink 防護的 gap — Unix ReadFlags 帶 O_NOFOLLOW
 // 但 Windows 標準 syscall 無等價 flag,過去 Windows 完全靠 caller-side
 // EvalSymlinks 防禦,callsite 反覆撞牆。
 //
-// 流程與 OpenWriteValidated 完全對稱;差異只在最終 openReadValidated dispatch:
-//   - Linux:openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS) + ReadFlags
-//   - Darwin:O_NOFOLLOW_ANY (kernel-level reject parent-component symlink)
-//   - Windows / 其他 Unix:os.OpenFile(resolvedPath, ReadFlags) —
+// 流程:
+//  0. 相對 path 先接 cwd 絕對化(absolutizeKeepDotDot)
+//  1. EvalSymlinks(path) — fallback 到 EvalSymlinks(parent) + base name
+//  2. matchAnyBase — 對每個 basePath 以 IsWithinResolved 解析 base 本身的 symlink
+//     （例 macOS /tmp → /private/tmp）並比對；至少一個 basePath 命中即放行
+//  3. openReadValidated(resolvedPath, hitBase) — 用 resolvedPath(非原始 path)開,
+//     close validate-vs-use 縫隙;平台 dispatch:
+//     - Linux:openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS) + ReadFlags
+//     - Darwin:O_NOFOLLOW_ANY (kernel-level reject parent-component symlink)
+//     - Windows / 其他 Unix:os.OpenFile(resolvedPath, ReadFlags) —
 //     Windows 殘餘 TOCTOU 由 EvalSymlinks pre-validation 兜底
 //     (見 flags_windows.go package doc)
 //

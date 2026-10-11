@@ -25,14 +25,14 @@ import (
 //	| manifest-driven user files、檔名可能含 vendor encoding     | security.OpenLenientValidated     |
 //	| （例：BTS EMG 匯出 "SF_8_BTS%_*.csv"，字面 "%" 屬正常）    | （經此 helper）                  |
 //	|                                                           |                                   |
-//	| 受控內部讀寫路徑（allow-list 內的檔案）                    | PathValidator.ValidateFilePath    |
-//	|                                                           | （pathvalidator.go）              |
-//	|                                                           |                                   |
 //	| 使用者選取的檔案（GUI file dialog，如 ReadCSV）            | PathValidator.ValidateExternalPath|
 //	| （防 traversal + 系統敏感位置，不限 allow-list）          |                                   |
 //	|                                                           |                                   |
 //	| Output / data 目錄                                        | PathValidator.ValidateExternalDir |
 //	| （目錄語意：只擋系統敏感位置與路徑長度）                  |                                   |
+//	|                                                           |                                   |
+//	| 寫進 OutputDir 的輸出檔（CSV / PNG）                      | io 的 Output placement            |
+//	| （containment + 敏感位置 + atomic write，ADR-0055）       | （CSVHandler.placeOutput）        |
 //
 // 跨平台 trust assumption：兩者皆要求 baseFolder / allowedBasePaths 為 user-selected 可信路徑。
 //

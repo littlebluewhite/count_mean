@@ -9,95 +9,11 @@ import (
 	"testing"
 )
 
-func TestPathValidator_ValidateFilePath(t *testing.T) {
-	// Create temporary test directories
-	allowedPaths := []string{"/tmp/test", "./input", "./output"}
-	validator := NewPathValidator(allowedPaths)
-
-	tests := []struct {
-		name    string
-		path    string
-		wantErr bool
-	}{
-		{
-			name:    "valid relative path",
-			path:    "./input/test.csv",
-			wantErr: false,
-		},
-		{
-			name:    "empty path",
-			path:    "",
-			wantErr: false, // 允許空路徑
-		},
-		{
-			name:    "path with percent sign",
-			path:    "./input/test%20file.csv",
-			wantErr: false, // 允許包含 % 符號的路徑
-		},
-		{
-			name:    "path with spaces",
-			path:    "./input/test file.csv",
-			wantErr: false, // 允許包含空格的路徑
-		},
-		{
-			name:    "path traversal attempt",
-			path:    "../../../etc/passwd",
-			wantErr: true,
-		},
-		{
-			name:    "path with double dots",
-			path:    "./input/../output/test.csv",
-			wantErr: true,
-		},
-		{
-			name:    "absolute path outside allowed",
-			path:    "/etc/passwd",
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validator.ValidateFilePath(tt.path)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateFilePath() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-// ValidateFilePath 對含 NUL byte 的 input 必須回 ErrPathContainsNUL,與
+// ValidateExternalPath 對含 NUL byte 的 input 必須回 ErrPathContainsNUL,與
 // lenient_path 契約對稱。NUL 是 POSIX / Windows 檔案 API 的字串 truncation
 // 字元 — 攻擊者送 `/legit/foo.csv\x00/etc/passwd`,部分 syscall 在 NUL 截斷後
 // 開到 `/legit/foo.csv`,其他 OS / locale 可能跟到 NUL 後的 suffix。在 boundary
 // 早期 reject 是最強的 input contract。
-func TestValidateFilePath_RejectsNUL(t *testing.T) {
-	t.Parallel()
-
-	validator := NewPathValidator(nil) // nil 走無白名單模式,只跑 path-format check
-
-	cases := []string{
-		"foo\x00bar.csv",
-		"/legit/foo.csv\x00/etc/passwd",
-		"\x00leading.csv",
-		"trailing\x00",
-	}
-
-	for _, path := range cases {
-		t.Run(path, func(t *testing.T) {
-			t.Parallel()
-			err := validator.ValidateFilePath(path)
-			if err == nil {
-				t.Fatalf("ValidateFilePath(%q) 應 reject NUL byte,got nil error", path)
-			}
-			if !errors.Is(err, ErrPathContainsNUL) {
-				t.Errorf("ValidateFilePath(%q) 應回 ErrPathContainsNUL,got %v", path, err)
-			}
-		})
-	}
-}
-
-// 對稱 ValidateFilePath_RejectsNUL — ValidateExternalPath 同樣必須 reject NUL byte。
 func TestValidateExternalPath_RejectsNUL(t *testing.T) {
 	t.Parallel()
 
@@ -517,7 +433,7 @@ func TestPathValidator_ExternalPath_AllowsLookalikeButNotMatchingPaths(t *testin
 }
 
 // Fuzz target:用 URL-encoded traversal payload + unicode mutation 持續攻擊
-// validatePathFormat(經 ValidateFilePath / ValidateExternalPath 兩條入口)。
+// validatePathFormat(經 ValidateExternalPath / ValidateExternalDir 兩條入口)。
 //
 // 不變式:
 //  1. 任意 input 不得 panic
@@ -556,15 +472,15 @@ func FuzzValidatePathFormat(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, s string) {
 		// 兩條入口都跑 — 確保都不會 panic、都不會放走 traversal
-		errStrict := v.ValidateFilePath(s)
 		errExternal := v.ValidateExternalPath(s)
+		errDir := v.ValidateExternalDir(s)
 
 		if HasTraversalElement(s) {
-			if errStrict == nil {
-				t.Fatalf("ValidateFilePath 通過了含 `..` element 的 input：%q", s)
-			}
 			if errExternal == nil {
 				t.Fatalf("ValidateExternalPath 通過了含 `..` element 的 input：%q", s)
+			}
+			if errDir == nil {
+				t.Fatalf("ValidateExternalDir 通過了含 `..` element 的 input：%q", s)
 			}
 		}
 	})
@@ -653,24 +569,6 @@ func TestCheckSensitiveLocation_AppDataPolicy_CrossPlatform(t *testing.T) {
 			}
 			if !tc.wantBlock && err != nil {
 				t.Errorf("path %q 應通過,實際被擋:err=%v", tc.path, err)
-			}
-		})
-	}
-}
-
-// 名稱以 `..` 開頭但不是 traversal element 的子項(`..foo`、`foo..bar`)是 base 內的合法
-// 子路徑。舊 isPathWithinBase 用 HasPrefix(rel, "..") 比對,把 `..foo` 誤拒。
-func TestValidateFilePath_AcceptsChildNamedDotDotPrefix(t *testing.T) {
-	t.Parallel()
-
-	base := t.TempDir()
-	validator := NewPathValidator([]string{base})
-
-	for _, name := range []string{"..foo", "..foo/data.csv", "foo..bar"} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if err := validator.ValidateFilePath(filepath.Join(base, name)); err != nil {
-				t.Fatalf("ValidateFilePath(base/%s) 應通過,got %v", name, err)
 			}
 		})
 	}

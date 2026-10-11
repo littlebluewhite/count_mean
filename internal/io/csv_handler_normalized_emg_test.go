@@ -56,7 +56,7 @@ func TestWriteNormalizedPhaseSyncEMG_NilDataReturnsError(t *testing.T) {
 }
 
 // TestWriteNormalizedPhaseSyncEMG_AtomicWrite_LeavesFinalUntouchedOnEmitError
-// 驗證目錄不可寫時 WriteCSVAtomic 失敗，final path 不被改寫。
+// 驗證目錄不可寫時 atomic write(fsperm.AtomicWriteFile)失敗，final path 不被改寫。
 func TestWriteNormalizedPhaseSyncEMG_AtomicWrite_LeavesFinalUntouchedOnEmitError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix permission semantics; Windows 行為不同")

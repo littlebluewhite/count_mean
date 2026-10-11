@@ -30,20 +30,20 @@ import (
 //     沒有中間 component 可被 swap,且 open 之後抽換 leaf 名也不影響經 fd 的操作
 //     (codex r3 P2)。
 //
-// RESOLVE_NO_SYMLINKS 的安全論證與 openValidated 一致:resolvedParent 是
+// RESOLVE_NO_SYMLINKS 的安全論證與 openReadValidated 一致:resolvedParent 是
 // EvalSymlinksWithFallback 的產物,合法 in-base symlink 早已展開;此 flag 擋的是
 // EvalSymlinks→openat2 之間 swap 進來、survive 到 syscall 的 symlink (TOCTOU),
 // 與 Darwin O_NOFOLLOW_ANY 對齊。RESOLVE_BENEATH 兜底,任何 walk 出 dirfd 的企圖回 EXDEV。
 //
 // O_CLOEXEC:openat2 raw syscall 不像 os.OpenFile 自動帶 CLOEXEC,明確 OR 進 Flags
-// (與 openValidated:108 相同) — Wails spawn 子行程時避免 dirfd / tmp fd 外洩。
+// (與 openReadValidated 相同) — Wails spawn 子行程時避免 dirfd / tmp fd 外洩。
 //
 // fallback:openat2 在 < 5.6 kernel 或 LSM 拒絕時回 ENOSYS (leaf 下行或 tmp-create 任一
 // 站點)。降級為 os.OpenFile(tmpFull, TmpCreateFlags, FilePerm) + dirfd=fdNone,Commit
 // 改走 os.Rename(tmpFull, targetFull)、Abort 改走 os.Remove(tmpFull) — 等同今日無 dirfd
 // 行為。tmpFull 父目錄已 EvalSymlinks 校驗、TmpCreateFlags 帶 O_NOFOLLOW 擋 leaf symlink;
-// subdir parent-component swap 在此 ancient-kernel fallback 仍有殘餘 TOCTOU (與讀/寫端
-// 一致、已知 deferred)。透過 emitOpenat2FallbackWarning 觸發一次性降級警告 (與讀/寫端
+// subdir parent-component swap 在此 ancient-kernel fallback 仍有殘餘 TOCTOU (與讀端
+// 一致、已知 deferred)。透過 emitOpenat2FallbackWarning 觸發一次性降級警告 (與讀端
 // 共用同一 sync.Once)。EXDEV/ELOOP → ErrPathEscapesBase。
 func openAtomicWrite(baseDir, relParent, tmpBase, targetBase, tmpFull, targetFull string) (*AtomicWriteHandle, error) {
 	anchorFD, err := openLeafAnchor(baseDir, relParent)

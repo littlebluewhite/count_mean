@@ -84,28 +84,6 @@ func TestExportedErrors_NoDirSegmentAfterSinkRedact(t *testing.T) {
 			symlink: true,
 		},
 		{
-			name: "OpenWriteValidated/missing subdir",
-			call: func(*testing.T) error {
-				return closeOnly(fsperm.OpenWriteValidated(filepath.Join(missingSub, "out.csv"), bases))
-			},
-			wantIs: fs.ErrNotExist,
-		},
-		{
-			name: "OpenWriteValidated/missing base dir",
-			call: func(*testing.T) error {
-				return closeOnly(fsperm.OpenWriteValidated(filepath.Join(ghostBase, "out.csv"), []string{ghostBase}))
-			},
-			wantIs: fs.ErrNotExist,
-		},
-		{
-			name: "OpenWriteValidated/symlink escape",
-			call: func(*testing.T) error {
-				return closeOnly(fsperm.OpenWriteValidated(filepath.Join(escape, "out.csv"), bases))
-			},
-			wantIs:  fsperm.ErrPathEscapesBase,
-			symlink: true,
-		},
-		{
 			name: "OpenAtomicWriteValidated/missing subdir",
 			call: func(*testing.T) error {
 				target := filepath.Join(missingSub, "out.csv")

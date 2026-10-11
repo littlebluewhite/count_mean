@@ -145,7 +145,7 @@ func TestOpenAtomicWriteValidated_CommitThenAbortNoop(t *testing.T) {
 }
 
 // TestOpenAtomicWriteValidated_RejectsEmptyBasePaths 釘住 empty basePaths →
-// ErrBasePathsEmpty (與 OpenWriteValidated 對稱,拒絕 silent 退化)。
+// ErrBasePathsEmpty (與 OpenReadValidated 對稱,拒絕 silent 退化)。
 func TestOpenAtomicWriteValidated_RejectsEmptyBasePaths(t *testing.T) {
 	t.Parallel()
 
@@ -163,6 +163,54 @@ func TestOpenAtomicWriteValidated_RejectsEmptyBasePaths(t *testing.T) {
 			t.Errorf("expected ErrBasePathsEmpty, got %v", err)
 		}
 	}
+}
+
+// TestOpenAtomicWriteValidated_BasePathMatching 釘住 matchAnyBase 的兩個邊界(承接
+// ADR-0055 刪除的 OpenWriteValidated 測試):全為空白的 base 不算有效 base(過了 len
+// 檢查也不得退化成「無 base 守門」);多個 base 時至少一個命中即放行、全不命中則拒。
+func TestOpenAtomicWriteValidated_BasePathMatching(t *testing.T) {
+	t.Parallel()
+
+	t.Run("blank bases rejected", func(t *testing.T) {
+		t.Parallel()
+		target := filepath.Join(t.TempDir(), "out.csv")
+		for _, bp := range [][]string{{""}, {"  "}} {
+			h, err := fsperm.OpenAtomicWriteValidated(target, tmpFor(target), bp)
+			if err == nil {
+				_ = h.File().Close()
+				_ = h.Abort()
+				t.Fatalf("blank basePaths %q 應拒絕", bp)
+			}
+			if !errors.Is(err, fsperm.ErrPathEscapesBase) {
+				t.Errorf("blank basePaths %q: expected ErrPathEscapesBase, got %v", bp, err)
+			}
+		}
+	})
+
+	t.Run("any base hits", func(t *testing.T) {
+		t.Parallel()
+		base1, base2, outside := t.TempDir(), t.TempDir(), t.TempDir()
+		bases := []string{base1, base2}
+
+		target := filepath.Join(base2, "out.csv")
+		h, err := fsperm.OpenAtomicWriteValidated(target, tmpFor(target), bases)
+		if err != nil {
+			t.Fatalf("base2 之下的 path 不該被拒(即使 base1 不命中): %v", err)
+		}
+		_ = h.File().Close()
+		_ = h.Abort()
+
+		escape := filepath.Join(outside, "out.csv")
+		h, err = fsperm.OpenAtomicWriteValidated(escape, tmpFor(escape), bases)
+		if err == nil {
+			_ = h.File().Close()
+			_ = h.Abort()
+			t.Fatalf("兩個 base 都不命中應拒")
+		}
+		if !errors.Is(err, fsperm.ErrPathEscapesBase) {
+			t.Errorf("expected ErrPathEscapesBase, got %v", err)
+		}
+	})
 }
 
 // TestOpenAtomicWriteValidated_ParentEscapesBase 釘住 target 父目錄不在任何 base
@@ -187,7 +235,7 @@ func TestOpenAtomicWriteValidated_ParentEscapesBase(t *testing.T) {
 
 // TestOpenAtomicWriteValidated_ParentSymlinkEscapesBase 釘住:base 內 symlink 指向
 // base 外,透過 base/link/out.csv 寫 → resolvedParent 落在 base 外 → ErrPathEscapesBase。
-// 這是 atomic-write 對 OpenWriteValidated symlink-escape 測試的對映。
+// 寫入端的 parent-symlink escape 由本測試承接(OpenWriteValidated 已於 ADR-0055 刪除)。
 func TestOpenAtomicWriteValidated_ParentSymlinkEscapesBase(t *testing.T) {
 	t.Parallel()
 

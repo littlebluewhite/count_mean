@@ -4,8 +4,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-
-	"count_mean/internal/logging"
 )
 
 // SanitizeCellForWrite escapes a single CSV cell that will be written to disk
@@ -105,77 +103,6 @@ func sanitizeRowCells(row []string) []string {
 	out := make([]string, len(row))
 	for i, c := range row {
 		out[i] = SanitizeCellForWrite(c)
-	}
-	return out
-}
-
-// SanitizeAllRows returns a fresh [][]string with SanitizeCellForWrite applied
-// to every cell in every row. Used as the single chokepoint in csv_handler.WriteCSV
-// to catch body-row formula injection (e.g. user-controllable PhaseName labels
-// from config.json flowing into row[0] via csv_converter.buildRow). Idempotent
-// — already-escaped cells with leading "'" stay unchanged on a second pass, so
-// converter-level header sanitize remains safe as defense-in-depth.
-//
-// # Nil-row handling (P1-A6-4 + P1-15)
-//
-// If a row in `rows` is nil, it is **skipped + logged at Warn level**.
-// encoding/csv.Writer panics when handed a nil row; propagating nils through this
-// chokepoint was a latent NPE waiting for the wrong call site to hit it.
-// 過去 fix 改為 silent skip,但 silent 是另一種坑 — caller 若計算
-// `len(out) == len(in)` 隱含「index 對應」,silent drop 不會被 dev 發現,直到
-// downstream data correlation 出錯。加 logger.Warn 把每筆 drop 記錄起來,
-// 讓 ops / dev 能在 log 看到「哪些 row 被 drop 了」的 audit trail。
-//
-// Logger 是 process-default logger (logging.GetLogger()) — sanitize 屬 chokepoint
-// 工具,不暴露 logger 注入點以免擾亂 hot-path 介面。Warn level 在 default Info
-// production config 下會被輸出。
-//
-// # ⚠ Index invariant breakage (L19)
-//
-// **Output length may be less than `len(rows)`** — input index `i` does **not**
-// necessarily map to output index `i`. Any caller that relies on positional
-// alignment between the input row slice and the output row slice (for example
-// to look up a parallel metadata slice by index) MUST validate / strip nil rows
-// upstream rather than relying on this helper to preserve indexing.
-//
-// Alternative considered (rejected): replace nil rows with `[]string{}` to
-// preserve indexing. Rejected because that produces zero-cell rows in the CSV
-// output (an empty line), which is **less safe** than dropping them: empty CSV
-// rows are still legitimate `encoding/csv` records that downstream parsers may
-// interpret as "row with one empty field" — exactly the silent-miscalculation
-// vector we want to avoid in EMG analysis pipelines. Skipping is the safer
-// default; callers needing strict index-preservation have an upstream choice
-// (filter / error / placeholder) that's contextually correct, not one we can
-// guess here.
-//
-// See [TestSanitizeAllRows_NilRowInSlice] and [TestSanitizeAllRows_OnlyNilRows]
-// for the locked-in behavior.
-func SanitizeAllRows(rows [][]string) [][]string {
-	if rows == nil {
-		return nil
-	}
-	out := make([][]string, 0, len(rows))
-	var logger *logging.Logger // lazy init,避免每次無 nil row 也呼叫 GetLogger
-	for i, row := range rows {
-		if row == nil {
-			// 把 nil row drop 記錄到 Warn log,給 ops/dev audit trail。
-			// 過去 silent skip 容易被 caller 用 len(out) == len(in) 隱含假設踩到 —
-			// 計算後資料 row 數對不上沒人知道哪掉了。lazy init logger 避免無 nil
-			// 時白做 GetLogger 呼叫(穩態下 99% rows 都非 nil)。
-			if logger == nil {
-				logger = logging.GetLogger("csvutil_sanitize")
-			}
-			logger.Warn("nil row dropped at index", map[string]any{
-				"index": i,
-				"total": len(rows),
-			})
-			continue
-		}
-		// 這裡逐 row 處理,header / body 混在一起(SanitizeAllRows 是 csv_handler
-		// 整檔 sanitize chokepoint,首 row 是 header,其餘是 body)。SanitizeHeaderRow
-		// 與 SanitizeBodyRow 行為等價(per-cell sanitize),用 SanitizeBodyRow 是因為
-		// 此處呼叫 frequency 上 body row 居多 — caller 直觀。
-		out = append(out, SanitizeBodyRow(row))
 	}
 	return out
 }

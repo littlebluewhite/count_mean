@@ -5,19 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"count_mean/internal/security/fsperm"
 )
-
-// writerWrapHook 是 加的 test injection point:test 用此 hook 把 *os.File
-// 包成失敗 writer 模擬 disk full / pipe broken。production code 不註冊此 hook,
-// 直接走 raw *os.File。
-//
-// CSVPayload 本身吃 io.Writer,單測 payload 時直接餵失敗 writer 即可;hook 留給
-// 經 WriteCSVAtomic 走真實 tmp 檔的測試(驗證失敗時 tmp 被清掉、final path 不動)。
-//
-//nolint:gochecknoglobals // test-only injection point
-var writerWrapHook func(io.Writer) io.Writer
 
 // midWriteErrorCheckInterval 是 加入的「每 N rows 檢查一次 writer.Error」
 // 步長。csv.Writer 的 Write 內部 buffer flush 是 lazy,Write 自己幾乎不 return
@@ -30,55 +18,34 @@ var writerWrapHook func(io.Writer) io.Writer
 // case 多寫了多少 row」(<=1024 row 的浪費 vs N 萬 row 的浪費)。
 const midWriteErrorCheckInterval = 1024
 
-// RowEmitter is the iterator callback passed to WriteCSVAtomic. Caller iterates
+// RowEmitter is the iterator callback passed to CSVPayload. Caller iterates
 // over rows and invokes emit per row. Returning a non-nil error from emit aborts
 // the write and bubbles back; returning a non-nil error from the RowEmitter
 // itself has the same effect.
 //
-// 由 WriteCSVAtomic 傳入的 emit 已自動套用 SanitizeCellForWrite — caller 不需要
+// 由 CSVPayload 傳入的 emit 已自動套用 SanitizeCellForWrite — caller 不需要
 // （也不應該）在 emit 前對 row 預先 sanitize。Sanitize 是 idempotent（重複呼叫
-// 不會多加前綴），但減少 caller 心智負擔仍以「在 WriteCSVAtomic 邊界做」為佳。
+// 不會多加前綴），但減少 caller 心智負擔仍以「在 CSVPayload 邊界做」為佳。
 type RowEmitter func(emit func(row []string) error) error
 
-// SafeWriteOptions configures WriteCSVAtomic.
+// SafeWriteOptions configures CSVPayload.
 type SafeWriteOptions struct {
-	// Header is mandatory; WriteCSVAtomic runs SanitizeHeaderRow before writing.
+	// Header is mandatory; CSVPayload runs SanitizeHeaderRow before writing.
 	Header []string
-	// Emit is mandatory; WriteCSVAtomic drives the emit callback for each row.
+	// Emit is mandatory; CSVPayload drives the emit callback for each row.
 	// 注意：傳入 emit 的 row 會自動經 SanitizeCellForWrite 過 — 阻擋 CSV 公式
-	// 注入。Caller 不需要自己呼叫 SanitizeRow / SanitizeAllRows。
+	// 注入。Caller 不需要自己呼叫 SanitizeBodyRow。
 	Emit RowEmitter
-	// BasePaths is optional. When non-empty, the tmp-create + rename are
-	// dirfd-anchored via fsperm.OpenAtomicWriteValidated — the whole tmp →
-	// rename sequence runs relative to a single dirfd of the *validated,
-	// resolved* parent directory, closing the atomic-write parent-swap TOCTOU
-	// (ADR-0017 Decision 6 / #34). The parent must resolve under one of these
-	// bases or the write is rejected (ErrPathEscapesBase). When empty,
-	// WriteCSVAtomic falls back to the legacy os.OpenFile + os.Rename path,
-	// byte-identical to today.
-	BasePaths []string
 	// OmitBOM 為 true 時不寫 UTF-8 BOM。零值照舊寫 BOM，既有 caller 與 byte-identity
 	// golden 不受影響。CSV 輸出的 BOM 開關只由 internal/io 依 config.BOMEnabled 設定。
 	OmitBOM bool
 }
 
-// WriteCSVAtomic writes a CSV to path atomically: the CSV payload is
-// CSVPayload(opts), and the durable-placement protocol (crypto-tmp → open →
-// fsync → atomic rename → parent fsync, dirfd-anchored when BasePaths is set)
-// belongs to fsperm.AtomicWriteFile.
-//
-// BasePaths semantics are unchanged: non-empty → dirfd-anchored validated write
-// (parent-swap TOCTOU closed, ErrPathEscapesBase on a base miss); empty → legacy
-// os.OpenFile + os.Rename fallback.
-func WriteCSVAtomic(path string, opts SafeWriteOptions) error {
-	return fsperm.AtomicWriteFile(path, opts.BasePaths, CSVPayload(opts))
-}
-
-// CSVPayload 回傳把 opts 描述的 CSV 寫進 w 的 payload，給 fsperm.AtomicWriteFile 使用。
+// CSVPayload 回傳把 opts 描述的 CSV 寫進 w 的 payload，給 fsperm.AtomicWriteFile 使用;
+// 落檔位置與 atomic 協定屬 internal/io 的 Output placement(ADR-0055)。
 // 它持有 CSV 的位元組：UTF-8 BOM（OmitBOM 為 false 時）、SanitizeHeaderRow、逐列
-// SanitizeBodyRow、mid-write Flush/Error 探測，以及 writerWrapHook test seam。
+// SanitizeBodyRow，以及 mid-write Flush/Error 探測。
 // 回傳前會 Flush 並檢查 writer.Error()，符合 AtomicWriteFile「write 回傳前自行 flush」的契約。
-// opts.BasePaths 在此不使用（落檔位置由 caller 決定）。
 //
 //nolint:err113 // dynamic errors for user-facing output
 func CSVPayload(opts SafeWriteOptions) func(io.Writer) error {
@@ -96,14 +63,8 @@ func CSVPayload(opts SafeWriteOptions) func(io.Writer) error {
 			}
 		}
 
-		// test hook 可包裝 underlying writer 模擬 disk full / pipe broken,
-		// production 路徑 hook=nil 直接走 raw writer。csv.Writer 內部 buffered,
-		// 真正 error 只在 Flush 或下次 Write 才 surface。
-		var underlying = w
-		if writerWrapHook != nil {
-			underlying = writerWrapHook(w)
-		}
-		writer := csv.NewWriter(underlying)
+		// csv.Writer 內部 buffered,真正 error 只在 Flush 或下次 Write 才 surface。
+		writer := csv.NewWriter(w)
 
 		if err := writer.Write(SanitizeHeaderRow(opts.Header)); err != nil {
 			return fmt.Errorf("寫入標題列失敗: %w", err)
