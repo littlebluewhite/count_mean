@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"count_mean/internal/config"
-	"count_mean/internal/security"
 )
 
 // plantedDirMarker 是植入目錄的辨識段。每列觸發的路徑都把它放在「非末段」位置
@@ -87,9 +86,9 @@ func newRPCRedactTestApp(t *testing.T, outputDir, configPath string) *App {
 //  2. errors.Is(err, 原 sentinel) 仍成立(redact 只改文字,不斷 chain)
 //
 // 名單:SaveConfig、CalculateMaxMean、NormalizeData、AnalyzePhases、
-// LoadPhaseManifest、AnalyzePhaseSync(validate gate)、DownloadCCIChart、
+// LoadPhaseManifest、DownloadCCIChart、
 // DownloadChartComposerImage。其餘回 error 的 bound method 不列:AnalyzeCCI /
-// AnalyzeMuscleRatio / AnalyzeNormalizedPhaseSync / LoadChartComposerSubjects /
+// AnalyzeMuscleRatio / AnalyzeNormalizedPhaseSync / AnalyzePhaseSync / LoadChartComposerSubjects /
 // GenerateChartComposer 走單一通道,err 只在 panic 時非 nil(ErrInternalPanic,
 // 不含路徑);SetLanguage 只回 locale 字串;SelectFile / SelectDirectory 的錯誤
 // 只來自 ErrAppNotReady 或 Wails 對話框 runtime(單元測試無法觸發),handler 本身
@@ -162,23 +161,6 @@ func TestRPCErrChannel_NoAbsolutePath(t *testing.T) {
 			},
 		},
 		{
-			name:     "AnalyzePhaseSync",
-			sentinel: security.ErrPathTraversal,
-			call: func(t *testing.T, planted string) error {
-				// validate gate:含 `..` element 的 manifest 路徑 → ErrPathTraversal,
-				// 錯誤文字帶原始路徑。
-				app := newRPCRedactTestApp(t, t.TempDir(), "")
-				_, err := app.AnalyzePhaseSync(PhaseSyncParams{
-					ManifestFile: planted + "/../manifest.csv",
-					DataFolder:   planted,
-					StartPhase:   "P0",
-					EndPhase:     "P2",
-				})
-
-				return err
-			},
-		},
-		{
 			name:     "DownloadCCIChart",
 			sentinel: fs.ErrNotExist,
 			call: func(t *testing.T, planted string) error {
@@ -225,7 +207,7 @@ func TestRPCErrChannel_NoAbsolutePath(t *testing.T) {
 // 字串不洩漏目錄段。
 //
 // 名單:AnalyzeCCI、AnalyzeNormalizedPhaseSync、LoadChartComposerSubjects、
-// GenerateChartComposer、AnalyzePhaseSync(分析分支)走 result.Message;
+// GenerateChartComposer、AnalyzePhaseSync(validate / 分析分支)走 result.Message;
 // AnalyzeMuscleRatio 的逐 subject 失敗走 Subjects[i].Error(analyzer 回的字串,
 // 不經 Message)。
 func TestRPCMessage_NoAbsolutePath(t *testing.T) {
@@ -301,11 +283,28 @@ func TestRPCMessage_NoAbsolutePath(t *testing.T) {
 		{
 			name: "AnalyzePhaseSync",
 			call: func(t *testing.T, planted string) string {
-				// 分析分支(validate 通過後)走 failed-result;validate 分支走 err 通道,
-				// 由 TestRPCErrChannel_NoAbsolutePath 守。
+				// 分析分支(validate 通過後)走 failed-result。
 				app := newRPCRedactTestApp(t, t.TempDir(), "")
 				result, err := app.AnalyzePhaseSync(PhaseSyncParams{
 					ManifestFile: missingManifest(planted),
+					DataFolder:   planted,
+					StartPhase:   "P0",
+					EndPhase:     "P2",
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+		},
+		{
+			name: "AnalyzePhaseSync_Validate",
+			call: func(t *testing.T, planted string) string {
+				// validate gate:含 `..` element 的 manifest 路徑 → ErrPathTraversal,
+				// 錯誤文字帶原始路徑,經 inputMessage redact 後進 Message。
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzePhaseSync(PhaseSyncParams{
+					ManifestFile: planted + "/../manifest.csv",
 					DataFolder:   planted,
 					StartPhase:   "P0",
 					EndPhase:     "P2",

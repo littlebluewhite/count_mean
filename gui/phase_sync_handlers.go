@@ -84,10 +84,10 @@ func phasePointSliceToString(phases []models.PhasePoint) []string {
 
 // AnalyzePhaseSync 執行分期同步分析.
 //
-// 錯誤通道契約 (dual / mixed):validate 失敗 → `(nil, err)` 走 err channel
-// (path_validation_test 期待 traversal manifest / data folder 回 (nil, err));
-// 分析 / 寫檔失敗 → `(failedResult, nil)` 走 failed-result channel;panic 由首句
-// defer recoverHandlerPanic 轉成 ErrInternalPanic → `(nil, err)` 走 err channel。
+// 錯誤通道契約(single channel,ADR-0051):所有可預期失敗(validate / phase 選擇 /
+// 分析 / 寫檔)一律 `(failedResult, nil)` 走 result 通道,與 manifest handler 家族
+// 一致;只有 panic 由首句 defer recoverHandlerPanic 轉成 ErrInternalPanic →
+// `(nil, err)` 走 err channel。
 func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult, err error) {
 	defer recoverHandlerPanic("分期同步分析", a.logger, &err)
 
@@ -95,18 +95,18 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 	a.logger.Info("分期同步分析參數", map[string]any{"params": params})
 	a.logger.Info("開始分期同步分析", nil)
 
-	// 1 validate → err channel
+	// 1 validate → failed-result channel
 	if validateErr := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); validateErr != nil {
-		return nil, validateErr
+		return failedPhaseSyncResult(inputMessage(validateErr)), nil
 	}
 	if params.StartPhase == "" || params.EndPhase == "" {
-		return nil, ErrNoPhaseSelection
+		return failedPhaseSyncResult(inputMessage(ErrNoPhaseSelection)), nil
 	}
 	if !params.StartPhase.IsValid() || !params.EndPhase.IsValid() {
-		return nil, fmt.Errorf(
+		return failedPhaseSyncResult(inputMessage(fmt.Errorf(
 			"StartPhase=%q EndPhase=%q: %w",
 			params.StartPhase, params.EndPhase, ErrInvalidPhasePoint,
-		)
+		))), nil
 	}
 
 	// 2 分析(domain analyzer)→ failed-result channel
@@ -152,7 +152,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 }
 
 // failedPhaseSyncResult builds a phase-sync result indicating failure
-// (分析 / 寫檔分支;validate 分支走 err 通道)。
+// (validate / 分析 / 寫檔分支皆走 result 通道,ADR-0051)。
 func failedPhaseSyncResult(message string) *PhaseSyncResult {
 	return &PhaseSyncResult{
 		Success: false,

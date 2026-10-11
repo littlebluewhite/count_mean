@@ -60,8 +60,8 @@ func traversalPaths() []struct {
 
 // TestAnalyzePhaseSync_RejectsTraversalManifest 驗證 AnalyzePhaseSync
 // 在 boundary 應該擋下 ManifestFile 路徑中的 traversal / 系統敏感目錄樣本。
-// 邊界驗證早於 downstream analyzer，所以 err 必須由 validateExternalPathInputs
-// 帶出（含 "路徑驗證失敗" 字樣），且 result 為 nil。
+// 邊界驗證早於 downstream analyzer，統一通道(ADR-0051)下 Go err 為 nil，
+// result.Message 帶出 validateExternalPathInputs 的 "路徑驗證失敗" 標誌。
 func TestAnalyzePhaseSync_RejectsTraversalManifest(t *testing.T) {
 	app := setupHandlerTestApp(t)
 
@@ -76,13 +76,11 @@ func TestAnalyzePhaseSync_RejectsTraversalManifest(t *testing.T) {
 			}
 
 			result, err := app.AnalyzePhaseSync(params)
-			require.Error(t, err, "traversal manifest 應被 boundary 擋下: %s", tc.path)
-			assert.Nil(t, result, "失敗應回 nil result")
-			assert.True(t,
-				strings.Contains(err.Error(), "路徑驗證失敗") ||
-					errors.Is(err, security.ErrPathTraversal) ||
-					errors.Is(err, security.ErrSensitiveDirectory),
-				"err 應含 boundary path validation 標誌: got %v", err)
+			require.NoError(t, err, "統一通道下 boundary 失敗不應走 err: %s", tc.path)
+			require.NotNil(t, result, "統一通道下 boundary 失敗應回 non-nil failedResult")
+			assert.False(t, result.Success, "traversal manifest 應被 boundary 擋下: %s", tc.path)
+			assert.True(t, containsAnyTraversalMarker(result.Message),
+				"result.Message 應含 boundary path validation 標誌: got %q", result.Message)
 		})
 	}
 }
@@ -210,9 +208,10 @@ func TestAnalyzePhaseSync_RejectsTraversalDataFolder(t *testing.T) {
 	}
 
 	result, err := app.AnalyzePhaseSync(params)
-	require.Error(t, err, "traversal DataFolder 應被 boundary 擋下")
-	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "資料夾", "錯誤訊息應指明是 DataFolder 欄位的問題")
+	require.NoError(t, err, "統一通道下 boundary 失敗不應走 err")
+	require.NotNil(t, result)
+	assert.False(t, result.Success, "traversal DataFolder 應被 boundary 擋下")
+	assert.Contains(t, result.Message, "資料夾", "Message 應指明是 DataFolder 欄位的問題")
 }
 
 // TestValidateExternalPathInputs_AcceptsLegitimateAbsolutePaths sanity-check：

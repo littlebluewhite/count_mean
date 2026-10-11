@@ -203,3 +203,43 @@ func TestAnalyzeNormalizedPhaseSync_EmptyParamsUnifiedChannel(t *testing.T) {
 		},
 	)
 }
+
+// TestAnalyzePhaseSync_EmptyParamsUnifiedChannel 同 CCI — 守 PhaseSync 入口
+// (manifest / folder / phase 選擇)可預期失敗走統一通道(ADR-0051)。
+func TestAnalyzePhaseSync_EmptyParamsUnifiedChannel(t *testing.T) {
+	app := setupHandlerTestApp(t)
+
+	assertUnifiedFailureChannel(t,
+		app.AnalyzePhaseSync,
+		resultSuccessAccessor[PhaseSyncResult]{
+			Success: func(r *PhaseSyncResult) bool { return r.Success },
+			Message: func(r *PhaseSyncResult) string { return r.Message },
+		},
+		[]unifiedChannelCase[PhaseSyncParams, PhaseSyncResult]{
+			{
+				name: "no_manifest",
+				params: PhaseSyncParams{
+					ManifestFile: "", DataFolder: "/tmp/legit",
+					StartPhase: "P0", EndPhase: "P2",
+				},
+				expectInMsg: ErrNoManifestFile.Error(),
+			},
+			{
+				name: "no_data_folder",
+				params: PhaseSyncParams{
+					ManifestFile: "/tmp/legit/m.csv", DataFolder: "",
+					StartPhase: "P0", EndPhase: "P2",
+				},
+				expectInMsg: ErrNoDataFolder.Error(),
+			},
+			{
+				name: "no_phase_selection",
+				params: PhaseSyncParams{
+					ManifestFile: "/tmp/legit/m.csv", DataFolder: "/tmp/legit",
+					StartPhase: "", EndPhase: "P2",
+				},
+				expectInMsg: ErrNoPhaseSelection.Error(),
+			},
+		},
+	)
+}
