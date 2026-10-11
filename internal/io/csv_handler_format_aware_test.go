@@ -571,6 +571,31 @@ func TestWriteCCIResult_NonFiniteGaitTimeRejected(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr), "invalid result 不應留下檔案")
 }
 
+// TestWriteCCIResult_ShortPairRejected 驗證 pair 長度短於 TimeValues 時回
+// ErrPairLengthMismatch 且不寫檔(ADR-0053;舊行為補空字串)。
+func TestWriteCCIResult_ShortPairRejected(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir := newFormatAwareTestHandler(t)
+
+	result := &cci.CCIAnalysisResult{
+		Subject:       "subj_short",
+		GaitStartTime: 0.0,
+		GaitEndTime:   1.0,
+		TimeValues:    []float64{0.0, 0.5, 1.0},
+		PairResults: []cci.CCIResult{
+			{PairName: "P1", Values: []float64{0.1, 0.2, 0.3}},
+			{PairName: "P2", Values: []float64{0.4}},
+		},
+	}
+
+	_, err := handler.WriteCCIResult(context.Background(), WriteRequest{}, result)
+	require.ErrorIs(t, err, cci.ErrPairLengthMismatch)
+
+	_, statErr := os.Stat(filepath.Join(tempDir, "subj_short_CCI_Rudolph.csv"))
+	require.True(t, os.IsNotExist(statErr), "invalid result 不應留下檔案")
+}
+
 // TestWriteCCIResult_CtxCancel 驗證 pre-cancel 不寫檔。
 func TestWriteCCIResult_CtxCancel(t *testing.T) {
 	t.Parallel()
