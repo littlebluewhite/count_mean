@@ -25,8 +25,8 @@ func useGlobalLocale(t *testing.T, locale Locale) {
 }
 
 // TestError_ErrorRendersZhTWRegardlessOfLocale 釘住 Error() 固定以內建 zh-TW catalog 渲染:
-// 目前 locale 是 en-US 時,err.Error()(log、err 通道、byte-pinned 測試看到的文字)仍與
-// key 化之前的 zh-TW 文字逐位元組相同。
+// 目前 locale 是 en-US 時,err.Error()(log、byte-pinned 測試看到的文字)仍與 key 化
+// 之前的 zh-TW 文字逐位元組相同。
 func TestError_ErrorRendersZhTWRegardlessOfLocale(t *testing.T) {
 	useGlobalLocale(t, LocaleEnUS)
 

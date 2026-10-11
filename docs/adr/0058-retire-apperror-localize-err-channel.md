@@ -31,8 +31,9 @@ W11 的前一步把所有 producer 改為帶 key 的 `i18n.Error`（io `ReadCSV`
 
 - **zh-TW 錯誤文字少了 AppError 外框**：沒有 `[CODE]` 前綴、「詳細:」「原因:」段，也沒有 ValidationError 的「欄位 '…' 驗證失敗: … (值: …)」回顯；過大只帶 MB 數、非一般檔案不帶路徑、CSV 驗證只帶行號 / 欄號、檔名規則只帶觸發規則的片段（W11 前一步）。
 - **log 不再有 `error_code` / `recoverable` 欄位**，`AppError.Context` 的欄位也不再併入 log context；caller 傳入的同名 context key 不再被覆蓋（不再是保留 key）。
-- **非 zh-TW locale 下 err 通道改送該 locale 的文字**：帶 key 的部分（io `ReadCSV`、`validation/csv`、`validation/filename`、legacy panel 與 MaxMean 批次的 `error.handler.*` 前綴、analyzer 的 `i18n.Error`）以目前 locale 渲染，路徑仍脫敏。zh-TW 下文字與過去逐位元組相同。
+- **非 zh-TW locale 下 err 通道改送該 locale 的文字**：帶 key 的部分（io `ReadCSV`、`validation/csv`、`validation/filename`、legacy panel 與 MaxMean 批次的 `error.handler.*` 前綴、analyzer 的 `i18n.Error`）以目前 locale 渲染，路徑仍脫敏。zh-TW 下文字與過去逐位元組相同 —— 限內建 catalog：外部 zh-TW 翻譯 JSON 覆寫了某個 key 時，`Localize` 用覆寫後的文字而 `Error()` 用內建文字，兩者不同，err 通道回 `webviewErr`、送出覆寫後的文字（[[ADR-0048]] Consequences）。
 - **仍是中文的部分**（不在本 ADR 範圍）：calculator、Output placement、security、manifest loader 的包裝訊息，以及 io `listEntries` 的「無法讀取目錄 …」，在 en-US 下仍顯示中文，與英文前綴混排。
+- **gui err 通道自己的 sentinel 也仍是中文**：panic 分支的 `ErrInternalPanic`（「內部錯誤，請聯絡技術支援（無需重啟）」）與其 `handler=` 欄位的中文 handler 名（「CCI 分析」「階段分析」等），以及 `ErrAppNotReady`（「App 尚未完成啟動，請稍候再試」）—— 都是 `errors.New` 字面值，不經 `Localize`。
 - golden（真實 V.16 資料走 GUI handler，預設 zh-TW）與 W10、W11 前一步逐位元組相同。
 
 ## Why

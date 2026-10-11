@@ -12,9 +12,9 @@ import (
 // 訊息 = Key 的 catalog 文字以 Args 格式化(規則同 T:無 Args 時不經 Sprintf,文字裡的
 // `%` 原樣保留);Cause 非 nil 時再接「: 」+ Cause 的文字。
 //
-// Error() 固定以內建 zh-TW catalog 渲染、與目前 locale 無關:log、err 通道與既有測試
-// 看到的文字和 key 化之前逐位元組相同。Unwrap 回 Cause,errors.Is / As 照常走到 cause
-// 與 sentinel。
+// Error() 固定以內建 zh-TW catalog 渲染、與目前 locale 無關:log 與既有測試看到的文字
+// 和 key 化之前逐位元組相同(err 通道出口另以 Localize 依目前 locale 渲染,ADR-0058)。
+// Unwrap 回 Cause,errors.Is / As 照常走到 cause 與 sentinel。
 type Error struct {
 	Key   string
 	Args  []any

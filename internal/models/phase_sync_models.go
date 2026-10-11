@@ -107,7 +107,7 @@ type PhaseTimeRange struct {
 
 // PhaseSyncValidationError 驗證錯誤 — phase sync / manifest 解析期間欄位驗證失敗。
 //
-// 原名 ValidationError 與 internal/errors.ValidationError 同名，跨 package
+// 原名 ValidationError 與 internal/errors.ValidationError（已於 ADR-0058 刪除）同名，跨 package
 // 引用易讀錯（且 IDE / golangci-lint 不會擋）。改名為 PhaseSyncValidationError
 // 後語意更聚焦：本型別只在 internal/parsers/phase_manifest_parser.go 的
 // ValidatePhaseManifest 內使用，回傳給 internal/phase_sync 與 internal/cci。

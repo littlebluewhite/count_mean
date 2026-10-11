@@ -639,7 +639,7 @@ if errors.As(err, &keyed) {
     }
 }
 
-// 顯示：依目前 locale 渲染（zh-TW 下與 err.Error() 相同）
+// 顯示：依目前 locale 渲染（內建 zh-TW catalog 下與 err.Error() 相同）
 msg := i18n.Localize(err)
 ```
 

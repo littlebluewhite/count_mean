@@ -79,8 +79,9 @@ func (e *webviewErr) Unwrap() error {
 // (ADR-0058)。順序不可對調:Localize 在 err 文字裡找 *i18n.Error 的 zh-TW 原文,先
 // redact 會改掉原文裡的路徑而找不到、整段退回 zh-TW。
 //
-// 文字沒變(zh-TW 下不含路徑,或 nil)就原樣回傳,保留 caller 的 error identity
-// (err == sentinel 比較不受影響)。
+// 文字沒變(內建 catalog 的 zh-TW 下不含路徑,或 nil)就原樣回傳,保留 caller 的 error
+// identity(err == sentinel 比較不受影響)。外部 zh-TW 翻譯 JSON 覆寫了 key 時 Localize
+// 與 Error() 不同,回 webviewErr(ADR-0048 Consequences)。
 func renderForWebview(err error) error {
 	if err == nil {
 		return nil

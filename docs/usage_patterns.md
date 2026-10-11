@@ -604,6 +604,10 @@ func (p *ErrorHandlingProcessor) shouldRetry(err error) bool {
 
     var keyed *i18n.Error
     if errors.As(err, &keyed) {
+        if strings.HasPrefix(keyed.Key, "error.csv.") {
+            return false // validate_data 階段的數據格式錯誤，重試結果相同
+        }
+
         switch keyed.Key {
         case i18n.KeyErrorIOFileTooLarge, i18n.KeyErrorIOFilenameInvalid,
             i18n.KeyErrorIOCSVValidationFailed:
