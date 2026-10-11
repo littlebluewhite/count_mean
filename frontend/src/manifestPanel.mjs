@@ -496,7 +496,7 @@ export class ManifestPanel {
         } catch (err) {
             // eslint-disable-next-line no-console
             console.error('選擇分期總檔案失敗:', err);
-            await globalThis.ShowError(globalThis.t('dialog.error'), String(err));
+            await globalThis.ShowError(globalThis.t('dialog.error'), err?.message ?? String(err));
         }
     }
 
@@ -543,7 +543,7 @@ export class ManifestPanel {
         } catch (err) {
             // eslint-disable-next-line no-console
             console.error('載入主題失敗:', err);
-            await globalThis.ShowError(globalThis.t('dialog.error'), String(err));
+            await globalThis.ShowError(globalThis.t('dialog.error'), err?.message ?? String(err));
         }
     }
 

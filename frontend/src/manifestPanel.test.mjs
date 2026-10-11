@@ -700,6 +700,30 @@ test('15. selectMpManifest:loadSubjects throw → ShowError(冒泡到 catch)', a
         }
 
         assert.equal(calls.showError.length, 1, 'loadSubjects throw 應觸發 ShowError 一次');
+        assert.equal(calls.showError[0].msg, '後端載入失敗', '對話框只顯示訊息,不帶 "Error: " 前綴');
+    } finally {
+        await teardown(window);
+    }
+});
+
+test('15b. onMpManifestDropped:loadSubjects throw → ShowError 只顯示訊息(無 "Error: " 前綴)', async () => {
+    const { window, mp, calls } = await setup();
+    try {
+        const spec = minimalSpec({
+            loadSubjects: async () => { throw new Error('後端載入失敗'); },
+        });
+        mp.run(spec);
+
+        const origError = console.error;
+        console.error = () => {};
+        try {
+            await mp.onMpManifestDropped();
+        } finally {
+            console.error = origError;
+        }
+
+        assert.equal(calls.showError.length, 1, 'loadSubjects throw 應觸發 ShowError 一次');
+        assert.equal(calls.showError[0].msg, '後端載入失敗', '對話框只顯示訊息,不帶 "Error: " 前綴');
     } finally {
         await teardown(window);
     }
