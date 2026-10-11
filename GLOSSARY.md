@@ -62,10 +62,10 @@ _Avoid_: baseline, MVIC file, reference signal, max reference.
 _Avoid_: window max, rolling average, peak mean.
 
 **Format-aware write**
-CSVHandler 對外的一種寫入操作 —— caller 傳入 result struct（MaxMeanResult / EMGDataset / PhaseAnalysisResult）與 WriteRequest，CSVHandler 內部負責 row layout、precision、scaling、merging（多 phase 合一檔）與 sanitize 後寫檔。
-與 raw write 對比：raw write 只接受 `[][]string`；format-aware write 接受分析結果結構，CSVHandler 持有 row layout 的真相。
-**Filename ownership 隨 unit-of-work 形狀分**：Subject-based write（PhaseSync / NormalizedPhaseSync / CCI / MuscleRatioOutput*）由 CSVHandler 內部從 `result.Subject` + suffix convention 推導（`req.Filename` 被忽略）；File-based write（PhaseAnalysis / MaxMean / Normalized）由 caller 傳入 `req.Filename`。詳見 [[ADR-0004]]。**NormalizedPhaseSync 產兩個 Subject-based 輸出**（標準化 EMG 時序 + 統計），檔名皆由 CSVHandler 推導（見 [[ADR-0020]]）；與 File-based 的 plain **Normalized**（EMGDataset 標準化）是不同概念，勿混。
-**File-based write 回傳實際寫入的路徑**：經單一寫門 `writeFileOutput`（join → MkdirAll → WriteCSV），回傳值就是落檔位置；檔案路徑一律不 URL-decode（`%`、`+` 為字面字元，見 [[ADR-0039]]）。
+CSVHandler 對外的一種寫入操作 —— caller 傳入 result struct（MaxMeanResult / EMGDataset / PhaseAnalysisResult / PhaseSync、CCI、MuscleRatio 結果），CSVHandler 內部負責 row layout、precision、scaling、merging（多 phase 合一檔）與 sanitize，再交給 [[Output placement]] 落檔。
+與 raw write 對比：raw write 只接受 `[][]string`（File-based 的 `WriteFileCSV`）；format-aware write 接受分析結果結構，CSVHandler 持有 row layout 的真相。
+**Filename ownership 隨 unit-of-work 形狀分**：Subject-based write（PhaseSync / NormalizedPhaseSync / CCI / MuscleRatioOutput*）由 CSVHandler 從 `result.Subject` + suffix convention 推導，不收 [[WriteRequest]]、一律寫在 OutputDir 根；File-based write（PhaseAnalysis / MaxMean / Normalized）由 caller 以 [[WriteRequest]] 傳入檔名（與可選的 SubDir）。詳見 [[ADR-0004]]。**NormalizedPhaseSync 產兩個 Subject-based 輸出**（標準化 EMG 時序 + 統計），檔名皆由 CSVHandler 推導（見 [[ADR-0020]]）；與 File-based 的 plain **Normalized**（EMGDataset 標準化）是不同概念，勿混。
+**回傳實際寫入的路徑**：兩種命名都經 [[Output placement]]，回傳值就是落檔位置；檔案路徑一律不 URL-decode（`%`、`+` 為字面字元，見 [[ADR-0039]]）。
 _Avoid_: structured write, typed write, formatted output.
 
 **User-picked CSV read**
@@ -73,17 +73,17 @@ _Avoid_: structured write, typed write, formatted output.
 與 manifest-driven 的 lenient 讀取（`OpenLenientValidated`）不同：後者的檔名來自 manifest、相對於 baseFolder。
 _Avoid_: raw read, direct open.
 
-**Subject output placement**
-Subject-based write 把輸出落檔的唯一步驟 `placeSubjectOutput`：`SubjectOutputName` 推導檔名 → containment join → `ValidateExternalPath` → `MkdirAll` → `WriteCSVAtomic`（帶 `BasePaths`），回傳實際寫入路徑。7 個 Subject-based writer 只持有 row layout。錯誤文字固定為「輸出路徑無效」「輸出目錄建立失敗」。PHI 性質依分支而異：containment 失敗是固定哨兵（不帶 SubDir）；`MkdirAll` 失敗只包底層 errno（不帶目錄路徑）；`ValidateExternalPath` 失敗以 `%w` 包 validator error，可帶輸出「檔案」路徑，經 webview sink 時只剩檔名（ADR-0036 D5）。見 [[ADR-0040]]。
-與 File-based write 的單一寫門 `writeFileOutput`（非 atomic、檔名由 caller 傳入）是兩條不同的路。
-_Avoid_: phase-sync atomic write, output dir validation.
+**Output placement**
+所有輸出（CSV 與 PNG）落檔的唯一步驟 `CSVHandler.placeOutput`：containment join（`safeJoinOutput`）→ 依格式驗檔名（CSV 用 `ValidateFilename`，PNG 用 `ValidateName`）→ `ValidateExternalPath`（敏感位置，含 symlink resolve）→ `MkdirAll`（先驗證、後建目錄）→ `fsperm.AtomicWriteFile`（crypto tmp → fsync → rename，parent 以 dirfd 錨定在 allow-list 之下），回傳實際寫入路徑。格式由 payload 帶：`csvPayload`（BOM 照 `config.BOMEnabled`、formula 逸出）、`pngPayload`（位元組原樣）。三組入口共用這一道門：File-based CSV（`WriteFileCSV`，檔名與 SubDir 由 [[WriteRequest]] 給）、Subject-based CSV（`placeSubjectOutput`，檔名 `SubjectOutputName(subject, suffix)`，寫在 OutputDir 根）、Subject PNG（`WriteSubjectPNG`，只收已解碼並驗證過的位元組）。
+leaf 是 symlink 時 rename 取代連結本身、不跟到目標；寫到一半失敗不動既有檔，crash 可能留下 `*.tmp.<hex>`。錯誤文字固定為「輸出路徑無效」「檔案名稱驗證失敗」「輸出目錄建立失敗」。PHI 性質依分支而異：containment 失敗是固定哨兵（不帶 SubDir）；`MkdirAll` 失敗只包底層 errno（不帶目錄路徑）；`ValidateExternalPath` 失敗以 `%w` 包 validator error，可帶輸出「檔案」路徑，經 webview sink 時只剩檔名（ADR-0036 D5）。見 [[ADR-0055]]（取代 [[ADR-0040]] 只管 Subject-based 的版本）。
+_Avoid_: subject output placement, phase-sync atomic write, output dir validation, writeFileOutput.
 
 **Read sanity / write escape**
 驗證詞彙依 context 分開：讀端（`ValidateCSVData`、`ReadCSVRecords`、manifest parser）只做 sanity —— 結構、cell ≤32KB（`CheckCells`），user-picked pipeline 另加 UTF-8；不判斷內容像不像攻擊。注入防禦只在寫端，由 `csvutil` 逸出 formula starter。filename 驗證只擋檔案系統非法（`<>:"|?*`、控制字元、分隔符、磁碟代號、保留裝置名）。見 [[ADR-0041]]。檔名規則只有 `validation/filename` 一個裁判（`ValidateName`，保留名逐個點分段比對），security 只管路徑位置、不檢查檔名（[[ADR-0054]]）。
 _Avoid_: injection detection on read, dangerous-pattern registry.
 
 **WriteRequest**
-所有 format-aware write 共用的請求外殼，欄位只有 Filename（檔名）與 SubDir（可選的 OutputDir 子目錄，空字串 = 寫到 OutputDir 根）；headers 與資料由各 write 方法的 result struct 提供。
+File-based write（MaxMean / Normalized / PhaseAnalysis，以及 raw `WriteFileCSV`）的請求外殼，欄位只有 Filename（caller 給的檔名，須為 `.csv`）與 SubDir（可選的 OutputDir 子目錄，空字串 = 寫到 OutputDir 根；MaxMean batch 用它寫進 `OutputDir/<batchName>/`）。Subject-based write 不收它 —— 檔名由 subject 推導、一律寫在 OutputDir 根（[[ADR-0055]]）。headers 與資料由各 write 方法的 result struct 提供。
 _Avoid_: write options, write spec, csv request.
 
 **Domain analyzer**

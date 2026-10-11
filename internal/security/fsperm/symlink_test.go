@@ -20,8 +20,8 @@ import (
 // 對寫入端造成 silent overwrite、對讀取端造成資料外洩。加上 O_NOFOLLOW 後
 // kernel 直接拒絕。
 //
-// 此測試與 internal/io/csv_handler_symlink_test.go 對 WriteCSV 高階 API 的
-// 對稱驗證 — 這裡保證底層 flag 本身正確；後者保證 wrapper 沒漏接 flag。
+// 這裡保證底層 flag 本身正確。io 寫入門(Output placement)改走 atomic rename 後,
+// leaf symlink 由 rename 取代、不跟到目標,見 internal/io/csv_handler_symlink_test.go(ADR-0055)。
 func TestFsperm_FlagsRejectSymlink(t *testing.T) {
 	t.Parallel()
 

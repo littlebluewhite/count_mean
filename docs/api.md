@@ -462,23 +462,25 @@ fmt.Printf("讀取成功：%d 筆 row\n", len(records))
 
 ```go
 type WriteRequest struct {
-    Filename string // File-based writer 使用；Subject-based writer 忽略（檔名由 subject 推導）
-    SubDir   string // OutputDir 之下的子目錄，空字串 = OutputDir 根
+    Filename string // File-based writer 的輸出檔名（須為 .csv）
+    SubDir   string // OutputDir 之下的子目錄，空字串 = OutputDir 根（MaxMean batch 用）
 }
 
-// File-based（檔名由 caller 傳入，非 atomic，單一寫門 writeFileOutput）
+// File-based（檔名由 caller 以 WriteRequest 傳入）
 func (h *CSVHandler) WriteMaxMean(req WriteRequest, headers []string, results []models.MaxMeanResult, startRange, endRange float64) (string, error)
 func (h *CSVHandler) WriteNormalized(req WriteRequest, dataset *models.EMGDataset) (string, error)
 func (h *CSVHandler) WritePhaseAnalysis(req WriteRequest, headers []string, result *calculator.AnalyzeResult /* ... */) (string, error)
+func (h *CSVHandler) WriteFileCSV(req WriteRequest, data [][]string) (string, error) // raw：data[0] 為 header
 
-// Subject-based（檔名由 filename.SubjectOutputName 推導，WriteCSVAtomic，單一步驟 placeSubjectOutput）
-func (h *CSVHandler) WritePhaseSyncResult(req WriteRequest, stats *models.EMGStatistics) (string, error)
-func (h *CSVHandler) WriteCCIResult(ctx context.Context, req WriteRequest, result *cci.CCIAnalysisResult) (string, error)
+// Subject-based（檔名由 filename.SubjectOutputName 推導，一律寫在 OutputDir 根，不收 WriteRequest）
+func (h *CSVHandler) WritePhaseSyncResult(stats *models.EMGStatistics) (string, error)
+func (h *CSVHandler) WriteCCIResult(ctx context.Context, result *cci.CCIAnalysisResult) (string, error)
+func (h *CSVHandler) WriteSubjectPNG(subject, suffix string, png []byte) (string, error) // 只收已解碼並驗證過的 PNG 位元組
 // 另有 WriteNormalizedPhaseSyncResult / WriteNormalizedPhaseSyncEMG / WriteCCIPhasesResult /
 // WriteMuscleRatioOutputAll / WriteMuscleRatioOutputPhases，見 internal/io/csv_handler.go
 ```
 
-所有 writer 皆回傳**實際寫入的路徑**。row layout、scaling、precision、BOM（`BOMEnabled`）、formula-injection 逸出、`O_NOFOLLOW` 拒絕 symlink、fsync 收尾由 writer 內部持有；caller 不再自行組裝 `[][]string`。輸出一律落在 `cfg.OutputDir[/SubDir]` 之內，`SubDir` 含 `..` 逸出時回「輸出路徑無效」（見 ADR-0040、GLOSSARY「Subject output placement」）。
+所有 writer 皆回傳**實際寫入的路徑**，並經同一道落檔門（GLOSSARY「Output placement」，ADR-0055）：containment → 檔名驗證（CSV 要 `.csv`，PNG 用 `ValidateName`）→ 敏感位置 → 建目錄 → atomic 寫入（tmp → fsync → rename）。row layout、scaling、precision、formula-injection 逸出由 writer 內部持有；caller 不再自行組裝 `[][]string`。BOM：全部 CSV 都照 `BOMEnabled`（關掉時 Subject-based CSV 也不帶 BOM）；PNG 位元組原樣寫出。目標檔名若是 symlink，rename 取代連結本身、不跟到目標。輸出一律落在 `cfg.OutputDir[/SubDir]` 之內，`SubDir` 含 `..` 逸出時回「輸出路徑無效」。
 
 **示例：**
 ```go
@@ -791,6 +793,8 @@ contextLogger.Info("用戶操作", map[string]interface{}{
 func NewPathValidator(allowedBasePaths []string) *PathValidator
 ```
 
+allow-list 只經 `GetAllowedBasePaths()` 交給 `fsperm.AtomicWriteFile` 當 dirfd 錨點（Output placement）；`ValidateExternalPath` / `ValidateExternalDir` 不看它。原本限定 allow-list 的 `ValidateFilePath` 已刪除（ADR-0055）。
+
 **示例：**
 ```go
 // 創建路徑驗證器
@@ -801,32 +805,13 @@ validator := security.NewPathValidator([]string{
 })
 ```
 
-**ValidateFilePath**
-
-```go
-func (v *PathValidator) ValidateFilePath(filePath string) error
-```
-
-Strict 驗證：路徑必須落在建構時給定的 allowed base paths 之內（受控的內部路徑）。使用者選取的任意檔請改用 `ValidateExternalPath`。
-
-**示例：**
-```go
-// 驗證文件路徑
-if err := validator.ValidateFilePath(userInputPath); err != nil {
-    log.Printf("路徑驗證失敗：%v", err)
-    return err
-}
-
-// 路徑安全，可以繼續處理
-```
-
 **ValidateExternalPath**
 
 ```go
 func (v *PathValidator) ValidateExternalPath(path string) error
 ```
 
-驗證使用者外部選取的**檔案**路徑（GUI 檔案對話框、CSV 讀寫目標），**不**要求落在 allow-list 內。擋 `..` traversal、系統敏感位置（`/etc`、`~/.ssh` …）與過長路徑；並把路徑經 symlink 解析後再檢查一次（`ln -s /etc /tmp/foo` 不能繞過）。路徑不做 URL-decode。`CSVHandler.ReadCSV` 與 Subject output placement 都經此驗證（ADR-0038 / ADR-0039）。**不檢查檔名**（Windows 保留名、檔名長度）：檔名規則由 `filename.ValidateName` 單一裁判，檔案 caller 自己呼叫（ADR-0054）。
+驗證使用者外部選取的**檔案**路徑（GUI 檔案對話框、CSV 讀寫目標），**不**要求落在 allow-list 內。擋 `..` traversal、系統敏感位置（`/etc`、`~/.ssh` …）與過長路徑；並把路徑經 symlink 解析後再檢查一次（`ln -s /etc /tmp/foo` 不能繞過）。路徑不做 URL-decode。`CSVHandler.ReadCSV` 與 Output placement（全部輸出檔）都經此驗證（ADR-0038 / ADR-0039 / ADR-0055）。**不檢查檔名**（Windows 保留名、檔名長度）：檔名規則由 `filename.ValidateName` 單一裁判，檔案 caller 自己呼叫（ADR-0054）。
 
 **ValidateExternalDir**
 
@@ -857,7 +842,7 @@ func ValidateName(name string) error                       // 不綁副檔名
 func (v *Validator) ValidateFilename(filename string) error // = ValidateName + .csv
 ```
 
-`ValidateName` 擋空白、tab / 控制字元、Unicode Cf / Cs、路徑分隔符、Windows 磁碟代號前綴、`<>:"|?*`、Windows 保留名（**每個點分段**比對，`CON.txt.csv`、`a.NUL.png` 都擋）與長度 > 255。`ValidateFilename` 另要求副檔名為 `.csv`（TrimSpace 後取、不分大小寫；尾點與無副檔名拒絕）。`manifest.LoadManifests` 開檔前對 `Base(path)` 呼叫 `ValidateName`；`CSVHandler.ReadCSV` / `WriteCSV` 呼叫 `ValidateFilename`。`filename.Sanitize` 用同一條逐段保留名規則（`a.NUL.b` → `a.NUL_safe.b`），所以 `SubjectOutputName(subject, suffix) + ext` 必過 `ValidateName`（property 測試釘住）。
+`ValidateName` 擋空白、tab / 控制字元、Unicode Cf / Cs、路徑分隔符、Windows 磁碟代號前綴、`<>:"|?*`、Windows 保留名（**每個點分段**比對，`CON.txt.csv`、`a.NUL.png` 都擋）與長度 > 255。`ValidateFilename` 另要求副檔名為 `.csv`（TrimSpace 後取、不分大小寫；尾點與無副檔名拒絕）。`manifest.LoadManifests` 開檔前對 `Base(path)` 呼叫 `ValidateName`；`CSVHandler.ReadCSV` 與 CSV 輸出（Output placement 的 CSV payload）呼叫 `ValidateFilename`，PNG 輸出呼叫 `ValidateName`。`filename.Sanitize` 用同一條逐段保留名規則（`a.NUL.b` → `a.NUL_safe.b`），所以 `SubjectOutputName(subject, suffix) + ext` 必過 `ValidateName`（property 測試釘住）。
 
 ---
 
@@ -883,13 +868,13 @@ func SanitizeHeaderRow(row []string) []string
 
 對單列每 cell 跑 `SanitizeCellForWrite`，回傳新 slice。Headers 是最高風險面（user 上傳的 CSV header 會 round-trip 進匯出檔）。
 
-**SanitizeAllRows**
+**CSVPayload**
 
 ```go
-func SanitizeAllRows(rows [][]string) [][]string
+func CSVPayload(opts SafeWriteOptions) func(io.Writer) error
 ```
 
-`csv_handler.WriteCSV` 內部用此函式作為單一 chokepoint，保證**所有 cell（header + body）**都會被 sanitize，堵住 `result.PhaseName` 等 user-controllable 標籤的 formula-injection 路徑。`SanitizeCellForWrite` 是 idempotent，已 escape 的 cell 不會被二次處理。
+CSV 輸出的位元組由它持有，是 sanitize 的單一 chokepoint：UTF-8 BOM（`OmitBOM` 為 false 時；io 依 `BOMEnabled` 設定）、header 經 `SanitizeHeaderRow`、每列 body 經 `SanitizeBodyRow`，保證**所有 cell（header + body）**都會被 sanitize，堵住 `result.PhaseName` 等 user-controllable 標籤的 formula-injection 路徑；每 1024 列 Flush 一次探測 underlying 寫入錯誤。落檔交給 `fsperm.AtomicWriteFile`（經 io 的 Output placement，ADR-0055）。`SanitizeCellForWrite` 是 idempotent，已 escape 的 cell 不會被二次處理。
 
 **PeekBOM / WriteBOM**
 
@@ -920,7 +905,7 @@ var   ReadFlags   = os.O_RDONLY | unix.O_NOFOLLOW
 func WriteFileNoFollow(path string, data []byte) error
 ```
 
-一次性整檔寫入 helper（PNG 圖片、i18n JSON 等不需 streaming 的場景）。串流寫入（CSV）仍走 `os.OpenFile(path, fsperm.WriteFlags, fsperm.FilePerm)` pattern。
+一次性整檔寫入 helper（目前用於 i18n JSON）。寫進 OutputDir 的輸出檔（CSV、PNG）不走它，而是經 io 的 Output placement 走 `fsperm.AtomicWriteFile`（ADR-0055）。
 
 ### 通用工具函數
 
