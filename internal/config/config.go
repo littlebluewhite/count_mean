@@ -15,6 +15,7 @@ import (
 	"count_mean/internal/i18n"
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
+	"count_mean/internal/security/redact"
 )
 
 // Configuration validation errors.
@@ -187,7 +188,7 @@ func (c *AppConfig) SaveConfigAtomic(filename string) error {
 	// 會 ENOENT。
 	parent := filepath.Dir(filename)
 	if err := os.MkdirAll(parent, fsperm.DirPerm); err != nil {
-		return fmt.Errorf("無法建立 config parent 目錄 %s: %w", parent, err)
+		return fmt.Errorf("無法建立 config parent 目錄 %s: %w", redact.DirPath(parent), err)
 	}
 
 	return fsperm.AtomicWriteFile(filename, nil, func(w io.Writer) error {

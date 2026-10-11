@@ -287,12 +287,14 @@ func TestLoadManifests_RejectsReservedName(t *testing.T) {
 
 // TestLoadManifests_FileNotFound 釘住開檔錯誤原樣保留:訊息「無法開啟檔案」(原 parsers
 // ParseFile 的測試,ADR-0056 開檔搬到 LoadManifests),且仍可 errors.Is(os.ErrNotExist)。
+// 自己內插的路徑以 redact.FilePath 帶入、只留檔名(ADR-0059);目錄只剩 cause 的
+// *PathError 文字裡,交給 sink 端 redact。
 func TestLoadManifests_FileNotFound(t *testing.T) {
 	t.Parallel()
 
 	_, err := LoadManifests(filepath.Join(t.TempDir(), "nonexistent_file.csv"))
-	if err == nil || !strings.Contains(err.Error(), "無法開啟檔案") {
-		t.Fatalf("err = %v; want 「無法開啟檔案」", err)
+	if err == nil || !strings.HasPrefix(err.Error(), "無法開啟檔案 nonexistent_file.csv: ") {
+		t.Fatalf("err = %v; want 「無法開啟檔案 nonexistent_file.csv: …」", err)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("errors.Is(err, os.ErrNotExist) = false; err=%v", err)

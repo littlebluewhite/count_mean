@@ -232,7 +232,10 @@ func TestRPCMessage_NoAbsolutePath(t *testing.T) {
 
 	cases := []struct {
 		name string
-		call func(t *testing.T, planted string) string
+		// shownFile 非空:觸發的錯誤以 redact.FilePath 帶路徑、只留檔名(ADR-0059),沒有
+		// `<redacted-path>` 可要求;反向保險改為斷言含該檔名。
+		shownFile string
+		call      func(t *testing.T, planted string) string
 	}{
 		{
 			name: "AnalyzeCCI",
@@ -330,10 +333,11 @@ func TestRPCMessage_NoAbsolutePath(t *testing.T) {
 			},
 		},
 		{
-			name: "AnalyzePhaseSync_Validate",
+			name:      "AnalyzePhaseSync_Validate",
+			shownFile: "manifest.csv",
 			call: func(t *testing.T, planted string) string {
 				// validate gate:含 `..` element 的 manifest 路徑 → ErrPathTraversal,
-				// 錯誤文字帶原始路徑,經 inputMessage redact 後進 Message。
+				// 被拒路徑以 redact.FilePath 帶入、只留檔名,經 inputMessage 進 Message。
 				app := newRPCRedactTestApp(t, t.TempDir(), "")
 				result, err := app.AnalyzePhaseSync(PhaseSyncParams{
 					ManifestFile: planted + "/../manifest.csv",
@@ -374,8 +378,16 @@ func TestRPCMessage_NoAbsolutePath(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			planted := plantDir(t)
+			text := tc.call(t, planted)
 
-			requireNoDirLeak(t, tc.call(t, planted), planted)
+			if tc.shownFile != "" {
+				requireNoDirLeak(t, text, "")
+				require.NotContains(t, text, plantedDirMarker)
+				require.Contains(t, text, tc.shownFile, "觸發的錯誤應帶檔名")
+
+				return
+			}
+			requireNoDirLeak(t, text, planted)
 		})
 	}
 }

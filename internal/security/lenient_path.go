@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"count_mean/internal/security/fsperm"
+	"count_mean/internal/security/redact"
 )
 
 // resolveLenientPath joins baseFolder + filename for the manifest-driven EMG loading scenario,
@@ -77,8 +78,9 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 	normalized := strings.ReplaceAll(filename, `\`, "/")
 
 	// 錯誤訊息只帶 basename:manifest filename 可能是相對路徑且含 subject / patient 資料夾名,
-	// webview sink 的 redact.Paths 無法遮蔽相對路徑、對絕對路徑也保留最後一段,必須在來源端就去掉目錄。
-	shown := lenientShownName(filename)
+	// webview sink 的 redact.Paths 無法遮蔽相對路徑、對絕對路徑也保留最後一段,必須在來源端就去掉目錄
+	// —— 以 redact.FilePath 帶入(ADR-0059)。
+	shown := redact.FilePath(filename)
 
 	// Null byte：os.OpenFile 會拒，但 error path 會把未清理的 byte 寫進 log（observability
 	// 污染風險）。提前擋。
@@ -153,11 +155,6 @@ func resolveLenientPath(baseFolder, filename string) (string, error) {
 	return joined, nil
 }
 
-// lenientShownName 回傳可放進錯誤訊息的檔名:只留 basename(同樣把 "\" 視為分隔符)。
-func lenientShownName(filename string) string {
-	return filepath.Base(strings.ReplaceAll(filename, `\`, "/"))
-}
-
 // OpenLenientValidated 是 manifest-driven EMG 讀檔的**單一 fused 安全入口**：
 // 把 lenient 路徑解析與 atomic validated-open 併成一道門，所有 manifest data-file
 // 讀取（Phase C/D 起經 manifest door）皆收斂於此。
@@ -196,7 +193,7 @@ func OpenLenientValidated(baseFolder, filename string) (*os.File, error) {
 	}
 	f, err := fsperm.OpenReadValidated(joined, []string{baseFolder})
 	if err != nil {
-		return nil, fmt.Errorf("OpenLenientValidated: 開啟 %s 失敗: %w", lenientShownName(filename), err)
+		return nil, fmt.Errorf("OpenLenientValidated: 開啟 %s 失敗: %w", redact.FilePath(filename), err)
 	}
 	return f, nil
 }

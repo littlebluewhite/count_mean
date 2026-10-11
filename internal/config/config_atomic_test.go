@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,19 @@ func TestSaveConfigAtomic_CreatesParentDir(t *testing.T) {
 
 	_, err = os.Stat(path)
 	require.NoError(t, err, "config file must exist after SaveConfigAtomic")
+}
+
+// TestSaveConfigAtomic_MkdirErrorHidesParentDir 釘住 parent 目錄建立失敗時,自己內插的
+// 目錄以 redact.DirPath 帶入、整條隱藏(ADR-0059);路徑只剩 cause 的 *PathError 文字裡,
+// 交給 sink 端 redact。
+func TestSaveConfigAtomic_MkdirErrorHidesParentDir(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
+
+	err := DefaultConfig().SaveConfigAtomic(filepath.Join(blocker, "sub", "config.json"))
+	require.Error(t, err)
+	require.True(t, strings.HasPrefix(err.Error(), "無法建立 config parent 目錄 <redacted-path>/: "),
+		"err = %v", err)
 }
 
 // TestSaveConfigAtomic_StaleTmpOrphanDoesNotBlock is a regression test for the

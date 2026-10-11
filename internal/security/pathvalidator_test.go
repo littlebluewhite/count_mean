@@ -256,7 +256,7 @@ func TestValidateExternalPath_EncodedSequencesAreLiteral(t *testing.T) {
 			if err := validator.ValidateExternalPath(p); err != nil {
 				t.Fatalf("ValidateExternalPath(%q) 編碼序列應視為字面字元放行，實際 err=%v", p, err)
 			}
-			abs, err := validator.validatePathFormat(p)
+			abs, err := validator.validatePathFormat(p, false)
 			if err != nil {
 				t.Fatalf("validatePathFormat(%q) err=%v", p, err)
 			}
@@ -571,5 +571,31 @@ func TestCheckSensitiveLocation_AppDataPolicy_CrossPlatform(t *testing.T) {
 				t.Errorf("path %q 應通過,實際被擋:err=%v", tc.path, err)
 			}
 		})
+	}
+}
+
+// TestValidateExternal_ErrorTextHidesDirectories 釘住被拒路徑進錯誤文字的渲染(ADR-0059):
+// 檔案(ValidateExternalPath)只留檔名、目錄(ValidateExternalDir)整條隱藏。相對路徑的
+// 目錄段 sink 端 redact.Paths 遮不到,必須在這裡就不帶。
+func TestValidateExternal_ErrorTextHidesDirectories(t *testing.T) {
+	t.Parallel()
+
+	const planted = "PatientAlice_PHI"
+	v := NewPathValidator(nil)
+
+	fileErr := v.ValidateExternalPath(planted + "/../x/emg.csv")
+	if !errors.Is(fileErr, ErrPathTraversal) {
+		t.Fatalf("ValidateExternalPath err = %v, want ErrPathTraversal", fileErr)
+	}
+	if got, want := fileErr.Error(), ErrPathTraversal.Error()+": emg.csv"; got != want {
+		t.Errorf("檔案只留檔名:\n got: %q\nwant: %q", got, want)
+	}
+
+	dirErr := v.ValidateExternalDir(planted + "/../" + planted + "_dir")
+	if !errors.Is(dirErr, ErrPathTraversal) {
+		t.Fatalf("ValidateExternalDir err = %v, want ErrPathTraversal", dirErr)
+	}
+	if got, want := dirErr.Error(), ErrPathTraversal.Error()+": <redacted-path>/"; got != want {
+		t.Errorf("目錄整條隱藏:\n got: %q\nwant: %q", got, want)
 	}
 }

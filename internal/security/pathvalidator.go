@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	"count_mean/internal/security/fsperm"
+	"count_mean/internal/security/redact"
 )
 
 // Path validation error definitions.
@@ -134,7 +135,7 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 	// path 可能含合法字面 `%`(例 `report 50%.csv` / BTS 匯出 `SF_8_BTS%_*.csv`),
 	// validatePathFormat 不 decode,故照原樣通過;element traversal / 敏感目錄 /
 	// symlink resolve 仍生效。
-	absPath, err := pv.validatePathFormat(path)
+	absPath, err := pv.validatePathFormat(path, isDir)
 	if err != nil {
 		return err
 	}
@@ -150,7 +151,7 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 		// fsperm.EvalSymlinksWithFallback 只在「整條 path 連 / 都不存在」這類異常時 fail。
 		// 對「path 不存在但 parent 存在」會走 fallback。此處保守 reject，避免 silently
 		// skip layer 2 留下 false negative。
-		return fmt.Errorf("無法解析路徑符號連結 '%s': %w", absPath, resolveErr)
+		return fmt.Errorf("無法解析路徑符號連結 '%s': %w", shownPath(absPath, isDir), resolveErr)
 	}
 
 	// Resolved 路徑可能與 absPath 相同（無 symlink）— 重複跑一次也 cheap，且
@@ -159,7 +160,8 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 }
 
 // validatePathFormat 做 validateExternal 的前置檢查:
-// traversal + 絕對化。回傳 Clean 後的絕對路徑。
+// traversal + 絕對化。回傳 Clean 後的絕對路徑。isDir 只決定 path 進錯誤文字的渲染
+// (shownPath)。
 //
 // 不做 URL-decode:path 是檔案系統路徑,不是 URL。`%2E%2E`、`%2F`、`+` 都是字面檔名
 // 字元,OS 開檔時也不會解碼;先前的 decode loop 會讓「驗證的路徑」與「實際開的路徑」
@@ -167,25 +169,35 @@ func (pv *PathValidator) validateExternal(path string, isDir bool) error {
 //
 // Traversal 檢查採 element-based(split 比對 `..` element),不用 substring scan —
 // 後者會誤拒 `report..v2.csv` / `backup..2024.csv` 等合法檔名。
-func (*PathValidator) validatePathFormat(path string) (absPath string, err error) {
+func (*PathValidator) validatePathFormat(path string, isDir bool) (absPath string, err error) {
 	// Pre-Clean element check：interior `..`（例如 `./input/../output/test.csv`）
 	// 在 Clean 後會被解析消去，但這種跨目錄寫法本身就值得擋，因此在 Clean 之前
 	// 先 split 比對 `..` element。filename 含字面雙點（`report..v2.csv`）的 path
 	// element 不會被誤拒。
 	if HasTraversalElement(path) {
-		return "", fmt.Errorf("%w: %s", ErrPathTraversal, path)
+		return "", fmt.Errorf("%w: %s", ErrPathTraversal, shownPath(path, isDir))
 	}
 
 	abs, absErr := filepath.Abs(filepath.Clean(path))
 	if absErr != nil {
-		return "", fmt.Errorf("無法解析路徑 '%s': %w", path, absErr)
+		return "", fmt.Errorf("無法解析路徑 '%s': %w", shownPath(path, isDir), absErr)
 	}
 
 	if HasTraversalElement(abs) {
-		return "", fmt.Errorf("%w: %s", ErrPathTraversalAbs, abs)
+		return "", fmt.Errorf("%w: %s", ErrPathTraversalAbs, shownPath(abs, isDir))
 	}
 
 	return abs, nil
+}
+
+// shownPath 回被驗證路徑進錯誤文字的 typed arg(ADR-0059):目錄整條隱藏、檔案只留檔名。
+// 被拒的路徑常是相對路徑(`../Patient/x.csv`),sink 端 redact.Paths 遮不到它的首段。
+func shownPath(path string, isDir bool) fmt.Stringer {
+	if isDir {
+		return redact.DirPath(path)
+	}
+
+	return redact.FilePath(path)
 }
 
 // HasTraversalElement reports whether any path element equals "..".

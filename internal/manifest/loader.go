@@ -61,7 +61,7 @@ func LoadManifests(path string) ([]models.PhaseManifest, error) {
 
 	f, err := fsperm.OpenRegularLimited(path, fsperm.MaxReadBytes)
 	if err != nil {
-		return nil, fmt.Errorf("無法開啟檔案 %s: %w", path, err)
+		return nil, fmt.Errorf("無法開啟檔案 %s: %w", redact.FilePath(path), err)
 	}
 	defer func() { _ = f.Close() }() //nolint:errcheck // read-only fd; close error not actionable
 
