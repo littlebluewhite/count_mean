@@ -201,7 +201,9 @@ const loadManifestsTestCSV = "Subject,MotionFile,ForceFile,EMGFile,EMGMotionOffs
 // TestLoadManifests_RejectsReservedName 釘住 ADR-0054:分期總檔的檔名由 filename 套件
 // (ValidateName)把關,每個點分段都比對 Windows 保留名。舊的 security.checkFilename 只剝
 // 最後一個副檔名,`CON.txt.csv` → `CON.txt` 不命中而放行;Windows 上開檔會導向 console device。
-// 檔案內容合法,失敗只能來自檔名檢查。
+//
+// 檔名檢查在開檔前,所以保留名的檔案不建在磁碟上(Windows 上寫 CON / LPT1 會碰到實體
+// device);路徑不存在,若檔名檢查沒擋,錯誤會是「無法開啟檔案」而非保留字錯誤。
 func TestLoadManifests_RejectsReservedName(t *testing.T) {
 	t.Parallel()
 
@@ -214,13 +216,15 @@ func TestLoadManifests_RejectsReservedName(t *testing.T) {
 	for _, name := range []string{"CON.txt.csv", "CON.csv", "a.NUL.csv", "lpt1.bak.csv"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			writeFileHelper(t, base, name, loadManifestsTestCSV)
 			_, err := LoadManifests(filepath.Join(base, name))
 			if err == nil {
 				t.Fatalf("LoadManifests(%q) 必須拒絕 Windows 保留名", name)
 			}
 			if !strings.Contains(err.Error(), "保留字") {
-				t.Errorf("LoadManifests(%q) 應回保留字錯誤,got %v", name, err)
+				t.Errorf("LoadManifests(%q) 應回保留字錯誤(檔名檢查),got %v", name, err)
+			}
+			if errors.Is(err, os.ErrNotExist) {
+				t.Errorf("LoadManifests(%q) 應在開檔前被檔名檢查擋下,不該是 file-not-found: %v", name, err)
 			}
 		})
 	}
