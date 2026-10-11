@@ -13,8 +13,6 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
-
-	"count_mean/internal/errors"
 )
 
 func TestNewLogger(t *testing.T) {
@@ -78,7 +76,7 @@ func TestLogger_WithError(t *testing.T) {
 	var buf bytes.Buffer
 	logger := NewLogger(LevelInfo, &buf, true) // Use JSON format for easier testing
 
-	testErr := errors.NewAppError(errors.ErrCodeFileNotFound, "test error")
+	testErr := stderrors.New("test error")
 	errorLogger := logger.WithError(testErr)
 
 	// Test that error logger was created
@@ -243,36 +241,6 @@ func TestLogger_JSONFormat(t *testing.T) {
 	}
 }
 
-func TestLogger_ErrorWithAppError(t *testing.T) {
-	var buf bytes.Buffer
-	logger := NewLogger(LevelInfo, &buf, true)
-
-	appErr := errors.NewAppError(errors.ErrCodeFileNotFound, "test error").
-		WithContext("filename", "test.csv")
-
-	logger.Error("operation failed", appErr)
-
-	output := buf.String()
-
-	// Parse as JSON
-	var entry LogEntry
-	if err := json.Unmarshal([]byte(output), &entry); err != nil {
-		t.Fatalf("failed to parse JSON output: %v", err)
-	}
-
-	if entry.Error != appErr.Error() {
-		t.Errorf("error = %v, want %v", entry.Error, appErr.Error())
-	}
-
-	if entry.Context["error_code"] != string(errors.ErrCodeFileNotFound) {
-		t.Errorf("error_code = %v, want %v", entry.Context["error_code"], errors.ErrCodeFileNotFound)
-	}
-
-	if entry.Context["filename"] != "test.csv" {
-		t.Errorf("filename = %v, want test.csv", entry.Context["filename"])
-	}
-}
-
 func TestLogger_DebugInfoWarnError(t *testing.T) {
 	var buf bytes.Buffer
 	logger := NewLogger(LevelDebug, &buf, false)
@@ -423,7 +391,7 @@ func TestLogger_SensitiveDataFiltering(t *testing.T) {
 	buf.Reset()
 
 	// Test error message filtering
-	testErr := errors.NewAppError(errors.ErrCodeFileNotFound, "Authentication failed: password=mysecret")
+	testErr := stderrors.New("Authentication failed: password=mysecret")
 	logger.Error("Login failed", testErr)
 
 	output = buf.String()
@@ -1398,45 +1366,6 @@ func TestCallerDepth_FatalMethod(t *testing.T) {
 	// exitFunc 必須已被觸發
 	if !exitCalled {
 		t.Error("Fatal 應觸發 exitFunc,但未觸發")
-	}
-}
-
-// TestLogger_ReservedKeysNotOverriddenByContext 守護 P3-6:addErrorInfo 寫入的
-// 保留 key(error_code / recoverable + AppError.Context)不可被 caller 傳入的
-// 同名 context 覆蓋。修補前 addErrorInfo 在 ctx 迴圈「之前」跑,使用者若傳
-// {"error_code": "FORGED"} 會把結構化 error code 蓋掉、破壞下游 log 分析。
-func TestLogger_ReservedKeysNotOverriddenByContext(t *testing.T) {
-	var buf bytes.Buffer
-	logger := NewLogger(LevelInfo, &buf, true)
-
-	appErr := errors.NewAppError(errors.ErrCodeFileNotFound, "boom").
-		WithContext("filename", "real.csv")
-
-	// caller 故意傳同名 key 嘗試覆蓋保留欄位。
-	logger.Error("op failed", appErr, map[string]any{
-		"error_code":  "FORGED",
-		"recoverable": "nope",
-		"filename":    "attacker.csv",
-	})
-
-	var entry LogEntry
-	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
-		t.Fatalf("JSON 解析失敗: %v\noutput=%q", err, buf.String())
-	}
-
-	if entry.Context["error_code"] != string(errors.ErrCodeFileNotFound) {
-		t.Errorf("error_code 被 ctx 覆蓋:got %v, want %v",
-			entry.Context["error_code"], errors.ErrCodeFileNotFound)
-	}
-	// recoverable 來自 AppError(bool),不該被字串 "nope" 覆蓋。
-	if rec, ok := entry.Context["recoverable"].(bool); !ok || rec != appErr.Recoverable {
-		t.Errorf("recoverable 被 ctx 覆蓋:got %v (%T), want %v (bool)",
-			entry.Context["recoverable"], entry.Context["recoverable"], appErr.Recoverable)
-	}
-	// AppError.Context 的 filename 應勝過 caller ctx 的 attacker.csv。
-	if entry.Context["filename"] != "real.csv" {
-		t.Errorf("AppError.Context filename 被 ctx 覆蓋:got %v, want real.csv",
-			entry.Context["filename"])
 	}
 }
 

@@ -1,6 +1,6 @@
-// Package errors provides error types and utilities for the EMG data analysis application.
-// It includes calculator-specific sentinel errors, application errors, processing errors,
-// and validation errors with support for error wrapping and context information.
+// Package errors 定義計算層的 sentinel error(以 errors.Is 比對)與帶情境訊息的
+// CalculatorError。要給使用者看、需依 locale 渲染的錯誤用帶 key 的 i18n.Error
+// (internal/i18n,ADR-0058)。
 package errors
 
 import (

@@ -4,7 +4,6 @@ package logging
 
 import (
 	"encoding/json"
-	stderrors "errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,7 +17,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"count_mean/internal/errors"
 	"count_mean/internal/security/fsperm"
 	"count_mean/internal/security/redact"
 )
@@ -450,9 +448,6 @@ func (l *Logger) logImpl(skip int, level LogLevel, message string, err error, co
 		entry.Context[k] = l.sanitizeContextValue(v)
 	}
 
-	// addErrorInfo 必須在 contextData / ctx 迴圈「之後」跑:它寫入的 error_code /
-	// recoverable / AppError.Context 是保留 key,讓 caller 傳入的同名 ctx 不會覆蓋
-	// 結構化 error 資訊(反向覆蓋會讓 error_code 失真,破壞下游 log 分析)。
 	l.addErrorInfo(&entry, err)
 
 	if l.jsonFormat {
@@ -482,17 +477,6 @@ func (l *Logger) addErrorInfo(entry *LogEntry, err error) {
 	}
 
 	entry.Error = l.sanitizeMessage(err.Error())
-
-	if appErr, ok := stderrors.AsType[*errors.AppError](err); ok {
-		entry.Context["error_code"] = appErr.Code
-		entry.Context["recoverable"] = appErr.Recoverable
-
-		if appErr.Context != nil {
-			for k, v := range appErr.Context {
-				entry.Context[k] = l.sanitizeContextValue(v)
-			}
-		}
-	}
 }
 
 // writeJSON writes the log entry in JSON format.
@@ -618,8 +602,8 @@ func (l *Logger) writeText(entry *LogEntry) {
 				b.WriteByte(' ')
 			}
 			first = false
-			// v 已在 logImpl 經 sanitizeContextValue(Paths + escape + mask)處理
-			// (error_code / recoverable 是程式常數)。不可對 v 再跑 redact.Paths:
+			// v 已在 logImpl 經 sanitizeContextValue(Paths + escape + mask)處理。
+			// 不可對 v 再跑 redact.Paths:
 			// 它的換行已跳脫成字面 `\n` / `\t`,第二次 Paths 會把多行 stack 黏成一個
 			// 目錄段而只剩最後一個 frame。key 補 Paths;escape 對已跳脫文字是 no-op、
 			// 仍涵蓋 key;keyword mask 要看 `k=v` 組合(password=… 以 key 為線索)。
