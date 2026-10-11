@@ -5,7 +5,6 @@ import (
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/i18n"
-	"count_mean/internal/io"
 	"count_mean/internal/models"
 	"count_mean/internal/synchronizer"
 )
@@ -123,7 +122,7 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 
 	// 3 導出結果 → failed-result channel。ADR-0001: 寫檔職責由 PhaseSyncAnalyzer
 	// 搬到 CSVHandler,走同一條 format-aware write 路徑。
-	outputPath, writeErr := s.csvHandler.WritePhaseSyncResult(io.WriteRequest{}, stats)
+	outputPath, writeErr := s.csvHandler.WritePhaseSyncResult(stats)
 	if writeErr != nil {
 		return failedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerExportFailed, writeErr)), nil
 	}

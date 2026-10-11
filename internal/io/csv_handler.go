@@ -339,14 +339,13 @@ var errEmptyPhaseSyncResult = stderrors.New("PhaseSync stats 不可為 nil")
 // 供 GUI 顯示「EMG 數據為空」而非吞 nil。i18n 契約:中文訊息直接顯示給使用者。
 var errEmptyPhaseSyncEMGData = stderrors.New("EMG 數據為空")
 
-// WriteRequest 是 format-aware write 共用的目的地請求。
+// WriteRequest 是 File-based write(WriteMaxMean / WriteNormalized / WritePhaseAnalysis /
+// WriteFileCSV)的目的地請求。Subject-based writer 不收它:檔名由 subject 推導,一律落在
+// OutputDir 根。
 //
-// Filename 是 CSV 檔名;SubDir 為空時直接寫到 OutputDir 根,非空時自動
-// MkdirAll(OutputDir/SubDir) 後寫到該子目錄。
-//
-// 此 struct 取代 caller 端在「寫到 OutputDir 根 vs 子目錄」與「Convert* + WriteCSV*」
-// 兩條選擇上的 ad-hoc 拼接 — caller 一次描述「寫哪裡」即可;file-based writer 一律經
-// WriteFileCSV 落檔並回傳實際寫入的路徑。
+// Filename 是 CSV 檔名;SubDir 為空時直接寫到 OutputDir 根,非空時(MaxMean 批次)
+// MkdirAll(OutputDir/SubDir) 後寫到該子目錄。File-based writer 一律經 WriteFileCSV
+// 落檔並回傳實際寫入的路徑。
 type WriteRequest struct {
 	Filename string
 	SubDir   string
@@ -526,46 +525,42 @@ func emitRows(rows [][]string) csvutil.RowEmitter {
 // ADR-0016 invariant「Subject-based write ⟹ atomic 寫入 + BasePaths」(ADR-0040)在此結構化:
 // 7 個 Subject-based writer 只持有 row layout,沒有任何一個能繞過 placement。
 func (h *CSVHandler) placeSubjectOutput(
-	subDir, subject, suffix string,
+	subject, suffix string,
 	header []string,
 	emit csvutil.RowEmitter,
 ) (string, error) {
-	return h.placeOutput(subDir, filename.SubjectOutputName(subject, suffix)+".csv", h.csvPayload(header, emit))
+	return h.placeOutput("", filename.SubjectOutputName(subject, suffix)+".csv", h.csvPayload(header, emit))
 }
 
 // placeSubjectRows 把 data[][]string(data[0] 為 header)交給 placeSubjectOutput 串流寫出。
 // ConvertPhaseSyncResult 恆回固定 8-row layout,故 data 至少 1 row,data[0] 不會 panic。
-func (h *CSVHandler) placeSubjectRows(subDir, subject, suffix string, data [][]string) (string, error) {
-	return h.placeSubjectOutput(subDir, subject, suffix, data[0], emitRows(data[1:]))
+func (h *CSVHandler) placeSubjectRows(subject, suffix string, data [][]string) (string, error) {
+	return h.placeSubjectOutput(subject, suffix, data[0], emitRows(data[1:]))
 }
 
 // WritePhaseSyncResult 把 PhaseSync 分析結果 (EMGStatistics) 寫成 CSV。
 //
 // Filename 由 filename.SubjectOutputName(Subject, "{StartPhase}-{EndPhase}_statistics")
-// 自動生成 — req.Filename 被忽略, 僅 req.SubDir 生效 (空字串 → OutputDir 根)。
-// 回傳實際 outputPath (絕對路徑, 形如 OutputDir/[SubDir/]<filename>) 與錯誤。
+// 自動生成,落在 OutputDir 根。回傳實際 outputPath (形如 OutputDir/<filename>) 與錯誤。
 //
 // row layout (8-row: header / 開始分期點 / 開始時間 / 結束分期點 / 結束時間 /
 // 時間差值 / 平均值 / 最大值)、precision (phaseSyncPrecision=6) 由 implementation 持有。
 // 路徑由 placeSubjectOutput 守門 + tmp+rename atomic 寫入 —
 // ADR-0016 invariant: Subject-based write ⟹ atomic 寫入。
-func (h *CSVHandler) WritePhaseSyncResult(
-	req WriteRequest,
-	stats *models.EMGStatistics,
-) (string, error) {
+func (h *CSVHandler) WritePhaseSyncResult(stats *models.EMGStatistics) (string, error) {
 	if stats == nil {
 		return "", errEmptyPhaseSyncResult
 	}
 
 	suffix := fmt.Sprintf("%s-%s_statistics", stats.StartPhase, stats.EndPhase)
 
-	return h.placeSubjectRows(req.SubDir, stats.Subject, suffix, h.converter.ConvertPhaseSyncResult(stats))
+	return h.placeSubjectRows(stats.Subject, suffix, h.converter.ConvertPhaseSyncResult(stats))
 }
 
 // WriteNormalizedPhaseSyncResult 把 normalized PhaseSync 分析結果寫成 CSV。
 //
 // Filename 由 stats.Subject 經 filename.Sanitize 後與 normStart/normEnd/stats 分期
-// 自動推導 — req.Filename 被忽略,僅 req.SubDir 生效。
+// 自動推導,落在 OutputDir 根。
 // Filename template: {safeSubject}_normalized_norm-{normStart}-{normEnd}_stats-{StartPhase}-{EndPhase}.csv
 // (對齊 GUI 現行 template)。
 //
@@ -573,7 +568,6 @@ func (h *CSVHandler) WritePhaseSyncResult(
 // 路徑由 placeSubjectOutput 守門 + tmp+rename atomic 寫入 —
 // ADR-0016 invariant: Subject-based write ⟹ atomic 寫入。
 func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
-	req WriteRequest,
 	stats *models.EMGStatistics,
 	normStart, normEnd models.PhasePoint,
 ) (string, error) {
@@ -584,14 +578,13 @@ func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
 	suffix := fmt.Sprintf("normalized_norm-%s-%s_stats-%s-%s",
 		normStart, normEnd, stats.StartPhase, stats.EndPhase)
 
-	return h.placeSubjectRows(req.SubDir, stats.Subject, suffix, h.converter.ConvertPhaseSyncResult(stats))
+	return h.placeSubjectRows(stats.Subject, suffix, h.converter.ConvertPhaseSyncResult(stats))
 }
 
 // WriteCCIResult 把 CCI 分析結果寫成 CSV。
 //
 // Filename 由 result.Subject 經 filename.Sanitize 後 + "_CCI_Rudolph.csv" suffix
-// 推導 — req.Filename 被忽略,僅 req.SubDir 生效(空字串 → OutputDir 根)。
-// 回傳實際 outputPath 與錯誤。
+// 推導,落在 OutputDir 根。回傳實際 outputPath 與錯誤。
 //
 // row layout: 1 header row ["Time (s)", "Gait Cycle (%)", PairName...]
 //
@@ -607,9 +600,7 @@ func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
 // 落檔(ADR-0040);pathValidator 守門覆蓋原 cci.ExportToCSV 缺少的 defense-in-depth
 // (原路徑走 security.NewPathValidator(nil) 未整合 CSVHandler 既有 allowedPaths;
 // 由本 method 統一補上)。
-func (h *CSVHandler) WriteCCIResult(
-	ctx context.Context, req WriteRequest, result *cci.CCIAnalysisResult,
-) (string, error) {
+func (h *CSVHandler) WriteCCIResult(ctx context.Context, result *cci.CCIAnalysisResult) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -626,7 +617,7 @@ func (h *CSVHandler) WriteCCIResult(
 	var droppedRowCount int
 	numPoints := len(result.TimeValues)
 
-	outputPath, err := h.placeSubjectOutput(req.SubDir, result.Subject, "CCI_Rudolph", header,
+	outputPath, err := h.placeSubjectOutput(result.Subject, "CCI_Rudolph", header,
 		func(emit func([]string) error) error {
 			for i := 0; i < numPoints; i++ {
 				if i > 0 && i%cciStreamCtxCheckInterval == 0 {
@@ -720,14 +711,11 @@ type MuscleRatioOutputPhasesPayload struct {
 
 // WriteMuscleRatioOutputAll 寫 per-subject Output 1 — full time-series ratio CSV。
 //
-// Filename 由 Subject 經 filename.Sanitize 後 + "_muscle_ratio.csv" 推導;
-// req.Filename 被忽略,僅 req.SubDir 生效。
+// Filename 由 Subject 經 filename.Sanitize 後 + "_muscle_ratio.csv" 推導,落在 OutputDir 根。
 //
 // row layout: 1 header ["Time (s)", PairLabels...] + N data rows。
 // NaN/Inf cell → 空字串。
-func (h *CSVHandler) WriteMuscleRatioOutputAll(
-	req WriteRequest, p MuscleRatioOutputAllPayload,
-) (string, error) {
+func (h *CSVHandler) WriteMuscleRatioOutputAll(p MuscleRatioOutputAllPayload) (string, error) {
 	if len(p.Times) == 0 {
 		return "", errEmptyMuscleRatioPayload
 	}
@@ -736,7 +724,7 @@ func (h *CSVHandler) WriteMuscleRatioOutputAll(
 	header = append(header, "Time (s)")
 	header = append(header, p.PairLabels...)
 
-	return h.placeSubjectOutput(req.SubDir, p.Subject, "muscle_ratio", header,
+	return h.placeSubjectOutput(p.Subject, "muscle_ratio", header,
 		func(emit func([]string) error) error {
 			for i, t := range p.Times {
 				row := make([]string, 0, 1+len(p.Ratios))
@@ -754,12 +742,10 @@ func (h *CSVHandler) WriteMuscleRatioOutputAll(
 
 // WriteMuscleRatioOutputPhases 寫 per-subject Output 2 — phase+midpoint slice CSV。
 //
-// Filename 由 Subject 推導 + "_muscle_ratio_phases_avg11.csv";req.Filename 被忽略。
+// Filename 由 Subject 推導 + "_muscle_ratio_phases_avg11.csv",落在 OutputDir 根。
 // Row 數量由 caller (muscle_ratio.Analyzer) 預先決定的 Points 切片長度決定。
 // Analyzer 已算好 window mean 值,handler 純 layout emit。(ADR-0014)
-func (h *CSVHandler) WriteMuscleRatioOutputPhases(
-	req WriteRequest, p MuscleRatioOutputPhasesPayload,
-) (string, error) {
+func (h *CSVHandler) WriteMuscleRatioOutputPhases(p MuscleRatioOutputPhasesPayload) (string, error) {
 	if len(p.Points) == 0 {
 		return "", errEmptyMuscleRatioPayload
 	}
@@ -768,7 +754,7 @@ func (h *CSVHandler) WriteMuscleRatioOutputPhases(
 	header = append(header, "Phase", "Time (s)")
 	header = append(header, p.PairLabels...)
 
-	return h.placeSubjectOutput(req.SubDir, p.Subject, "muscle_ratio_phases_avg11", header,
+	return h.placeSubjectOutput(p.Subject, "muscle_ratio_phases_avg11", header,
 		func(emit func([]string) error) error {
 			for _, point := range p.Points {
 				row := make([]string, 0, 2+len(point.Values))
@@ -828,12 +814,10 @@ var errOutputPathEscapesOutputDir = stderrors.New("輸出路徑逸出 OutputDir"
 //
 // 直接吃 *cci.CCIAnalysisResult(與 WriteCCIResult 對稱):pair 欄位 header 由
 // result.PairResults 推導、資料列由 result.PhaseStats 推導(ADR-0025)。
-// Filename 由 result.Subject 推導 + "_CCI_Rudolph_phases.csv";req.Filename 被忽略,
-// 僅 req.SubDir 生效。Row 數量 = len(result.PhaseStats);Time cell 在 row.HasTime
+// Filename 由 result.Subject 推導 + "_CCI_Rudolph_phases.csv",落在 OutputDir 根。
+// Row 數量 = len(result.PhaseStats);Time cell 在 row.HasTime
 // 為 false 時為空字串;NaN/Inf value cell → 空字串。
-func (h *CSVHandler) WriteCCIPhasesResult(
-	ctx context.Context, req WriteRequest, result *cci.CCIAnalysisResult,
-) (string, error) {
+func (h *CSVHandler) WriteCCIPhasesResult(ctx context.Context, result *cci.CCIAnalysisResult) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -846,7 +830,7 @@ func (h *CSVHandler) WriteCCIPhasesResult(
 		header = append(header, pr.PairName)
 	}
 
-	return h.placeSubjectOutput(req.SubDir, result.Subject, "CCI_Rudolph_phases", header,
+	return h.placeSubjectOutput(result.Subject, "CCI_Rudolph_phases", header,
 		func(emit func([]string) error) error {
 			for _, row := range result.PhaseStats {
 				timeCell := ""
@@ -869,8 +853,8 @@ func (h *CSVHandler) WriteCCIPhasesResult(
 // WriteNormalizedPhaseSyncEMG 把 normalized phase-sync EMG 時序資料寫成 CSV
 // (Output 1 — 時序型 EMG,非統計摘要)。
 //
-// Filename: {sanitize(subject)}_normalized.csv (req.Filename 被忽略,僅 req.SubDir 生效)。
-// 回傳實際 outputPath (絕對路徑) 與錯誤。
+// Filename: {sanitize(subject)}_normalized.csv,落在 OutputDir 根。
+// 回傳實際 outputPath 與錯誤。
 //
 // row layout: header row (Time + data.Headers 順序) + 每個時間點一列。
 // NaN/Inf → 空 cell (Output 1 missing-data 慣例;勿與 Output 2 ConvertPhaseSyncResult
@@ -879,11 +863,7 @@ func (h *CSVHandler) WriteCCIPhasesResult(
 //
 // 路徑由 placeSubjectOutput 守門 + tmp+rename atomic 寫入 —
 // ADR-0016 invariant: Subject-based write ⟹ atomic 寫入。
-func (h *CSVHandler) WriteNormalizedPhaseSyncEMG(
-	req WriteRequest,
-	data *models.PhaseSyncEMGData,
-	subject string,
-) (string, error) {
+func (h *CSVHandler) WriteNormalizedPhaseSyncEMG(data *models.PhaseSyncEMGData, subject string) (string, error) {
 	if data == nil {
 		return "", errEmptyPhaseSyncEMGData
 	}
@@ -911,7 +891,7 @@ func (h *CSVHandler) WriteNormalizedPhaseSyncEMG(
 		return nil
 	}
 
-	return h.placeSubjectOutput(req.SubDir, subject, "normalized", buildEMGCSVHeader(data.Headers), emit)
+	return h.placeSubjectOutput(subject, "normalized", buildEMGCSVHeader(data.Headers), emit)
 }
 
 // buildEMGCSVHeader 組合 EMG CSV 標頭：`Time` + 各肌肉名稱。

@@ -6,7 +6,6 @@ import (
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/i18n"
-	"count_mean/internal/io"
 	"count_mean/internal/models"
 	"count_mean/internal/phase_sync"
 )
@@ -117,7 +116,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerCancelled, ctxErr)), nil
 	}
 
-	normalizedEMGPath, csvWriteErr := s.csvHandler.WriteNormalizedPhaseSyncEMG(io.WriteRequest{}, analysis.NormalizedEMG, analysis.Subject)
+	normalizedEMGPath, csvWriteErr := s.csvHandler.WriteNormalizedPhaseSyncEMG(analysis.NormalizedEMG, analysis.Subject)
 	if csvWriteErr != nil {
 		return failedNormalizedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerWriteNormalizedEMGFailed, csvWriteErr)), nil
 	}
@@ -129,7 +128,7 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 	}
 
 	phaseSyncCSVPath, statsWriteErr := s.csvHandler.WriteNormalizedPhaseSyncResult(
-		io.WriteRequest{}, stats, params.NormStartPhase, params.NormEndPhase,
+		stats, params.NormStartPhase, params.NormEndPhase,
 	)
 	if statsWriteErr != nil {
 		// 對齊 CCI/muscle_ratio sibling:atomic 寫入失敗時不另記 path 欄位

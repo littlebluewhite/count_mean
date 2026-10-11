@@ -71,7 +71,7 @@ func writeMuscleRatio(t *testing.T, path string, times []float64, ratios [][]flo
 	dir := filepath.Dir(path)
 	cfg := config.DefaultConfig()
 	cfg.InputDir, cfg.OutputDir, cfg.OperateDir = dir, dir, dir
-	written, err := io.NewCSVHandler(cfg).WriteMuscleRatioOutputAll(io.WriteRequest{}, io.MuscleRatioOutputAllPayload{
+	written, err := io.NewCSVHandler(cfg).WriteMuscleRatioOutputAll(io.MuscleRatioOutputAllPayload{
 		Subject:    "fixture",
 		PairLabels: pairLabels,
 		Times:      times,

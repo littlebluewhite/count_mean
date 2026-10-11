@@ -34,7 +34,7 @@ func TestWriteCCIPhasesResult_ContentRoundTrip(t *testing.T) {
 		},
 	}
 
-	outputPath, err := handler.WriteCCIPhasesResult(context.Background(), WriteRequest{}, payload)
+	outputPath, err := handler.WriteCCIPhasesResult(context.Background(), payload)
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(tempDir, "NSF1_CCI_Rudolph_phases.csv"), outputPath)
 
@@ -77,7 +77,7 @@ func TestWriteCCIPhasesResult_EmptyRows(t *testing.T) {
 		PhaseStats:  nil,
 	}
 
-	_, err := handler.WriteCCIPhasesResult(context.Background(), WriteRequest{}, payload)
+	_, err := handler.WriteCCIPhasesResult(context.Background(), payload)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errEmptyCCIPhasesPayload),
 		"expected errEmptyCCIPhasesPayload, got: %v", err)
@@ -90,7 +90,7 @@ func TestWriteCCIPhasesResult_NilResult(t *testing.T) {
 
 	handler, _ := newFormatAwareTestHandler(t)
 
-	_, err := handler.WriteCCIPhasesResult(context.Background(), WriteRequest{}, nil)
+	_, err := handler.WriteCCIPhasesResult(context.Background(), nil)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errEmptyCCIPhasesPayload),
 		"expected errEmptyCCIPhasesPayload for nil result, got: %v", err)

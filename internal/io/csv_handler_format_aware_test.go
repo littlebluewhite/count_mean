@@ -247,7 +247,7 @@ func TestWriteNormalizedPhaseSyncResult_NilStats(t *testing.T) {
 
 	handler, _ := newFormatAwareTestHandler(t)
 
-	_, err := handler.WriteNormalizedPhaseSyncResult(WriteRequest{}, nil,
+	_, err := handler.WriteNormalizedPhaseSyncResult(nil,
 		models.PhaseP0, models.PhaseL)
 	require.ErrorIs(t, err, errEmptyPhaseSyncResult)
 }
@@ -269,7 +269,7 @@ func TestWriteNormalizedPhaseSyncResult_RoundTrip(t *testing.T) {
 		ChannelMaxes: map[string]float64{"RA": 1.1, "ES": 2.2},
 	}
 
-	outputPath, err := handler.WriteNormalizedPhaseSyncResult(WriteRequest{}, stats,
+	outputPath, err := handler.WriteNormalizedPhaseSyncResult(stats,
 		models.PhaseP0, models.PhaseL)
 	require.NoError(t, err)
 
@@ -312,7 +312,7 @@ func TestWriteNormalizedPhaseSyncResult_SubjectSanitization(t *testing.T) {
 				ChannelMaxes: map[string]float64{"Ch1": 2.0},
 			}
 
-			outputPath, err := handler.WriteNormalizedPhaseSyncResult(WriteRequest{}, stats,
+			outputPath, err := handler.WriteNormalizedPhaseSyncResult(stats,
 				models.PhaseP0, models.PhaseL)
 			require.NoError(t, err)
 
@@ -354,7 +354,7 @@ func TestWritePhaseSyncResult_NilStats(t *testing.T) {
 
 	handler, _ := newFormatAwareTestHandler(t)
 
-	outputPath, err := handler.WritePhaseSyncResult(WriteRequest{}, nil)
+	outputPath, err := handler.WritePhaseSyncResult(nil)
 	require.ErrorIs(t, err, errEmptyPhaseSyncResult)
 	require.Empty(t, outputPath, "失敗時 outputPath 必為空")
 }
@@ -400,7 +400,7 @@ func TestWritePhaseSyncResult_SubjectSanitization(t *testing.T) {
 				ChannelMaxes: map[string]float64{"Ch1": 2.0},
 			}
 
-			outputPath, err := handler.WritePhaseSyncResult(WriteRequest{}, stats)
+			outputPath, err := handler.WritePhaseSyncResult(stats)
 			require.NoError(t, err)
 
 			base := filepath.Base(outputPath)
@@ -424,7 +424,7 @@ func TestWritePhaseSyncResult_SubjectSanitization(t *testing.T) {
 
 // TestWritePhaseSyncResult_RoundTrip 釘住 ADR-0001 invariant:
 // PhaseSync 的 8-row layout 跟自動 filename 由 CSVHandler 持有,
-// caller 只給 stats 跟 WriteRequest (SubDir 可選); 回傳 outputPath。
+// caller 只給 stats;回傳 outputPath。
 //
 // Row layout (8-row PhaseSync layout:
 // header + 開始分期點/時間 + 結束分期點/時間 + 時間差值 + 平均值 + 最大值):
@@ -455,7 +455,7 @@ func TestWritePhaseSyncResult_RoundTrip(t *testing.T) {
 		ChannelMaxes: map[string]float64{"RA": 1.5, "ES": 2.0},
 	}
 
-	outputPath, err := handler.WritePhaseSyncResult(WriteRequest{}, stats)
+	outputPath, err := handler.WritePhaseSyncResult(stats)
 	require.NoError(t, err)
 
 	// outputPath 應反映自動生成 filename (含 subject + phase range + _statistics.csv)。
@@ -514,7 +514,7 @@ func TestWriteCCIResult_RoundTrip(t *testing.T) {
 		},
 	}
 
-	outputPath, err := handler.WriteCCIResult(context.Background(), WriteRequest{}, result)
+	outputPath, err := handler.WriteCCIResult(context.Background(), result)
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(tempDir, "subj_A_CCI_Rudolph.csv"), outputPath)
 
@@ -542,7 +542,7 @@ func TestWriteCCIResult_NaNRowSkip(t *testing.T) {
 		},
 	}
 
-	outputPath, err := handler.WriteCCIResult(context.Background(), WriteRequest{}, result)
+	outputPath, err := handler.WriteCCIResult(context.Background(), result)
 	require.NoError(t, err)
 
 	rows := readCSVRows(t, outputPath)
@@ -564,7 +564,7 @@ func TestWriteCCIResult_NonFiniteGaitTimeRejected(t *testing.T) {
 		PairResults:   []cci.CCIResult{{PairName: "P1", Values: []float64{0.1, 0.2, 0.3}}},
 	}
 
-	_, err := handler.WriteCCIResult(context.Background(), WriteRequest{}, result)
+	_, err := handler.WriteCCIResult(context.Background(), result)
 	require.ErrorIs(t, err, cci.ErrInvalidGaitCycle)
 
 	_, statErr := os.Stat(filepath.Join(tempDir, "subj_NaN_CCI_Rudolph.csv"))
@@ -589,7 +589,7 @@ func TestWriteCCIResult_ShortPairRejected(t *testing.T) {
 		},
 	}
 
-	_, err := handler.WriteCCIResult(context.Background(), WriteRequest{}, result)
+	_, err := handler.WriteCCIResult(context.Background(), result)
 	require.ErrorIs(t, err, cci.ErrPairLengthMismatch)
 
 	_, statErr := os.Stat(filepath.Join(tempDir, "subj_short_CCI_Rudolph.csv"))
@@ -613,7 +613,7 @@ func TestWriteCCIResult_CtxCancel(t *testing.T) {
 		PairResults:   []cci.CCIResult{{PairName: "P1", Values: []float64{0.1}}},
 	}
 
-	_, err := handler.WriteCCIResult(ctx, WriteRequest{}, result)
+	_, err := handler.WriteCCIResult(ctx, result)
 	require.ErrorIs(t, err, context.Canceled)
 
 	_, statErr := os.Stat(filepath.Join(tempDir, "subj_C_CCI_Rudolph.csv"))
@@ -634,7 +634,7 @@ func TestWriteMuscleRatioOutputAll_RoundTrip(t *testing.T) {
 		Ratios:     [][]float64{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}},
 	}
 
-	outputPath, err := handler.WriteMuscleRatioOutputAll(WriteRequest{}, payload)
+	outputPath, err := handler.WriteMuscleRatioOutputAll(payload)
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(tempDir, "s1_muscle_ratio.csv"), outputPath)
 
@@ -660,7 +660,7 @@ func TestWriteMuscleRatioOutputPhases_RoundTrip(t *testing.T) {
 		},
 	}
 
-	outputPath, err := handler.WriteMuscleRatioOutputPhases(WriteRequest{}, payload)
+	outputPath, err := handler.WriteMuscleRatioOutputPhases(payload)
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(tempDir, "s1_muscle_ratio_phases_avg11.csv"), outputPath)
 
@@ -683,7 +683,7 @@ func TestWriteMuscleRatioOutputAll_NaNInfCell(t *testing.T) {
 		Ratios:     [][]float64{{math.NaN(), math.Inf(1)}},
 	}
 
-	outputPath, err := handler.WriteMuscleRatioOutputAll(WriteRequest{}, payload)
+	outputPath, err := handler.WriteMuscleRatioOutputAll(payload)
 	require.NoError(t, err)
 
 	rows := readCSVRows(t, outputPath)
@@ -697,69 +697,10 @@ func TestWriteMuscleRatioOutputAll_NaNInfCell(t *testing.T) {
 func TestWriteMuscleRatioOutputPhases_EmptyPointsRejected(t *testing.T) {
 	handler, _ := newFormatAwareTestHandler(t)
 
-	_, err := handler.WriteMuscleRatioOutputPhases(WriteRequest{}, MuscleRatioOutputPhasesPayload{
+	_, err := handler.WriteMuscleRatioOutputPhases(MuscleRatioOutputPhasesPayload{
 		Subject:    "empty_points",
 		PairLabels: []string{"R1"},
 		Points:     []MuscleRatioPhasePoint{}, // 故意空
 	})
 	require.ErrorIs(t, err, errEmptyMuscleRatioPayload)
-}
-
-// TestSafeJoinOutput_RejectsTraversal 驗證 codex review Run 2 抓的 P2 — req.SubDir
-// 含 traversal ("../evil") 或絕對路徑 ("/etc") 時,3 個 direct atomic writer
-// (WriteCCIResult / WriteMuscleRatioOutputAll / WriteMuscleRatioOutputPhases)
-// 都要 reject,不能讓 *.csv 寫到 OutputDir 外面。
-func TestSafeJoinOutput_RejectsTraversal(t *testing.T) {
-	traversalCases := []struct {
-		name   string
-		subDir string
-	}{
-		{"relative_traversal", "../evil"},
-		{"absolute_path", "/etc"},
-		{"deep_traversal", "../../etc"},
-	}
-
-	for _, tc := range traversalCases {
-		t.Run(tc.name+"/WriteCCIResult", func(t *testing.T) {
-			handler, _ := newFormatAwareTestHandler(t)
-			_, err := handler.WriteCCIResult(context.Background(),
-				WriteRequest{SubDir: tc.subDir},
-				&cci.CCIAnalysisResult{
-					Subject:       "s",
-					GaitStartTime: 0.0,
-					GaitEndTime:   1.0,
-					TimeValues:    []float64{0.0},
-					PairResults:   []cci.CCIResult{{PairName: "P1", Values: []float64{0.1}}},
-				})
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "輸出路徑")
-		})
-
-		t.Run(tc.name+"/WriteMuscleRatioOutputAll", func(t *testing.T) {
-			handler, _ := newFormatAwareTestHandler(t)
-			_, err := handler.WriteMuscleRatioOutputAll(
-				WriteRequest{SubDir: tc.subDir},
-				MuscleRatioOutputAllPayload{
-					Subject:    "s",
-					PairLabels: []string{"R1"},
-					Times:      []float64{0.0, 1.0},
-					Ratios:     [][]float64{{0.1, 0.2}},
-				})
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "輸出路徑")
-		})
-
-		t.Run(tc.name+"/WriteMuscleRatioOutputPhases", func(t *testing.T) {
-			handler, _ := newFormatAwareTestHandler(t)
-			_, err := handler.WriteMuscleRatioOutputPhases(
-				WriteRequest{SubDir: tc.subDir},
-				MuscleRatioOutputPhasesPayload{
-					Subject:    "s",
-					PairLabels: []string{"R1"},
-					Points:     []MuscleRatioPhasePoint{{Name: "P1", Time: 0.5, Values: []float64{0.1}}},
-				})
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "輸出路徑")
-		})
-	}
 }

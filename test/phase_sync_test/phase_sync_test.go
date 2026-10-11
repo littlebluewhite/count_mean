@@ -100,7 +100,7 @@ func TestPhaseSyncAnalysis_NSF2(t *testing.T) {
 	cfg.OperateDir = outputDir
 	csvHandler := io.NewCSVHandler(cfg)
 
-	outputPath, err := csvHandler.WritePhaseSyncResult(io.WriteRequest{}, stats)
+	outputPath, err := csvHandler.WritePhaseSyncResult(stats)
 	if err != nil {
 		t.Fatalf("導出失敗: %v", err)
 	}

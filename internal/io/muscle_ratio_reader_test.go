@@ -25,7 +25,7 @@ func TestMuscleRatioOutputAll_RoundTrip(t *testing.T) {
 			{0.4, 0.5, math.Inf(1)},
 		},
 	}
-	path, err := handler.WriteMuscleRatioOutputAll(WriteRequest{}, in)
+	path, err := handler.WriteMuscleRatioOutputAll(in)
 	require.NoError(t, err)
 
 	f, err := os.Open(path)

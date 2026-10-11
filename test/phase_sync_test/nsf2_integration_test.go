@@ -116,7 +116,7 @@ func TestNSF2_T_to_O_Analysis(t *testing.T) {
 	cfg.OperateDir = outputDir
 	csvHandler := io.NewCSVHandler(cfg)
 
-	outputPath, err := csvHandler.WritePhaseSyncResult(io.WriteRequest{}, stats)
+	outputPath, err := csvHandler.WritePhaseSyncResult(stats)
 	if err != nil {
 		t.Fatalf("Export failed: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestNSF2_P0_to_P1_Analysis(t *testing.T) {
 	cfg.OperateDir = outputDir
 	csvHandler := io.NewCSVHandler(cfg)
 
-	outputPath, err := csvHandler.WritePhaseSyncResult(io.WriteRequest{}, stats)
+	outputPath, err := csvHandler.WritePhaseSyncResult(stats)
 	if err != nil {
 		t.Fatalf("Export failed: %v", err)
 	}

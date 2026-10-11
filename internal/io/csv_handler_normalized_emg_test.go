@@ -33,7 +33,7 @@ func TestWriteNormalizedPhaseSyncEMG_HeaderOrderPreserved(t *testing.T) {
 	handler, tempDir := newFormatAwareTestHandler(t)
 	data := newNormalizedEMGTestData()
 
-	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(WriteRequest{}, data, "subject_01")
+	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(data, "subject_01")
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(tempDir, "subject_01_normalized.csv"), outputPath)
 
@@ -49,7 +49,7 @@ func TestWriteNormalizedPhaseSyncEMG_NilDataReturnsError(t *testing.T) {
 
 	handler, _ := newFormatAwareTestHandler(t)
 
-	_, err := handler.WriteNormalizedPhaseSyncEMG(WriteRequest{}, nil, "subject_01")
+	_, err := handler.WriteNormalizedPhaseSyncEMG(nil, "subject_01")
 	require.Error(t, err)
 	require.ErrorIs(t, err, errEmptyPhaseSyncEMGData)
 	require.Contains(t, err.Error(), "EMG 數據為空")
@@ -73,7 +73,7 @@ func TestWriteNormalizedPhaseSyncEMG_AtomicWrite_LeavesFinalUntouchedOnEmitError
 	defer func() { _ = os.Chmod(tempDir, 0o700) }() //nolint:errcheck // restore for t.TempDir cleanup
 
 	data := newNormalizedEMGTestData()
-	_, err := handler.WriteNormalizedPhaseSyncEMG(WriteRequest{}, data, "subject_01")
+	_, err := handler.WriteNormalizedPhaseSyncEMG(data, "subject_01")
 	require.Error(t, err, "目錄不可寫時應 fail")
 
 	// final path 還在，內容沒被覆寫。
@@ -92,7 +92,7 @@ func TestWriteNormalizedPhaseSyncEMG_RoundTripParseAndWrite(t *testing.T) {
 	handler, _ := newFormatAwareTestHandler(t)
 	original := newNormalizedEMGTestData()
 
-	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(WriteRequest{}, original, "subject_01")
+	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(original, "subject_01")
 	require.NoError(t, err)
 
 	f, openErr := os.Open(outputPath)
@@ -136,7 +136,7 @@ func TestWriteNormalizedPhaseSyncEMG_NaNCell(t *testing.T) {
 		Headers: []string{"MuscleA"},
 	}
 
-	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(WriteRequest{}, data, "subject_nan")
+	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(data, "subject_nan")
 	require.NoError(t, err)
 
 	rows := readRows(t, outputPath)
@@ -156,7 +156,7 @@ func TestWriteNormalizedPhaseSyncEMG_Precision6(t *testing.T) {
 	handler, _ := newFormatAwareTestHandler(t)
 	data := newNormalizedEMGTestData()
 
-	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(WriteRequest{}, data, "subject_01")
+	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(data, "subject_01")
 	require.NoError(t, err)
 
 	rows := readRows(t, outputPath)
@@ -193,7 +193,7 @@ func TestWriteNormalizedPhaseSyncEMG_ReplaceContract_SymlinkWithinBase(t *testin
 	require.NoError(t, os.Symlink(realTarget, symlinkPath))
 
 	data := newNormalizedEMGTestData()
-	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(WriteRequest{}, data, "subject_01")
+	outputPath, err := handler.WriteNormalizedPhaseSyncEMG(data, "subject_01")
 	require.NoError(t, err, "base 內部 symlink 應被 replace，write 應成功")
 	require.Equal(t, symlinkPath, outputPath)
 

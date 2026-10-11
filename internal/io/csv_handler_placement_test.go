@@ -20,22 +20,37 @@ import (
 	"count_mean/internal/security/redact"
 )
 
-// placementCase 描述一種 CSV 輸出(Output placement 的一列),在 subDir 下寫出。
+// placementCase 描述一種輸出(Output placement 的一列),寫在 OutputDir 根。
 // wantName 是逐字的輸出檔名:Subject-based 由 subject "subj_01" 推導(golden harness 比對的
 // byte-identity 契約,不可用實作自身算);File-based 就是 caller 給的檔名。
 type placementCase struct {
 	name     string
 	wantName string
-	write    func(h *CSVHandler, subDir string) (string, error)
+	write    func(h *CSVHandler) (string, error)
 }
 
-// placementCases 是全部 10 種 CSV:7 種 Subject-based + 3 種 File-based。
+// fileWriter 是 File-based writer:檔名由 caller 給,SubDir 有作用(MaxMean 批次)。
+type fileWriter struct {
+	name     string
+	wantName string
+	writeIn  func(h *CSVHandler, subDir string) (string, error)
+}
+
+// placementCases 是全部 10 種 CSV:7 種 Subject-based + 3 種 File-based(寫在 OutputDir 根)。
 func placementCases() []placementCase {
-	return append(subjectPlacementCases(), filePlacementCases()...)
+	cases := subjectPlacementCases()
+	for _, fw := range fileWriters() {
+		cases = append(cases, placementCase{
+			name: fw.name, wantName: fw.wantName,
+			write: func(h *CSVHandler) (string, error) { return fw.writeIn(h, "") },
+		})
+	}
+
+	return cases
 }
 
-// filePlacementCases 是 3 種 File-based writer(檔名由 caller 給,SubDir 有作用)。
-func filePlacementCases() []placementCase {
+// fileWriters 是 3 種 File-based writer。
+func fileWriters() []fileWriter {
 	headers := []string{"Time", "Ch1"}
 	maxMean := []models.MaxMeanResult{{ColumnIndex: 1, StartTime: 1, EndTime: 2, MaxMean: 100}}
 	dataset := &models.EMGDataset{
@@ -48,30 +63,30 @@ func filePlacementCases() []placementCase {
 		},
 	}
 
-	return []placementCase{
+	return []fileWriter{
 		{
 			name: "MaxMean", wantName: "trial_maxmean.csv",
-			write: func(h *CSVHandler, sub string) (string, error) {
+			writeIn: func(h *CSVHandler, sub string) (string, error) {
 				return h.WriteMaxMean(WriteRequest{Filename: "trial_maxmean.csv", SubDir: sub},
 					headers, maxMean, 0.5, 3.0)
 			},
 		},
 		{
 			name: "Normalized", wantName: "trial_normalized.csv",
-			write: func(h *CSVHandler, sub string) (string, error) {
+			writeIn: func(h *CSVHandler, sub string) (string, error) {
 				return h.WriteNormalized(WriteRequest{Filename: "trial_normalized.csv", SubDir: sub}, dataset)
 			},
 		},
 		{
 			name: "PhaseAnalysis", wantName: "trial_phase.csv",
-			write: func(h *CSVHandler, sub string) (string, error) {
+			writeIn: func(h *CSVHandler, sub string) (string, error) {
 				return h.WritePhaseAnalysis(WriteRequest{Filename: "trial_phase.csv", SubDir: sub}, headers, phases)
 			},
 		},
 	}
 }
 
-// subjectPlacementCases 是 7 種 Subject-based writer(檔名由 subject 推導)。
+// subjectPlacementCases 是 7 種 Subject-based writer(檔名由 subject 推導,一律落在 OutputDir 根)。
 func subjectPlacementCases() []placementCase {
 	stats := &models.EMGStatistics{
 		Subject:      "subj_01",
@@ -103,39 +118,38 @@ func subjectPlacementCases() []placementCase {
 	return []placementCase{
 		{
 			name: "PhaseSyncResult", wantName: "subj_01_P1-C_statistics.csv",
-			write: func(h *CSVHandler, sub string) (string, error) {
-				return h.WritePhaseSyncResult(WriteRequest{SubDir: sub}, stats)
+			write: func(h *CSVHandler) (string, error) {
+				return h.WritePhaseSyncResult(stats)
 			},
 		},
 		{
 			name: "NormalizedPhaseSyncResult", wantName: "subj_01_normalized_norm-P0-L_stats-P1-C.csv",
-			write: func(h *CSVHandler, sub string) (string, error) {
-				return h.WriteNormalizedPhaseSyncResult(WriteRequest{SubDir: sub}, stats,
-					models.PhaseP0, models.PhaseL)
+			write: func(h *CSVHandler) (string, error) {
+				return h.WriteNormalizedPhaseSyncResult(stats, models.PhaseP0, models.PhaseL)
 			},
 		},
 		{
 			name: "NormalizedPhaseSyncEMG", wantName: "subj_01_normalized.csv",
-			write: func(h *CSVHandler, sub string) (string, error) {
-				return h.WriteNormalizedPhaseSyncEMG(WriteRequest{SubDir: sub}, emg, "subj_01")
+			write: func(h *CSVHandler) (string, error) {
+				return h.WriteNormalizedPhaseSyncEMG(emg, "subj_01")
 			},
 		},
 		{
 			name: "CCIResult", wantName: "subj_01_CCI_Rudolph.csv",
-			write: func(h *CSVHandler, sub string) (string, error) {
-				return h.WriteCCIResult(ctx, WriteRequest{SubDir: sub}, cciResult)
+			write: func(h *CSVHandler) (string, error) {
+				return h.WriteCCIResult(ctx, cciResult)
 			},
 		},
 		{
 			name: "CCIPhasesResult", wantName: "subj_01_CCI_Rudolph_phases.csv",
-			write: func(h *CSVHandler, sub string) (string, error) {
-				return h.WriteCCIPhasesResult(ctx, WriteRequest{SubDir: sub}, cciResult)
+			write: func(h *CSVHandler) (string, error) {
+				return h.WriteCCIPhasesResult(ctx, cciResult)
 			},
 		},
 		{
 			name: "MuscleRatioOutputAll", wantName: "subj_01_muscle_ratio.csv",
-			write: func(h *CSVHandler, sub string) (string, error) {
-				return h.WriteMuscleRatioOutputAll(WriteRequest{SubDir: sub}, MuscleRatioOutputAllPayload{
+			write: func(h *CSVHandler) (string, error) {
+				return h.WriteMuscleRatioOutputAll(MuscleRatioOutputAllPayload{
 					Subject: "subj_01", PairLabels: []string{"R1"},
 					Times: []float64{0, 1}, Ratios: [][]float64{{1, 2}},
 				})
@@ -143,8 +157,8 @@ func subjectPlacementCases() []placementCase {
 		},
 		{
 			name: "MuscleRatioOutputPhases", wantName: "subj_01_muscle_ratio_phases_avg11.csv",
-			write: func(h *CSVHandler, sub string) (string, error) {
-				return h.WriteMuscleRatioOutputPhases(WriteRequest{SubDir: sub}, MuscleRatioOutputPhasesPayload{
+			write: func(h *CSVHandler) (string, error) {
+				return h.WriteMuscleRatioOutputPhases(MuscleRatioOutputPhasesPayload{
 					Subject: "subj_01", PairLabels: []string{"R1"},
 					Points: []MuscleRatioPhasePoint{{Name: "P0", Time: 0, Values: []float64{1}}},
 				})
@@ -154,7 +168,8 @@ func subjectPlacementCases() []placementCase {
 }
 
 // Output placement 的共用契約(10 種 CSV 全部適用):
-// 檔名逐字、敏感目錄被拒(先驗證再建目錄)、不留 tmp、BOM 照 config.BOMEnabled、回傳路徑存在。
+// 檔名逐字、敏感目錄被拒(先驗證再建目錄)、不留 tmp、BOM 照 config.BOMEnabled、
+// 尚不存在的 OutputDir 會被建立(SaveConfig 換到新資料夾後不必重啟)。
 func TestOutputPlacement(t *testing.T) {
 	t.Parallel()
 
@@ -165,7 +180,7 @@ func TestOutputPlacement(t *testing.T) {
 			t.Run("Filename", func(t *testing.T) {
 				t.Parallel()
 				h, dir := newFormatAwareTestHandler(t)
-				got, err := tc.write(h, "")
+				got, err := tc.write(h)
 				require.NoError(t, err)
 				require.Equal(t, filepath.Join(dir, tc.wantName), got)
 			})
@@ -181,7 +196,7 @@ func TestOutputPlacement(t *testing.T) {
 					cfg.InputDir, cfg.OperateDir, cfg.OutputDir = outDir, outDir, outDir
 					h := NewCSVHandler(cfg)
 
-					got, err := tc.write(h, "")
+					got, err := tc.write(h)
 					require.Error(t, err, outDir)
 					require.Empty(t, got, outDir)
 					require.Contains(t, err.Error(), "輸出路徑無效", outDir)
@@ -194,7 +209,7 @@ func TestOutputPlacement(t *testing.T) {
 			t.Run("NoStrayTmp", func(t *testing.T) {
 				t.Parallel()
 				h, dir := newFormatAwareTestHandler(t)
-				_, err := tc.write(h, "")
+				_, err := tc.write(h)
 				require.NoError(t, err)
 
 				entries, readErr := os.ReadDir(dir)
@@ -212,7 +227,7 @@ func TestOutputPlacement(t *testing.T) {
 					cfg.InputDir, cfg.OperateDir, cfg.OutputDir = dir, dir, dir
 					cfg.BOMEnabled = bom
 
-					got, err := tc.write(NewCSVHandler(cfg), "")
+					got, err := tc.write(NewCSVHandler(cfg))
 					require.NoError(t, err)
 
 					content, readErr := os.ReadFile(got) //nolint:gosec // t.TempDir 內的測試檔
@@ -222,11 +237,15 @@ func TestOutputPlacement(t *testing.T) {
 				}
 			})
 
-			t.Run("ReturnedPathExists", func(t *testing.T) {
+			t.Run("MissingOutputDirCreated", func(t *testing.T) {
 				t.Parallel()
-				h, _ := newFormatAwareTestHandler(t)
-				got, err := tc.write(h, "sub")
+				outDir := filepath.Join(t.TempDir(), "new", "out")
+				cfg := config.DefaultConfig()
+				cfg.InputDir, cfg.OperateDir, cfg.OutputDir = outDir, outDir, outDir
+
+				got, err := tc.write(NewCSVHandler(cfg))
 				require.NoError(t, err)
+				require.Equal(t, filepath.Join(outDir, tc.wantName), got)
 				require.FileExists(t, got)
 			})
 		})
@@ -237,18 +256,18 @@ func TestOutputPlacement(t *testing.T) {
 func TestOutputPlacement_SubDir(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range filePlacementCases() {
+	for _, tc := range fileWriters() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			t.Run("StaysInOutputDir", func(t *testing.T) {
 				t.Parallel()
 				h, dir := newFormatAwareTestHandler(t)
-				got, err := tc.write(h, "")
+				got, err := tc.writeIn(h, "")
 				require.NoError(t, err)
 				require.Equal(t, dir, filepath.Dir(got))
 
-				got, err = tc.write(h, "sub")
+				got, err = tc.writeIn(h, "sub")
 				require.NoError(t, err)
 				require.Equal(t, filepath.Join(dir, "sub"), filepath.Dir(got))
 			})
@@ -257,7 +276,7 @@ func TestOutputPlacement_SubDir(t *testing.T) {
 				t.Parallel()
 				for _, sub := range []string{"../evil", "../../etc", "../x"} {
 					h, dir := newFormatAwareTestHandler(t)
-					got, err := tc.write(h, sub)
+					got, err := tc.writeIn(h, sub)
 					require.Error(t, err, sub)
 					require.Empty(t, got, sub)
 					require.Contains(t, err.Error(), "輸出路徑", sub)
@@ -282,7 +301,7 @@ func TestWritePhaseSyncResult_SubjectWithSeparatorStaysOneSegment(t *testing.T) 
 		ChannelMeans: map[string]float64{"Ch1": 1}, ChannelMaxes: map[string]float64{"Ch1": 2},
 	}
 
-	got, err := h.WritePhaseSyncResult(WriteRequest{}, stats)
+	got, err := h.WritePhaseSyncResult(stats)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(dir, "a_b_S-T_statistics.csv"), got)
 }
@@ -293,12 +312,12 @@ func TestOutputPlacement_EscapeErrorCarriesNoSubDir(t *testing.T) {
 
 	const secret = "PatientX_escape"
 
-	for _, tc := range filePlacementCases() {
+	for _, tc := range fileWriters() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h, _ := newFormatAwareTestHandler(t)
 
-			_, err := tc.write(h, "../"+secret)
+			_, err := tc.writeIn(h, "../"+secret)
 			require.ErrorIs(t, err, errOutputPathEscapesOutputDir)
 			require.NotContains(t, err.Error(), secret)
 		})
@@ -316,14 +335,14 @@ func TestOutputPlacement_MkdirFailureCarriesNoDirPath(t *testing.T) {
 
 	const secret = "PatientAlice_PHI_out"
 
-	for _, tc := range filePlacementCases() {
+	for _, tc := range fileWriters() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h, dir := newFormatAwareTestHandler(t)
 			// 以一般檔案佔住 SubDir 位置 → MkdirAll 失敗(ENOTDIR)
 			require.NoError(t, os.WriteFile(filepath.Join(dir, secret), []byte("x"), 0o600))
 
-			_, err := tc.write(h, secret)
+			_, err := tc.writeIn(h, secret)
 			require.Error(t, err)
 			require.ErrorIs(t, err, syscall.ENOTDIR)
 			require.Contains(t, err.Error(), "輸出目錄建立失敗")

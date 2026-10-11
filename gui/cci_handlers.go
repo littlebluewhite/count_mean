@@ -6,7 +6,6 @@ import (
 
 	"count_mean/internal/cci"
 	"count_mean/internal/i18n"
-	"count_mean/internal/io"
 	"count_mean/internal/validation/filename"
 )
 
@@ -74,7 +73,7 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 		return failedCCIResult(a.failMessage(i18n.KeyErrorHandlerAnalysisFailed, aErr)), nil
 	}
 	// 3 Output 1
-	csvPath, e1 := s.csvHandler.WriteCCIResult(ctx, io.WriteRequest{}, analysisResult)
+	csvPath, e1 := s.csvHandler.WriteCCIResult(ctx, analysisResult)
 	if e1 != nil {
 		return failedCCIResult(a.failMessage(i18n.KeyErrorHandlerCSVExportFailed, e1)), nil
 	}
@@ -90,7 +89,7 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 	}
 	report := cci.GenerateReport(analysisResult)
 	// 6 Output 2
-	phasesPath, e2 := s.csvHandler.WriteCCIPhasesResult(ctx, io.WriteRequest{}, analysisResult)
+	phasesPath, e2 := s.csvHandler.WriteCCIPhasesResult(ctx, analysisResult)
 	if e2 != nil {
 		return failedCCIResult(a.failMessage(i18n.KeyErrorHandlerPhaseStatsExportFailed, e2)), nil
 	}

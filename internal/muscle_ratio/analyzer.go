@@ -186,7 +186,6 @@ func (*Analyzer) analyzeSubject(
 	pairLabels := defaultRatioLabels()
 
 	outAllPath, writeAllErr := params.CSVHandler.WriteMuscleRatioOutputAll(
-		io.WriteRequest{},
 		io.MuscleRatioOutputAllPayload{
 			Subject:    m.Subject,
 			PairLabels: pairLabels,
@@ -216,7 +215,6 @@ func (*Analyzer) analyzeSubject(
 	}
 
 	outPhasePath, writePhaseErr := params.CSVHandler.WriteMuscleRatioOutputPhases(
-		io.WriteRequest{},
 		io.MuscleRatioOutputPhasesPayload{
 			Subject:    m.Subject,
 			PairLabels: avgLabels,
