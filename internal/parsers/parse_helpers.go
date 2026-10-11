@@ -40,8 +40,7 @@ const MaxReasonableMotionIndex = 1_000_000_000
 // **缺值 vs 字面 NaN**：本函式 **無法** 區分「empty cell（missing-data）」與
 // 「字面 0」(兩者都回 `(0, false)` / `(0, true)`)；也無法區分「字面 NaN」與
 // 「missing」(後者回 `(0, false)`，前者回 `(NaN, true)`)。需要嚴格 round-trip
-// 區分 missing/NaN/Inf 的 caller 改用
-// `ParseFloatCellWithMissing` + `FormatFloatCell`。
+// 區分 missing/NaN/Inf 的 caller 需自行以 strconv.ParseFloat 實作。
 func ParseFloatCell(s string) (float64, bool) {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
@@ -74,112 +73,6 @@ func ParseTimeCell(s string) (float64, bool) {
 		return 0, false
 	}
 	return val, true
-}
-
-// ParseFloatCellWithMissing parses a CSV cell with explicit "missing" semantics —
-// the round-trip-safe counterpart to `FormatFloatCell`.
-//
-// Return semantics (v, isMissing):
-//   - ""（含 whitespace-only）→ `(NaN, true)`  — 「missing-data」訊號
-//   - "NaN"（不分大小寫）       → `(NaN, false)` — 字面 NaN 值（非 missing）
-//   - "+Inf" / "-Inf" / "Inf"    → `(±Inf, false)`
-//   - 合法數字                   → `(v, false)`
-//   - 不可解析                   → `(NaN, false)` — 視為「壞 NaN-ish 值」交 caller 決定
-//
-// **與 ParseFloatCell 差異**：ParseFloatCell 把 "" 與 "NaN" / "Inf" 不可分地壓
-// 在 ok=true/false 同一個維度;此函式拆成 `isMissing` 與 `v` 兩個維度,讓 writer
-// 端可以用 FormatFloatCell 還原 "" / "NaN" / "+Inf" 三種不同字面,跑 round-trip
-// 不損失。新 caller 若關心 missing 與 NaN value 的區別,應該選此函式。
-//
-// 為什麼 unparseable 回 `(NaN, false)` 而非 `(NaN, true)`：parse 失敗代表 cell
-// 有 garbage（可能是 corrupted sensor output 或惡意輸入）;`isMissing=true` 是
-// 「sensor 主動告知此 sample 沒被測到」的 semantic 訊號,不該被混入 garbage
-// fallback。caller 想 fail-fast 可以直接 `if math.IsNaN(v) && !isMissing` 判定。
-func ParseFloatCellWithMissing(s string) (float64, bool) {
-	trimmed := strings.TrimSpace(s)
-	if trimmed == "" {
-		return math.NaN(), true
-	}
-
-	val, err := strconv.ParseFloat(trimmed, 64)
-	if err != nil {
-		return math.NaN(), false
-	}
-
-	return val, false
-}
-
-// FormatFloatCell formats a float64 for CSV output with explicit missing-cell support —
-// the round-trip-safe counterpart to `ParseFloatCellWithMissing`.
-//
-// Output semantics:
-//   - isMissing=true             → ""        （空 cell — 表示 missing-data，無論 v 為何）
-//   - math.IsNaN(v) && !isMissing → "NaN"    （字面 NaN — 表示真實 NaN 值）
-//   - math.IsInf(v, +1)           → "+Inf"
-//   - math.IsInf(v, -1)           → "-Inf"
-//   - 其他                        → strconv.FormatFloat(v, 'f', precision, 64)
-//
-// **與 internal/io.formatNormalizedEMGCell 差異**：formatNormalizedEMGCell 對 NaN / Inf 一律寫空字串,
-// 這是 muscle_ratio 對 NaN-as-missing 的 legacy 契約(見 analyzer_test.go
-// TestAnalyze_NaNCellWrittenAsEmpty / TestAnalyze_EMGUpstreamNaN_OutputCellEmpty)。
-// FormatFloatCell 提供 **嚴格區分** 的新語意,讓未來真正需要 round-trip 保留
-// NaN 字面 / Inf 字面 的 writer(例如 manifest export)可以採用,不破壞既有契約。
-//
-// precision <= 0 視為 6（與 internal/io.phaseSyncPrecision 對齊）。
-func FormatFloatCell(v float64, isMissing bool, precision int) string {
-	if isMissing {
-		return ""
-	}
-
-	if math.IsNaN(v) {
-		return "NaN"
-	}
-
-	if math.IsInf(v, 1) {
-		return "+Inf"
-	}
-
-	if math.IsInf(v, -1) {
-		return "-Inf"
-	}
-
-	if precision <= 0 {
-		precision = defaultFloatCellPrecision
-	}
-
-	return strconv.FormatFloat(v, 'f', precision, 64)
-}
-
-// defaultFloatCellPrecision 為 FormatFloatCell 預設小數位數，與 internal/io.phaseSyncPrecision 對齊。
-const defaultFloatCellPrecision = 6
-
-// ParseTimeAndChannels parses record[0] as time and record[channelStartIdx:] as channel values.
-// Returns (0, nil, false) when the time cell is empty or unparseable — signal to skip the row.
-// Channel cells that fail to parse silently fall back to 0 (preserves prior parser semantics).
-func ParseTimeAndChannels(record []string, channelStartIdx int) (float64, []float64, bool) {
-	if len(record) == 0 {
-		return 0, nil, false
-	}
-
-	timeVal, ok := ParseTimeCell(record[0])
-	if !ok {
-		return 0, nil, false
-	}
-
-	channelCount := len(record) - channelStartIdx
-	if channelCount < 0 {
-		channelCount = 0
-	}
-
-	channels := make([]float64, channelCount)
-
-	for i := 0; i < channelCount; i++ {
-		if val, ok := ParseFloatCell(record[channelStartIdx+i]); ok {
-			channels[i] = val
-		}
-	}
-
-	return timeVal, channels, true
 }
 
 // TimeSeriesLabels carries the dataset-specific words that ValidateTimeSeries

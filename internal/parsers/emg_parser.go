@@ -118,8 +118,7 @@ func initEMGData(headers []string, capacity int) *models.PhaseSyncEMGData {
 // 分歧由來:三 parser 早期各自手寫 strconv.ParseFloat,對 trailing 空白 / 空欄
 // 的容忍度不一(ANC 曾因 `strconv.ParseFloat(" 0.001 \t..")` error 整列被 skip)。
 // Unit D 統一收斂到 parse_helpers 的 ParseTimeCell / ParseFloatCell 兩 primitive,
-// 三 parser 此後共用同一空欄語意;需嚴格區分 missing 與字面 NaN 的新 caller 改用
-// ParseFloatCellWithMissing + FormatFloatCell(見 parse_helpers.go)。
+// 三 parser 此後共用同一空欄語意。
 func parseEMGDataRow(record, headers []string, emgData *models.PhaseSyncEMGData) bool {
 	if len(record) < len(headers) {
 		return false
