@@ -44,7 +44,6 @@ func BenchmarkValidateCSVData_TypicalEMG(b *testing.B) {
 	}
 
 	v := NewValidator()
-	const filename = "bench_emg.csv"
 
 	// 計算總 byte size,讓 b.SetBytes 報 throughput
 	var totalBytes int64
@@ -57,7 +56,7 @@ func BenchmarkValidateCSVData_TypicalEMG(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := v.ValidateCSVData(records, filename); err != nil {
+		if err := v.ValidateCSVData(records); err != nil {
 			b.Fatalf("ValidateCSVData unexpected err: %v", err)
 		}
 	}

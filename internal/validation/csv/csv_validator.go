@@ -2,10 +2,9 @@
 package csv
 
 import (
-	"fmt"
 	"strings"
 
-	"count_mean/internal/errors"
+	"count_mean/internal/i18n"
 )
 
 // Validator provides CSV data validation functionality.
@@ -20,21 +19,23 @@ func NewValidator() *Validator {
 //
 // 只留結構檢查 + CheckCells（cell ≤ 32KB）+ UTF-8；不再做公式 / script / SQL /
 // 命令注入偵測 — 注入防禦只在寫出側（csvutil）。
-func (v *Validator) ValidateCSVData(records [][]string, filename string) error {
+//
+// 錯誤是帶 key 的 i18n.Error（error.csv.*），caller 層 Localize；Args 只有行號 / 欄號，
+// 不回顯 cell 內容，也不收檔名。
+func (v *Validator) ValidateCSVData(records [][]string) error {
 	// Check for empty data
 	if len(records) == 0 {
-		return errors.NewValidationError("csv_data", len(records), "CSV 檔案為空")
+		return i18n.NewError(i18n.KeyErrorCSVEmpty)
 	}
 
 	// Check for minimum rows (header + at least one data row)
 	if len(records) < 2 {
-		return errors.NewValidationError("csv_data", len(records),
-			"CSV 檔案至少需要包含標題行和一行資料")
+		return i18n.NewError(i18n.KeyErrorCSVNoDataRow)
 	}
 
 	// Validate header row
 	if len(records[0]) == 0 {
-		return errors.NewValidationError("csv_data", records[0], "CSV 標題行為空")
+		return i18n.NewError(i18n.KeyErrorCSVHeaderEmpty)
 	}
 
 	// 偵測 duplicate / empty header。下游 parser 用「header → column index」
@@ -48,14 +49,12 @@ func (v *Validator) ValidateCSVData(records [][]string, filename string) error {
 
 	// Check for excessive columns (potential DoS attack)
 	if expectedColumns > 1000 {
-		return errors.NewValidationError("csv_data", expectedColumns,
-			"CSV 欄位數量過多 (最大 1000 欄)")
+		return i18n.NewError(i18n.KeyErrorCSVTooManyColumns)
 	}
 
 	// Check for excessive rows (potential DoS attack, max 1 million rows)
 	if len(records) > 1000000 { //nolint:mnd // 1000000 is 1 million rows limit
-		return errors.NewValidationError("csv_data", len(records),
-			"CSV 資料行數過多 (最大 1,000,000 行)")
+		return i18n.NewError(i18n.KeyErrorCSVTooManyRows)
 	}
 
 	if err := CheckCells(records); err != nil {
@@ -63,7 +62,7 @@ func (v *Validator) ValidateCSVData(records [][]string, filename string) error {
 	}
 
 	for i, record := range records {
-		if err := validateRow(record, i+1, expectedColumns, filename); err != nil {
+		if err := validateRow(record, i+1, expectedColumns); err != nil {
 			return err
 		}
 	}
@@ -79,26 +78,16 @@ func (v *Validator) ValidateCSVData(records [][]string, filename string) error {
 //
 // case-insensitive + trim 取所謂 "normalized key"：CSV 工具（Excel、numbers）對
 // header 通常 case-insensitive 比對；user 不小心輸入 "Channel1" 與 "channel1"
-// 視為 collision。
+// 視為 collision。錯誤只帶欄號，不回顯標題文字。
 func validateHeaderUniqueness(header []string) error {
 	seen := make(map[string]int, len(header))
 	for i, cell := range header {
 		normalized := strings.ToLower(strings.TrimSpace(cell))
 		if normalized == "" {
-			return errors.NewValidationError("csv_data",
-				map[string]any{"column_index": i + 1, "value": cell},
-				fmt.Sprintf("CSV 第 %d 欄標題為空或純空白", i+1))
+			return i18n.NewError(i18n.KeyErrorCSVHeaderCellEmpty, i+1)
 		}
 		if prev, exists := seen[normalized]; exists {
-			return errors.NewValidationError("csv_data",
-				map[string]any{
-					"column_index":     i + 1,
-					"value":            cell,
-					"duplicate_of_col": prev + 1,
-					"normalized_value": normalized,
-				},
-				fmt.Sprintf("CSV 第 %d 欄標題 %q 與第 %d 欄重複（normalize 後相同）",
-					i+1, cell, prev+1))
+			return i18n.NewError(i18n.KeyErrorCSVHeaderDuplicate, i+1, prev+1)
 		}
 		seen[normalized] = i
 	}
@@ -106,20 +95,13 @@ func validateHeaderUniqueness(header []string) error {
 }
 
 // validateRow 檢查單一 row 的欄位數與（user-picked pipeline 專屬的）UTF-8。
-func validateRow(record []string, row, expectedColumns int, filename string) error {
+func validateRow(record []string, row, expectedColumns int) error {
 	if len(record) != expectedColumns {
-		return errors.NewValidationError("csv_data",
-			map[string]any{
-				"row":           row,
-				"expected_cols": expectedColumns,
-				"actual_cols":   len(record),
-				"filename":      filename,
-			},
-			fmt.Sprintf("第 %d 行的欄位數量不一致", row))
+		return i18n.NewError(i18n.KeyErrorCSVRowColumnMismatch, row)
 	}
 
 	for j, cell := range record {
-		if err := checkUTF8(cell, row, j+1, filename); err != nil {
+		if err := checkUTF8(cell, row, j+1); err != nil {
 			return err
 		}
 	}

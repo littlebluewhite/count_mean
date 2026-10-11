@@ -160,6 +160,17 @@ var translationsEnUS = map[string]string{
 	KeyErrorHandlerParseEMGFailed:           "Failed to parse EMG",
 	KeyErrorHandlerParseMotionFailed:        "Failed to parse Motion",
 	KeyErrorHandlerParseMuscleRatioFailed:   "Failed to parse muscle_ratio",
+	// CSV 讀取側 sanity(validation/csv);只帶行號 / 欄號。
+	KeyErrorCSVEmpty:             "CSV file is empty",
+	KeyErrorCSVNoDataRow:         "CSV file must contain a header row and at least one data row",
+	KeyErrorCSVHeaderEmpty:       "CSV header row is empty",
+	KeyErrorCSVHeaderCellEmpty:   "CSV header in column %d is empty or whitespace-only",
+	KeyErrorCSVHeaderDuplicate:   "CSV header in column %d duplicates column %d (identical after normalisation)",
+	KeyErrorCSVTooManyColumns:    "Too many CSV columns (max 1000)",
+	KeyErrorCSVTooManyRows:       "Too many CSV rows (max 1,000,000)",
+	KeyErrorCSVRowColumnMismatch: "Row %d has an inconsistent number of columns",
+	KeyErrorCSVCellTooLong:       "Cell at row %d, column %d is too long (max 32KB)",
+	KeyErrorCSVCellNotUTF8:       "Cell at row %d, column %d contains non-UTF-8 characters",
 	// ConfigPanel — Phase 1 frontend i18n MVP entries (2026-05-14).
 	KeyConfigPanelTitle:            "System Configuration",
 	KeyConfigButtonBack:            "Back",

@@ -160,6 +160,17 @@ var translationsZhCN = map[string]string{
 	KeyErrorHandlerParseEMGFailed:           "解析 EMG 失败",
 	KeyErrorHandlerParseMotionFailed:        "解析 Motion 失败",
 	KeyErrorHandlerParseMuscleRatioFailed:   "解析 muscle_ratio 失败",
+	// CSV 讀取側 sanity(validation/csv);只帶行號 / 欄號。
+	KeyErrorCSVEmpty:             "CSV 文件为空",
+	KeyErrorCSVNoDataRow:         "CSV 文件至少需要包含标题行和一行数据",
+	KeyErrorCSVHeaderEmpty:       "CSV 标题行为空",
+	KeyErrorCSVHeaderCellEmpty:   "CSV 第 %d 列标题为空或纯空白",
+	KeyErrorCSVHeaderDuplicate:   "CSV 第 %d 列标题与第 %d 列重复（normalize 后相同）",
+	KeyErrorCSVTooManyColumns:    "CSV 列数过多 (最大 1000 列)",
+	KeyErrorCSVTooManyRows:       "CSV 数据行数过多 (最大 1,000,000 行)",
+	KeyErrorCSVRowColumnMismatch: "第 %d 行的列数不一致",
+	KeyErrorCSVCellTooLong:       "第 %d 行第 %d 列的内容过长 (最大 32KB)",
+	KeyErrorCSVCellNotUTF8:       "第 %d 行第 %d 列包含非 UTF-8 字符",
 	// ConfigPanel — Phase 1 frontend i18n MVP entries (2026-05-14).
 	KeyConfigPanelTitle:            "系统配置",
 	KeyConfigButtonBack:            "返回",

@@ -47,7 +47,7 @@ func TestValidateCSVData_RejectsStructuralProblems(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := v.ValidateCSVData(tc.records, "test.csv")
+			err := v.ValidateCSVData(tc.records)
 			if err == nil {
 				t.Errorf("ValidateCSVData(%q) 必須回傳 error，實際通過", tc.name)
 				return
@@ -97,7 +97,7 @@ func TestValidateCSVData_RejectsDuplicateHeader(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := v.ValidateCSVData(c.records, "dup.csv")
+			err := v.ValidateCSVData(c.records)
 			if err == nil {
 				t.Errorf("ValidateCSVData header=%v 必須擋下重複 header，實際通過", c.records[0])
 			}
@@ -140,7 +140,7 @@ func TestValidateCSVData_RejectsEmptyHeaderCell(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := v.ValidateCSVData(c.records, "empty.csv")
+			err := v.ValidateCSVData(c.records)
 			if err == nil {
 				t.Errorf("ValidateCSVData header=%v 必須擋下空 header cell，實際通過", c.records[0])
 			}
@@ -159,7 +159,7 @@ func TestValidateCSVData_AllowsLegitimateUniqueHeader(t *testing.T) {
 		{"0.2", "150", "250", "S1"},
 	}
 
-	if err := v.ValidateCSVData(records, "ok.csv"); err != nil {
+	if err := v.ValidateCSVData(records); err != nil {
 		t.Errorf("ValidateCSVData 合法 unique header 不該 reject，實際 err=%v", err)
 	}
 }
@@ -172,7 +172,7 @@ func TestValidateCSVData_AcceptsDottedHeaders(t *testing.T) {
 		{"Time", "R.Shoulder", "L.Shoulder"},
 		{"1", "2", "3"},
 	}
-	if err := v.ValidateCSVData(records, "emg.csv"); err != nil {
+	if err := v.ValidateCSVData(records); err != nil {
 		t.Errorf("ValidateCSVData(R.Shoulder header) 不該 reject,實際 err=%v", err)
 	}
 }
@@ -203,7 +203,7 @@ func TestValidateCSVData_RejectsNonUTF8(t *testing.T) {
 		{"Time", "Ch1"},
 		{"1", "\xa4\xa4"},
 	}
-	if err := v.ValidateCSVData(records, "big5.csv"); err == nil {
+	if err := v.ValidateCSVData(records); err == nil {
 		t.Error("ValidateCSVData 非 UTF-8 cell 必須拒絕,實際通過")
 	}
 }

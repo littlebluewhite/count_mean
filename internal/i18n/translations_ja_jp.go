@@ -160,6 +160,17 @@ var translationsJaJP = map[string]string{
 	KeyErrorHandlerParseEMGFailed:           "EMG の解析に失敗しました",
 	KeyErrorHandlerParseMotionFailed:        "Motion の解析に失敗しました",
 	KeyErrorHandlerParseMuscleRatioFailed:   "muscle_ratio の解析に失敗しました",
+	// CSV 讀取側 sanity(validation/csv);只帶行號 / 欄號。
+	KeyErrorCSVEmpty:             "CSV ファイルが空です",
+	KeyErrorCSVNoDataRow:         "CSV ファイルにはヘッダー行と少なくとも 1 行のデータが必要です",
+	KeyErrorCSVHeaderEmpty:       "CSV ヘッダー行が空です",
+	KeyErrorCSVHeaderCellEmpty:   "CSV の %d 列目のヘッダーが空または空白のみです",
+	KeyErrorCSVHeaderDuplicate:   "CSV の %d 列目のヘッダーが %d 列目と重複しています（正規化後に同一）",
+	KeyErrorCSVTooManyColumns:    "CSV の列数が多すぎます (最大 1000 列)",
+	KeyErrorCSVTooManyRows:       "CSV のデータ行数が多すぎます (最大 1,000,000 行)",
+	KeyErrorCSVRowColumnMismatch: "%d 行目の列数が一致しません",
+	KeyErrorCSVCellTooLong:       "%d 行目 %d 列目の内容が長すぎます (最大 32KB)",
+	KeyErrorCSVCellNotUTF8:       "%d 行目 %d 列目に UTF-8 以外の文字が含まれています",
 	// ConfigPanel — Phase 1 frontend i18n MVP entries (2026-05-14).
 	KeyConfigPanelTitle:            "システム設定",
 	KeyConfigButtonBack:            "戻る",

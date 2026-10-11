@@ -198,7 +198,7 @@ func (h *CSVHandler) validateCSVRecords(records [][]string, cleanPath string) er
 		return err
 	}
 
-	if err := h.csvValidator.ValidateCSVData(records, cleanPath); err != nil {
+	if err := h.csvValidator.ValidateCSVData(records); err != nil {
 		h.logger.Error("CSV 資料結構驗證失敗", err, map[string]any{"path": cleanPath})
 
 		return fmt.Errorf("CSV 資料驗證失敗: %w", err)

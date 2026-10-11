@@ -272,6 +272,19 @@ const (
 	KeyErrorHandlerParseMotionFailed        = "error.handler.parse_motion_failed"
 	KeyErrorHandlerParseMuscleRatioFailed   = "error.handler.parse_muscle_ratio_failed"
 
+	// CSV 讀取側 sanity(validation/csv,ADR-0041):以 i18n.NewError 回帶 key 的錯誤,
+	// caller 層 Localize。Args 只有行號 / 欄號(1-based),不回顯 cell 內容或檔名。
+	KeyErrorCSVEmpty             = "error.csv.empty"
+	KeyErrorCSVNoDataRow         = "error.csv.no_data_row"
+	KeyErrorCSVHeaderEmpty       = "error.csv.header_empty"
+	KeyErrorCSVHeaderCellEmpty   = "error.csv.header_cell_empty"
+	KeyErrorCSVHeaderDuplicate   = "error.csv.header_duplicate"
+	KeyErrorCSVTooManyColumns    = "error.csv.too_many_columns"
+	KeyErrorCSVTooManyRows       = "error.csv.too_many_rows"
+	KeyErrorCSVRowColumnMismatch = "error.csv.row_column_mismatch"
+	KeyErrorCSVCellTooLong       = "error.csv.cell_too_long"
+	KeyErrorCSVCellNotUTF8       = "error.csv.cell_not_utf8"
+
 	// ConfigPanel — Phase 1 frontend i18n MVP keys (2026-05-14).
 	// 用於前端 frontend/src/main.js showConfigPanel() 字串 catalog 化。
 	// 命名前綴 "config." 避免與既有泛用 Key 衝突(KeyLabelLanguage 等仍保留供他處 reuse)。

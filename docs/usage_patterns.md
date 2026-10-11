@@ -580,7 +580,7 @@ func (p *ErrorHandlingProcessor) processFile(filePath string) error {
     
     // 階段 2: 數據驗證（dataset 為 ReadCSV 回傳的 [][]string）
     validator := csv.NewValidator()
-    err = validator.ValidateCSVData(dataset, filePath)
+    err = validator.ValidateCSVData(dataset)
     if err != nil {
         return &errors.AppError{
             Code:    errors.ErrCodeDataValidation,
