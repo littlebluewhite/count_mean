@@ -205,7 +205,6 @@ const (
 	// 層 Localize(ADR-0048);catalog 字串只含 fmt.Sprintf-compatible verbs
 	// (%s %v %d %.3f),「: cause」由 WrapError 接上。
 	KeyErrorCCIParseManifestFailed     = "error.cci.parse_manifest_failed"
-	KeyErrorCCIInvalidSubjectIndex     = "error.cci.invalid_subject_index"
 	KeyErrorCCIParseEMGFailed          = "error.cci.parse_emg_failed"
 	KeyErrorCCIBuildChannelMapFailed   = "error.cci.build_channel_map_failed"
 	KeyErrorCCIExtractGaitRangeFailed  = "error.cci.extract_gait_range_failed"
@@ -223,7 +222,6 @@ const (
 	// 錯誤,handler 層 Localize(ADR-0048)。zh-TW 與遷移前硬編碼文字逐位元組相同;
 	// 值只是訊息本身,「: cause」(sentinel 或下游錯誤)由 WrapError 接上。
 	KeyErrorPhaseSyncParseManifestFailed    = "error.phase_sync.parse_manifest_failed"
-	KeyErrorPhaseSyncInvalidSubjectIndex    = "error.phase_sync.invalid_subject_index"
 	KeyErrorPhaseSyncManifestDataInvalid    = "error.phase_sync.manifest_data_invalid"
 	KeyErrorPhaseSyncPhaseOrderInvalid      = "error.phase_sync.phase_order_invalid"
 	KeyErrorPhaseSyncDataFolderNotFound     = "error.phase_sync.data_folder_not_found"

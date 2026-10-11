@@ -108,7 +108,7 @@ func TestAnalyzeNormalizedPhaseSync_SameRangeBackwardCompat(t *testing.T) {
 	params := NormalizedPhaseSyncParams{
 		ManifestFile:    manifestPath,
 		DataFolder:      dataFolder,
-		SubjectIndex:    0,
+		Subject:         "TestSubject",
 		NormStartPhase:  "P0",
 		NormEndPhase:    "P2",
 		StatsStartPhase: "P0",
@@ -143,7 +143,7 @@ func TestAnalyzeNormalizedPhaseSync_DifferentRanges(t *testing.T) {
 	params := NormalizedPhaseSyncParams{
 		ManifestFile:    manifestPath,
 		DataFolder:      dataFolder,
-		SubjectIndex:    0,
+		Subject:         "TestSubject",
 		NormStartPhase:  "P0",
 		NormEndPhase:    "P2",
 		StatsStartPhase: "P1",
@@ -177,7 +177,7 @@ func TestAnalyzeNormalizedPhaseSync_StatsPhaseOrderError(t *testing.T) {
 	params := NormalizedPhaseSyncParams{
 		ManifestFile:    manifestPath,
 		DataFolder:      dataFolder,
-		SubjectIndex:    0,
+		Subject:         "TestSubject",
 		NormStartPhase:  "P0",
 		NormEndPhase:    "P2",
 		StatsStartPhase: "P2", // 故意反序
@@ -206,7 +206,7 @@ func TestAnalyzeNormalizedPhaseSync_StatsZeroDurationRejected(t *testing.T) {
 	params := NormalizedPhaseSyncParams{
 		ManifestFile:    manifestPath,
 		DataFolder:      dataFolder,
-		SubjectIndex:    0,
+		Subject:         "TestSubject",
 		NormStartPhase:  "P0",
 		NormEndPhase:    "P2",
 		StatsStartPhase: "P1", // 同 phase
@@ -249,7 +249,7 @@ func TestAnalyzeNormalizedPhaseSync_RejectsInvalidExternalPath(t *testing.T) {
 	params := NormalizedPhaseSyncParams{
 		ManifestFile:    manifestPath,
 		DataFolder:      dataFolder,
-		SubjectIndex:    0,
+		Subject:         "TestSubject",
 		NormStartPhase:  "P0",
 		NormEndPhase:    "P2",
 		StatsStartPhase: "P0",
@@ -284,7 +284,7 @@ func TestAnalyzeNormalizedPhaseSync_NormPhaseNotFound(t *testing.T) {
 	params := NormalizedPhaseSyncParams{
 		ManifestFile:    manifestPath,
 		DataFolder:      dataFolder,
-		SubjectIndex:    0,
+		Subject:         "TestSubject",
 		NormStartPhase:  "P0",
 		NormEndPhase:    "P99", // 不存在
 		StatsStartPhase: "P0",
@@ -326,7 +326,7 @@ func TestAnalyzeNormalizedPhaseSync_StatsFailureWritesNoOutput(t *testing.T) {
 	result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
 		ManifestFile:    manifestPath,
 		DataFolder:      dataFolder,
-		SubjectIndex:    0,
+		Subject:         "TestSubject",
 		NormStartPhase:  "P0",
 		NormEndPhase:    "P2",
 		StatsStartPhase: "S",
@@ -375,7 +375,7 @@ func TestAnalyzeNormalizedPhaseSync_PhaseOrderCheckedBeforeIO(t *testing.T) {
 			result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
 				ManifestFile:    filepath.Join(dataFolder, "missing_manifest.csv"),
 				DataFolder:      dataFolder,
-				SubjectIndex:    0,
+				Subject:         "TestSubject",
 				NormStartPhase:  tc.norm[0],
 				NormEndPhase:    tc.norm[1],
 				StatsStartPhase: tc.stats[0],
@@ -455,7 +455,7 @@ func TestAnalyzeNormalizedPhaseSync_LoadAndNormalizeFailurePrefix(t *testing.T) 
 			result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
 				ManifestFile:    manifestPath,
 				DataFolder:      dataFolder,
-				SubjectIndex:    0,
+				Subject:         "TestSubject",
 				NormStartPhase:  "P0",
 				NormEndPhase:    "P2",
 				StatsStartPhase: "P0",
@@ -497,7 +497,7 @@ func TestAnalyzeNormalizedPhaseSync_StatsRangeErrorPrecedesNormalizeError(t *tes
 	result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
 		ManifestFile:    manifestPath,
 		DataFolder:      dataFolder,
-		SubjectIndex:    0,
+		Subject:         "TestSubject",
 		NormStartPhase:  "P0",
 		NormEndPhase:    "P2",
 		StatsStartPhase: "S",

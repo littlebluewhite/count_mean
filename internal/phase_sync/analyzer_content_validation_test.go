@@ -101,7 +101,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,150,0.6,0.7,180,0
 		DataFolder:   tmpDir,
 		StartPhase:   "P0",
 		EndPhase:     "P1",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, analyzeErr := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -135,7 +135,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,200,0.
 		DataFolder:   tmpDir,
 		StartPhase:   "P0",
 		EndPhase:     "P1",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, analyzeErr := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -169,7 +169,7 @@ TestSubject,motion.csv,force.anc,emg.csv,500,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,0
 		DataFolder:   tmpDir,
 		StartPhase:   "P0",
 		EndPhase:     "P1",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, analyzeErr := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -204,7 +204,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,2.0,80,2.1
 		DataFolder:   tmpDir,
 		StartPhase:   "P0",
 		EndPhase:     "P1",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, analyzeErr := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -238,7 +238,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,5.0
 		DataFolder:   tmpDir,
 		StartPhase:   "P0",
 		EndPhase:     "P1",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, analyzeErr := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -277,7 +277,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,500,0.6,0.7,600,0
 		DataFolder:   tmpDir,
 		StartPhase:   "P0",
 		EndPhase:     "P1",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	// This should pass all content validations
@@ -318,7 +318,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,500,0.6,0.7,600,0
 		DataFolder:   tmpDir,
 		StartPhase:   "P0",
 		EndPhase:     "P1",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, analyzeErr := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -355,7 +355,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,5000,0.6,0.7,6000
 		DataFolder:   tmpDir,
 		StartPhase:   "P0",
 		EndPhase:     "D", // End at D which is motion index 5000
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, analyzeErr := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -390,7 +390,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,0.8
 		DataFolder:   tmpDir,
 		StartPhase:   "P0",
 		EndPhase:     "P1",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, analyzeErr := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -425,7 +425,7 @@ TestSubject,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.3,0.4,0.5,50,0.6,0.7,80,0.8
 		DataFolder:   tmpDir,
 		StartPhase:   "P0",
 		EndPhase:     "P1",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, analyzeErr := analyzer.AnalyzePhaseSync(context.Background(), params)

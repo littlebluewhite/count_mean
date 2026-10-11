@@ -104,13 +104,18 @@ func TestAnalyzeCCI_EmptyParamsUnifiedChannel(t *testing.T) {
 		[]unifiedChannelCase[CCIParams, CCIResult]{
 			{
 				name:        "no_manifest",
-				params:      CCIParams{ManifestFile: "", DataFolder: "/tmp/legit", SubjectIndex: 0},
+				params:      CCIParams{ManifestFile: "", DataFolder: "/tmp/legit", Subject: "S1"},
 				expectInMsg: ErrNoManifestFile.Error(),
 			},
 			{
 				name:        "no_data_folder",
-				params:      CCIParams{ManifestFile: "/tmp/legit/m.csv", DataFolder: "", SubjectIndex: 0},
+				params:      CCIParams{ManifestFile: "/tmp/legit/m.csv", DataFolder: "", Subject: "S1"},
 				expectInMsg: ErrNoDataFolder.Error(),
+			},
+			{
+				name:        "no_subject",
+				params:      CCIParams{ManifestFile: "/tmp/legit/m.csv", DataFolder: "/tmp/legit", Subject: ""},
+				expectInMsg: ErrNoSubject.Error(),
 			},
 		},
 	)
@@ -183,9 +188,18 @@ func TestAnalyzeNormalizedPhaseSync_EmptyParamsUnifiedChannel(t *testing.T) {
 				expectInMsg: ErrNoDataFolder.Error(),
 			},
 			{
-				name: "no_norm_phase",
+				name: "no_subject",
 				params: NormalizedPhaseSyncParams{
 					ManifestFile: "/tmp/legit/m.csv", DataFolder: "/tmp/legit",
+					NormStartPhase: "P0", NormEndPhase: "P2",
+					StatsStartPhase: "P0", StatsEndPhase: "P2",
+				},
+				expectInMsg: ErrNoSubject.Error(),
+			},
+			{
+				name: "no_norm_phase",
+				params: NormalizedPhaseSyncParams{
+					ManifestFile: "/tmp/legit/m.csv", DataFolder: "/tmp/legit", Subject: "S1",
 					NormStartPhase: "", NormEndPhase: "P2",
 					StatsStartPhase: "P0", StatsEndPhase: "P2",
 				},
@@ -194,7 +208,7 @@ func TestAnalyzeNormalizedPhaseSync_EmptyParamsUnifiedChannel(t *testing.T) {
 			{
 				name: "no_stats_phase",
 				params: NormalizedPhaseSyncParams{
-					ManifestFile: "/tmp/legit/m.csv", DataFolder: "/tmp/legit",
+					ManifestFile: "/tmp/legit/m.csv", DataFolder: "/tmp/legit", Subject: "S1",
 					NormStartPhase: "P0", NormEndPhase: "P2",
 					StatsStartPhase: "P0", StatsEndPhase: "",
 				},
@@ -233,9 +247,17 @@ func TestAnalyzePhaseSync_EmptyParamsUnifiedChannel(t *testing.T) {
 				expectInMsg: ErrNoDataFolder.Error(),
 			},
 			{
-				name: "no_phase_selection",
+				name: "no_subject",
 				params: PhaseSyncParams{
 					ManifestFile: "/tmp/legit/m.csv", DataFolder: "/tmp/legit",
+					StartPhase: "P0", EndPhase: "P2",
+				},
+				expectInMsg: ErrNoSubject.Error(),
+			},
+			{
+				name: "no_phase_selection",
+				params: PhaseSyncParams{
+					ManifestFile: "/tmp/legit/m.csv", DataFolder: "/tmp/legit", Subject: "S1",
 					StartPhase: "", EndPhase: "P2",
 				},
 				expectInMsg: ErrNoPhaseSelection.Error(),

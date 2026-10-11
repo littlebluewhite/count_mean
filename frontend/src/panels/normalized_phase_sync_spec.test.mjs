@@ -8,7 +8,7 @@
 //      ShowError,dialog 由 onResult own);hideSubject 省略(用 subject)。
 //   2. formBody 為 builder function 且不洩漏 hardcoded 繁中(4 個 phase 下拉)。
 //   3. formBody 呼叫 translator ≥ 8 次(4 label + 4 placeholder option)。
-//   4-7. spec.rpc 在 manifestPath / dataFolder / subjectIdx / 任一 phase 缺時 throw。
+//   4-7. spec.rpc 在 manifestPath / dataFolder / subjectName / 任一 phase 缺時 throw。
 //   8. spec.rpc happy path:全必填齊 → 呼到 AnalyzeNormalizedPhaseSync 且
 //      success=false 不升 throw + param 正確 map。
 //   9. spec.onResult 在 result.success=false(軟失敗)時不 render 結果區、只彈 ShowError
@@ -25,7 +25,6 @@ function validCtx(overrides = {}) {
     return {
         manifestPath: '/tmp/manifest.csv',
         dataFolder: '/tmp/data',
-        subjectIdx: 0,
         subjectName: 'SubjectA',
         subjects: [],
         ...overrides,
@@ -70,7 +69,7 @@ test('normalizedPhaseSyncSpec 必須暴露 ADR-0007 §6 spec shape + silentSucce
     // silentSuccess=true:雙輸出路徑訊息 + success=false 業務 ShowError,dialog 由 onResult own。
     assert.equal(spec.silentSuccess, true, 'silentSuccess 鎖定為 true(dialog 由 onResult own)');
 
-    // 用 subject(subjectIdx)→ hideSubject 省略走 default。
+    // 用 subject(subjectName)→ hideSubject 省略走 default。
     assert.ok(
         spec.hideSubject === undefined || spec.hideSubject === false,
         'hideSubject 省略或 false(NormalizedPhaseSync 用 subject)'
@@ -80,16 +79,16 @@ test('normalizedPhaseSyncSpec 必須暴露 ADR-0007 §6 spec shape + silentSucce
     assert.equal(typeof spec.rpc, 'function', 'rpc 應為 async function');
     assert.equal(typeof spec.onResult, 'function', 'onResult 應為 async function');
 
-    // M5:loadSubjects(index-mode)+ afterRender(4 個 phase 下拉 load + mirror)必填;
+    // M5:loadSubjects + afterRender(4 個 phase 下拉 load + mirror)必填;
     // onSubjectChange 省略。
-    assert.equal(typeof spec.loadSubjects, 'function', 'Normalized 有 loadSubjects(index-mode)');
+    assert.equal(typeof spec.loadSubjects, 'function', 'Normalized 有 loadSubjects');
     assert.equal(typeof spec.afterRender, 'function', 'Normalized 有 afterRender(load 4 phase 下拉)');
     assert.equal(spec.onSubjectChange, undefined, 'Normalized 省略 onSubjectChange');
 });
 
 // ---------- spec.loadSubjects + afterRender(M5)----------
 
-test('Normalized spec.loadSubjects 走 LoadPhaseManifest 且 valueMode=index', async () => {
+test('Normalized spec.loadSubjects 走 LoadPhaseManifest 且只回 subjects', async () => {
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
     try {
@@ -99,7 +98,7 @@ test('Normalized spec.loadSubjects 走 LoadPhaseManifest 且 valueMode=index', a
         const spec = makeNormalizedPhaseSyncSpec({});
         const out = await spec.loadSubjects('/tmp/m.csv', '');
         assert.deepEqual(out.subjects, ['N1', 'N2']);
-        assert.equal(out.valueMode, 'index', 'Normalized valueMode=index');
+        assert.deepEqual(Object.keys(out), ['subjects'], 'loadSubjects 只回 subjects(無 valueMode)');
     } finally {
         if (window?.happyDOM?.close) await window.happyDOM.close();
         delete globalThis.window;
@@ -187,8 +186,8 @@ test('spec.rpc 在 dataFolder 缺時 throw', async () => {
     await assertRpcThrows({ dataFolder: '' }, {});
 });
 
-test('spec.rpc 在 subjectIdx 為 NaN 時 throw(未選 subject)', async () => {
-    await assertRpcThrows({ subjectIdx: NaN }, {});
+test('spec.rpc 在 subjectName 為空時 throw(未選 subject)', async () => {
+    await assertRpcThrows({ subjectName: '' }, {});
 });
 
 test('spec.rpc 在 normStartPhase 缺時 throw', async () => {
@@ -212,7 +211,7 @@ test('spec.rpc 在 statsEndPhase 缺時 throw', async () => {
 test('spec.rpc 全必填齊 → 呼到 AnalyzeNormalizedPhaseSync 且 success=false 不升 throw + param 正確 map', async () => {
     // NormalizedPhaseSync 後端所有可預期失敗走 result.success=false;rpc 不升 throw
     //(對比 CCI),原樣回傳讓 onResult 判 + 彈業務 ShowError。此 test 同時釘 4 個 phase
-    // 從 DOM 讀 + ctx.subjectIdx 正確 map 到後端 param。
+    // 從 DOM 讀 + ctx.subjectName 正確 map 到後端 param。
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
     globalThis.document = window.document;
@@ -232,13 +231,14 @@ test('spec.rpc 全必填齊 → 呼到 AnalyzeNormalizedPhaseSync 且 success=fa
         };
 
         const spec = makeNormalizedPhaseSyncSpec({});
-        const result = await spec.rpc(validCtx({ subjectIdx: 3 }));
+        const result = await spec.rpc(validCtx({ subjectName: 'SF3' }));
 
         assert.equal(result, fakeResult, 'success=false 時 rpc 應原樣回傳 result(不升 throw)');
         assert.ok(analyzeParams, 'rpc 應呼到 AnalyzeNormalizedPhaseSync');
         assert.equal(analyzeParams.manifestFile, '/tmp/manifest.csv', 'manifestFile 走 ctx.manifestPath');
         assert.equal(analyzeParams.dataFolder, '/tmp/data', 'dataFolder 走 ctx.dataFolder');
-        assert.equal(analyzeParams.subjectIndex, 3, 'subjectIndex 走 ctx.subjectIdx');
+        assert.equal(analyzeParams.subject, 'SF3', 'subject 走 ctx.subjectName(ADR-0057)');
+        assert.equal('subjectIndex' in analyzeParams, false, 'NormalizedPhaseSyncParams 不再送 subjectIndex');
         assert.equal(analyzeParams.normStartPhase, 'P0', 'normStartPhase 走 #normalizedPhaseSyncNormStartPhase value');
         assert.equal(analyzeParams.normEndPhase, 'S', 'normEndPhase 走 #normalizedPhaseSyncNormEndPhase value');
         assert.equal(analyzeParams.statsStartPhase, 'C', 'statsStartPhase 走 #normalizedPhaseSyncStatsStartPhase value');

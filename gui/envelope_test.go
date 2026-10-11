@@ -129,22 +129,66 @@ func TestEnvelope_LocalizesAnalyzerErrors(t *testing.T) {
 		enUS string
 	}{
 		{
-			name: "AnalyzeCCI_InvalidSubjectIndex",
+			// Subject 不在 manifest 是輸入錯誤:inputMessage、無「分析失敗」前綴(ADR-0057)。
+			name: "AnalyzeCCI_SubjectNotFound",
 			call: func(t *testing.T) string {
 				dir := t.TempDir()
 				app := newRPCRedactTestApp(t, t.TempDir(), "")
 				result, err := app.AnalyzeCCI(CCIParams{
 					ManifestFile: writeEnvelopeTestManifest(t, dir, "S1"),
 					DataFolder:   dir,
-					SubjectIndex: 5,
+					Subject:      "S5",
 				})
 				require.NoError(t, err)
 				require.False(t, result.Success)
 
 				return result.Message
 			},
-			zhTW: "分析失敗: 無效的主題索引: 5 (共有 1 個主題)",
-			enUS: "Analysis failed: Invalid subject index: 5 (1 subjects available)",
+			zhTW: `Subject "S5" 不存在於分期總檔案`,
+			enUS: `Subject "S5" not found in the manifest file`,
+		},
+		{
+			name: "AnalyzePhaseSync_SubjectNotFound",
+			call: func(t *testing.T) string {
+				dir := t.TempDir()
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzePhaseSync(PhaseSyncParams{
+					ManifestFile: writeEnvelopeTestManifest(t, dir, "S1"),
+					DataFolder:   dir,
+					StartPhase:   "P0",
+					EndPhase:     "P2",
+					Subject:      "S5",
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+			zhTW: `Subject "S5" 不存在於分期總檔案`,
+			enUS: `Subject "S5" not found in the manifest file`,
+		},
+		{
+			// NPS 經 *phase_sync.AnalysisError(StageLoad):errors.Is 走到 sentinel,不加「載入資料失敗」。
+			name: "AnalyzeNormalizedPhaseSync_SubjectNotFound",
+			call: func(t *testing.T) string {
+				dir := t.TempDir()
+				app := newRPCRedactTestApp(t, t.TempDir(), "")
+				result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
+					ManifestFile:    writeEnvelopeTestManifest(t, dir, "S1"),
+					DataFolder:      dir,
+					Subject:         "S5",
+					NormStartPhase:  "P0",
+					NormEndPhase:    "P2",
+					StatsStartPhase: "P0",
+					StatsEndPhase:   "P2",
+				})
+				require.NoError(t, err)
+				require.False(t, result.Success)
+
+				return result.Message
+			},
+			zhTW: `Subject "S5" 不存在於分期總檔案`,
+			enUS: `Subject "S5" not found in the manifest file`,
 		},
 		{
 			name: "AnalyzeMuscleRatio_SubjectError",
@@ -174,6 +218,7 @@ func TestEnvelope_LocalizesAnalyzerErrors(t *testing.T) {
 					DataFolder:   filepath.Join(plantDir(t), "missing"),
 					StartPhase:   "P0",
 					EndPhase:     "P2",
+					Subject:      "S1",
 				})
 				require.NoError(t, err)
 				require.False(t, result.Success)
@@ -191,6 +236,7 @@ func TestEnvelope_LocalizesAnalyzerErrors(t *testing.T) {
 				result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
 					ManifestFile:    writeEnvelopeTestManifest(t, t.TempDir(), "S1"),
 					DataFolder:      filepath.Join(plantDir(t), "missing"),
+					Subject:         "S1",
 					NormStartPhase:  "P0",
 					NormEndPhase:    "P2",
 					StatsStartPhase: "P0",
@@ -247,6 +293,7 @@ func TestHandlerLogs_ExpectedFailureShape(t *testing.T) {
 		result, err := app.AnalyzeCCI(CCIParams{
 			ManifestFile: filepath.Join(t.TempDir(), "missing_manifest.csv"),
 			DataFolder:   t.TempDir(),
+			Subject:      "S1",
 		})
 		require.NoError(t, err)
 		require.False(t, result.Success)

@@ -33,7 +33,7 @@ func TestAnalyzeCCI_PreCancelledContextReturnsErr(t *testing.T) {
 	params := &CCIParams{
 		ManifestFile: "/nonexistent/manifest.csv",
 		DataFolder:   "/nonexistent",
-		SubjectIndex: 0,
+		Subject:      "CCICancel",
 	}
 
 	_, err := analyzer.AnalyzeCCI(ctx, params)
@@ -62,7 +62,7 @@ func TestAnalyzeCCI_InFlightCancelReturnsQuickly(t *testing.T) {
 	params := &CCIParams{
 		ManifestFile: manifestFile,
 		DataFolder:   dataFolder,
-		SubjectIndex: 0,
+		Subject:      "CCICancel",
 	}
 
 	// 先 capture goroutine baseline；先做 GC 排掉 testing framework warmup 的殘留。

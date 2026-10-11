@@ -2,16 +2,18 @@ package gui
 
 import (
 	"bytes"
+	"errors"
 
 	"count_mean/internal/cci"
 	"count_mean/internal/i18n"
+	"count_mean/internal/manifest"
 )
 
 // CCIParams 共同收縮分析參數.
 type CCIParams struct {
 	ManifestFile string `json:"manifestFile"`
 	DataFolder   string `json:"dataFolder"`
-	SubjectIndex int    `json:"subjectIndex"`
+	Subject      string `json:"subject"` // manifest row 的 Subject 名稱(ADR-0057)
 }
 
 // CCIResult 共同收縮分析結果.
@@ -63,11 +65,17 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 	if vErr := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); vErr != nil {
 		return failedCCIResult(inputMessage(vErr)), nil
 	}
-	// 2 execute（domain analyzer）
+	if params.Subject == "" {
+		return failedCCIResult(inputMessage(ErrNoSubject)), nil
+	}
+	// 2 execute（domain analyzer）;Subject 不在 manifest 是輸入錯誤(inputMessage)
 	analysisResult, aErr := a.cciAnalyzer.AnalyzeCCI(ctx, &cci.CCIParams{
-		ManifestFile: params.ManifestFile, DataFolder: params.DataFolder, SubjectIndex: params.SubjectIndex,
+		ManifestFile: params.ManifestFile, DataFolder: params.DataFolder, Subject: params.Subject,
 	})
 	if aErr != nil {
+		if errors.Is(aErr, manifest.ErrSubjectNotFound) {
+			return failedCCIResult(inputMessage(aErr)), nil
+		}
 		return failedCCIResult(a.failMessage(i18n.KeyErrorHandlerAnalysisFailed, aErr)), nil
 	}
 	// 3 Output 1

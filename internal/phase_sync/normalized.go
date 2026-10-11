@@ -37,7 +37,7 @@ func (e *AnalysisError) Unwrap() error { return e.Err }
 type NormalizedParams struct {
 	ManifestFile    string
 	DataFolder      string
-	SubjectIndex    int
+	Subject         string // manifest row 的 Subject 名稱(manifest.LoadSubject,ADR-0057)
 	NormStartPhase  models.PhasePoint
 	NormEndPhase    models.PhasePoint
 	StatsStartPhase models.PhasePoint
@@ -81,7 +81,7 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzeNormalizedPhaseSync(
 		return nil, &AnalysisError{Stage: StageStatsRange, Err: err}
 	}
 
-	m, emgData, err := analyzer.load(p.ManifestFile, p.DataFolder, p.SubjectIndex)
+	m, emgData, err := analyzer.load(p.ManifestFile, p.DataFolder, p.Subject)
 	if err != nil {
 		return nil, &AnalysisError{Stage: StageLoad, Err: err}
 	}

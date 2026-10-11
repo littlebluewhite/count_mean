@@ -33,7 +33,7 @@ func TestAnalyzeCCI_PanicInBody_CaughtAsInternalPanic(t *testing.T) {
 		result, err = app.AnalyzeCCI(CCIParams{
 			ManifestFile: filepath.Join(t.TempDir(), "x.csv"),
 			DataFolder:   t.TempDir(),
-			SubjectIndex: 0,
+			Subject:      "S1",
 		})
 	}, "body 內 panic 必須被首句 defer recoverHandlerPanic 攔住,不可 propagate")
 

@@ -63,7 +63,7 @@ type AnalysisParams struct {
 	DataFolder   string     // 數據資料夾路徑
 	StartPhase   PhasePoint // 開始分期點
 	EndPhase     PhasePoint // 結束分期點
-	SubjectIndex int        // 選擇的主題索引（從0開始）
+	Subject      string     // 選擇的主題名稱(manifest.LoadSubject 以名稱取 row,ADR-0057)
 }
 
 // EMGStatistics EMG 統計結果.

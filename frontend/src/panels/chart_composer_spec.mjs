@@ -90,7 +90,7 @@ export function makeChartComposerSpec(app) {
         silentSuccess: true,
         // Composer subject 依賴 dataFolder(LoadChartComposerSubjects 帶 dataFolder),
         // 故 selectMpDataFolder 寫完 dataFolder 後需 re-load subjects。僅 Composer 設此
-        // 旗標 — index-mode 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest,
+        // 旗標 — 其他 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest,
         // 設 true 會讓選 dataFolder 清空已選 subject(codex round-1 P2)。
         subjectsDependOnDataFolder: true,
 
@@ -113,11 +113,9 @@ export function makeChartComposerSpec(app) {
             + `onclick="app.standardizeComposerView()">${t('button.standardize_view')}</button>`,
 
         /**
-         * Subject load(ADR-0007 §4 **name-mode**):Composer 走
-         * LoadChartComposerSubjects({manifestPath, dataFolder}) → result.subjects,
-         * valueMode='name' → option.value 寫 subject **字串**(ADR-0002 §1
-         * canonical-key:manifest 升版時 idx 位移、name 不變,故 Composer 用 name)。
-         * 對齊舊 loadComposerSubjects(main.js:1746-1750 `opt.value = subject`)。
+         * Subject load:Composer 走 LoadChartComposerSubjects({manifestPath, dataFolder})
+         * → result.subjects;option.value 是 Subject 名稱(ADR-0002 §1 canonical-key,
+         * ADR-0057 後四個有 subject 的 panel 一致)。
          *
          * Composer 的 loadSubjects 需要 dataFolder(LoadChartComposerSubjects 帶它),
          * 故 ManifestPanel selectMpDataFolder 寫完 dataFolder 後會 re-load(見
@@ -127,24 +125,24 @@ export function makeChartComposerSpec(app) {
          *
          * @param {string} manifestPath - #mpManifestPath value
          * @param {string} dataFolder - #mpDataFolder value
-         * @returns {Promise<{subjects: string[], valueMode: 'name'}>}
+         * @returns {Promise<{subjects: string[]}>}
          */
         loadSubjects: async (manifestPath, dataFolder) => {
             // 對齊舊 selectComposerManifest/DataFolder(main.js:1700/1715):只有在
             // manifest + dataFolder 都齊時才打 RPC(backend LoadChartComposerSubjects
             // RejectsEmptyDataFolder)。dataFolder 缺時回空 subjects(不 throw、不打
             // RPC)— ManifestPanel 此時保留 placeholder + 不 enable,等使用者選完
-            // dataFolder 後 selectMpDataFolder 會 re-load。index-mode 3 panel 無此
+            // dataFolder 後 selectMpDataFolder 會 re-load。其他 3 panel 無此
             // 限制(LoadPhaseManifest 不需 dataFolder),故只 Composer loadSubjects 設此 guard。
             if (!dataFolder) {
-                return { subjects: [], valueMode: 'name' };
+                return { subjects: [] };
             }
             const result = await LoadChartComposerSubjects({ manifestPath, dataFolder });
             if (!result.success) {
                 // 升 throw 讓 ManifestPanel caller catch → ShowError(對齊舊路徑語意)。
                 throw new Error(result.message || '載入主題失敗');
             }
-            return { subjects: result.subjects || [], valueMode: 'name' };
+            return { subjects: result.subjects || [] };
         },
 
         /**

@@ -5,7 +5,7 @@
 // 中最簡單的一個:
 //   * hideSubject: true — MuscleRatio 只吃 manifest + dataFolder(批次處理 manifest
 //     內所有 subject,**無 subject 下拉**;ADR-0007 §2 入口定義)。shell 因此省略
-//     subject select,rpc 也不讀 ctx.subjectIdx / subjectName。
+//     subject select,rpc 也不讀 ctx.subjectName。
 //   * silentSuccess: true — MuscleRatio 有 PARTIAL-FAILED 語意(部分 subject 成功、
 //     部分失敗):result.success=false 時走 ShowError(部分失敗),success=true 走
 //     ShowMessage(完成)。envelope 的標準「rpc resolve = success → ShowMessage」
@@ -34,7 +34,7 @@
 // invariant(由 muscle_ratio_spec.test.mjs 釘):
 //   * hideSubject === true、silentSuccess === true
 //   * spec.formBody 為 builder function(只有描述 help-text;無繁中洩漏)
-//   * rpc 在 manifestPath / dataFolder 缺時 throw(不讀 subjectIdx)
+//   * rpc 在 manifestPath / dataFolder 缺時 throw(不讀 subjectName)
 
 import { AnalyzeMuscleRatio } from '../../wailsjs/go/gui/App.js';
 
@@ -97,7 +97,7 @@ export function makeMuscleRatioSpec(app) {
          * guard 取代(ADR-0007 §7),此處不再重複。
          *
          * @param {object} ctx - ManifestPanel _gatherCtx 結果(MuscleRatio 只讀
-         *   manifestPath / dataFolder;hideSubject=true 時 subjectIdx=NaN 不讀)
+         *   manifestPath / dataFolder;hideSubject=true 時 subjectName='' 不讀)
          * @returns {Promise<object>} MuscleRatioResult(subjects / success / message)
          */
         rpc: async (ctx) => {

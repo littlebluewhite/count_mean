@@ -11,7 +11,7 @@
 //   3. formBody 呼叫 translator ≥ 4 次(2 label + 2 placeholder option)。
 //   4. spec.rpc 在 manifestPath 缺時 throw。
 //   5. spec.rpc 在 dataFolder 缺時 throw。
-//   6. spec.rpc 在 subjectIdx NaN/<0 時 throw。
+//   6. spec.rpc 在 subjectName 為空(未選 subject)時 throw。
 //   7. spec.rpc 在 startPhase 缺時 throw。
 //   8. spec.rpc 在 endPhase 缺時 throw。
 //   9. spec.rpc happy path:全必填齊 → 呼到 AnalyzePhaseSync 且 success=false 不升 throw。
@@ -35,7 +35,6 @@ function validCtx(overrides = {}) {
     return {
         manifestPath: '/tmp/manifest.csv',
         dataFolder: '/tmp/data',
-        subjectIdx: 0,
         subjectName: 'SubjectA',
         subjects: [],
         ...overrides,
@@ -77,7 +76,7 @@ test('phaseSyncSpec 必須暴露 ADR-0007 §6 spec shape + silentSuccess 特例'
     // dialog 由 onResult own(有別於 CCI rpc-throw + envelope ShowMessage)。
     assert.equal(spec.silentSuccess, true, 'silentSuccess 鎖定為 true(dialog 由 onResult own)');
 
-    // PhaseSync 用 subject(subjectIdx)→ hideSubject 省略走 default(顯示 subject select)。
+    // PhaseSync 用 subject(subjectName)→ hideSubject 省略走 default(顯示 subject select)。
     assert.ok(
         spec.hideSubject === undefined || spec.hideSubject === false,
         'hideSubject 省略或 false(PhaseSync 用 subject)'
@@ -87,16 +86,16 @@ test('phaseSyncSpec 必須暴露 ADR-0007 §6 spec shape + silentSuccess 特例'
     assert.equal(typeof spec.rpc, 'function', 'rpc 應為 async function');
     assert.equal(typeof spec.onResult, 'function', 'onResult 應為 async function');
 
-    // M5:loadSubjects(index-mode)+ afterRender(phase 下拉 load)必填;
+    // M5:loadSubjects + afterRender(phase 下拉 load)必填;
     // onSubjectChange 省略(subject change 無特殊行為)。
-    assert.equal(typeof spec.loadSubjects, 'function', 'PhaseSync 有 loadSubjects(index-mode)');
+    assert.equal(typeof spec.loadSubjects, 'function', 'PhaseSync 有 loadSubjects');
     assert.equal(typeof spec.afterRender, 'function', 'PhaseSync 有 afterRender(load phase 下拉)');
     assert.equal(spec.onSubjectChange, undefined, 'PhaseSync 省略 onSubjectChange');
 });
 
 // ---------- spec.loadSubjects + afterRender(M5)----------
 
-test('PhaseSync spec.loadSubjects 走 LoadPhaseManifest 且 valueMode=index', async () => {
+test('PhaseSync spec.loadSubjects 走 LoadPhaseManifest 且只回 subjects', async () => {
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
     try {
@@ -106,7 +105,7 @@ test('PhaseSync spec.loadSubjects 走 LoadPhaseManifest 且 valueMode=index', as
         const spec = makePhaseSyncSpec({});
         const out = await spec.loadSubjects('/tmp/m.csv', '');
         assert.deepEqual(out.subjects, ['A', 'B', 'C']);
-        assert.equal(out.valueMode, 'index', 'PhaseSync valueMode=index');
+        assert.deepEqual(Object.keys(out), ['subjects'], 'loadSubjects 只回 subjects(無 valueMode)');
     } finally {
         if (window?.happyDOM?.close) await window.happyDOM.close();
         delete globalThis.window;
@@ -207,7 +206,7 @@ test('spec.rpc 在 dataFolder 缺時 throw', async () => {
     }
 });
 
-test('spec.rpc 在 subjectIdx 為 NaN 時 throw(未選 subject)', async () => {
+test('spec.rpc 在 subjectName 為空時 throw(未選 subject)', async () => {
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
     globalThis.document = window.document;
@@ -215,7 +214,7 @@ test('spec.rpc 在 subjectIdx 為 NaN 時 throw(未選 subject)', async () => {
         setPhases(window);
         const spec = makePhaseSyncSpec({});
         await assert.rejects(
-            async () => { await spec.rpc(validCtx({ subjectIdx: NaN })); },
+            async () => { await spec.rpc(validCtx({ subjectName: '' })); },
             (err) => {
                 assert.match(err.message, /必要欄位|必填欄位/, 'throw 訊息含「請填寫所有必要欄位」語意');
                 return true;
@@ -278,7 +277,7 @@ test('spec.rpc 在 endPhase 缺時 throw', async () => {
 test('spec.rpc 全必填齊 → 呼到 AnalyzePhaseSync 且 success=false 不升 throw(dual 通道,onResult own dialog)', async () => {
     // PhaseSync 後端 dual 通道:Execute/Write 軟失敗走 result.success=false。rpc 不升
     // throw(對比 CCI),原樣回傳讓 onResult 判 + 彈業務 ShowError。此 test 同時釘
-    // rpc 把 DOM 的 startPhase/endPhase + ctx.subjectIdx 正確 map 到後端 param。
+    // rpc 把 DOM 的 startPhase/endPhase + ctx.subjectName 正確 map 到後端 param。
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
     globalThis.document = window.document;
@@ -298,13 +297,14 @@ test('spec.rpc 全必填齊 → 呼到 AnalyzePhaseSync 且 success=false 不升
         };
 
         const spec = makePhaseSyncSpec({});
-        const result = await spec.rpc(validCtx({ subjectIdx: 2 }));
+        const result = await spec.rpc(validCtx({ subjectName: 'SF2' }));
 
         assert.equal(result, fakeResult, 'success=false 時 rpc 應原樣回傳 result(不升 throw)');
         assert.ok(analyzeParams, 'rpc 應呼到 AnalyzePhaseSync');
         assert.equal(analyzeParams.manifestFile, '/tmp/manifest.csv', 'manifestFile 走 ctx.manifestPath');
         assert.equal(analyzeParams.dataFolder, '/tmp/data', 'dataFolder 走 ctx.dataFolder');
-        assert.equal(analyzeParams.subjectIndex, 2, 'subjectIndex 走 ctx.subjectIdx');
+        assert.equal(analyzeParams.subject, 'SF2', 'subject 走 ctx.subjectName(ADR-0057)');
+        assert.equal('subjectIndex' in analyzeParams, false, 'PhaseSyncParams 不再送 subjectIndex');
         assert.equal(analyzeParams.startPhase, 'P0', 'startPhase 走 #phaseSyncStartPhase value');
         assert.equal(analyzeParams.endPhase, 'C', 'endPhase 走 #phaseSyncEndPhase value');
     } finally {

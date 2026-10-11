@@ -4,7 +4,7 @@
 // (ADR-0007 §6,M3 交付)。CCI 是 ManifestPanel 的「標準案例」:
 //   * runBtnLabelKey 省略 → 走 default 'button.start_analyze'(不像 Composer 覆寫)
 //   * silentSuccess 省略(預設 false)→ 成功後 envelope 彈 ShowMessage
-//   * subject 用 subjectIdx(number)而非 Composer 的 subjectName(string)
+//   * subject 用 subjectName(Subject 名稱,後端以名稱取 row,ADR-0057)
 //
 // 設計:
 //   * spec.formBody — CCI 原 panel(main.js showCCIPanel:1233-1273)的表單欄位
@@ -13,7 +13,7 @@
 //   * spec.rpc — 呼 `AnalyzeCCI(CCIParams)` 並把 result.success=false 升為 throw,
 //     讓 envelope 統一走 ShowError(對齊既有 executeCCIAnalysis main.js:1352-1357
 //     的 success/message 雙檢查路徑)。pre-validation guard(manifestFile /
-//     dataFolder / subjectIndex)集中在此 — 既有路徑(main.js:1339-1342)是
+//     dataFolder / subject)集中在此 — 既有路徑(main.js:1339-1342)是
 //     `await ShowError + return`,改 throw 後 envelope 統一 ShowError 一次。
 //   * spec.onResult — 把舊 showCCIResult(main.js:1381-1555)的 4 段結果區整段
 //     closure 化:info metadata / iframe chart + phase checkboxes / report /
@@ -21,9 +21,8 @@
 //     phase checkbox 走 mp.bindPhaseCheckboxes(帶 onUpdate 刷新 pct 文字面板)。
 //
 // **後端 param / result 欄位名(已對 Go struct 驗證,勿臆測)**:
-//   CCIParams  { manifestFile, dataFolder, subjectIndex }   ← gui/cci_handlers.go:19
-//     (注意:不是 manifestPath / subjectIdx — Go json tag 是 manifestFile /
-//      subjectIndex,handoff sketch 寫錯,以 Go struct 為準)
+//   CCIParams  { manifestFile, dataFolder, subject }   ← gui/cci_handlers.go
+//     (注意:不是 manifestPath — Go json tag 是 manifestFile,以 Go struct 為準)
 //   CCIResult  { outputCSVPath, subject, pairNames, chartHTML, phasePercents,
 //                phaseTimes, report, success, message }      ← gui/cci_handlers.go:26
 //
@@ -44,7 +43,7 @@
 // invariant(由 cci_spec.test.mjs 釘):
 //   * spec.formBody 為 builder function(CCI 無額外欄位 → 回空字串,無繁中洩漏)
 //   * runBtnLabelKey 省略(undefined)、silentSuccess 省略(undefined / falsy)
-//   * rpc 在 manifestFile / dataFolder 缺、subjectIndex NaN/<0 時 throw
+//   * rpc 在 manifestFile / dataFolder / subject 缺時 throw
 //   * rpc 在 backend result.success=false 時 throw(升 soft error 為 ShowError)
 
 import { bridge } from '../charts/iframeBridge.mjs';
@@ -96,18 +95,15 @@ export function makeCciSpec(app) {
         formBody: cciFormBody,
 
         /**
-         * Subject load(ADR-0007 §4 index-mode):manifest 選好後 ManifestPanel
-         * selectMpManifest 呼此 fn 取 subject 列表填 #mpSubject。CCI 走
-         * LoadPhaseManifest(主題字串陣列),valueMode='index' → option.value 寫
-         * 0-based 索引(對齊舊 loadCCIManifestSubjects main.js:1304-1308 `option.value
-         * = index`)。_gatherCtx 的 subjectIdx = parseInt(value) 對應後端 subjectIndex。
+         * Subject load:manifest 選好後 ManifestPanel selectMpManifest 呼此 fn 取
+         * subject 列表填 #mpSubject。CCI 走 LoadPhaseManifest(主題字串陣列);
+         * option.value 是 Subject 名稱,_gatherCtx 的 subjectName 對應後端 subject(ADR-0057)。
          *
          * @param {string} manifestPath - #mpManifestPath value
-         * @returns {Promise<{subjects: string[], valueMode: 'index'}>}
+         * @returns {Promise<{subjects: string[]}>}
          */
         loadSubjects: async (manifestPath) => ({
             subjects: await LoadPhaseManifest(manifestPath),
-            valueMode: 'index',
         }),
 
         /**
@@ -116,21 +112,20 @@ export function makeCciSpec(app) {
          * 的 `if (result.success) {...} else { ShowError }` 路徑。
          *
          * Pre-validation guards 集中在這 — 既有路徑(main.js:1339-1342)是
-         * `if (!manifestFile || !dataFolder || isNaN(subjectIndex)) { ShowError + return }`,
+         * `if (!manifestFile || !dataFolder || !subject) { ShowError + return }`,
          * 改 throw 後 envelope 統一 ShowError 一次。throw 訊息沿用裸字串(原因見
          * guard 內註解),soft-error 升 throw 帶 backend message。
          *
          * @param {object} ctx - ManifestPanel _gatherCtx 結果
-         *   { manifestPath, dataFolder, subjectIdx, subjectName, subjects }
+         *   { manifestPath, dataFolder, subjectName, subjects }
          * @returns {Promise<object>} CCIResult(success / message / chartHTML / ...)
          */
         rpc: async (ctx) => {
             // ctx.manifestPath / ctx.dataFolder 來自 shell 的 #mpManifestPath /
             // #mpDataFolder input(_gatherCtx 規範化命名),對應後端 CCIParams 的
-            // manifestFile / dataFolder。ctx.subjectIdx 是 parseInt(option.value),
-            // CCI option.value 寫的是 index(main.js:1306 `option.value = index`),
-            // 故 subjectIdx 直接對應後端 subjectIndex。
-            if (!ctx.manifestPath || !ctx.dataFolder || Number.isNaN(ctx.subjectIdx) || ctx.subjectIdx < 0) {
+            // manifestFile / dataFolder。ctx.subjectName 是 #mpSubject 的 option.value
+            // (Subject 名稱;未選時為 ''),對應後端 subject。
+            if (!ctx.manifestPath || !ctx.dataFolder || !ctx.subjectName) {
                 // 對齊 main.js:1340 既有錯誤文案(error.msg.fill_required_fields →
                 // 「請填寫所有必要欄位」)。沿用裸字串而非 globalThis.t(key):對齊 M2
                 // chart_composer_spec.mjs:140 rpc throw 裸字串慣例,且 rpc 不該依賴
@@ -141,11 +136,11 @@ export function makeCciSpec(app) {
             }
 
             const result = await AnalyzeCCI({
-                // 後端 CCIParams json tag:manifestFile / dataFolder / subjectIndex
-                //(gui/cci_handlers.go:19,以 Go struct 為準勿臆測)。
+                // 後端 CCIParams json tag:manifestFile / dataFolder / subject
+                //(gui/cci_handlers.go,以 Go struct 為準勿臆測)。
                 manifestFile: ctx.manifestPath,
                 dataFolder: ctx.dataFolder,
-                subjectIndex: ctx.subjectIdx,
+                subject: ctx.subjectName,
             });
 
             // backend handler 用 Success=false 表 soft error(non-panic,見

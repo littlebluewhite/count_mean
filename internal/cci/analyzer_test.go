@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"count_mean/internal/manifest"
 )
 
 // TestCCIAnalyzer_AnalyzeCCI_AcceptsLiteralPercentInEMGFilename 釘住 codex review
@@ -46,7 +48,7 @@ func TestCCIAnalyzer_AnalyzeCCI_AcceptsLiteralPercentInEMGFilename(t *testing.T)
 	_, err := a.AnalyzeCCI(context.Background(), &CCIParams{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		SubjectIndex: 0,
+		Subject:      "SF8",
 	})
 
 	// 強化主張：path-validation 不該因 '%' 失敗（fix 退化的徵兆），同時必須真的穿越到
@@ -103,7 +105,7 @@ func TestCCIAnalyzer_ConcurrentCallsNoRace(t *testing.T) {
 				_, err := a.AnalyzeCCI(context.Background(), &CCIParams{
 					ManifestFile: manifestPath,
 					DataFolder:   dataDir,
-					SubjectIndex: 0,
+					Subject:      "S",
 				})
 				// 不 assert err — race detector 才是這個 test 的守門
 				_ = err
@@ -147,7 +149,7 @@ func TestCCIAnalyzer_RejectsInvalidPhaseManifest(t *testing.T) {
 	_, err := a.AnalyzeCCI(context.Background(), &CCIParams{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		SubjectIndex: 0,
+		Subject:      "SF8",
 	})
 
 	require.Error(t, err, "畸形 manifest（P0 晚於 P1）應在 loadAndValidate 被 fail-fast 擋下")
@@ -184,8 +186,28 @@ func TestAnalyzeCCI_AcceptsBlankForceFile(t *testing.T) {
 	_, err := NewCCIAnalyzer().AnalyzeCCI(context.Background(), &CCIParams{
 		ManifestFile: manifestPath,
 		DataFolder:   dataDir,
-		SubjectIndex: 0,
+		Subject:      "SF8",
 	})
 
 	require.NoError(t, err, "CCI 不開 Motion / Force 檔,兩欄留空應可分析")
+}
+
+// TestAnalyzeCCI_SubjectNotFound 釘住 ADR-0057:Subject 不在 manifest 是輸入錯誤,
+// manifest.ErrSubjectNotFound 原樣回傳、不加「解析分期總檔案失敗」前綴(gui 走 inputMessage)。
+func TestAnalyzeCCI_SubjectNotFound(t *testing.T) {
+	tempDir := t.TempDir()
+	manifestPath := filepath.Join(tempDir, "manifest.csv")
+	manifestContent := "Subject,motion file,Force Plate file,EMG file," +
+		"EMG第一筆時間對應Motion的時間index值,P0,P1,P2,S,C,D,T0,T,O,L\n" +
+		"SF8,m.csv,f.anc,emg.csv,1,0.01,0.02,0.03,0.04,0.05,20,0.07,0.08,30,0.09\n"
+	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o600))
+
+	_, err := NewCCIAnalyzer().AnalyzeCCI(context.Background(), &CCIParams{
+		ManifestFile: manifestPath,
+		DataFolder:   tempDir,
+		Subject:      "SF9",
+	})
+
+	require.ErrorIs(t, err, manifest.ErrSubjectNotFound)
+	assert.Equal(t, `Subject "SF9" 不存在於分期總檔案`, err.Error())
 }

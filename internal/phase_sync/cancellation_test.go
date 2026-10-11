@@ -32,7 +32,7 @@ func TestAnalyzePhaseSync_PreCancelledContextReturnsErr(t *testing.T) {
 		DataFolder:   "/nonexistent",
 		StartPhase:   models.PhaseP0,
 		EndPhase:     models.PhaseP1,
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, err := analyzer.AnalyzePhaseSync(ctx, params)

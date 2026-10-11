@@ -41,7 +41,7 @@ TestSubject,motion.csv,force.csv,emg.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350
 		DataFolder:   nonExistent,
 		StartPhase:   "P0",
 		EndPhase:     "P2",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)

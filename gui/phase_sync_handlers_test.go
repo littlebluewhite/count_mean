@@ -43,7 +43,7 @@ func TestAnalyzePhaseSync_HappyPath(t *testing.T) {
 		DataFolder:   dataFolder,
 		StartPhase:   models.PhaseP0,
 		EndPhase:     models.PhaseP2,
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -81,7 +81,7 @@ func TestAnalyzePhaseSync_WriteFailure_FailedResultNilErr(t *testing.T) {
 		DataFolder:   dataFolder,
 		StartPhase:   models.PhaseP0,
 		EndPhase:     models.PhaseP2,
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	})
 	require.NoError(t, err, "寫檔失敗走 failed-result 通道,不走 Go err")
 	require.NotNil(t, result)

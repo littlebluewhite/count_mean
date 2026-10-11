@@ -6,6 +6,7 @@ import (
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/i18n"
+	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/phase_sync"
 )
@@ -20,7 +21,7 @@ import (
 type NormalizedPhaseSyncParams struct {
 	ManifestFile    string            `json:"manifestFile"`
 	DataFolder      string            `json:"dataFolder"`
-	SubjectIndex    int               `json:"subjectIndex"`
+	Subject         string            `json:"subject"` // manifest row 的 Subject 名稱(ADR-0057)
 	NormStartPhase  models.PhasePoint `json:"normStartPhase"`
 	NormEndPhase    models.PhasePoint `json:"normEndPhase"`
 	StatsStartPhase models.PhasePoint `json:"statsStartPhase"`
@@ -97,13 +98,17 @@ func (a *App) AnalyzeNormalizedPhaseSync(params NormalizedPhaseSyncParams) (resu
 	analysis, analyzeErr := a.phaseSyncAnalyzer.AnalyzeNormalizedPhaseSync(ctx, &phase_sync.NormalizedParams{
 		ManifestFile:    params.ManifestFile,
 		DataFolder:      params.DataFolder,
-		SubjectIndex:    params.SubjectIndex,
+		Subject:         params.Subject,
 		NormStartPhase:  params.NormStartPhase,
 		NormEndPhase:    params.NormEndPhase,
 		StatsStartPhase: params.StatsStartPhase,
 		StatsEndPhase:   params.StatsEndPhase,
 	})
 	if analyzeErr != nil {
+		// Subject 不在 manifest 是輸入錯誤(StageLoad 的 AnalysisError 文字與 cause 相同)。
+		if errors.Is(analyzeErr, manifest.ErrSubjectNotFound) {
+			return failedNormalizedPhaseSyncResult(inputMessage(analyzeErr)), nil
+		}
 		return failedNormalizedPhaseSyncResult(a.failMessage(normalizedPhaseSyncFailKey(analyzeErr), analyzeErr)), nil
 	}
 
@@ -193,10 +198,13 @@ func normalizedPhaseSyncFailKey(err error) string {
 }
 
 // validateNormalizedPhaseSyncParams 檢查必填欄位。沿用既有錯誤型別保持訊息一致。
-// 兩組分期點（Norm 與 Stats）只要任一組未填齊就回 ErrNoPhaseSelection。
+// Subject 空回 ErrNoSubject;兩組分期點（Norm 與 Stats）只要任一組未填齊就回 ErrNoPhaseSelection。
 func validateNormalizedPhaseSyncParams(params NormalizedPhaseSyncParams) error {
 	if err := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); err != nil {
 		return err
+	}
+	if params.Subject == "" {
+		return ErrNoSubject
 	}
 	if params.NormStartPhase == "" || params.NormEndPhase == "" {
 		return ErrNoPhaseSelection

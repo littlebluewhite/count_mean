@@ -97,18 +97,18 @@ function minimalSpec(overrides = {}) {
 }
 
 // 從 functionPanel innerHTML 預填一組合法輸入,讓 _gatherCtx 不卡在缺欄位
-function fillCtxInputs(window, { manifestPath = '/tmp/m.csv', dataFolder = '/tmp/data', subjectIdx = 0, subjectName = 'SubjectA' } = {}) {
+function fillCtxInputs(window, { manifestPath = '/tmp/m.csv', dataFolder = '/tmp/data', subjectName = 'SubjectA' } = {}) {
     const get = (id) => window.document.getElementById(id);
     get('mpManifestPath').value = manifestPath;
     get('mpDataFolder').value = dataFolder;
-    // subject select 填一個 option + select 它
+    // subject select 填一個 option + select 它(option.value = Subject 名稱,ADR-0057)
     const select = get('mpSubject');
     select.innerHTML = '';
     const opt = window.document.createElement('option');
-    opt.value = String(subjectIdx);
+    opt.value = subjectName;
     opt.textContent = subjectName;
     select.appendChild(opt);
-    select.value = String(subjectIdx);
+    select.value = subjectName;
     select.disabled = false;
 }
 
@@ -564,8 +564,7 @@ test('10. bindPhaseCheckboxes 未傳 onUpdate:change 觸發不應 throw(向後�
 
 // ---------- M5 wiring:selectMpManifest / selectMpDataFolder / onMpSubjectChange ----------
 //
-// Subject load 兩形態(ADR-0007 §4):index-mode(CCI/PhaseSync/Normalized,
-// option.value=0-based 索引)vs name-mode(Composer,option.value=subject 字串)。
+// Subject load:option.value = Subject 名稱(ADR-0057,四個有 subject 的 panel 一致)。
 // 這幾個 test 釘 ManifestPanel 的 subject-load helper 行為,不真正觸發 wails RPC
 // (stub window.go.gui.App.{SelectFile,SelectDirectory})。
 
@@ -579,7 +578,7 @@ function stubWails(window, { file = '/tmp/picked.csv', folder = '/tmp/picked-dir
     window.go.gui.App.SelectDirectory = async () => folder;
 }
 
-test('11. selectMpManifest:index-mode loadSubjects 填 #mpSubject(option.value=索引)', async () => {
+test('11. selectMpManifest:loadSubjects 填 #mpSubject(option.value=Subject 名稱)', async () => {
     const { window, mp } = await setup();
     try {
         stubWails(window, { file: '/tmp/manifest.csv' });
@@ -588,7 +587,7 @@ test('11. selectMpManifest:index-mode loadSubjects 填 #mpSubject(option.value=�
         const spec = minimalSpec({
             loadSubjects: async (manifestPath, dataFolder) => {
                 loadArgs = { manifestPath, dataFolder };
-                return { subjects: ['SubjA', 'SubjB', 'SubjC'], valueMode: 'index' };
+                return { subjects: ['SubjA', 'SubjB', 'SubjC'] };
             },
         });
         mp.run(spec);
@@ -600,38 +599,36 @@ test('11. selectMpManifest:index-mode loadSubjects 填 #mpSubject(option.value=�
         // loadSubjects 被呼叫,manifestPath forward 正確
         assert.equal(loadArgs.manifestPath, '/tmp/manifest.csv', 'loadSubjects 收到 manifestPath');
 
-        // #mpSubject 填了 placeholder + 3 個 subject,index-mode option.value 為索引
+        // #mpSubject 填了 placeholder + 3 個 subject,option.value 為 Subject 名稱(非索引)
         const select = window.document.getElementById('mpSubject');
         assert.equal(select.disabled, false, 'subject select 應 enable');
         const opts = Array.from(select.options);
         assert.equal(opts.length, 4, 'placeholder + 3 subject = 4 option');
-        assert.equal(opts[1].value, '0', 'index-mode:第一個 subject option.value=0');
+        assert.equal(opts[1].value, 'SubjA', '第一個 subject option.value=Subject 名稱');
         assert.equal(opts[1].textContent, 'SubjA', 'option text 顯示 subject 名');
-        assert.equal(opts[3].value, '2', 'index-mode:第三個 subject option.value=2');
+        assert.equal(opts[3].value, 'SubjC', '第三個 subject option.value=Subject 名稱');
     } finally {
         await teardown(window);
     }
 });
 
-test('12. selectMpManifest:name-mode loadSubjects 填 #mpSubject(option.value=subject 字串)', async () => {
+test('12. _gatherCtx:subjectName 取 option.value;選 placeholder 時為空字串', async () => {
+    // spec 的必填守門靠 `!ctx.subjectName`:placeholder 的 option 文字是「請選擇主題」,
+    // 若 subjectName 讀文字,未選 subject 也會送出;故 _gatherCtx 讀 value。
     const { window, mp } = await setup();
     try {
-        stubWails(window, { file: '/tmp/composer-manifest.csv' });
-
+        stubWails(window, { file: '/tmp/manifest.csv' });
         const spec = minimalSpec({
-            loadSubjects: async () => ({ subjects: ['Alice', 'Bob'], valueMode: 'name' }),
+            loadSubjects: async () => ({ subjects: ['Alice', 'Bob'] }),
         });
         mp.run(spec);
-
         await mp.selectMpManifest();
 
         const select = window.document.getElementById('mpSubject');
-        const opts = Array.from(select.options);
-        assert.equal(opts.length, 3, 'placeholder + 2 subject');
-        // name-mode:option.value 為 subject 字串(ADR-0002 canonical-key),非索引
-        assert.equal(opts[1].value, 'Alice', 'name-mode:option.value=subject 字串');
-        assert.equal(opts[2].value, 'Bob', 'name-mode:option.value=subject 字串');
-        assert.equal(opts[1].textContent, 'Alice');
+        assert.equal(mp._gatherCtx().subjectName, '', '預設選中 placeholder → subjectName 為空');
+        select.value = 'Bob';
+        assert.equal(mp._gatherCtx().subjectName, 'Bob', '選中 Bob → subjectName=Bob');
+        assert.equal('subjectIdx' in mp._gatherCtx(), false, 'ctx 不再帶 subjectIdx');
     } finally {
         await teardown(window);
     }
@@ -645,7 +642,7 @@ test('13. selectMpManifest:hideSubject=true 時不呼 loadSubjects(MuscleRatio)'
         let loadCalled = false;
         const spec = minimalSpec({
             hideSubject: true,
-            loadSubjects: async () => { loadCalled = true; return { subjects: [], valueMode: 'index' }; },
+            loadSubjects: async () => { loadCalled = true; return { subjects: [] }; },
         });
         mp.run(spec);
 
@@ -668,7 +665,7 @@ test('14. selectMpManifest:user cancel(SelectFile 回 falsy)→ 不動 input、�
 
         let loadCalled = false;
         const spec = minimalSpec({
-            loadSubjects: async () => { loadCalled = true; return { subjects: [], valueMode: 'index' }; },
+            loadSubjects: async () => { loadCalled = true; return { subjects: [] }; },
         });
         mp.run(spec);
         // 預填一個既有值,cancel 後不應被覆蓋
@@ -720,7 +717,7 @@ test('16. selectMpDataFolder:寫 #mpDataFolder + 若 manifest 已選則 re-load 
             subjectsDependOnDataFolder: true,
             loadSubjects: async (manifestPath, dataFolder) => {
                 loadArgs = { manifestPath, dataFolder };
-                return { subjects: ['X'], valueMode: 'name' };
+                return { subjects: ['X'] };
             },
         });
         mp.run(spec);
@@ -746,7 +743,7 @@ test('17. selectMpDataFolder:manifest 未選時不 re-load subjects', async () =
 
         let loadCalled = false;
         const spec = minimalSpec({
-            loadSubjects: async () => { loadCalled = true; return { subjects: [], valueMode: 'index' }; },
+            loadSubjects: async () => { loadCalled = true; return { subjects: [] }; },
         });
         mp.run(spec);
         // manifest 留空
@@ -767,7 +764,7 @@ test('17b. selectMpManifest:loadSubjects 回空 subjects → select 保留 disab
     try {
         stubWails(window, { file: '/tmp/manifest.csv' });
         const spec = minimalSpec({
-            loadSubjects: async () => ({ subjects: [], valueMode: 'name' }),
+            loadSubjects: async () => ({ subjects: [] }),
         });
         mp.run(spec);
 
@@ -785,7 +782,7 @@ test('17b. selectMpManifest:loadSubjects 回空 subjects → select 保留 disab
     }
 });
 
-test('17c. selectMpDataFolder:index-mode panel(無 subjectsDependOnDataFolder)選 folder 不 reload,保留已選 subject', async () => {
+test('17c. selectMpDataFolder:subject 只依賴 manifest 的 panel(無 subjectsDependOnDataFolder)選 folder 不 reload,保留已選 subject', async () => {
     // codex round-1 P2 regression:CCI/PhaseSync/Normalized 的 subject 只依賴 manifest。
     // 先選 subject 再選 dataFolder 時,若 selectMpDataFolder 仍 reload subjects,
     // _loadMpSubjects 的 `select.innerHTML=''` 會把已選 subject value reset 回空
@@ -798,25 +795,25 @@ test('17c. selectMpDataFolder:index-mode panel(無 subjectsDependOnDataFolder)�
 
         let loadCalled = false;
         const spec = minimalSpec({
-            // 故意不傳 subjectsDependOnDataFolder(index-mode 行為)
+            // 故意不傳 subjectsDependOnDataFolder(CCI/PhaseSync/Normalized 行為)
             loadSubjects: async () => {
                 loadCalled = true;
-                return { subjects: ['SubjA', 'SubjB'], valueMode: 'index' };
+                return { subjects: ['SubjA', 'SubjB'] };
             },
         });
         mp.run(spec);
-        // 模擬 user 已選 manifest + 已選一個 subject(index-mode option.value=索引)
+        // 模擬 user 已選 manifest + 已選一個 subject(option.value=Subject 名稱)
         window.document.getElementById('mpManifestPath').value = '/tmp/manifest.csv';
-        fillCtxInputs(window, { subjectIdx: 1, subjectName: 'SubjB' });
+        fillCtxInputs(window, { subjectName: 'SubjB' });
         const select = window.document.getElementById('mpSubject');
-        assert.equal(select.value, '1', 'precondition:subject 已選為 index 1');
+        assert.equal(select.value, 'SubjB', 'precondition:subject 已選為 SubjB');
 
         await mp.selectMpDataFolder();
 
         assert.equal(window.document.getElementById('mpDataFolder').value, '/tmp/data-dir', 'dataFolder 仍寫入');
-        assert.equal(loadCalled, false, 'index-mode panel 選 dataFolder 不應 reload subjects');
+        assert.equal(loadCalled, false, 'subject 只依賴 manifest 的 panel 選 dataFolder 不應 reload subjects');
         // 已選 subject value 必須被保留(reload 會 reset 回空 placeholder)
-        assert.equal(select.value, '1', '已選 subject value 必須被保留,不被清空');
+        assert.equal(select.value, 'SubjB', '已選 subject value 必須被保留,不被清空');
     } finally {
         await teardown(window);
     }
@@ -836,7 +833,7 @@ test('17d. selectMpDataFolder:subjectsDependOnDataFolder=true(Composer)選 folde
             subjectsDependOnDataFolder: true,
             loadSubjects: async (manifestPath, dataFolder) => {
                 loadArgs = { manifestPath, dataFolder };
-                return { subjects: ['Alice', 'Bob', 'Carol'], valueMode: 'name' };
+                return { subjects: ['Alice', 'Bob', 'Carol'] };
             },
         });
         mp.run(spec);
@@ -849,7 +846,7 @@ test('17d. selectMpDataFolder:subjectsDependOnDataFolder=true(Composer)選 folde
         // select 被重新填充:placeholder + 3 subject
         const select = window.document.getElementById('mpSubject');
         assert.equal(select.options.length, 4, 'select 重新填充為 placeholder + 3 subject');
-        assert.equal(select.options[1].value, 'Alice', 'name-mode option.value=subject 字串');
+        assert.equal(select.options[1].value, 'Alice', 'option.value=Subject 名稱');
     } finally {
         await teardown(window);
     }

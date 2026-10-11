@@ -101,7 +101,6 @@ var translationsEnUS = map[string]string{
 	KeyErrorManifestSubjectNotFound:  "not found in the manifest file",
 	// CCI Analysis Messages (backend i18n).
 	KeyErrorCCIParseManifestFailed:     "Failed to parse manifest file",
-	KeyErrorCCIInvalidSubjectIndex:     "Invalid subject index: %d (%d subjects available)",
 	KeyErrorCCIParseEMGFailed:          "Failed to parse EMG file",
 	KeyErrorCCIBuildChannelMapFailed:   "Failed to build channel map",
 	KeyErrorCCIExtractGaitRangeFailed:  "Failed to extract EMG data for gait cycle range",
@@ -116,7 +115,6 @@ var translationsEnUS = map[string]string{
 	KeyErrorCCIRenderChartFailed:       "Failed to render CCI chart",
 	// PhaseSync Analysis Messages (backend i18n, ADR-0048).
 	KeyErrorPhaseSyncParseManifestFailed:    "Failed to parse manifest file",
-	KeyErrorPhaseSyncInvalidSubjectIndex:    "Invalid subject index: %d (%d subjects available)",
 	KeyErrorPhaseSyncManifestDataInvalid:    "Manifest data validation failed",
 	KeyErrorPhaseSyncPhaseOrderInvalid:      "Phase order validation failed",
 	KeyErrorPhaseSyncDataFolderNotFound:     "Data folder does not exist (%s)",

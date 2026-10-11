@@ -96,7 +96,7 @@ TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 				DataFolder:   dataFolder,
 				StartPhase:   "P0",
 				EndPhase:     "P2",
-				SubjectIndex: 0,
+				Subject:      "TestSubject",
 			}
 
 			// Execute analysis - should fail with path validation error
@@ -187,7 +187,7 @@ TestSubject,motion.csv,force.csv,%s,0,0.0,0.001,0.002,0.0015,0.0018,2,0.0025,0.0
 				DataFolder:   dataFolder,
 				StartPhase:   "P0",
 				EndPhase:     "P2",
-				SubjectIndex: 0,
+				Subject:      "TestSubject",
 			}
 
 			// Execute analysis - path validation should succeed
@@ -234,7 +234,7 @@ TestSubject,motion.csv,force.csv,%s,0,0.0,0.001,0.002,0.0015,0.0018,2,0.0025,0.0
 			DataFolder:   dataFolder,
 			StartPhase:   "P0",
 			EndPhase:     "P2",
-			SubjectIndex: 0,
+			Subject:      "TestSubject",
 		}
 
 		_, err := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -265,7 +265,7 @@ TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 			DataFolder:   dataFolder,
 			StartPhase:   "P0",
 			EndPhase:     "P2",
-			SubjectIndex: 0,
+			Subject:      "TestSubject",
 		}
 
 		stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -314,7 +314,7 @@ TestSubject,motion.csv,force.csv,symlink.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0
 		DataFolder:   dataFolder,
 		StartPhase:   "P0",
 		EndPhase:     "P2",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	stats, err := analyzer.AnalyzePhaseSync(context.Background(), params)
@@ -426,7 +426,7 @@ TestSubject,motion.csv,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`
 		DataFolder:   dataFolder,
 		StartPhase:   "P0",
 		EndPhase:     "P2",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	_, err := analyzer.AnalyzePhaseSync(context.Background(), params)

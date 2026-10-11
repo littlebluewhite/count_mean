@@ -350,7 +350,7 @@ func testAnalysisParamsCreation(t *testing.T) {
 		DataFolder:   "/data",
 		StartPhase:   "P0",
 		EndPhase:     "P2",
-		SubjectIndex: 0,
+		Subject:      "SF1",
 	}
 
 	if params.ManifestFile != "manifest.csv" {
@@ -369,8 +369,8 @@ func testAnalysisParamsCreation(t *testing.T) {
 		t.Errorf("AnalysisParams.EndPhase = %s, expected 'P2'", params.EndPhase)
 	}
 
-	if params.SubjectIndex != 0 {
-		t.Errorf("AnalysisParams.SubjectIndex = %d, expected 0", params.SubjectIndex)
+	if params.Subject != "SF1" {
+		t.Errorf("AnalysisParams.Subject = %s, expected 'SF1'", params.Subject)
 	}
 }
 
@@ -380,7 +380,7 @@ func testAnalysisParamsJSONSerialization(t *testing.T) {
 		DataFolder:   "/test_data",
 		StartPhase:   "S",
 		EndPhase:     "T",
-		SubjectIndex: 1,
+		Subject:      "SF2",
 	}
 
 	jsonData, err := json.Marshal(params)
@@ -404,7 +404,7 @@ func testAnalysisParamsJSONDeserialization(t *testing.T) {
 		"DataFolder": "/deserial_data",
 		"StartPhase": "C",
 		"EndPhase": "L",
-		"SubjectIndex": 2
+		"Subject": "SF3"
 	}`
 
 	var params AnalysisParams
@@ -418,8 +418,8 @@ func testAnalysisParamsJSONDeserialization(t *testing.T) {
 		t.Errorf("Deserialized ManifestFile = %s, expected 'deserial_manifest.csv'", params.ManifestFile)
 	}
 
-	if params.SubjectIndex != 2 {
-		t.Errorf("Deserialized SubjectIndex = %d, expected 2", params.SubjectIndex)
+	if params.Subject != "SF3" {
+		t.Errorf("Deserialized Subject = %s, expected 'SF3'", params.Subject)
 	}
 }
 
@@ -430,7 +430,7 @@ func testAnalysisParamsValidation(t *testing.T) {
 		DataFolder:   "/valid",
 		StartPhase:   "P0",
 		EndPhase:     "P2",
-		SubjectIndex: 0,
+		Subject:      "SF1",
 	}
 
 	if validParams.ManifestFile == "" {
@@ -441,8 +441,8 @@ func testAnalysisParamsValidation(t *testing.T) {
 		t.Error("Valid params should have non-empty data folder")
 	}
 
-	if validParams.SubjectIndex < 0 {
-		t.Error("Valid params should have non-negative subject index")
+	if validParams.Subject == "" {
+		t.Error("Valid params should have non-empty subject")
 	}
 }
 
@@ -1019,7 +1019,7 @@ func TestCompleteDataFlow(t *testing.T) {
 		DataFolder:   "/data",
 		StartPhase:   "P0",
 		EndPhase:     "P2",
-		SubjectIndex: 0,
+		Subject:      "SF1",
 	}
 
 	// 序列化

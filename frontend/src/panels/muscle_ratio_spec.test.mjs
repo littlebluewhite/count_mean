@@ -11,13 +11,13 @@
 //   3. formBody 呼叫 translator ≥ 1 次(描述文字)。
 //   4. spec.rpc 在 manifestPath 缺時 throw。
 //   5. spec.rpc 在 dataFolder 缺時 throw。
-//   6. spec.rpc 不讀 subjectIdx — subjectIdx=NaN 但 manifest/folder 齊時不因 subject throw。
+//   6. spec.rpc 不讀 subjectName — subjectName='' 但 manifest/folder 齊時不因 subject throw。
 //
 // Mock 策略:
 //   * happy-dom 提供 DOM(formBody parse / textContent 抽繁中字元)。
 //   * makeMuscleRatioSpec(app) factory 接 stub app。rpc throw test(4/5)只測 guard,
 //     pre-validation throw 在 AnalyzeMuscleRatio binding 觸發前已先擋下,不需 stub
-//     window.go。test 6 要走到 AnalyzeMuscleRatio,故 stub window.go 驗證 subjectIdx
+//     window.go。test 6 要走到 AnalyzeMuscleRatio,故 stub window.go 驗證 subjectName
 //     不影響 rpc(MuscleRatio 無 subject)。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,12 +25,11 @@ import { Window } from 'happy-dom';
 import { muscleRatioFormBody, makeMuscleRatioSpec } from './muscle_ratio_spec.mjs';
 
 // 合法 ctx(rpc 不卡在 guard 用)。MuscleRatio 只讀 manifestPath / dataFolder;
-// subjectIdx 故意設 NaN(hideSubject=true 時 _gatherCtx 回 NaN),驗證 rpc 不讀它。
+// subjectName 故意設 ''(hideSubject=true 時 _gatherCtx 回 ''),驗證 rpc 不讀它。
 function validCtx(overrides = {}) {
     return {
         manifestPath: '/tmp/manifest.csv',
         dataFolder: '/tmp/data',
-        subjectIdx: NaN,
         subjectName: '',
         subjects: [],
         ...overrides,
@@ -142,10 +141,10 @@ test('spec.rpc 在 dataFolder 缺時 throw', async () => {
     );
 });
 
-test('spec.rpc 不讀 subjectIdx — manifest/folder 齊但 subjectIdx=NaN 時仍呼到 AnalyzeMuscleRatio', async () => {
-    // MuscleRatio 無 subject(hideSubject=true → _gatherCtx subjectIdx=NaN)。
-    // 此 test 釘:rpc guard 不檢 subjectIdx,合法 manifest/folder 即過 guard 走到
-    // AnalyzeMuscleRatio(對比 CCI/PhaseSync 會因 NaN subjectIdx throw)。
+test('spec.rpc 不讀 subjectName — manifest/folder 齊但 subjectName 為空時仍呼到 AnalyzeMuscleRatio', async () => {
+    // MuscleRatio 無 subject(hideSubject=true → _gatherCtx subjectName='')。
+    // 此 test 釘:rpc guard 不檢 subjectName,合法 manifest/folder 即過 guard 走到
+    // AnalyzeMuscleRatio(對比 CCI/PhaseSync 會因空 subjectName throw)。
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
     try {
@@ -162,12 +161,12 @@ test('spec.rpc 不讀 subjectIdx — manifest/folder 齊但 subjectIdx=NaN 時�
         };
 
         const spec = makeMuscleRatioSpec({});
-        const result = await spec.rpc(validCtx()); // subjectIdx=NaN 但 manifest/folder 齊
+        const result = await spec.rpc(validCtx()); // subjectName='' 但 manifest/folder 齊
 
-        assert.ok(analyzeParams, 'subjectIdx=NaN 不應擋下 — rpc 應呼到 AnalyzeMuscleRatio');
+        assert.ok(analyzeParams, 'subjectName 為空不應擋下 — rpc 應呼到 AnalyzeMuscleRatio');
         assert.equal(analyzeParams.manifestFile, '/tmp/manifest.csv', 'manifestFile 走 ctx.manifestPath');
         assert.equal(analyzeParams.dataFolder, '/tmp/data', 'dataFolder 走 ctx.dataFolder');
-        assert.equal('subjectIndex' in analyzeParams, false, 'MuscleRatioParams 不含 subjectIndex');
+        assert.equal('subject' in analyzeParams, false, 'MuscleRatioParams 不含 subject');
         assert.equal(result.success, true, 'rpc 原樣回傳 result(不升 throw)');
     } finally {
         if (window?.happyDOM?.close) {

@@ -49,7 +49,7 @@ func TestNSF2_T_to_O_Analysis(t *testing.T) {
 		DataFolder:   dataFolder,
 		StartPhase:   "T",
 		EndPhase:     "O",
-		SubjectIndex: 0, // NSF2
+		Subject:      "NSF2",
 	}
 
 	// Execute analysis
@@ -171,7 +171,7 @@ func TestNSF2_P0_to_P1_Analysis(t *testing.T) {
 		DataFolder:   dataFolder,
 		StartPhase:   "P0",
 		EndPhase:     "P1",
-		SubjectIndex: 0, // NSF2
+		Subject:      "NSF2",
 	}
 
 	// Execute analysis

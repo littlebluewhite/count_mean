@@ -22,8 +22,6 @@ import (
 
 // Validation errors.
 var (
-	// ErrInvalidSubjectIndex indicates an invalid subject index.
-	ErrInvalidSubjectIndex = errors.New("invalid subject index")
 	// ErrFileNotFound indicates a file was not found.
 	ErrFileNotFound = errors.New("file not found")
 	// ErrPhasePointOutOfRange indicates a phase point is out of data range.
@@ -75,8 +73,7 @@ func NewPhaseSyncAnalyzer() *PhaseSyncAnalyzer {
 type validationContext struct {
 	manifestFile string
 	dataFolder   string
-	subjectIndex int
-	manifests    []models.PhaseManifest
+	subject      string
 	manifest     models.PhaseManifest
 	baseFolder   string
 	emgFilePath  string
@@ -85,36 +82,30 @@ type validationContext struct {
 // validationStep 定義驗證步驟函數類型.
 type validationStep func(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error
 
-// validateManifestFile 驗證分期總檔案.
-func validateManifestFile(analyzer *PhaseSyncAnalyzer, ctx *validationContext) error {
-	manifests, err := manifest.LoadManifests(ctx.manifestFile)
-	if err != nil {
+// validateSubject 以 manifest.LoadSubject 取 ctx.subject 的 row(該列已過
+// parsers.ValidatePhaseManifest,ADR-0057)。
+//
+// 找不到 Subject 是輸入錯誤,manifest.ErrSubjectNotFound 原樣回傳(gui 走 inputMessage);
+// row 驗證失敗加「分期總檔案數據驗證失敗」、讀檔門失敗加「解析分期總檔案失敗」前綴。
+func validateSubject(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
+	m, err := manifest.LoadSubject(ctx.manifestFile, ctx.subject)
+	switch {
+	case errors.Is(err, manifest.ErrSubjectNotFound):
+		return err
+	case errors.Is(err, manifest.ErrSubjectRowInvalid):
+		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncManifestDataInvalid)
+	case err != nil:
 		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncParseManifestFailed)
 	}
 
-	ctx.manifests = manifests
+	ctx.manifest = *m
 
 	return nil
 }
 
-// validateSubjectIndex 驗證主題索引.
-func validateSubjectIndex(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
-	if ctx.subjectIndex < 0 || ctx.subjectIndex >= len(ctx.manifests) {
-		return i18n.WrapError(ErrInvalidSubjectIndex, i18n.KeyErrorPhaseSyncInvalidSubjectIndex,
-			ctx.subjectIndex, len(ctx.manifests))
-	}
-
-	ctx.manifest = ctx.manifests[ctx.subjectIndex]
-
-	return nil
-}
-
-// validateManifestData 驗證分期總檔案數據.
+// validateManifestData 驗證分期總檔案數據:分期不變量已由 validateSubject(LoadSubject)
+// 驗過,這裡只剩 phase_sync 自己的條件。
 func validateManifestData(_ *PhaseSyncAnalyzer, ctx *validationContext) error {
-	if err := parsers.ValidatePhaseManifest(&ctx.manifest); err != nil {
-		return i18n.WrapError(err, i18n.KeyErrorPhaseSyncManifestDataInvalid)
-	}
-
 	// phase_sync 會開 Motion / Force 檔,故在此要求兩欄非空;CCI 不開這兩檔,不要求(ADR-0045)。
 	// Message 仍是硬編碼 zh:與 parsers.ValidatePhaseManifest 同型別,不在 ADR-0048 遷移範圍。
 	if ctx.manifest.MotionFile == "" {
@@ -313,8 +304,7 @@ func validateForcePhasePoints(manifest *models.PhaseManifest, maxForceTime float
 // runValidationPipeline 執行驗證管線.
 func (analyzer *PhaseSyncAnalyzer) runValidationPipeline(ctx *validationContext) error {
 	steps := []validationStep{
-		validateManifestFile,
-		validateSubjectIndex,
+		validateSubject,
 		validateManifestData,
 		validateEMGFilePath,
 		validateMotionFile,
@@ -345,9 +335,9 @@ func (analyzer *PhaseSyncAnalyzer) runValidationPipeline(ctx *validationContext)
 // 驗證仍完整 parse Motion / ANC 檔只為讀最後一筆 index / 時間(validateMotionFile /
 // validateForceFile);改成只讀尾端不在 ADR-0047 範圍內。
 func (analyzer *PhaseSyncAnalyzer) load(
-	manifestFile, dataFolder string, subjectIndex int,
+	manifestFile, dataFolder, subject string,
 ) (*models.PhaseManifest, *models.PhaseSyncEMGData, error) {
-	ctx := &validationContext{manifestFile: manifestFile, dataFolder: dataFolder, subjectIndex: subjectIndex}
+	ctx := &validationContext{manifestFile: manifestFile, dataFolder: dataFolder, subject: subject}
 	if err := analyzer.runValidationPipeline(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -470,7 +460,7 @@ func (analyzer *PhaseSyncAnalyzer) AnalyzePhaseSync(
 		return nil, err
 	}
 
-	m, emgData, err := analyzer.load(params.ManifestFile, params.DataFolder, params.SubjectIndex)
+	m, emgData, err := analyzer.load(params.ManifestFile, params.DataFolder, params.Subject)
 	if err != nil {
 		return nil, err
 	}

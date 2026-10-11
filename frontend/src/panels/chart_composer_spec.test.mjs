@@ -49,17 +49,17 @@ test('chartComposerSpec 必須暴露 ADR-0007 §6 spec shape 所有必填欄位'
     assert.equal(typeof spec.rpc, 'function', 'rpc 應為 async function');
     assert.equal(typeof spec.onResult, 'function', 'onResult 應為 async function');
 
-    // M5:loadSubjects(**name-mode**)+ onSubjectChange(reset state)必填;
+    // M5:loadSubjects + onSubjectChange(reset state)必填;
     // afterRender 省略(Composer 無 phase 下拉,phase checkbox 在 onResult 內 render)。
-    assert.equal(typeof spec.loadSubjects, 'function', 'Composer 有 loadSubjects(name-mode)');
+    assert.equal(typeof spec.loadSubjects, 'function', 'Composer 有 loadSubjects');
     assert.equal(typeof spec.onSubjectChange, 'function', 'Composer 有 onSubjectChange(reset state)');
     assert.equal(spec.afterRender, undefined, 'Composer 省略 afterRender(無 phase 下拉)');
 });
 
-// ---------- spec.loadSubjects(M5,name-mode)+ onSubjectChange ----------
+// ---------- spec.loadSubjects(M5)+ onSubjectChange ----------
 
-test('Composer spec.loadSubjects 走 LoadChartComposerSubjects 且 valueMode=name', async () => {
-    // Composer subject 用 string(ADR-0002 canonical-key / ADR-0007 §4 name-mode)。
+test('Composer spec.loadSubjects 走 LoadChartComposerSubjects 且只回 subjects', async () => {
+    // Composer subject 用 string(ADR-0002 canonical-key;ADR-0057 後四個 panel 一致)。
     // loadSubjects 呼 LoadChartComposerSubjects({manifestPath, dataFolder}) → result.subjects。
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
@@ -81,7 +81,7 @@ test('Composer spec.loadSubjects 走 LoadChartComposerSubjects 且 valueMode=nam
         assert.equal(argObj.manifestPath, '/tmp/manifest.csv', 'loadSubjects forward manifestPath');
         assert.equal(argObj.dataFolder, '/tmp/data', 'loadSubjects forward dataFolder(Composer 需要)');
         assert.deepEqual(out.subjects, ['Rudolph', 'Donner']);
-        assert.equal(out.valueMode, 'name', 'Composer valueMode=name(subject 用字串)');
+        assert.deepEqual(Object.keys(out), ['subjects'], 'loadSubjects 只回 subjects(無 valueMode)');
     } finally {
         if (window?.happyDOM?.close) await window.happyDOM.close();
         delete globalThis.window;
@@ -108,7 +108,7 @@ test('Composer spec.loadSubjects 在 dataFolder 缺時回空(不打 RPC,對齊�
 
         assert.equal(rpcCalled, false, 'dataFolder 缺時不應打 LoadChartComposerSubjects RPC');
         assert.deepEqual(out.subjects, [], 'dataFolder 缺時回空 subjects');
-        assert.equal(out.valueMode, 'name', 'valueMode 仍為 name');
+        assert.deepEqual(Object.keys(out), ['subjects'], 'dataFolder 缺時也只回 subjects');
     } finally {
         if (window?.happyDOM?.close) await window.happyDOM.close();
         delete globalThis.window;
@@ -383,7 +383,6 @@ test('spec.rpc 只 forward manifest/dataFolder/subject 三參數給 GenerateChar
         const ctx = {
             manifestPath: '/tmp/manifest.csv',
             dataFolder: '/tmp/data',
-            subjectIdx: NaN,
             subjectName: 'Rudolph',
             subjects: [],
         };
@@ -393,7 +392,7 @@ test('spec.rpc 只 forward manifest/dataFolder/subject 三參數給 GenerateChar
         assert.equal(argObj.manifestPath, '/tmp/manifest.csv', 'forward manifestPath');
         assert.equal(argObj.dataFolder, '/tmp/data', 'forward dataFolder');
         assert.equal(argObj.subjectName, undefined, 'rpc 用 ctx.subjectName 填 subject 欄位');
-        assert.equal(argObj.subject, 'Rudolph', 'forward subject(name-mode)');
+        assert.equal(argObj.subject, 'Rudolph', 'forward subject(Subject 名稱)');
         assert.ok(!('selectedChannels' in argObj), 'ADR-0013:不再帶 selectedChannels');
         assert.ok(!('emgMotionOffset' in argObj), 'ADR-0013:不再帶 emgMotionOffset');
         assert.equal(result.success, true);
@@ -418,7 +417,6 @@ test('spec.rpc 在 result.success=false 時 throw(envelope 統一 ShowError)', a
         const ctx = {
             manifestPath: '/tmp/manifest.csv',
             dataFolder: '/tmp/data',
-            subjectIdx: NaN,
             subjectName: 'Rudolph',
             subjects: [],
         };

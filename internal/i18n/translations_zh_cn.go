@@ -101,7 +101,6 @@ var translationsZhCN = map[string]string{
 	KeyErrorManifestSubjectNotFound:  "不存在于分期总文件",
 	// CCI Analysis Messages (backend i18n).
 	KeyErrorCCIParseManifestFailed:     "解析分期总文件失败",
-	KeyErrorCCIInvalidSubjectIndex:     "无效的主题索引: %d (共有 %d 个主题)",
 	KeyErrorCCIParseEMGFailed:          "解析 EMG 文件失败",
 	KeyErrorCCIBuildChannelMapFailed:   "建立通道映射失败",
 	KeyErrorCCIExtractGaitRangeFailed:  "提取步态周期 EMG 数据失败",
@@ -116,7 +115,6 @@ var translationsZhCN = map[string]string{
 	KeyErrorCCIRenderChartFailed:       "渲染 CCI 图表失败",
 	// PhaseSync Analysis Messages (backend i18n, ADR-0048).
 	KeyErrorPhaseSyncParseManifestFailed:    "解析分期总文件失败",
-	KeyErrorPhaseSyncInvalidSubjectIndex:    "无效的主题索引: %d (共有 %d 个主题)",
 	KeyErrorPhaseSyncManifestDataInvalid:    "分期总文件数据验证失败",
 	KeyErrorPhaseSyncPhaseOrderInvalid:      "分期点顺序验证失败",
 	KeyErrorPhaseSyncDataFolderNotFound:     "文件夹不存在 (%s)",

@@ -16,6 +16,7 @@ var (
 	ErrNoManifestFile     = errors.New("請選擇分期總檔案")
 	ErrNoDataFolder       = errors.New("請選擇數據資料夾")
 	ErrNoPhaseSelection   = errors.New("請選擇開始和結束分期點")
+	ErrNoSubject          = errors.New("Subject 不可為空")
 	ErrLocaleEmpty        = errors.New("locale 不可為空字串")
 	ErrLocaleUnsupported  = errors.New("不支援的 locale")
 	ErrInvalidPhasePoint  = errors.New("無效的分期點代碼")

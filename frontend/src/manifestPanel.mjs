@@ -18,14 +18,16 @@
 //     runBtnLabelKey: 'button.start_analyze',  // optional, default 'button.start_analyze'
 //                                              // Composer override 為 'button.generate_chart'
 //     formBody: (t) => `<div>... ${t('form.label.muscleratio_layout')} ...</div>`,
-//     rpc: async (ctx) => AnalyzeCCI(ctx.manifestPath, ctx.dataFolder, ctx.subjectIdx),
+//     rpc: async (ctx) => AnalyzeCCI({ manifestFile: ctx.manifestPath, dataFolder: ctx.dataFolder, subject: ctx.subjectName }),
 //     onResult: async (result, ctx, mp) => { mp.attachIframe(...); mp.bindPhaseCheckboxes(...); },
 //     silentSuccess: false,  // optional, Composer 寫 true、其他 4 省略
 //     subjectsDependOnDataFolder: false,  // optional, 僅 Composer 寫 true(subject
 //                                         // 依賴 dataFolder → 選 folder 後 re-load);
-//                                         // index-mode 3 panel 省略避免清空已選 subject
+//                                         // 其他 3 panel 省略避免清空已選 subject
 //   });
-//   // ctx shape:{ manifestPath, dataFolder, subjectIdx, subjectName, subjects }
+//   // ctx shape:{ manifestPath, dataFolder, subjectName, subjects }
+//   //   subjectName: `#mpSubject` 的 option.value = Subject 名稱(後端以名稱取 row,
+//   //   ADR-0057);未選(placeholder)或無 subject select 時為 ''。
 //   //   subjects: 預留欄位(目前 always []);M3/M4 spec author 如需 subjects array,
 //   //   自 `app._<adapter>Subjects` 取(M1 _gatherCtx 不主動 populate)。
 //
@@ -95,16 +97,15 @@ export class ManifestPanel {
      * @param {boolean} [spec.hideSubject=false] - true 時 shell 省略 subject `<select>`
      *   區塊。MuscleRatio 只吃 manifest + dataFolder(無 subject,ADR-0007 §2 入口
      *   定義),設此旗標;其他 4 panel 省略走 default(顯示 subject select)。
-     * @param {(manifestPath: string, dataFolder: string) => Promise<{subjects: string[], valueMode: ('index'|'name')}>} [spec.loadSubjects]
+     * @param {(manifestPath: string, dataFolder: string) => Promise<{subjects: string[]}>} [spec.loadSubjects]
      *   - Optional。manifest 選好後 selectMpManifest 呼此 fn 取 subject 列表並填
-     *   `#mpSubject`。**Subject 兩形態(ADR-0007 §4)**:valueMode='index' 時
-     *   option.value 寫 0-based 索引(CCI/PhaseSync/Normalized — subjectIdx);
-     *   valueMode='name' 時 option.value 寫 subject string(Composer — subjectName,
-     *   ADR-0002 canonical-key)。MuscleRatio 省略(hideSubject,無 subject load)。
+     *   `#mpSubject`:option.value 與 option 文字都是 Subject 名稱(後端以名稱取 row,
+     *   ADR-0057),_gatherCtx 的 subjectName 即 select.value。MuscleRatio 省略
+     *   (hideSubject,無 subject load)。
      * @param {boolean} [spec.subjectsDependOnDataFolder=false] - Optional。true 時
      *   subject 列表依賴 dataFolder(目前僅 Composer:LoadChartComposerSubjects 帶
      *   dataFolder),selectMpDataFolder 寫完 dataFolder 後會 re-load subjects。
-     *   index-mode 的 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest,
+     *   其他 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest,
      *   省略此旗標(default false)→ 選 dataFolder 不 reload,避免 _loadMpSubjects
      *   的 `select.innerHTML=''` 清空已選 subject(codex round-1 P2)。
      * @param {(mp: ManifestPanel) => void} [spec.afterRender] - Optional。run() 把
@@ -197,8 +198,9 @@ export class ManifestPanel {
 
     /**
      * 從 shared shell 的 #mpManifestPath / #mpDataFolder / #mpSubject 抽
-     * ctx。Subject 不對稱(idx vs name)由 ManifestPanel own — 兩種形狀同時
-     * 給,caller 各取所需,不擴 backend RPC signature(ADR-0007 §4)。
+     * ctx。subjectName 是 `#mpSubject` 的 option.value(Subject 名稱,ADR-0057);
+     * 讀 value 而非 option 文字:選到 placeholder 時 value 是 '',spec 的必填守門
+     * 才擋得到(option 文字會是「請選擇主題」)。
      *
      * `subjects` 為預留欄位(目前 always []);M3/M4 spec author 如需 subjects
      * array,自 `app._<adapter>Subjects` 取(_gatherCtx 不主動 populate)。
@@ -206,19 +208,10 @@ export class ManifestPanel {
     _gatherCtx() {
         const manifestPath = document.getElementById('mpManifestPath')?.value || '';
         const dataFolder = document.getElementById('mpDataFolder')?.value || '';
-        const select = document.getElementById('mpSubject');
-        // parseInt('SubjectA') === NaN — CCI/PhaseSync/Normalized/MuscleRatio
-        // 把 idx 寫進 option.value,subjectIdx 自動 valid;Composer 把 subject
-        // string 寫進 option.value,subjectName 走 select.value。兩種形狀
-        // 同時 expose,spec 各取所需。
-        const subjectIdx = select ? parseInt(select.value, 10) : NaN;
-        const subjectName = select?.options?.[select.selectedIndex]?.textContent
-            || select?.value
-            || '';
+        const subjectName = document.getElementById('mpSubject')?.value || '';
         return {
             manifestPath,
             dataFolder,
-            subjectIdx,
             subjectName,
             subjects: [], // reserved, currently always [];spec 端如需自 app._<adapter>Subjects 取
         };
@@ -231,8 +224,8 @@ export class ManifestPanel {
      *
      * `spec.hideSubject === true` 時省略 subject `<select>` 區塊(MuscleRatio
      * 只吃 manifest + dataFolder,ADR-0007 §2 入口定義 — 無 subject)。此時
-     * _gatherCtx 的 `#mpSubject` lookup 回 null → subjectIdx=NaN / subjectName=''
-     *(spec.rpc 不讀這兩欄即可)。其他 4 panel 省略 hideSubject 走 default。
+     * _gatherCtx 的 `#mpSubject` lookup 回 null → subjectName=''
+     *(spec.rpc 不讀即可)。其他 4 panel 省略 hideSubject 走 default。
      *
      * `formBody` 為 builder function 而非 string(ADR-0007 §6 + reversibility:
      * locale change 時 frozen string 無法 retranslate,builder fn 走 onLocaleChange
@@ -470,8 +463,7 @@ export class ManifestPanel {
 
     /**
      * 選 manifest 檔 → 寫 `#mpManifestPath` → 若 spec.loadSubjects 且非 hideSubject,
-     * load subject 列表填 `#mpSubject`(subject 兩形態 idx/name 由 valueMode 決定,
-     * ADR-0007 §4)。對齊既有 selectCCIManifest(main.js:1279)+ selectComposerManifest
+     * load subject 列表填 `#mpSubject`(option.value = Subject 名稱,ADR-0057)。對齊既有 selectCCIManifest(main.js:1279)+ selectComposerManifest
      *(:1694)pattern,但 subject load 改走 spec 注入的 loadSubjects。
      *
      * SelectFile 失敗 / load 失敗 → ShowError(對齊既有 catch 行為)。user cancel
@@ -507,7 +499,7 @@ export class ManifestPanel {
      * subjects(對齊既有 selectComposerDataFolder:1710「dataFolder 改了且 manifest
      * 在 → reload subjects」behaviour)。
      *
-     * index-mode 的 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest、
+     * 其他 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest、
      * **不**讀 dataFolder。對它們 re-load 並非冪等:`_loadMpSubjects` 先
      * `select.innerHTML=''` 再重填,會把已選的 subject value reset 回空 placeholder
      *(codex round-1 P2:先選 subject 再選 dataFolder 會 silent 清空 subject →
@@ -525,7 +517,7 @@ export class ManifestPanel {
 
             const manifest = document.getElementById('mpManifestPath')?.value || '';
             // 只有 subjectsDependOnDataFolder=true(Composer)才 re-load — 否則對
-            // index-mode panel 的 reload 會清空已選 subject(見上方註解 codex P2)。
+            // 其他 panel 的 reload 會清空已選 subject(見上方註解 codex P2)。
             if (spec?.subjectsDependOnDataFolder && spec?.loadSubjects && !spec.hideSubject && manifest) {
                 await this._loadMpSubjects();
             }
@@ -566,12 +558,9 @@ export class ManifestPanel {
     }
 
     /**
-     * 內部 helper:呼 spec.loadSubjects(manifestPath, dataFolder) 取 subject 列表 +
-     * valueMode,填 `#mpSubject` option 並 enable。**Subject 兩形態(ADR-0007 §4)**:
-     *   - valueMode='index':option.value = 0-based 索引(CCI/PhaseSync/Normalized),
-     *     _gatherCtx 的 parseInt(value) → subjectIdx valid。
-     *   - valueMode='name':option.value = subject string(Composer,ADR-0002
-     *     canonical-key),_gatherCtx 的 subjectName 走 select.value / option text。
+     * 內部 helper:呼 spec.loadSubjects(manifestPath, dataFolder) 取 subject 列表,
+     * 填 `#mpSubject` option 並 enable。option.value = Subject 名稱(後端以名稱取 row,
+     * ADR-0057),_gatherCtx 的 subjectName 即 select.value。
      *
      * loadSubjects throw(例如 Composer LoadChartComposerSubjects success=false)→
      * 往外冒給 caller(selectMpManifest / selectMpDataFolder)的 catch 統一 ShowError。
@@ -579,7 +568,7 @@ export class ManifestPanel {
     async _loadMpSubjects() {
         const manifestPath = document.getElementById('mpManifestPath')?.value || '';
         const dataFolder = document.getElementById('mpDataFolder')?.value || '';
-        const { subjects, valueMode } = await this._currentSpec.loadSubjects(manifestPath, dataFolder);
+        const { subjects } = await this._currentSpec.loadSubjects(manifestPath, dataFolder);
 
         const select = document.getElementById('mpSubject');
         if (!select) return;
@@ -590,11 +579,10 @@ export class ManifestPanel {
         select.appendChild(placeholder);
 
         const list = subjects || [];
-        list.forEach((subject, index) => {
+        list.forEach((subject) => {
             const opt = document.createElement('option');
-            // index-mode 寫 0-based 索引;name-mode 寫 subject 字串。subject text 一律
-            // 顯示 subject 名(textContent 防 XSS — subject 來自 manifest CSV)。
-            opt.value = valueMode === 'name' ? subject : String(index);
+            // value 與文字都是 Subject 名稱(textContent 防 XSS — subject 來自 manifest CSV)。
+            opt.value = subject;
             opt.textContent = subject;
             select.appendChild(opt);
         });

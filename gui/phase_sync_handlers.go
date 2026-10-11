@@ -1,10 +1,12 @@
 package gui
 
 import (
+	"errors"
 	"fmt"
 
 	"count_mean/internal/calculator"
 	"count_mean/internal/i18n"
+	"count_mean/internal/manifest"
 	"count_mean/internal/models"
 	"count_mean/internal/synchronizer"
 )
@@ -15,7 +17,7 @@ type PhaseSyncParams struct {
 	DataFolder   string            `json:"dataFolder"`
 	StartPhase   models.PhasePoint `json:"startPhase"`
 	EndPhase     models.PhasePoint `json:"endPhase"`
-	SubjectIndex int               `json:"subjectIndex"`
+	Subject      string            `json:"subject"` // manifest row 的 Subject 名稱(ADR-0057)
 }
 
 // PhaseSyncResult 分期同步分析結果.
@@ -98,6 +100,9 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 	if validateErr := validateManifestHandlerParams(params.ManifestFile, params.DataFolder); validateErr != nil {
 		return failedPhaseSyncResult(inputMessage(validateErr)), nil
 	}
+	if params.Subject == "" {
+		return failedPhaseSyncResult(inputMessage(ErrNoSubject)), nil
+	}
 	if params.StartPhase == "" || params.EndPhase == "" {
 		return failedPhaseSyncResult(inputMessage(ErrNoPhaseSelection)), nil
 	}
@@ -108,15 +113,18 @@ func (a *App) AnalyzePhaseSync(params PhaseSyncParams) (result *PhaseSyncResult,
 		))), nil
 	}
 
-	// 2 分析(domain analyzer)→ failed-result channel
+	// 2 分析(domain analyzer)→ failed-result channel;Subject 不在 manifest 是輸入錯誤
 	stats, analyzeErr := a.phaseSyncAnalyzer.AnalyzePhaseSync(a.context(), &models.AnalysisParams{
 		ManifestFile: params.ManifestFile,
 		DataFolder:   params.DataFolder,
 		StartPhase:   params.StartPhase,
 		EndPhase:     params.EndPhase,
-		SubjectIndex: params.SubjectIndex,
+		Subject:      params.Subject,
 	})
 	if analyzeErr != nil {
+		if errors.Is(analyzeErr, manifest.ErrSubjectNotFound) {
+			return failedPhaseSyncResult(inputMessage(analyzeErr)), nil
+		}
 		return failedPhaseSyncResult(a.failMessage(i18n.KeyErrorHandlerAnalysisFailed, analyzeErr)), nil
 	}
 

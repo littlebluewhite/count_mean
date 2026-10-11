@@ -3,7 +3,7 @@
 // 標準化分期同步分析 panel spec — 餵給 `ManifestPanel.run(spec)` 走 envelope
 // (ADR-0007 §6,M4 交付)。NormalizedPhaseSync 是三個「CSV-success / 無 iframe」
 // panel 中表單最複雜的一個:
-//   * subject 用 subjectIdx(number)— hideSubject 省略走 default(顯示 subject select)。
+//   * subject 用 subjectName(Subject 名稱,ADR-0057)— hideSubject 省略走 default(顯示 subject select)。
 //   * silentSuccess: true — 成功訊息是雙輸出路徑
 //     `t('success.msg.normalized_analysis_done', normalizedEMGPath, phaseSyncCSVPath)`
 //    (非 result.message),且失敗走 result.success=false 業務分支。envelope 標準
@@ -26,7 +26,7 @@
 //   PhaseSync 理由:onResult 已 own dialog,結果區要照常 render。三個 M4 panel 統一此模式。
 //
 // **後端 param / result 欄位名(已對 Go struct 驗證,勿臆測)**:
-//   NormalizedPhaseSyncParams { manifestFile, dataFolder, subjectIndex,
+//   NormalizedPhaseSyncParams { manifestFile, dataFolder, subject,
 //     normStartPhase, normEndPhase, statsStartPhase, statsEndPhase }
 //                                       ← gui/normalized_phase_sync_handlers.go:24
 //     (4 個 phase 為 models.PhasePoint,wire 上 string)
@@ -39,7 +39,7 @@
 // invariant(由 normalized_phase_sync_spec.test.mjs 釘):
 //   * silentSuccess === true、hideSubject 省略(undefined)
 //   * spec.formBody 為 builder function 且不洩漏 hardcoded 繁中(4 個 phase 下拉)
-//   * rpc 在 manifestPath / dataFolder 缺、subjectIdx NaN/<0、任一 phase 缺時 throw
+//   * rpc 在 manifestPath / dataFolder / subjectName / 任一 phase 缺時 throw
 
 import { AnalyzeNormalizedPhaseSync, LoadPhaseManifest } from '../../wailsjs/go/gui/App.js';
 
@@ -110,7 +110,7 @@ export function makeNormalizedPhaseSyncSpec(app) {
     return {
         titleKey: 'panel.normalizedphasesync.title',
         statusRunningKey: 'status.normalized_running',
-        // hideSubject 省略 → 用 subject(subjectIdx)。
+        // hideSubject 省略 → 用 subject(subjectName)。
         // silentSuccess: 成功訊息帶雙輸出路徑(非 result.message),success=false 走業務
         //   ShowError;dialog 由 onResult own(對齊 main.js:2319-2327)。
         silentSuccess: true,
@@ -118,15 +118,14 @@ export function makeNormalizedPhaseSyncSpec(app) {
         formBody: normalizedPhaseSyncFormBody,
 
         /**
-         * Subject load(ADR-0007 §4 index-mode):同 CCI/PhaseSync 走 LoadPhaseManifest,
-         * valueMode='index'(對齊舊 loadNormalizedPhaseSyncSubjects main.js:2215-2219)。
+         * Subject load:同 CCI/PhaseSync 走 LoadPhaseManifest;option.value 是 Subject
+         * 名稱(ADR-0057)。
          *
          * @param {string} manifestPath - #mpManifestPath value
-         * @returns {Promise<{subjects: string[], valueMode: 'index'}>}
+         * @returns {Promise<{subjects: string[]}>}
          */
         loadSubjects: async (manifestPath) => ({
             subjects: await LoadPhaseManifest(manifestPath),
-            valueMode: 'index',
         }),
 
         /**
@@ -143,7 +142,7 @@ export function makeNormalizedPhaseSyncSpec(app) {
         /**
          * 呼 AnalyzeNormalizedPhaseSync RPC。
          *
-         * 從 DOM 讀 4 個 phase(formBody render 的下拉),subjectIdx 來自 ctx。所有必填齊
+         * 從 DOM 讀 4 個 phase(formBody render 的下拉),subjectName 來自 ctx。所有必填齊
          * 才呼 RPC,缺則 throw(exception → envelope ShowError;對齊 main.js:2305-2310
          * 既有 fill_required_fields guard)。
          *
@@ -163,20 +162,19 @@ export function makeNormalizedPhaseSyncSpec(app) {
 
             // 對齊 main.js:2305 既有驗證:manifest / dataFolder / subject + 4 個 phase 全必填。
             // 沿用裸字串(對齊 M2/M3 慣例,理由見 phase_sync_spec.mjs 同段註解)。
-            if (!ctx.manifestPath || !ctx.dataFolder
-                || Number.isNaN(ctx.subjectIdx) || ctx.subjectIdx < 0
+            if (!ctx.manifestPath || !ctx.dataFolder || !ctx.subjectName
                 || !normStartPhase || !normEndPhase
                 || !statsStartPhase || !statsEndPhase) {
                 throw new Error('請填寫所有必要欄位');
             }
 
-            // NormalizedPhaseSyncParams json tag:manifestFile / dataFolder / subjectIndex /
+            // NormalizedPhaseSyncParams json tag:manifestFile / dataFolder / subject /
             // normStartPhase / normEndPhase / statsStartPhase / statsEndPhase
-            //(gui/normalized_phase_sync_handlers.go:24,以 Go struct 為準)。
+            //(gui/normalized_phase_sync_handlers.go,以 Go struct 為準)。
             return AnalyzeNormalizedPhaseSync({
                 manifestFile: ctx.manifestPath,
                 dataFolder: ctx.dataFolder,
-                subjectIndex: ctx.subjectIdx,
+                subject: ctx.subjectName,
                 normStartPhase,
                 normEndPhase,
                 statsStartPhase,

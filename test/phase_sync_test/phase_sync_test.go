@@ -43,7 +43,7 @@ func TestPhaseSyncAnalysis_NSF2(t *testing.T) {
 		DataFolder:   dataFolder,
 		StartPhase:   "T",
 		EndPhase:     "O",
-		SubjectIndex: 0, // 第一個主題（NSF2）
+		Subject:      "NSF2", // 第一個主題
 	}
 
 	// 執行分析

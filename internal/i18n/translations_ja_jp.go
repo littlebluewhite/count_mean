@@ -101,7 +101,6 @@ var translationsJaJP = map[string]string{
 	KeyErrorManifestSubjectNotFound:  "はマニフェストファイルに存在しません",
 	// CCI Analysis Messages (backend i18n).
 	KeyErrorCCIParseManifestFailed:     "マニフェストファイルの解析に失敗しました",
-	KeyErrorCCIInvalidSubjectIndex:     "無効なサブジェクトインデックス: %d (合計 %d 件)",
 	KeyErrorCCIParseEMGFailed:          "EMGファイルの解析に失敗しました",
 	KeyErrorCCIBuildChannelMapFailed:   "チャネルマッピングの構築に失敗しました",
 	KeyErrorCCIExtractGaitRangeFailed:  "歩行周期 EMG データの抽出に失敗しました",
@@ -116,7 +115,6 @@ var translationsJaJP = map[string]string{
 	KeyErrorCCIRenderChartFailed:       "CCI チャートのレンダリングに失敗しました",
 	// PhaseSync Analysis Messages (backend i18n, ADR-0048).
 	KeyErrorPhaseSyncParseManifestFailed:    "マニフェストファイルの解析に失敗しました",
-	KeyErrorPhaseSyncInvalidSubjectIndex:    "無効なサブジェクトインデックス: %d (合計 %d 件)",
 	KeyErrorPhaseSyncManifestDataInvalid:    "マニフェストデータの検証に失敗しました",
 	KeyErrorPhaseSyncPhaseOrderInvalid:      "フェーズ順序の検証に失敗しました",
 	KeyErrorPhaseSyncDataFolderNotFound:     "データフォルダが存在しません (%s)",

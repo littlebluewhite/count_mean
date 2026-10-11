@@ -2,7 +2,7 @@
 //
 // 分期同步分析 panel spec — 餵給 `ManifestPanel.run(spec)` 走 envelope
 // (ADR-0007 §6,M4 交付)。PhaseSync 是「CSV-success / 無 iframe」panel:
-//   * subject 用 subjectIdx(number)— hideSubject 省略走 default(顯示 subject select)。
+//   * subject 用 subjectName(Subject 名稱,ADR-0057)— hideSubject 省略走 default(顯示 subject select)。
 //   * silentSuccess: true — 成功訊息是 `t('success.msg.analysis_done', result.outputPath)`
 //    (outputPath-based,非 result.message),且失敗走 result.success=false 業務分支,
 //     envelope 的標準「rpc resolve = success → ShowMessage(result.message)」訊息形狀
@@ -26,7 +26,7 @@
 //   PhaseSync 的 onResult 已 own dialog,升 throw 反而會跳過結果區 render + 用錯訊息形狀。
 //
 // **後端 param / result 欄位名(已對 Go struct 驗證,勿臆測)**:
-//   PhaseSyncParams { manifestFile, dataFolder, startPhase, endPhase, subjectIndex }
+//   PhaseSyncParams { manifestFile, dataFolder, startPhase, endPhase, subject }
 //                                                            ← gui/app.go:1050
 //     (startPhase/endPhase 為 models.PhasePoint,wire 上是 string)
 //   PhaseSyncResult { outputPath, subject, startPhase, startTime, endPhase, endTime,
@@ -36,7 +36,7 @@
 // invariant(由 phase_sync_spec.test.mjs 釘):
 //   * silentSuccess === true、hideSubject 省略(undefined)
 //   * spec.formBody 為 builder function 且不洩漏 hardcoded 繁中(start/end phase 下拉)
-//   * rpc 在 manifestPath / dataFolder 缺、subjectIdx NaN/<0、startPhase/endPhase 缺時 throw
+//   * rpc 在 manifestPath / dataFolder / subjectName / startPhase / endPhase 缺時 throw
 
 import { AnalyzePhaseSync, LoadPhaseManifest } from '../../wailsjs/go/gui/App.js';
 
@@ -90,7 +90,7 @@ export function makePhaseSyncSpec(app) {
     return {
         titleKey: 'panel.phasesync.title',
         statusRunningKey: 'status.phasesync_running',
-        // hideSubject 省略 → PhaseSync 用 subject(subjectIdx)。
+        // hideSubject 省略 → PhaseSync 用 subject(subjectName)。
         // silentSuccess: 成功訊息帶 outputPath(非 result.message),且 success=false
         //   走業務 ShowError;dialog 由 onResult own(對齊 main.js:1156-1161)。
         silentSuccess: true,
@@ -98,15 +98,13 @@ export function makePhaseSyncSpec(app) {
         formBody: phaseSyncFormBody,
 
         /**
-         * Subject load(ADR-0007 §4 index-mode):同 CCI 走 LoadPhaseManifest,
-         * valueMode='index'(對齊舊 loadManifestSubjects main.js:1074-1078)。
+         * Subject load:同 CCI 走 LoadPhaseManifest;option.value 是 Subject 名稱(ADR-0057)。
          *
          * @param {string} manifestPath - #mpManifestPath value
-         * @returns {Promise<{subjects: string[], valueMode: 'index'}>}
+         * @returns {Promise<{subjects: string[]}>}
          */
         loadSubjects: async (manifestPath) => ({
             subjects: await LoadPhaseManifest(manifestPath),
-            valueMode: 'index',
         }),
 
         /**
@@ -123,7 +121,7 @@ export function makePhaseSyncSpec(app) {
         /**
          * 呼 AnalyzePhaseSync RPC。
          *
-         * 從 DOM 讀 startPhase / endPhase(formBody render 的下拉),subjectIdx 來自
+         * 從 DOM 讀 startPhase / endPhase(formBody render 的下拉),subjectName 來自
          * ctx(shell 的 #mpSubject)。所有必填齊才呼 RPC,缺則 throw(exception →
          * envelope ShowError;對齊 main.js:1141-1144 既有 fill_required_fields guard)。
          *
@@ -132,7 +130,7 @@ export function makePhaseSyncSpec(app) {
          * 業務 ShowError。rpc 原樣回傳 result。
          *
          * @param {object} ctx - ManifestPanel _gatherCtx 結果
-         *   { manifestPath, dataFolder, subjectIdx, subjectName, subjects }
+         *   { manifestPath, dataFolder, subjectName, subjects }
          * @returns {Promise<object>} PhaseSyncResult(success / message / outputPath / ...)
          */
         rpc: async (ctx) => {
@@ -145,20 +143,19 @@ export function makePhaseSyncSpec(app) {
             // 沿用裸字串而非 globalThis.t(key):對齊 M2/M3 rpc throw 裸字串慣例(rpc 不該
             // 依賴 globalThis.t 在 test 環境存在);envelope catch 後以
             // error.msg.analysis_failed_dynamic 包裝顯示(manifestPanel.mjs:150)。
-            if (!ctx.manifestPath || !ctx.dataFolder
-                || Number.isNaN(ctx.subjectIdx) || ctx.subjectIdx < 0
+            if (!ctx.manifestPath || !ctx.dataFolder || !ctx.subjectName
                 || !startPhase || !endPhase) {
                 throw new Error('請填寫所有必要欄位');
             }
 
-            // PhaseSyncParams json tag:manifestFile / dataFolder / subjectIndex /
-            // startPhase / endPhase(gui/app.go:1050,以 Go struct 為準)。
+            // PhaseSyncParams json tag:manifestFile / dataFolder / subject /
+            // startPhase / endPhase(gui/phase_sync_handlers.go,以 Go struct 為準)。
             // startPhase / endPhase 為 models.PhasePoint(wire 上 string),下拉 value
             // 直接送即可。
             return AnalyzePhaseSync({
                 manifestFile: ctx.manifestPath,
                 dataFolder: ctx.dataFolder,
-                subjectIndex: ctx.subjectIdx,
+                subject: ctx.subjectName,
                 startPhase,
                 endPhase,
             });

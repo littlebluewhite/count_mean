@@ -99,7 +99,7 @@ func TestPhaseTimelineAgreement_AllCallers(t *testing.T) {
 		result, err := cci.NewCCIAnalyzer().AnalyzeCCI(context.Background(), &cci.CCIParams{
 			ManifestFile: manifestPath,
 			DataFolder:   dataFolder,
-			SubjectIndex: 0,
+			Subject:      "Agree",
 		})
 		require.NoError(t, err)
 
@@ -129,7 +129,7 @@ func TestPhaseTimelineAgreement_AllCallers(t *testing.T) {
 			res, err := analyzer.AnalyzeNormalizedPhaseSync(context.Background(), &phase_sync.NormalizedParams{
 				ManifestFile:    manifestPath,
 				DataFolder:      dataFolder,
-				SubjectIndex:    0,
+				Subject:         "Agree",
 				NormStartPhase:  pair[0],
 				NormEndPhase:    pair[1],
 				StatsStartPhase: pair[0],

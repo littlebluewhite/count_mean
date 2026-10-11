@@ -230,7 +230,7 @@ func (a *App) GenerateChartComposer(
 	}
 
 	if params.Subject == "" {
-		return failedChartComposerResult("Subject 不可為空"), nil
+		return failedChartComposerResult(inputMessage(ErrNoSubject)), nil
 	}
 
 	composerInput, loadErr := composer.Load(params.ManifestPath, params.DataFolder, params.Subject)

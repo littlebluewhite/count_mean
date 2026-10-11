@@ -72,7 +72,7 @@ func TestAnalyzePhaseSync_RejectsTraversalManifest(t *testing.T) {
 				DataFolder:   "/tmp/legit", // 不會走到，因為 manifest 先被擋
 				StartPhase:   "P0",
 				EndPhase:     "P2",
-				SubjectIndex: 0,
+				Subject:      "S1",
 			}
 
 			result, err := app.AnalyzePhaseSync(params)
@@ -110,7 +110,7 @@ func TestAnalyzeCCI_RejectsTraversalManifest(t *testing.T) {
 			params := CCIParams{
 				ManifestFile: tc.path,
 				DataFolder:   "/tmp/legit",
-				SubjectIndex: 0,
+				Subject:      "S1",
 			}
 
 			result, err := app.AnalyzeCCI(params)
@@ -204,7 +204,7 @@ func TestAnalyzePhaseSync_RejectsTraversalDataFolder(t *testing.T) {
 		DataFolder:   "../etc",
 		StartPhase:   "P0",
 		EndPhase:     "P2",
-		SubjectIndex: 0,
+		Subject:      "S1",
 	}
 
 	result, err := app.AnalyzePhaseSync(params)

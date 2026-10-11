@@ -13,7 +13,6 @@ import (
 	"count_mean/internal/logging"
 	"count_mean/internal/manifest"
 	"count_mean/internal/models"
-	"count_mean/internal/parsers"
 	"count_mean/internal/synchronizer"
 	"count_mean/util"
 )
@@ -38,7 +37,7 @@ var ErrNilResult = errors.New("CCI 分析結果為 nil")
 type CCIParams struct {
 	ManifestFile string
 	DataFolder   string
-	SubjectIndex int
+	Subject      string // manifest row 的 Subject 名稱(manifest.LoadSubject,ADR-0057)
 }
 
 // CCIAnalyzer orchestrates the CCI Rudolph analysis pipeline.
@@ -73,7 +72,7 @@ func (a *CCIAnalyzer) AnalyzeCCI(
 	a.logger.Info("開始 CCI Rudolph 分析", map[string]any{
 		"manifest": params.ManifestFile,
 		"folder":   params.DataFolder,
-		"subject":  params.SubjectIndex,
+		"subject":  params.Subject,
 	})
 
 	manifest, err := a.loadAndValidate(params)
@@ -168,23 +167,18 @@ func (a *CCIAnalyzer) computeCCI(
 	return result, nil
 }
 
-// loadAndValidate parses the manifest and validates the subject index.
+// loadAndValidate 以 manifest.LoadSubject 取 params.Subject 的 row(該列已驗證分期不變量:
+// 時間順序 / motion-index 單調 / NaN-Inf / 必填欄位,ADR-0057)。CCI 是 fail-fast 管線,
+// 畸形 manifest 在入口擋下。
+//
+// 找不到 Subject 是輸入錯誤,manifest.ErrSubjectNotFound 原樣回傳(gui 走 inputMessage);
+// 讀檔門與 row 驗證失敗都加「解析分期總檔案失敗」前綴。
 func (a *CCIAnalyzer) loadAndValidate(params *CCIParams) (*models.PhaseManifest, error) {
-	manifests, err := manifest.LoadManifests(params.ManifestFile)
+	m, err := manifest.LoadSubject(params.ManifestFile, params.Subject)
 	if err != nil {
-		return nil, i18n.WrapError(err, i18n.KeyErrorCCIParseManifestFailed)
-	}
-
-	if params.SubjectIndex < 0 || params.SubjectIndex >= len(manifests) {
-		return nil, i18n.NewError(i18n.KeyErrorCCIInvalidSubjectIndex, params.SubjectIndex, len(manifests))
-	}
-
-	// 對齊 phase_sync.validateManifestData：選定 subject 後驗證分期不變量（時間順序 /
-	// motion-index 單調 / NaN-Inf / 必填欄位）。CCI 是 fail-fast 管線,畸形 manifest 應在
-	// 入口擋下,而非讓非法分期點流進下游 gait 計算與圖表。muscle_ratio 維持 partial-success
-	// (ADR-0014),故僅 CCI 補此門。
-	m := &manifests[params.SubjectIndex]
-	if err := parsers.ValidatePhaseManifest(m); err != nil {
+		if errors.Is(err, manifest.ErrSubjectNotFound) {
+			return nil, err
+		}
 		return nil, i18n.WrapError(err, i18n.KeyErrorCCIParseManifestFailed)
 	}
 

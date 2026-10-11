@@ -250,6 +250,7 @@ func TestRPCMessage_NoAbsolutePath(t *testing.T) {
 				result, err := app.AnalyzeCCI(CCIParams{
 					ManifestFile: missingManifest(planted),
 					DataFolder:   planted,
+					Subject:      "S1",
 				})
 				require.NoError(t, err)
 				require.False(t, result.Success)
@@ -264,6 +265,7 @@ func TestRPCMessage_NoAbsolutePath(t *testing.T) {
 				result, err := app.AnalyzeNormalizedPhaseSync(NormalizedPhaseSyncParams{
 					ManifestFile:    missingManifest(planted),
 					DataFolder:      planted,
+					Subject:         "S1",
 					NormStartPhase:  "P0",
 					NormEndPhase:    "P2",
 					StatsStartPhase: "P0",
@@ -314,6 +316,7 @@ func TestRPCMessage_NoAbsolutePath(t *testing.T) {
 					DataFolder:   planted,
 					StartPhase:   "P0",
 					EndPhase:     "P2",
+					Subject:      "S1",
 				})
 				require.NoError(t, err)
 				require.False(t, result.Success)

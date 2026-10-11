@@ -11,7 +11,7 @@
 //      回空字串,vacuous-pass;此 test 釘「未來加欄位必經 translator」的契約)。
 //   3. spec.rpc 在 manifestPath 缺時 throw。
 //   4. spec.rpc 在 dataFolder 缺時 throw。
-//   5. spec.rpc 在 subjectIdx 為 NaN / 負時 throw。
+//   5. spec.rpc 在 subjectName 為空(未選 subject)時 throw。
 //   6. spec.rpc 在 backend result.success=false 時 throw(升 soft error 為 ShowError)。
 //
 // Mock 策略:
@@ -25,14 +25,13 @@ import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
 import { cciFormBody, makeCciSpec } from './cci_spec.mjs';
 
-// 合法 ctx(rpc 不卡在 guard 用)。manifestPath / dataFolder / subjectIdx 對應
+// 合法 ctx(rpc 不卡在 guard 用)。manifestPath / dataFolder / subjectName 對應
 // ManifestPanel _gatherCtx 規範化命名(rpc 內 map 到後端 manifestFile /
-// dataFolder / subjectIndex)。
+// dataFolder / subject)。
 function validCtx(overrides = {}) {
     return {
         manifestPath: '/tmp/manifest.csv',
         dataFolder: '/tmp/data',
-        subjectIdx: 0,
         subjectName: 'SubjectA',
         subjects: [],
         ...overrides,
@@ -70,17 +69,17 @@ test('cciSpec 必須暴露 ADR-0007 §6 spec shape 所有必填欄位(CCI 標準
     assert.equal(typeof spec.rpc, 'function', 'rpc 應為 async function');
     assert.equal(typeof spec.onResult, 'function', 'onResult 應為 async function');
 
-    // M5:loadSubjects(index-mode)必填;afterRender / onSubjectChange 省略
+    // M5:loadSubjects 必填;afterRender / onSubjectChange 省略
     //(CCI 無 phase 下拉、subject change 無特殊行為)。
-    assert.equal(typeof spec.loadSubjects, 'function', 'CCI 有 loadSubjects(index-mode)');
+    assert.equal(typeof spec.loadSubjects, 'function', 'CCI 有 loadSubjects');
     assert.equal(spec.afterRender, undefined, 'CCI 省略 afterRender(無 phase 下拉)');
     assert.equal(spec.onSubjectChange, undefined, 'CCI 省略 onSubjectChange');
 });
 
-// ---------- spec.loadSubjects(M5,index-mode)----------
+// ---------- spec.loadSubjects(M5)----------
 
-test('CCI spec.loadSubjects 走 LoadPhaseManifest 且 valueMode=index', async () => {
-    // CCI/PhaseSync/Normalized subject 用 0-based 索引(ADR-0007 §4 index-mode)。
+test('CCI spec.loadSubjects 走 LoadPhaseManifest 且只回 subjects', async () => {
+    // option.value 由 ManifestPanel 寫 Subject 名稱(ADR-0057),loadSubjects 不再回 valueMode。
     // loadSubjects 呼 LoadPhaseManifest(manifestPath) → window.go.gui.App。
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
@@ -98,7 +97,7 @@ test('CCI spec.loadSubjects 走 LoadPhaseManifest 且 valueMode=index', async ()
 
         assert.equal(manifestArg, '/tmp/manifest.csv', 'loadSubjects 把 manifestPath 傳給 LoadPhaseManifest');
         assert.deepEqual(out.subjects, ['S1', 'S2'], 'subjects 為 LoadPhaseManifest 結果');
-        assert.equal(out.valueMode, 'index', 'CCI valueMode=index(subject 用索引)');
+        assert.deepEqual(Object.keys(out), ['subjects'], 'loadSubjects 只回 subjects(無 valueMode)');
     } finally {
         if (window?.happyDOM?.close) await window.happyDOM.close();
         delete globalThis.window;
@@ -164,24 +163,10 @@ test('spec.rpc 在 dataFolder 缺時 throw', async () => {
     );
 });
 
-test('spec.rpc 在 subjectIdx 為 NaN 時 throw(未選 subject)', async () => {
+test('spec.rpc 在 subjectName 為空時 throw(未選 subject)', async () => {
     const spec = makeCciSpec({});
-    // 未選 subject 時 ManifestPanel _gatherCtx 的 parseInt('') === NaN。
-    const ctx = validCtx({ subjectIdx: NaN });
-
-    await assert.rejects(
-        async () => { await spec.rpc(ctx); },
-        (err) => {
-            assert.match(err.message, /必要欄位|必填欄位/, 'throw 訊息含「請填寫所有必要欄位」語意');
-            return true;
-        },
-        'rpc 應 throw 而非 return falsy'
-    );
-});
-
-test('spec.rpc 在 subjectIdx 為負時 throw', async () => {
-    const spec = makeCciSpec({});
-    const ctx = validCtx({ subjectIdx: -1 });
+    // 未選 subject 時 ManifestPanel _gatherCtx 讀到 placeholder 的 value ''。
+    const ctx = validCtx({ subjectName: '' });
 
     await assert.rejects(
         async () => { await spec.rpc(ctx); },
@@ -204,11 +189,13 @@ test('spec.rpc 在 backend result.success=false 時 throw(升 soft error 為 Sho
     globalThis.window = window;
     try {
         let analyzeCalled = false;
+        let analyzeParams = null;
         window.go = {
             gui: {
                 App: {
-                    AnalyzeCCI: async (_params) => {
+                    AnalyzeCCI: async (params) => {
                         analyzeCalled = true;
+                        analyzeParams = params;
                         return { success: false, message: '後端分析失敗訊息' };
                     },
                 },
@@ -228,6 +215,8 @@ test('spec.rpc 在 backend result.success=false 時 throw(升 soft error 為 Sho
             'success=false 時 rpc 應 throw 讓 envelope 走 ShowError'
         );
         assert.equal(analyzeCalled, true, '合法 ctx 應實際呼到 AnalyzeCCI(guard 已通過)');
+        assert.equal(analyzeParams.subject, 'SubjectA', 'subject 走 ctx.subjectName(ADR-0057)');
+        assert.equal('subjectIndex' in analyzeParams, false, 'CCIParams 不再送 subjectIndex');
     } finally {
         if (window?.happyDOM?.close) {
             await window.happyDOM.close();

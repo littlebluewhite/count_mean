@@ -105,12 +105,12 @@ func TestPhaseSyncAnalyzer_AnalyzePhaseSync_InvalidParams(t *testing.T) {
 				DataFolder:   "/tmp",
 				StartPhase:   "P0",
 				EndPhase:     "P2",
-				SubjectIndex: 0,
+				Subject:      "Test",
 			},
 			expectedError: "解析分期總檔案失敗",
 		},
 		{
-			name: "invalid subject index - negative",
+			name: "subject not in manifest",
 			params: func() *models.AnalysisParams {
 				manifestContent := "Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset," +
 					"P0,P1,P2,S,C,D,T0,T,O,L\nTest,m.csv,f.csv,e.csv,100,1,2,3,4,5,250,6,7,350,8"
@@ -120,26 +120,27 @@ func TestPhaseSyncAnalyzer_AnalyzePhaseSync_InvalidParams(t *testing.T) {
 					DataFolder:   "/tmp",
 					StartPhase:   "P0",
 					EndPhase:     "P2",
-					SubjectIndex: -1,
+					Subject:      "Nope",
 				}
 			}(),
-			expectedError: "無效的主題索引",
+			expectedError: `Subject "Nope" 不存在於分期總檔案`,
 		},
 		{
-			name: "invalid subject index - too large",
+			name: "subject row fails ValidatePhaseManifest",
 			params: func() *models.AnalysisParams {
+				// S(1)早於 P2(3):力板時間不單調。
 				manifestContent := "Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset," +
-					"P0,P1,P2,S,C,D,T0,T,O,L\nTest,m.csv,f.csv,e.csv,100,1,2,3,4,5,250,6,7,350,8"
+					"P0,P1,P2,S,C,D,T0,T,O,L\nTest,m.csv,f.csv,e.csv,100,1,2,3,1,5,250,6,7,350,8"
 				manifestFile := createTempFile(t, manifestContent)
 				return &models.AnalysisParams{
 					ManifestFile: manifestFile,
 					DataFolder:   "/tmp",
 					StartPhase:   "P0",
 					EndPhase:     "P2",
-					SubjectIndex: 10,
+					Subject:      "Test",
 				}
 			}(),
-			expectedError: "無效的主題索引",
+			expectedError: "分期總檔案數據驗證失敗: PhasePoints: S 時間 (1.000) 不能早於 P2 時間 (3.000)",
 		},
 		{
 			name: "invalid phase order",
@@ -152,7 +153,7 @@ func TestPhaseSyncAnalyzer_AnalyzePhaseSync_InvalidParams(t *testing.T) {
 					DataFolder:   "/tmp",
 					StartPhase:   "P2",
 					EndPhase:     "P0", // Invalid: P2 should come before P0
-					SubjectIndex: 0,
+					Subject:      "Test",
 				}
 			}(),
 			expectedError: "start phase must be before end phase",
@@ -177,7 +178,7 @@ func TestAnalyzePhaseSync_PhaseOrderCheckedBeforeIO(t *testing.T) {
 		DataFolder:   t.TempDir(),
 		StartPhase:   models.PhaseP2,
 		EndPhase:     models.PhaseP0,
-		SubjectIndex: 0,
+		Subject:      "Test",
 	})
 
 	require.Error(t, err)
@@ -216,7 +217,7 @@ TestSubject,motion.csv,force.csv,emg.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350
 		DataFolder:   dataFolder, // EMG present; motion.csv inside doesn't exist → "Motion 檔案不存在"
 		StartPhase:   "P0",
 		EndPhase:     "P2",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	// EMG validation passes (file present); Motion file is absent and is validated next.
@@ -251,7 +252,7 @@ TestSubject,%s,force.csv,%s,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`, motion
 		DataFolder:   t.TempDir(),
 		StartPhase:   "P0",
 		EndPhase:     "P2",
-		SubjectIndex: 0,
+		Subject:      "TestSubject",
 	}
 
 	// EMG 在 pipeline 中先於 Motion 驗證；absolute EMG path 直接被 ResolveLenientPath 拒，
