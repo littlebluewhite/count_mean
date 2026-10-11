@@ -13,10 +13,8 @@ import (
 // 包成失敗 writer 模擬 disk full / pipe broken。production code 不註冊此 hook,
 // 直接走 raw *os.File。
 //
-// 為何用 hook 而非把 io.Writer 提到 public API:WriteCSVAtomic 對外仍只負責
-// 「給定 path,做 atomic CSV 寫」契約;暴露 io.Writer 會破壞 atomic 流程
-// (caller 沒辦法保證 rename 走 tmp+rename 邏輯)。test-only hook 保留契約純度
-// 同時取得 testability。
+// CSVPayload 本身吃 io.Writer,單測 payload 時直接餵失敗 writer 即可;hook 留給
+// 經 WriteCSVAtomic 走真實 tmp 檔的測試(驗證失敗時 tmp 被清掉、final path 不動)。
 //
 //nolint:gochecknoglobals // test-only injection point
 var writerWrapHook func(io.Writer) io.Writer
@@ -59,31 +57,43 @@ type SafeWriteOptions struct {
 	// WriteCSVAtomic falls back to the legacy os.OpenFile + os.Rename path,
 	// byte-identical to today.
 	BasePaths []string
+	// OmitBOM 為 true 時不寫 UTF-8 BOM。零值照舊寫 BOM，既有 caller 與 byte-identity
+	// golden 不受影響。CSV 輸出的 BOM 開關只由 internal/io 依 config.BOMEnabled 設定。
+	OmitBOM bool
 }
 
-// WriteCSVAtomic writes a CSV to path atomically. It owns the CSV payload —
-// UTF-8 BOM, SanitizeHeaderRow, per-row SanitizeBodyRow, the mid-write
-// Flush/Error probe, and the writerWrapHook test seam — and delegates the
-// durable-placement protocol (crypto-tmp → open → fsync → atomic rename →
-// parent fsync, dirfd-anchored when BasePaths is set) to fsperm.AtomicWriteFile.
-// Output is byte-identical to the pre-extraction flow.
+// WriteCSVAtomic writes a CSV to path atomically: the CSV payload is
+// CSVPayload(opts), and the durable-placement protocol (crypto-tmp → open →
+// fsync → atomic rename → parent fsync, dirfd-anchored when BasePaths is set)
+// belongs to fsperm.AtomicWriteFile.
 //
 // BasePaths semantics are unchanged: non-empty → dirfd-anchored validated write
 // (parent-swap TOCTOU closed, ErrPathEscapesBase on a base miss); empty → legacy
 // os.OpenFile + os.Rename fallback.
+func WriteCSVAtomic(path string, opts SafeWriteOptions) error {
+	return fsperm.AtomicWriteFile(path, opts.BasePaths, CSVPayload(opts))
+}
+
+// CSVPayload 回傳把 opts 描述的 CSV 寫進 w 的 payload，給 fsperm.AtomicWriteFile 使用。
+// 它持有 CSV 的位元組：UTF-8 BOM（OmitBOM 為 false 時）、SanitizeHeaderRow、逐列
+// SanitizeBodyRow、mid-write Flush/Error 探測，以及 writerWrapHook test seam。
+// 回傳前會 Flush 並檢查 writer.Error()，符合 AtomicWriteFile「write 回傳前自行 flush」的契約。
+// opts.BasePaths 在此不使用（落檔位置由 caller 決定）。
 //
 //nolint:err113 // dynamic errors for user-facing output
-func WriteCSVAtomic(path string, opts SafeWriteOptions) error {
-	if opts.Header == nil {
-		return errors.New("SafeWriteOptions.Header 不可為 nil")
-	}
-	if opts.Emit == nil {
-		return errors.New("SafeWriteOptions.Emit 不可為 nil")
-	}
+func CSVPayload(opts SafeWriteOptions) func(io.Writer) error {
+	return func(w io.Writer) error {
+		if opts.Header == nil {
+			return errors.New("SafeWriteOptions.Header 不可為 nil")
+		}
+		if opts.Emit == nil {
+			return errors.New("SafeWriteOptions.Emit 不可為 nil")
+		}
 
-	return fsperm.AtomicWriteFile(path, opts.BasePaths, func(w io.Writer) error {
-		if err := WriteBOM(w); err != nil {
-			return fmt.Errorf("寫入 BOM 失敗: %w", err)
+		if !opts.OmitBOM {
+			if err := WriteBOM(w); err != nil {
+				return fmt.Errorf("寫入 BOM 失敗: %w", err)
+			}
 		}
 
 		// test hook 可包裝 underlying writer 模擬 disk full / pipe broken,
@@ -133,5 +143,5 @@ func WriteCSVAtomic(path string, opts SafeWriteOptions) error {
 			return fmt.Errorf("CSV flush 失敗: %w", err)
 		}
 		return nil
-	})
+	}
 }

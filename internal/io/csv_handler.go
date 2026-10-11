@@ -324,230 +324,6 @@ func openFailure(err error) *errors.AppError {
 	return errors.WrapError(err, errors.ErrCodeFileNotFound, "無法開啟檔案")
 }
 
-// WriteCSV 寫入 CSV 檔案.
-//
-// 採用 named return 以便在 defer 中捕獲 file.Sync() / file.Close() 錯誤：
-//   - Sync (fsync syscall) 保證資料真的落 disk;否則 OS page cache 內的
-//     bytes 在 power loss / kernel panic 後會失蹤,caller 卻收到 nil error。
-//   - Close 失敗的常見原因是 buffered write flush 階段失敗(NFS 延遲寫入
-//     是其中一種,但 local FS 同樣可能因 disk full / quota / I/O error 等
-//     在 Close 浮現);僅 log 不傳播會讓 caller 誤以為寫入成功。
-//
-// 原本只 Close 不 Sync,且註解誤標「NFS 延遲寫入失敗只在 Close 時
-// 浮現」— 對 local FS 是錯誤假設(local FS 的 fsync 與 close 是兩個獨立 syscall,
-// close 不會自動 flush dirty page)。改為 defer 內 Sync → Close 兩段式收尾,
-// 任一階段失敗都升為 named return err。
-//
-// Caller 替代方案:如需更強保證(crash-safe rename + tmp 清理),改走
-// csvutil.WriteCSVAtomic — 它已內建 fsync + atomic rename。
-func (h *CSVHandler) WriteCSV(filename string, data [][]string) (err error) {
-	h.logger.Debug("開始寫入 CSV 檔案", map[string]any{
-		"filename":    filename,
-		"row_count":   len(data),
-		"bom_enabled": h.config.BOMEnabled,
-	})
-
-	if err := h.filenameValidator.ValidateFilename(filepath.Base(filename)); err != nil {
-		h.logger.Error("檔案名稱驗證失敗", err, map[string]any{"filename": filename})
-
-		return fmt.Errorf("檔案名稱驗證失敗: %w", err)
-	}
-
-	if err := h.pathValidator.ValidateFilePath(filename); err != nil {
-		h.logger.Error("寫入路徑驗證失敗", err, map[string]any{
-			"path": filename,
-		})
-
-		return fmt.Errorf("路徑驗證失敗: %w", err)
-	}
-
-	// 空 data 的處理必須區分「target 是否已存在」:
-	//   (a) target 不存在 → return nil(no-op 安全;不建檔案,caller 期望「空輸入
-	//       產不出檔案」)。
-	//   (b) target *已存在* → 必須 truncate stale 內容,否則 caller 以為這次寫入
-	//       了空結果,但磁碟上仍是上次完整資料 — patient 載入時會誤以為是新分析。
-	// truncate 策略:BOMEnabled 時保留 BOM(維持「這是 UTF-8 CSV」hint);
-	// BOMEnabled=false 則 truncate 到 0 byte(完全空檔)。
-	// path 驗證必須先過,空 data 也不該被當成 path-validation bypass 的後門。
-	if len(data) == 0 {
-		return h.handleEmptyDataWrite(filename)
-	}
-
-	// 原本 os.OpenFile(filename, WriteFlags) 是 lexical-only + O_NOFOLLOW
-	// 兩段式守門:
-	//   - filename 只是字串,沒 EvalSymlinks resolve,parent component 是
-	//     symlink 時 lexical 舊 isPathWithinBase(已併入 fsperm.IsWithin)通過,kernel 在 syscall 階段跟到底,
-	//     檔案落在 OutputDir 外。
-	//   - O_NOFOLLOW 只擋 leaf component 為 symlink 的 case,parent 為 symlink
-	//     完全不擋。
-	//
-	// 改用 fsperm.OpenWriteValidated:內部會 EvalSymlinks resolve filename 後
-	// 比對 GetAllowedBasePaths(),resolved path 落在 base 外直接 reject;同時
-	// Linux 用 openat2(RESOLVE_BENEATH)、Darwin 用 O_NOFOLLOW_ANY 取得 kernel-
-	// level atomic 保證。詳見 internal/security/fsperm/validated_open.go 註解。
-	//
-	// GetAllowedBasePaths 回傳 allow-list 副本(PathValidator 建構後不可變)。
-	file, err := fsperm.OpenWriteValidated(filename, h.pathValidator.GetAllowedBasePaths())
-	if err != nil {
-		h.logger.Error("無法建立輸出檔案", err, map[string]any{
-			"path": filename,
-		})
-
-		return fmt.Errorf("無法建立檔案: %w", err)
-	}
-
-	// 兩段式收尾 — 先 Sync 再 Close。
-	//   - Sync 失敗(fsync syscall 拒絕,disk full / I/O error / EIO)代表 OS
-	//     不能保證 page cache 的 bytes 已寫到 storage,必須回 err。
-	//   - Sync 成功之後,Close 失敗多半是 fd 重複關閉之類,但仍記 err 以保險。
-	// 兩階段都 mutate named return err,但只在原 err 為 nil 時覆寫(避免遮蔽
-	// payload write 失敗的根因 err)。
-	defer func() {
-		if syncErr := file.Sync(); syncErr != nil {
-			h.logger.Warn("fsync 輸出檔案時發生錯誤", map[string]any{
-				"file":  file.Name(),
-				"error": syncErr.Error(),
-			})
-			if err == nil {
-				err = fmt.Errorf("fsync 輸出檔案 %s 失敗: %w", filename, syncErr)
-			}
-		}
-		if closeErr := file.Close(); closeErr != nil {
-			h.logger.Warn("關閉輸出檔案時發生錯誤", map[string]any{
-				"file":  file.Name(),
-				"error": closeErr.Error(),
-			})
-			if err == nil {
-				err = fmt.Errorf("關閉輸出檔案 %s 失敗: %w", filename, closeErr)
-			}
-		}
-	}()
-
-	if err := writeCSVPayload(file, data, h.config.BOMEnabled); err != nil {
-		h.logger.Error("CSV 資料寫入失敗", err, map[string]any{
-			"path":     filename,
-			"filename": filename,
-		})
-
-		return fmt.Errorf("無法寫入資料到 %s: %w", filename, err)
-	}
-
-	h.logger.Info("CSV 檔案寫入成功", map[string]any{
-		"path":      filename,
-		"row_count": len(data),
-		"bom_used":  h.config.BOMEnabled,
-	})
-
-	return nil
-}
-
-// handleEmptyDataWrite 處理 WriteCSV 收到 empty data 的兩個分支:
-//   - target 不存在:return nil(no-op 安全)。
-//   - target 已存在:用 fsperm.OpenWriteValidated 重開檔(O_TRUNC),寫入空內容
-//     (BOMEnabled → BOM-only 維持 CSV 語意 hint;else → 0 byte)。
-//
-// caller (WriteCSV) 已完成 ValidateFilename / ValidateFilePath 兩段守門,
-// 此 helper 不重覆驗證以避免 lexical/resolved 兩條路徑不一致;但仍走 fsperm
-// safe-open(保留 symlink / parent-symlink 攻擊面的 kernel-level reject)。
-func (h *CSVHandler) handleEmptyDataWrite(filename string) (err error) {
-	if _, statErr := os.Stat(filename); statErr != nil {
-		if os.IsNotExist(statErr) {
-			h.logger.Warn("WriteCSV 收到空 data，目標不存在,跳過建檔", map[string]any{
-				"filename": filename,
-			})
-			return nil
-		}
-		// 其他 stat 錯誤(permission denied、I/O error 等)— 不該當成 not-exist
-		// 處理(會 silently skip truncate),回傳錯誤讓 caller 知道。
-		h.logger.Error("WriteCSV 空 data 路徑探測失敗", statErr, map[string]any{
-			"path": filename,
-		})
-		return fmt.Errorf("空 data 探測目標檔案失敗: %w", statErr)
-	}
-
-	// target 已存在 — 必須 truncate stale 內容,不能讓 caller 以為「寫了空結果」
-	// 但磁碟仍是舊資料。fsperm.OpenWriteValidated 內含 O_TRUNC(WriteFlags),
-	// 重新 open 等同 truncate。
-	file, err := fsperm.OpenWriteValidated(filename, h.pathValidator.GetAllowedBasePaths())
-	if err != nil {
-		h.logger.Error("無法 truncate stale 檔案", err, map[string]any{
-			"path": filename,
-		})
-		return fmt.Errorf("無法 truncate %s: %w", filename, err)
-	}
-
-	// 兩段式收尾(同 WriteCSV main path):先 Sync 再 Close。
-	defer func() {
-		if syncErr := file.Sync(); syncErr != nil {
-			h.logger.Warn("fsync truncated 檔案時發生錯誤", map[string]any{
-				"file":  file.Name(),
-				"error": syncErr.Error(),
-			})
-			if err == nil {
-				err = fmt.Errorf("fsync truncated 檔案 %s 失敗: %w", filename, syncErr)
-			}
-		}
-		if closeErr := file.Close(); closeErr != nil {
-			h.logger.Warn("關閉 truncated 檔案時發生錯誤", map[string]any{
-				"file":  file.Name(),
-				"error": closeErr.Error(),
-			})
-			if err == nil {
-				err = fmt.Errorf("關閉 truncated 檔案 %s 失敗: %w", filename, closeErr)
-			}
-		}
-	}()
-
-	if h.config.BOMEnabled {
-		if writeErr := csvutil.WriteBOM(file); writeErr != nil {
-			return fmt.Errorf("寫入 BOM-only truncated 檔案失敗: %w", writeErr)
-		}
-	}
-	// BOMEnabled=false 時不寫任何 byte,truncate 後檔案長度為 0。
-
-	h.logger.Info("WriteCSV 空 data + 既有目標檔案: 已 truncate", map[string]any{
-		"path":     filename,
-		"bom_used": h.config.BOMEnabled,
-	})
-
-	return nil
-}
-
-// writeCSVPayload 把 [data] 透過 csv.Writer 寫到 w，必要時先寫 BOM。
-//
-// 先前 inline 在 WriteCSV 內，僅靠 csv.Writer.WriteAll 的回傳值判斷
-// 寫入是否成功。WriteAll 本身已包含 Flush 並回 flush error，但若未來 csv 套件
-// 修改契約（或 caller 改成手動 Write loop），缺少 writer.Error() 顯式檢查會
-// 讓 bufio 累積的延遲錯誤被靜默吞掉。改成獨立 helper 並補上顯式 Error() check
-// 同時支援注入 fake io.Writer 進行 flush-failure 測試。
-//
-// Single chokepoint sanitize: csv_converter sanitizes headers; SanitizeAllRows
-// catches body-row labels (e.g. result.PhaseName from config.json) that bypass
-// the converter-level guard. SanitizeCellForWrite is idempotent so doubling up
-// is harmless. Closes the formula-injection vector noted by review wave 7
-// security/QA agents (PhaseName="=cmd|/c calc!A1" landing in row[0]).
-func writeCSVPayload(w stdio.Writer, data [][]string, bomEnabled bool) error {
-	if bomEnabled {
-		if err := csvutil.WriteBOM(w); err != nil {
-			return fmt.Errorf("無法寫入 BOM: %w", err)
-		}
-	}
-
-	writer := csv.NewWriter(w)
-	if err := writer.WriteAll(csvutil.SanitizeAllRows(data)); err != nil {
-		return fmt.Errorf("WriteAll 失敗: %w", err)
-	}
-
-	// 顯式 writer.Error() check：即使 WriteAll 回 nil，仍可能有先前 Write 累積
-	// 在 bufio 內的延遲錯誤未被回報（csv.Writer 文件明文要求呼叫 Error() 確認）。
-	// 防止 named-return + defer 結構在未來 refactor 中被誤刪而 silently lose error。
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("csv.Writer flush 失敗: %w", err)
-	}
-
-	return nil
-}
-
 // errEmptyPhaseAnalysis 標示 WritePhaseAnalysis 收到沒有 phase 結果可寫的請求。
 // caller 該在進 WritePhaseAnalysis 前就確保 PhaseResults 非空, 但對外仍給明確 error
 // 以便 GUI 顯示「無分析結果可匯出」而非吞 nil。
@@ -570,7 +346,7 @@ var errEmptyPhaseSyncEMGData = stderrors.New("EMG 數據為空")
 //
 // 此 struct 取代 caller 端在「寫到 OutputDir 根 vs 子目錄」與「Convert* + WriteCSV*」
 // 兩條選擇上的 ad-hoc 拼接 — caller 一次描述「寫哪裡」即可;file-based writer 一律經
-// writeFileOutput 落檔並回傳實際寫入的路徑。
+// WriteFileCSV 落檔並回傳實際寫入的路徑。
 type WriteRequest struct {
 	Filename string
 	SubDir   string
@@ -581,8 +357,7 @@ type WriteRequest struct {
 //
 // row layout、scaling (config.ScalingFactor 推導的 calculator.UnitScale)、precision
 // (config.Precision) 由 implementation 持有;caller 不再呼叫 Convert* 後組裝
-// [][]string。BOM / formula-injection sanitize / fsperm symlink reject / fsync
-// 兩段式收尾沿用 WriteCSV 既有路徑。
+// [][]string。落檔經 WriteFileCSV(BOM、formula-injection sanitize、atomic 寫入)。
 func (h *CSVHandler) WriteMaxMean(
 	req WriteRequest,
 	headers []string,
@@ -591,7 +366,7 @@ func (h *CSVHandler) WriteMaxMean(
 ) (string, error) {
 	data := h.converter.ConvertMaxMeanResults(headers, results, startRange, endRange)
 
-	return h.writeFileOutput(req, data)
+	return h.WriteFileCSV(req, data)
 }
 
 // WriteNormalized 把標準化後的 EMGDataset 寫成 CSV (1 header + N data rows)。
@@ -601,7 +376,7 @@ func (h *CSVHandler) WriteMaxMean(
 func (h *CSVHandler) WriteNormalized(req WriteRequest, dataset *models.EMGDataset) (string, error) {
 	data := h.converter.ConvertNormalizedData(dataset)
 
-	return h.writeFileOutput(req, data)
+	return h.WriteFileCSV(req, data)
 }
 
 // WritePhaseAnalysis 把 phase 分析結果寫成 CSV;支援單 phase 與多 phase merge。
@@ -650,52 +425,55 @@ func (h *CSVHandler) WritePhaseAnalysis(
 		}
 	}
 
-	return h.writeFileOutput(req, data)
+	return h.WriteFileCSV(req, data)
 }
 
-// writeFileOutput 是 File-based write 的單一寫門:join(OutputDir/SubDir/Filename,
-// 含 containment 檢查)→ MkdirAll → WriteCSV。回傳「實際寫入的路徑」,caller 不得自行重組。
+// errEmptyFileCSV 標示 WriteFileCSV 收到 0 列:至少要有 data[0] 當標題列。
+var errEmptyFileCSV = stderrors.New("WriteFileCSV: 資料不可為空(至少要有標題列)")
+
+// WriteFileCSV 是 File-based write 的單一寫門:caller 給檔名(req.Filename)與 rows
+// (data[0] 為標題列,data[1:] 逐列輸出),經 placeOutput 落檔,回傳「實際寫入的路徑」,
+// caller 不得自行重組。WriteMaxMean / WriteNormalized / WritePhaseAnalysis 都經過這裡。
 //
+// req.Filename 可帶子路徑(Normalize 的自由輸入,如 "sub/out.csv" 寫到 OutputDir/sub/out.csv);
+// 檔名規則只驗 join 後的 base,逸出 OutputDir 的名稱被拒。
 // 路徑不做 URL-decode:`%`、`+` 皆為字面檔名字元([[Format-aware write]])。
-func (h *CSVHandler) writeFileOutput(req WriteRequest, data [][]string) (string, error) {
-	path, err := h.safeJoinOutput(req.SubDir, req.Filename)
-	if err != nil {
-		return "", fmt.Errorf("輸出路徑無效: %w", err)
+func (h *CSVHandler) WriteFileCSV(req WriteRequest, data [][]string) (string, error) {
+	if len(data) == 0 {
+		return "", errEmptyFileCSV
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), fsperm.DirPerm); err != nil {
-		return "", fmt.Errorf("無法創建輸出目錄: %w", err)
-	}
-
-	if err := h.WriteCSV(path, data); err != nil {
-		return "", err
-	}
-
-	return path, nil
+	return h.placeOutput(req.SubDir, req.Filename, h.csvPayload(data[0], emitRows(data[1:])))
 }
 
-// placeSubjectOutput 是所有 Subject-based 寫檔的單一 placement 步驟([[Subject output placement]]):
-// SubjectOutputName → safeJoinOutput(containment)→ ValidateExternalPath → MkdirAll →
-// WriteCSVAtomic{Header, BasePaths, Emit}。回傳「實際寫入的路徑」。
+// placeOutput 是所有輸出落檔的單一步驟([[Subject output placement]],File-based 與
+// Subject-based 共用),依序:
+//  1. 命名:caller 給 name —— File-based 是 req.Filename;Subject-based 是
+//     filename.SubjectOutputName(subject, suffix)+".csv"(見 placeSubjectOutput)。
+//  2. safeJoinOutput(OutputDir/subDir/name,containment)。join 後以
+//     ValidateFilename(Base(path)) 驗檔名;Subject 檔名恆通過(ADR-0054 property 測試)。
+//  3. ValidateExternalPath(敏感位置,含 symlink resolve)。
+//  4. MkdirAll —— 先驗證、後建目錄,被拒的路徑不留下目錄。
+//  5. fsperm.AtomicWriteFile(path, GetAllowedBasePaths(), payload):tmp → fsync → rename,
+//     parent 以 dirfd 錨定在 allow-list 之下。leaf 若是 symlink,rename 取代連結本身,
+//     不跟到目標;parent 是逸出 base 的 symlink 則拒寫。
 //
-// ADR-0016 invariant「Subject-based write ⟹ WriteCSVAtomic + BasePaths」(ADR-0040)在此結構化:
-// 7 個 Subject-based writer 只持有 row layout,沒有任何一個能繞過本步驟。
-// 輸出檔名 = filename.SubjectOutputName(subject, suffix) + ".csv"(subject 內部強制 Sanitize)。
-//
-// 錯誤文字統一為「輸出路徑無效」「輸出目錄建立失敗」並以 %w 包底層 error。各分支的 PHI 性質:
+// 回傳「實際寫入的路徑」。錯誤文字為「輸出路徑無效」「檔案名稱驗證失敗」「輸出目錄建立失敗」,
+// 以 %w 包底層 error。各分支的 PHI 性質:
 //   - containment 失敗(errOutputPathEscapesOutputDir):固定哨兵,不帶 SubDir / 目錄路徑。
+//   - 檔名驗證失敗:validator error 帶檔名(base),不帶目錄。
 //   - MkdirAll 失敗:只包底層 errno(去掉 *fs.PathError 的路徑),不帶目錄路徑。
 //   - ValidateExternalPath 失敗:以 %w 包 validator error,可帶輸出「檔案」路徑
 //     (webview sink 只保留檔名,見 ADR-0036 D5)。
-//   - WriteCSVAtomic 失敗:原樣回傳底層 error,不另加前綴。
-func (h *CSVHandler) placeSubjectOutput(
-	subDir, subject, suffix string,
-	header []string,
-	emit csvutil.RowEmitter,
-) (string, error) {
-	outputPath, err := h.safeJoinOutput(subDir, filename.SubjectOutputName(subject, suffix)+".csv")
+//   - AtomicWriteFile 失敗:原樣回傳底層 error,不另加前綴。
+func (h *CSVHandler) placeOutput(subDir, name string, payload func(stdio.Writer) error) (string, error) {
+	outputPath, err := h.safeJoinOutput(subDir, name)
 	if err != nil {
 		return "", fmt.Errorf("輸出路徑無效: %w", err)
+	}
+
+	if err := h.filenameValidator.ValidateFilename(filepath.Base(outputPath)); err != nil {
+		return "", fmt.Errorf("檔案名稱驗證失敗: %w", err)
 	}
 
 	if err := h.pathValidator.ValidateExternalPath(outputPath); err != nil {
@@ -712,29 +490,53 @@ func (h *CSVHandler) placeSubjectOutput(
 		return "", fmt.Errorf("輸出目錄建立失敗: %w", err)
 	}
 
-	err = csvutil.WriteCSVAtomic(outputPath, csvutil.SafeWriteOptions{
-		Header:    header,
-		BasePaths: h.pathValidator.GetAllowedBasePaths(),
-		Emit:      emit,
-	})
-	if err != nil {
+	if err := fsperm.AtomicWriteFile(outputPath, h.pathValidator.GetAllowedBasePaths(), payload); err != nil {
 		return "", err
 	}
 
 	return outputPath, nil
 }
 
-// placeSubjectRows 把 data[][]string(data[0] 為 header)交給 placeSubjectOutput 串流寫出。
-// ConvertPhaseSyncResult 恆回固定 8-row layout,故 data 至少 1 row,data[0] 不會 panic。
-func (h *CSVHandler) placeSubjectRows(subDir, subject, suffix string, data [][]string) (string, error) {
-	return h.placeSubjectOutput(subDir, subject, suffix, data[0], func(emit func([]string) error) error {
-		for _, row := range data[1:] {
+// csvPayload 是 CSV 的 payload adapter:BOM 照 config.BOMEnabled(io 是唯一讀這個設定的地方),
+// 標題列與資料列的 formula-injection sanitize 由 csvutil.CSVPayload 持有。
+func (h *CSVHandler) csvPayload(header []string, emit csvutil.RowEmitter) func(stdio.Writer) error {
+	return csvutil.CSVPayload(csvutil.SafeWriteOptions{
+		Header:  header,
+		Emit:    emit,
+		OmitBOM: !h.config.BOMEnabled,
+	})
+}
+
+// emitRows 把現成的 rows 逐列交給 emit。
+func emitRows(rows [][]string) csvutil.RowEmitter {
+	return func(emit func([]string) error) error {
+		for _, row := range rows {
 			if err := emit(row); err != nil {
 				return err
 			}
 		}
 		return nil
-	})
+	}
+}
+
+// placeSubjectOutput 是 Subject-based write 的命名:輸出檔名 =
+// filename.SubjectOutputName(subject, suffix) + ".csv"(subject 內部強制 Sanitize),
+// 其餘交給 placeOutput。
+//
+// ADR-0016 invariant「Subject-based write ⟹ atomic 寫入 + BasePaths」(ADR-0040)在此結構化:
+// 7 個 Subject-based writer 只持有 row layout,沒有任何一個能繞過 placement。
+func (h *CSVHandler) placeSubjectOutput(
+	subDir, subject, suffix string,
+	header []string,
+	emit csvutil.RowEmitter,
+) (string, error) {
+	return h.placeOutput(subDir, filename.SubjectOutputName(subject, suffix)+".csv", h.csvPayload(header, emit))
+}
+
+// placeSubjectRows 把 data[][]string(data[0] 為 header)交給 placeSubjectOutput 串流寫出。
+// ConvertPhaseSyncResult 恆回固定 8-row layout,故 data 至少 1 row,data[0] 不會 panic。
+func (h *CSVHandler) placeSubjectRows(subDir, subject, suffix string, data [][]string) (string, error) {
+	return h.placeSubjectOutput(subDir, subject, suffix, data[0], emitRows(data[1:]))
 }
 
 // WritePhaseSyncResult 把 PhaseSync 分析結果 (EMGStatistics) 寫成 CSV。
@@ -745,8 +547,8 @@ func (h *CSVHandler) placeSubjectRows(subDir, subject, suffix string, data [][]s
 //
 // row layout (8-row: header / 開始分期點 / 開始時間 / 結束分期點 / 結束時間 /
 // 時間差值 / 平均值 / 最大值)、precision (phaseSyncPrecision=6) 由 implementation 持有。
-// 路徑由 placeSubjectOutput 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
-// ADR-0016 invariant: Subject-based write ⟹ WriteCSVAtomic。
+// 路徑由 placeSubjectOutput 守門 + tmp+rename atomic 寫入 —
+// ADR-0016 invariant: Subject-based write ⟹ atomic 寫入。
 func (h *CSVHandler) WritePhaseSyncResult(
 	req WriteRequest,
 	stats *models.EMGStatistics,
@@ -768,8 +570,8 @@ func (h *CSVHandler) WritePhaseSyncResult(
 // (對齊 GUI 現行 template)。
 //
 // row layout 與 WritePhaseSyncResult 相同 (8-row,由 ConvertPhaseSyncResult 持有)。
-// 路徑由 placeSubjectOutput 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
-// ADR-0016 invariant: Subject-based write ⟹ WriteCSVAtomic。
+// 路徑由 placeSubjectOutput 守門 + tmp+rename atomic 寫入 —
+// ADR-0016 invariant: Subject-based write ⟹ atomic 寫入。
 func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
 	req WriteRequest,
 	stats *models.EMGStatistics,
@@ -798,10 +600,10 @@ func (h *CSVHandler) WriteNormalizedPhaseSyncResult(
 // NaN/Inf cell → 空字串;整 row 所有 pair 都 NaN/Inf → skip 整 row(計入 droppedRowCount)。
 //
 // ctx 為第一個參數,sample loop 中每 cciStreamCtxCheckInterval 點檢查一次 ctx.Done()
-// — caller cancel 後立即停寫並回 ctx.Err。csvutil.WriteCSVAtomic 對 emit 回 error 走
+// — caller cancel 後立即停寫並回 ctx.Err。placement 的 atomic 寫入對 emit 回 error 走
 // tmp file abort 路徑,不留下半成品。
 //
-// ADR-0016 invariant: Subject-based write ⟹ WriteCSVAtomic + BasePaths,經 placeSubjectOutput
+// ADR-0016 invariant: Subject-based write ⟹ atomic 寫入 + BasePaths,經 placeSubjectOutput
 // 落檔(ADR-0040);pathValidator 守門覆蓋原 cci.ExportToCSV 缺少的 defense-in-depth
 // (原路徑走 security.NewPathValidator(nil) 未整合 CSVHandler 既有 allowedPaths;
 // 由本 method 統一補上)。
@@ -1004,9 +806,8 @@ func formatMuscleRatioCell(values []float64, idx int) string {
 // 的 SubDir(如 traversal "../evil")。絕對 SubDir(如 "/etc")經 filepath.Join 被當成相對片段,
 // 結果落在 OutputDir/etc 之內,並非逸出;其敏感位置由 ValidateExternalPath 把關。
 //
-// ADR-0016 / ADR-0040:writeFileOutput 與直接走 csvutil.WriteCSVAtomic 的 writer
-// (placeSubjectOutput)共用本 helper 守住 OutputDir 邊界,
-// 確保 SubDir traversal 不會把 *.csv 寫到 OutputDir 外面。
+// ADR-0016 / ADR-0040:placeOutput(File-based 與 Subject-based 共用)經本 helper
+// 守住 OutputDir 邊界,確保 SubDir / 檔名 traversal 不會把 *.csv 寫到 OutputDir 外面。
 func (h *CSVHandler) safeJoinOutput(subDir, filename string) (string, error) {
 	joined := filepath.Join(h.config.OutputDir, subDir, filename)
 	if !fsperm.IsWithin(h.config.OutputDir, joined) {
@@ -1020,7 +821,7 @@ var errEmptyMuscleRatioPayload = stderrors.New("WriteMuscleRatio*: payload 缺 T
 var errEmptyCCIPhasesPayload = stderrors.New("WriteCCIPhasesResult: payload has no rows")
 
 // errOutputPathEscapesOutputDir 標示 SubDir 含 traversal 導致 join
-// 後的路徑逸出 OutputDir;供 safeJoinOutput 回傳、placeSubjectOutput wrap。
+// 後的路徑逸出 OutputDir;供 safeJoinOutput 回傳、placeOutput wrap。
 var errOutputPathEscapesOutputDir = stderrors.New("輸出路徑逸出 OutputDir")
 
 // WriteCCIPhasesResult 寫 per-subject Output 2 — CCI 分期視窗統計 CSV (ADR-0018)。
@@ -1076,8 +877,8 @@ func (h *CSVHandler) WriteCCIPhasesResult(
 // 的 fmt.Sprintf("%.6f") 合併 — 後者寫出 "NaN" 字面)。
 // precision = phaseSyncPrecision = 6 (常數,無 precision 參數 — 與 Output 2 共享常數,不共享 formatter)。
 //
-// 路徑由 placeSubjectOutput 守門 + WriteCSVAtomic tmp+rename atomic 寫入 —
-// ADR-0016 invariant: Subject-based write ⟹ WriteCSVAtomic。
+// 路徑由 placeSubjectOutput 守門 + tmp+rename atomic 寫入 —
+// ADR-0016 invariant: Subject-based write ⟹ atomic 寫入。
 func (h *CSVHandler) WriteNormalizedPhaseSyncEMG(
 	req WriteRequest,
 	data *models.PhaseSyncEMGData,

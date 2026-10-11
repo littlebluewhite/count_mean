@@ -59,10 +59,9 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 			{"0.5", "125.6", "56.9"},
 		}
 
-		// Create CSV handler and write test file
+		// Create CSV handler and write test file(File-based writer 落在 OutputDir)
 		csvHandler := io.NewCSVHandler(cfg)
-		testFilePath := filepath.Join(inputDir, "test_emg.csv")
-		err := csvHandler.WriteCSV(testFilePath, testData)
+		testFilePath, err := csvHandler.WriteFileCSV(io.WriteRequest{Filename: "test_emg.csv"}, testData)
 		require.NoError(t, err)
 
 		// Test reading the file back
@@ -132,10 +131,9 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 		assert.ErrorAs(t, err, &appErr)
 		assert.Equal(t, errors.ErrCodeFileNotFound, appErr.Code)
 
-		// Test writing to invalid path
-		err = csvHandler.WriteCSV("/invalid/path/test.csv", [][]string{{"test"}})
+		// Test writing to invalid path(逸出 OutputDir 的檔名被拒)
+		_, err = csvHandler.WriteFileCSV(io.WriteRequest{Filename: "../../invalid/test.csv"}, [][]string{{"test"}})
 		require.Error(t, err)
-		assert.ErrorAs(t, err, &appErr)
 	})
 
 	t.Run("ConfigurationIntegration", func(t *testing.T) {
@@ -203,8 +201,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 		}
 
 		csvHandler := io.NewCSVHandler(cfg)
-		largeFilePath := filepath.Join(inputDir, "large_test.csv")
-		err := csvHandler.WriteCSV(largeFilePath, largeData)
+		largeFilePath, err := csvHandler.WriteFileCSV(io.WriteRequest{Filename: "large_test.csv"}, largeData)
 		require.NoError(t, err)
 
 		// Test processing large dataset
@@ -251,10 +248,9 @@ func TestIntegrationErrorRecovery(t *testing.T) {
 		}
 
 		csvHandler := io.NewCSVHandler(cfg)
-		badFilePath := filepath.Join(inputDir, "bad_data.csv")
 
 		// Write bad data (this should work)
-		err := csvHandler.WriteCSV(badFilePath, badData)
+		badFilePath, err := csvHandler.WriteFileCSV(io.WriteRequest{Filename: "bad_data.csv"}, badData)
 		require.NoError(t, err)
 
 		// Reading should fail with validation error
@@ -277,8 +273,7 @@ func TestIntegrationErrorRecovery(t *testing.T) {
 		}
 
 		csvHandler := io.NewCSVHandler(cfg)
-		invalidFilePath := filepath.Join(inputDir, "invalid_numbers.csv")
-		err := csvHandler.WriteCSV(invalidFilePath, invalidData)
+		_, err := csvHandler.WriteFileCSV(io.WriteRequest{Filename: "invalid_numbers.csv"}, invalidData)
 		require.NoError(t, err)
 
 		// Calculator should handle parsing errors gracefully
@@ -330,8 +325,8 @@ func TestIntegrationConcurrentOperations(t *testing.T) {
 					{"0.2", fmt.Sprintf("%.1f", float64(fileNum*10+110))},
 				}
 
-				filePath := filepath.Join(inputDir, fmt.Sprintf("concurrent_test_%d.csv", fileNum))
-				err := csvHandler.WriteCSV(filePath, testData)
+				filePath, err := csvHandler.WriteFileCSV(
+					io.WriteRequest{Filename: fmt.Sprintf("concurrent_test_%d.csv", fileNum)}, testData)
 				assert.NoError(t, err)
 
 				// Read back the file

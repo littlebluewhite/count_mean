@@ -113,9 +113,9 @@ func TestWriteMaxMean_SubDirWithPlus(t *testing.T) {
 	require.NoDirExists(t, filepath.Join(dir, "S 1"))
 }
 
-// WriteCSV 的檔名守門(取代已刪除的 SanitizePath):控制字元與保留名拒寫,
+// File-based 寫檔的檔名守門(取代已刪除的 SanitizePath):控制字元與保留名拒寫,
 // 與 ReadCSV 同一套規則;含字面 `%` / `+` 的合法檔名可寫。
-func TestWriteCSV_FilenameGuard(t *testing.T) {
+func TestWriteFileCSV_FilenameGuard(t *testing.T) {
 	t.Parallel()
 
 	handler, dir := newFormatAwareTestHandler(t)
@@ -127,13 +127,61 @@ func TestWriteCSV_FilenameGuard(t *testing.T) {
 		"reserved": "CON.csv",
 	}
 	for name, file := range rejected {
-		err := handler.WriteCSV(filepath.Join(dir, file), data)
+		_, err := handler.WriteFileCSV(WriteRequest{Filename: file}, data)
 		require.Error(t, err, name)
 		require.Contains(t, err.Error(), "檔案名稱驗證失敗", name)
 	}
 
 	for _, file := range []string{"SF_8_BTS%_6.10.csv", "a+b.csv"} {
-		require.NoError(t, handler.WriteCSV(filepath.Join(dir, file), data), file)
-		require.FileExists(t, filepath.Join(dir, file))
+		got, err := handler.WriteFileCSV(WriteRequest{Filename: file}, data)
+		require.NoError(t, err, file)
+		require.Equal(t, filepath.Join(dir, file), got)
+		require.FileExists(t, got)
 	}
+}
+
+// 0 列(連標題列都沒有)拒寫,不建檔。
+func TestWriteFileCSV_EmptyDataRejected(t *testing.T) {
+	t.Parallel()
+
+	handler, dir := newFormatAwareTestHandler(t)
+
+	for _, data := range [][][]string{nil, {}} {
+		got, err := handler.WriteFileCSV(WriteRequest{Filename: "empty.csv"}, data)
+		require.ErrorIs(t, err, errEmptyFileCSV)
+		require.Empty(t, got)
+	}
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+// Normalize 的輸出名是自由輸入,可帶 `/`:照今天的行為寫進 OutputDir 下的子目錄
+// (絕對路徑也只是 OutputDir 下的相對片段);逸出 OutputDir 的名稱被拒,不留任何東西。
+func TestWriteNormalized_FreeFormNameWithSlash(t *testing.T) {
+	t.Parallel()
+
+	dataset := &models.EMGDataset{
+		Headers: []string{"Time", "Ch1"},
+		Data:    []models.EMGData{{Time: 0.1, Channels: []float64{1.0}}},
+	}
+
+	for name, rel := range map[string]string{
+		"sub/out.csv":  filepath.Join("sub", "out.csv"),
+		"a/b/out.csv":  filepath.Join("a", "b", "out.csv"),
+		"/abs/out.csv": filepath.Join("abs", "out.csv"),
+	} {
+		handler, dir := newFormatAwareTestHandler(t)
+		got, err := handler.WriteNormalized(WriteRequest{Filename: name}, dataset)
+		require.NoError(t, err, name)
+		require.Equal(t, filepath.Join(dir, rel), got, name)
+		require.FileExists(t, got, name)
+	}
+
+	handler, dir := newFormatAwareTestHandler(t)
+	got, err := handler.WriteNormalized(WriteRequest{Filename: "../escape.csv"}, dataset)
+	require.ErrorIs(t, err, errOutputPathEscapesOutputDir)
+	require.Empty(t, got)
+	require.NoFileExists(t, filepath.Join(filepath.Dir(dir), "escape.csv"))
 }

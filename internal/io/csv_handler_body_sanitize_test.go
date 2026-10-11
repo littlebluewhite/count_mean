@@ -2,7 +2,6 @@ package io
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,15 +10,15 @@ import (
 	"count_mean/internal/config"
 )
 
-// TestCSVHandler_WriteCSV_SanitizesBodyRowChokepoint 鎖定 Wave 7 review
-// security/QA P0 修補：csv_handler.WriteCSV 內部 SanitizeAllRows chokepoint
+// TestCSVHandler_WriteFileCSV_SanitizesBodyRowChokepoint 鎖定 Wave 7 review
+// security/QA P0 修補：File-based 寫檔（WriteFileCSV → csvutil.CSVPayload）
 // 必須 escape body-row 第一格的 user-controllable label（如 result.PhaseName
 // 來自 config.json phaseLabels），堵住 converter 沒覆蓋的 body-row formula
 // injection 路徑（=cmd|/c calc!A1 之類）。
 //
-// 設計：直接餵 WriteCSV [][]string 含有 header 安全 + body row 開頭 = / @ / +
+// 設計：直接餵 WriteFileCSV [][]string 含有 header 安全 + body row 開頭 = / @ / +
 // non-numeric 三種 vector，讀回檔案驗證每個 vector 都被 '<prefix> escape。
-func TestCSVHandler_WriteCSV_SanitizesBodyRowChokepoint(t *testing.T) {
+func TestCSVHandler_WriteFileCSV_SanitizesBodyRowChokepoint(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
@@ -37,8 +36,8 @@ func TestCSVHandler_WriteCSV_SanitizesBodyRowChokepoint(t *testing.T) {
 		{"+HYPERLINK(\"http://e\",\"x\") 統計", "5", "6"}, // +non-numeric
 	}
 
-	output := filepath.Join(tempDir, "body_sanitize.csv")
-	require.NoError(t, handler.WriteCSV(output, data))
+	output, err := handler.WriteFileCSV(WriteRequest{Filename: "body_sanitize.csv"}, data)
+	require.NoError(t, err)
 
 	raw, err := os.ReadFile(output) //nolint:gosec // test path
 	require.NoError(t, err)

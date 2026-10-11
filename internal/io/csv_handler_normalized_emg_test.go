@@ -171,9 +171,9 @@ func TestWriteNormalizedPhaseSyncEMG_Precision6(t *testing.T) {
 // WriteNormalizedPhaseSyncEMG 成功、symlink entry 被替換成 regular file、原 target 不被覆寫。
 //
 // ADR-0020 symlink disposition：
-//   - TestCSVHandler_WriteAllowsSymlinkWithinBase（symlink_test.go:67）只覆蓋 WriteCSV 路徑，
-//     不覆蓋 placeSubjectOutput seam → 新增本 test 補上 replace-contract 釘住。
-//   - WriteCSVAtomic 的 tmp+rename 語意：rename 替換 symlink entry（非跟到 target），
+//   - File-based 寫檔的同一契約見 TestCSVHandler_LeafSymlinkWithinBaseIsReplaced（symlink_test.go）；
+//     本 test 經 placeSubjectOutput seam 釘住 Subject-based 這一側。
+//   - atomic write 的 tmp+rename 語意：rename 替換 symlink entry（非跟到 target），
 //     target 內容不變，symlink 被換成 regular file — 此為 atomic write 的設計意圖。
 func TestWriteNormalizedPhaseSyncEMG_ReplaceContract_SymlinkWithinBase(t *testing.T) {
 	if runtime.GOOS == "windows" {
