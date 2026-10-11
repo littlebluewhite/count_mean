@@ -37,15 +37,22 @@ func (a *App) calculateMaxMeanBatch(params MaxMeanParams) (*MaxMeanResult, error
 		return nil, err
 	}
 
+	// OutputPath 取自最後一次實際寫入的路徑(placement 的回傳值),不在 gui 重組;
+	// 全部失敗時沒有寫出任何檔,給空字串。
+	outputPath := ""
+	if res.SuccessCount > 0 {
+		outputPath = filepath.Dir(writer.last)
+	}
+
 	return &MaxMeanResult{
-		OutputPath: filepath.Join(s.config.OutputDir, outputDirName),
+		OutputPath: outputPath,
 		Success:    res.SuccessCount > 0,
 		Message:    fmt.Sprintf("批次處理完成：成功 %d 個檔案，失敗 %d 個檔案", res.SuccessCount, res.FailCount),
 	}, nil
 }
 
 // buildMaxMeanFileSource 決定 mode(internal-dir vs external)並建立對應的 FileSource,
-// 同時回傳 outputDirName 供 writer SubDir 與 envelope OutputPath 共用。
+// 同時回傳 outputDirName 供 writer 的 SubDir(envelope OutputPath 取自實際寫入路徑)。
 func (a *App) buildMaxMeanFileSource(s *appState, inputPath string) (maxmean.FileSource, string, error) {
 	if !filepath.IsAbs(inputPath) {
 		// 相對路徑 → configured InputDir 下
@@ -116,12 +123,20 @@ func (e *externalFileSource) Discover() ([]maxmean.BatchFile, error) {
 }
 
 // maxMeanResultWriter 是 ResultWriter production adapter:綁 SubDir,包 WriteMaxMean。
+// last 記住最後一次成功寫入的路徑,供 envelope 的 OutputPath(RunBatch 逐檔循序呼叫 Write)。
 type maxMeanResultWriter struct {
 	csvHandler *io.CSVHandler
 	subDir     string
+	last       string
 }
 
 func (w *maxMeanResultWriter) Write(name string, headers []string, results []models.MaxMeanResult, startRange, endRange float64) (string, error) {
 	outputFile := buildOutputFilename(name, SuffixMaxMean)
-	return w.csvHandler.WriteMaxMean(io.WriteRequest{Filename: outputFile, SubDir: w.subDir}, headers, results, startRange, endRange)
+	path, err := w.csvHandler.WriteMaxMean(io.WriteRequest{Filename: outputFile, SubDir: w.subDir}, headers, results, startRange, endRange)
+	if err != nil {
+		return "", err
+	}
+	w.last = path
+
+	return path, nil
 }

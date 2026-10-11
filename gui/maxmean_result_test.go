@@ -117,6 +117,7 @@ func TestCalculateMaxMean_EmptyBatchPath_ErrorsExplicitly(t *testing.T) {
 
 // TestCalculateMaxMean_BatchAllFailed_SuccessFalse 釘住批次「全部失敗」不得回報成功:
 // 每個檔案都計算失敗時 Success 必須為 false,Message 帶成功/失敗計數,前端據此走失敗路徑。
+// OutputPath 為空字串:沒有任何檔案寫出,不報一個可能根本不存在的目錄(ADR-0055)。
 func TestCalculateMaxMean_BatchAllFailed_SuccessFalse(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.InputDir = t.TempDir()
@@ -135,6 +136,8 @@ func TestCalculateMaxMean_BatchAllFailed_SuccessFalse(t *testing.T) {
 
 	assert.False(t, result.Success, "全部檔案失敗不得回報 Success=true")
 	assert.Contains(t, result.Message, "成功 0 個檔案，失敗 2 個檔案")
+	assert.Empty(t, result.OutputPath, "全部失敗時沒有實際寫入的目錄可報")
+	assert.NoDirExists(t, filepath.Join(cfg.OutputDir, filepath.Base(batchDir)))
 }
 
 // TestCalculateMaxMean_SuccessMessage_NoAbsolutePath 釘住成功 Message 不含絕對路徑
