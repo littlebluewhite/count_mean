@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"count_mean/internal/config"
-	"count_mean/internal/errors"
 	"count_mean/internal/logging"
 )
 
@@ -262,8 +261,7 @@ func (b *Benchmarker) SaveReportToFile(report *Result, filename string) error {
 	//nolint:gosec // G304: filename is provided by caller for benchmark output
 	file, err := os.Create(filename)
 	if err != nil {
-		return errors.WrapError(err, errors.ErrCodeFilePermission,
-			fmt.Sprintf("無法創建報告文件: %s", filename))
+		return fmt.Errorf("無法創建報告文件: %w", err)
 	}
 
 	defer func() {
@@ -274,8 +272,7 @@ func (b *Benchmarker) SaveReportToFile(report *Result, filename string) error {
 
 	_, err = file.WriteString(content)
 	if err != nil {
-		return errors.WrapError(err, errors.ErrCodeFilePermission,
-			fmt.Sprintf("無法寫入報告文件: %s", filename))
+		return fmt.Errorf("無法寫入報告文件: %w", err)
 	}
 
 	b.logger.Info("性能報告已保存", map[string]any{"file": filename})
