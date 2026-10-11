@@ -227,7 +227,7 @@ func TestLoad_MuscleRatioBlankCellIsNaN(t *testing.T) {
 	}
 }
 
-// TestLoad_SubjectNotFound Subject 不在 manifest 是輸入錯誤:wrap ErrSubjectNotFound、
+// TestLoad_SubjectNotFound Subject 不在 manifest 是輸入錯誤:manifest.ErrSubjectNotFound 原樣、
 // 不帶 Stage,文字與搬移前的 gui 訊息逐字相同。
 func TestLoad_SubjectNotFound(t *testing.T) {
 	manifestPath, dataFolder := setupV14(t)
@@ -235,10 +235,30 @@ func TestLoad_SubjectNotFound(t *testing.T) {
 	in, err := Load(manifestPath, dataFolder, "Nope")
 
 	assert.Nil(t, in)
-	require.ErrorIs(t, err, ErrSubjectNotFound)
+	require.ErrorIs(t, err, manifest.ErrSubjectNotFound)
 	assert.Equal(t, `Subject "Nope" 不存在於分期總檔案`, err.Error())
 	var loadErr *LoadError
 	assert.False(t, errors.As(err, &loadErr), "輸入錯誤不帶 Stage")
+}
+
+// TestLoad_InvalidRowIsManifestStage 釘住 Composer 取得的 row 經 ValidatePhaseManifest
+// (ADR-0057):分期點不單調的列是 StageManifest 的 *LoadError、命中 manifest.ErrSubjectRowInvalid。
+// 改走 manifest.LoadSubject 之前,Composer 不驗證這一列、照樣組圖。
+func TestLoad_InvalidRowIsManifestStage(t *testing.T) {
+	manifestPath, dataFolder := setupV14(t)
+	// S(0.4)早於 P2(0.9):力板時間不單調。
+	writeFile(t, manifestPath, manifestHeaderV14+
+		"S1,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.9,0.4,0.5,400,0.6,0.7,600,0.8,muscle_ratio.csv")
+
+	in, err := Load(manifestPath, dataFolder, "S1")
+
+	assert.Nil(t, in)
+	var loadErr *LoadError
+	require.ErrorAs(t, err, &loadErr)
+	assert.Equal(t, StageManifest, loadErr.Stage)
+	require.ErrorIs(t, err, manifest.ErrSubjectRowInvalid)
+	assert.Equal(t, "PhasePoints: S 時間 (0.400) 不能早於 P2 時間 (0.900)", err.Error(),
+		"Error() 是驗證錯誤原文,前綴由 gui 依 Stage 加")
 }
 
 // TestLoad_FailureStage 釘住每個載入步驟的失敗都是帶對應 Stage 的 *LoadError,

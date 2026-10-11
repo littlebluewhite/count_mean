@@ -20,19 +20,14 @@ import (
 	"count_mean/internal/synchronizer"
 )
 
-var (
-	// ErrSubjectNotFound 表示 Subject 不在 manifest 內 —— 使用者輸入問題,不帶 Stage;
-	// caller 以 errors.Is 辨識。
-	ErrSubjectNotFound = errors.New("不存在於分期總檔案")
-	// ErrMotionFileEmpty 表示 manifest row 的 MotionFile 為空(motion 是必要 grid)。
-	ErrMotionFileEmpty = errors.New("manifest 內 MotionFile 為空")
-)
+// ErrMotionFileEmpty 表示 manifest row 的 MotionFile 為空(motion 是必要 grid)。
+var ErrMotionFileEmpty = errors.New("manifest 內 MotionFile 為空")
 
 // Stage 標示 Load 在哪個載入步驟失敗,caller 依此選 user-facing 訊息前綴。
 type Stage int
 
 const (
-	StageManifest    Stage = iota + 1 // manifest.LoadManifests
+	StageManifest    Stage = iota + 1 // manifest.LoadSubject:讀分期總檔案或 row 驗證
 	StageEMGOpen                      // EMG 路徑解析 / 開檔
 	StageEMGParse                     // EMG 解析(*manifest.EMGParseError)
 	StageMotion                       // motion 檔名為空、開檔或解析
@@ -50,27 +45,25 @@ func (e *LoadError) Error() string { return e.Err.Error() }
 
 func (e *LoadError) Unwrap() error { return e.Err }
 
-// Load 讀 manifest、找出 subject 的 row(case-sensitive exact match,取第一筆),組出
+// Load 以 manifest.LoadSubject 取 subject 的 row(並驗證該列,ADR-0057),組出
 // [[Chart Composer]] 的 chart.ComposerInput:
 //   - EMG:[[Subject source]](manifest.LoadEMG),columnar 原樣交給 chart
 //   - MotionData(必要):motion-index 經 TimeSynchronizer.MotionIndexToEMGTime 換到 EMG 時間軸
 //   - MuscleRatioData(可選,row.MuscleRatioFile 非空才載):io.ReadMuscleRatioOutputAll
 //   - PhaseTimesEMG:[[Phase timeline]] 的 phase 名 → EMG 秒數(只含已提供的分期點)
 //
-// 錯誤:Subject 不在 manifest → wrap ErrSubjectNotFound(不帶 Stage);其餘載入失敗都是
-// *LoadError。
+// 錯誤:Subject 不在 manifest → manifest.ErrSubjectNotFound 原樣(輸入錯誤,不帶 Stage);
+// 其餘載入失敗(含 row 驗證失敗,StageManifest)都是 *LoadError。
 func Load(manifestPath, dataFolder, subject string) (*chart.ComposerInput, error) {
-	manifests, err := manifest.LoadManifests(manifestPath)
+	row, err := manifest.LoadSubject(manifestPath, subject)
 	if err != nil {
+		if errors.Is(err, manifest.ErrSubjectNotFound) {
+			return nil, err
+		}
 		return nil, &LoadError{Stage: StageManifest, Err: err}
 	}
 
-	row, found := findManifestBySubject(manifests, subject)
-	if !found {
-		return nil, fmt.Errorf("Subject %q %w", subject, ErrSubjectNotFound)
-	}
-
-	emg, err := manifest.LoadEMG(dataFolder, &row)
+	emg, err := manifest.LoadEMG(dataFolder, row)
 	if err != nil {
 		var parseErr *manifest.EMGParseError
 		if errors.As(err, &parseErr) {
@@ -96,21 +89,8 @@ func Load(manifestPath, dataFolder, subject string) (*chart.ComposerInput, error
 		EMG:             emg,
 		MuscleRatioData: muscleRatio,
 		MotionData:      motion,
-		PhaseTimesEMG:   phaseTimesEMG(&row),
+		PhaseTimesEMG:   phaseTimesEMG(row),
 	}, nil
-}
-
-// findManifestBySubject 在 manifest list 內找第一個 Subject 等於 target 的 row。
-// 第二個回傳值 false 表示沒找到。比對為 case-sensitive exact match。
-func findManifestBySubject(
-	manifests []models.PhaseManifest, target string,
-) (models.PhaseManifest, bool) {
-	for i := range manifests {
-		if manifests[i].Subject == target {
-			return manifests[i], true
-		}
-	}
-	return models.PhaseManifest{}, false
 }
 
 // loadMotion 從 motion CSV 載入後轉成 chart.MotionData

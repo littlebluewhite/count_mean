@@ -337,6 +337,16 @@ func TestGenerateChartComposer_LoadFailureMessagePerStage(t *testing.T) {
 			wantPrefix: i18n.T(i18n.KeyErrorHandlerLoadManifestFailed) + ": ",
 		},
 		{
+			name: "row 分期點不單調(ADR-0057)",
+			mutate: func(t *testing.T, p *GenerateChartComposerParams) {
+				require.NoError(t, os.WriteFile(p.ManifestPath, []byte(
+					"Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L,MuscleRatioFile\n"+
+						"TestSubjectV14,motion.csv,force.anc,emg.csv,1,0.1,0.2,0.9,0.4,0.5,400,0.6,0.7,600,0.8,muscle_ratio.csv"),
+					0o600))
+			},
+			wantPrefix: i18n.T(i18n.KeyErrorHandlerLoadManifestFailed) + ": PhasePoints: S 時間 (0.400) 不能早於 P2 時間 (0.900)",
+		},
+		{
 			name:       "Subject 不在 manifest(輸入錯誤)",
 			mutate:     func(_ *testing.T, p *GenerateChartComposerParams) { p.Subject = "Nope" },
 			wantPrefix: `Subject "Nope" 不存在於分期總檔案`,

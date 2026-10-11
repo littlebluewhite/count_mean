@@ -235,7 +235,7 @@ func (a *App) GenerateChartComposer(
 
 	composerInput, loadErr := composer.Load(params.ManifestPath, params.DataFolder, params.Subject)
 	if loadErr != nil {
-		if errors.Is(loadErr, composer.ErrSubjectNotFound) {
+		if errors.Is(loadErr, manifest.ErrSubjectNotFound) {
 			return failedChartComposerResult(inputMessage(loadErr)), nil
 		}
 		return failedChartComposerResult(a.failMessage(chartComposerLoadFailKey(loadErr), loadErr)), nil
