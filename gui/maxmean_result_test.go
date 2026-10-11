@@ -2,6 +2,7 @@ package gui
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -179,6 +180,42 @@ func parseCSVFloat(t *testing.T, s string) float64 {
 	require.NoError(t, err, "CSV cell 應為數值: %q", s)
 
 	return v
+}
+
+// TestMaxMeanParams_RangeMapping 釘住 W7 bug 所在的 gui 對應(ADR-0050):前端留空送 JSON null
+// → nil(未給),填 0 → 指向 0 的指標(合法邊界);兩個指標原樣進 MaxMeanRange。欄位改回
+// float64 時 null 與 0 無法區分,只填起點會再變成 [起點, 0] 而失敗。
+// 斷言不解參考欄位、params 由 JSON 解出(同 Wails binding),欄位型別改了仍編得過、在執行期失敗。
+func TestMaxMeanParams_RangeMapping(t *testing.T) {
+	var p MaxMeanParams
+	require.NoError(t, json.Unmarshal([]byte(`{"startTime":null,"endTime":0}`), &p))
+	assert.Nil(t, p.StartTime, "JSON null 必須解成 nil(未給)")
+	assert.Equal(t, new(float64), p.EndTime, "JSON 0 必須解成指向 0 的指標(0 是合法邊界)")
+
+	inDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.InputDir = inDir
+	cfg.OutputDir = t.TempDir()
+	app := NewApp(cfg, "test")
+
+	csvPath := filepath.Join(inDir, "sample.csv")
+	writeEMGCSVForMaxMean(t, csvPath, 50) // 時間 0.000 ~ 0.049 秒
+
+	// 只填起點:前端不送 endTime。
+	const start = 0.01
+	var params MaxMeanParams
+	require.NoError(t, json.Unmarshal([]byte(`{"windowSize":5,"startTime":0.01}`), &params))
+	params.InputPath = csvPath
+
+	result, err := app.CalculateMaxMean(params)
+	require.NoError(t, err)
+	require.True(t, result.Success, "只填起點必須成功,Message: %s", result.Message)
+
+	rows := readCSVRowsForTest(t, result.OutputPath)
+	require.Equal(t, "開始範圍秒數", rows[1][0])
+	require.Equal(t, "結束範圍秒數", rows[2][0])
+	assert.InDelta(t, start, parseCSVFloat(t, rows[1][1]), 1e-9, "開始範圍 = 使用者給的起點")
+	assert.InDelta(t, 0.049, parseCSVFloat(t, rows[2][1]), 1e-9, "結束範圍 = 實際末樣本")
 }
 
 // TestCalculateMaxMean_BTSPercentFile 釘住:BTS 匯出檔名含字面 `%`(`SF_8_BTS%_6.10.csv`)
