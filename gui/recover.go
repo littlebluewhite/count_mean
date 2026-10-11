@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
 	"count_mean/internal/security/redact"
 )
@@ -51,20 +52,20 @@ func (e *panicErrWithChain) Unwrap() []error {
 	return []error{e.wrap, e.original}
 }
 
-// webviewErr 是 err 通道離開 Go、送進 webview 前的 redact 包裝。Wails dispatcher
-// 以 err.Error() 序列化成 rejected promise,frontend 原樣顯示;caller err 常帶
-// 病患資料路徑(`stat /Users/<name>/patient/.../emg.csv: no such file`)。
+// webviewErr 是 err 通道離開 Go、送進 webview 前的包裝(在地化 + redact)。Wails
+// dispatcher 以 err.Error() 序列化成 rejected promise,frontend 原樣顯示;caller err
+// 常帶病患資料路徑(`stat /Users/<name>/patient/.../emg.csv: no such file`)。
 //
 // 仿 panicErrWithChain 拆開兩條契約:
-//   - Error() string:只回 redact.Paths 後的文字(PII contract)
-//   - Unwrap() error:回原 error,errors.Is/As 仍可走訪完整 chain(含 *fs.PathError
-//     等帶原路徑的節點 — 只供 Go 端判斷,不會被序列化進 webview)
+//   - Error() string:只回在地化、redact.Paths 後的文字(PII contract)
+//   - Unwrap() error:回原 error,errors.Is/As 仍可走訪完整 chain(含 *i18n.Error、
+//     *fs.PathError 等帶原路徑的節點 — 只供 Go 端判斷,不會被序列化進 webview)
 type webviewErr struct {
-	msg      string // redact 後的文字,Error() 用此
+	msg      string // 在地化、redact 後的文字,Error() 用此
 	original error  // 原 err,只供 errors.Is/As 走訪
 }
 
-// Error 只回 redact 後的文字 — 不含 absolute path(PII contract)。
+// Error 只回在地化、redact 後的文字 — 不含 absolute path(PII contract)。
 func (e *webviewErr) Error() string {
 	return e.msg
 }
@@ -74,16 +75,19 @@ func (e *webviewErr) Unwrap() error {
 	return e.original
 }
 
-// redactForWebview 把 err 文字過 redact.Paths;文字沒變(不含路徑或 nil)就原樣
-// 回傳,保留 caller 的 error identity(err == sentinel 比較不受影響)。
-func redactForWebview(err error) error {
+// renderForWebview 把 err 文字以目前 locale 渲染(i18n.Localize)後再過 redact.Paths
+// (ADR-0058)。順序不可對調:Localize 在 err 文字裡找 *i18n.Error 的 zh-TW 原文,先
+// redact 會改掉原文裡的路徑而找不到、整段退回 zh-TW。
+//
+// 文字沒變(zh-TW 下不含路徑,或 nil)就原樣回傳,保留 caller 的 error identity
+// (err == sentinel 比較不受影響)。
+func renderForWebview(err error) error {
 	if err == nil {
 		return nil
 	}
 
-	text := err.Error()
-	msg := redact.Paths(text)
-	if msg == text {
+	msg := redact.Paths(i18n.Localize(err))
+	if msg == err.Error() {
 		return err
 	}
 
@@ -109,12 +113,13 @@ var ErrAppNotReady = errors.New("App 尚未完成啟動，請稍候再試")
 // 對於不回 error 的 method(如 ShowMessage / GetVersion),改用
 // recoverHandlerPanicVoid(只 log 不 propagate)。
 //
-// # 無 panic 時:err 通道出口 redact
+// # 無 panic 時:err 通道出口在地化、redact
 //
-// 沒有 panic 時把 *errPtr 換成 redactForWebview(*errPtr):err 文字的 absolute
-// path 換成 `<redacted-path>/`,errors.Is/As chain 不變(見 webviewErr)。
+// 沒有 panic 時把 *errPtr 換成 renderForWebview(*errPtr):err 文字先以目前 locale
+// 渲染(i18n.Localize,ADR-0058),再把 absolute path 換成 `<redacted-path>/`,
+// errors.Is/As chain 不變(見 webviewErr)。
 // app_panic_ast_test.go 強制每個回 error 的 bound method 首句都是這個 defer,
-// 所以這裡是所有 Go err 進 webview 前的唯一出口,handler 不必各自 redact err
+// 所以這裡是所有 Go err 進 webview 前的唯一出口,handler 不必各自在地化、redact err
 // (result 的 Message 字串不經此處,由 envelope.go 的 failMessage / inputMessage /
 // redactText 負責 —— 兩條通道合稱 [[Webview envelope]],見 ADR-0036)。
 //
@@ -151,7 +156,7 @@ func recoverHandlerPanic(handlerName string, logger *logging.Logger, errPtr *err
 	r := recover()
 	if r == nil {
 		if errPtr != nil {
-			*errPtr = redactForWebview(*errPtr)
+			*errPtr = renderForWebview(*errPtr)
 		}
 
 		return

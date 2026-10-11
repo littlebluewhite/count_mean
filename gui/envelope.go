@@ -12,7 +12,7 @@ import (
 // [[Webview envelope]] 的 Message 通道(ADR-0036):handler 把可預期失敗包進
 // result 字串欄位(Message、MuscleRatioSubjectDTO.Error)
 // 時,只能經這三個 helper 從 err 產生文字。err 通道的出口在 recover.go
-// (recoverHandlerPanic → redactForWebview)。
+// (recoverHandlerPanic → renderForWebview)。
 //
 // 兩條通道都只做 sink-side redact.Paths:目錄段換成 `<redacted-path>/`,**末段
 // (basename)保留**。錯誤若以病患資料夾名結尾(例如 DataFolder 本身不存在),

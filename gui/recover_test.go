@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
 	"count_mean/internal/models"
 )
@@ -56,6 +57,68 @@ func TestRecoverHandlerPanic_NoPanic_RedactsPathKeepsChain(t *testing.T) {
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("errors.Is(err, fs.ErrNotExist) 應仍成立,got %v", err)
+	}
+
+	var pathErr *fs.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("errors.As(*fs.PathError) 應仍成立,got %v", err)
+	}
+	if pathErr.Path != patientPath {
+		t.Errorf("chain 內原 PathError 應保留原路徑,got %q", pathErr.Path)
+	}
+}
+
+// 無 panic 時 err 通道出口以目前 locale 渲染帶 key 的 i18n.Error(ADR-0058):
+// zh-TW 下文字不變、原 err 原樣回傳;en-US 下是英文,errors.As 仍取得原 *i18n.Error。
+func TestRecoverHandlerPanic_NoPanic_LocalizesKeyedErr(t *testing.T) {
+	prevLocale := i18n.GetLocale()
+	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
+
+	keyedErr := i18n.WrapError(errors.New("boom"), i18n.KeyErrorHandlerReadFileFailed)
+	exit := func() error {
+		err := keyedErr
+		func() {
+			defer recoverHandlerPanic("TestHandler", nil, &err)
+		}()
+
+		return err
+	}
+
+	i18n.SetLocale(i18n.LocaleZhTW)
+	if err := exit(); err != keyedErr {
+		t.Errorf("zh-TW 下文字不變,應原樣回傳原 err,got %T: %v", err, err)
+	}
+
+	i18n.SetLocale(i18n.LocaleEnUS)
+	err := exit()
+	if got, want := err.Error(), "Failed to read file: boom"; got != want {
+		t.Errorf("en-US 下 err 通道應為英文\n got: %q\nwant: %q", got, want)
+	}
+
+	var keyed *i18n.Error
+	if !errors.As(err, &keyed) || keyed.Key != i18n.KeyErrorHandlerReadFileFailed {
+		t.Errorf("errors.As(*i18n.Error) 應仍取得原 key,got %v", err)
+	}
+}
+
+// 先在地化再 redact:i18n.Localize 在 err 文字裡找 *i18n.Error 的 zh-TW 原文,先 redact
+// 會改掉原文裡的路徑而找不到、退回 zh-TW。Cause 是帶絕對路徑的 *fs.PathError 時,出口文字
+// 是英文且路徑已脫敏,chain 內的 *fs.PathError 保留原路徑供 Go 端判斷。
+func TestRecoverHandlerPanic_NoPanic_LocalizesThenRedactsPath(t *testing.T) {
+	prevLocale := i18n.GetLocale()
+	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
+	i18n.SetLocale(i18n.LocaleEnUS)
+
+	const patientPath = "/Users/alice/patient/case_2026_05_18/emg_raw.csv"
+
+	err := i18n.WrapError(&fs.PathError{Op: "open", Path: patientPath, Err: fs.ErrNotExist},
+		i18n.KeyErrorHandlerReadFileFailed)
+	func() {
+		defer recoverHandlerPanic("TestHandler", nil, &err)
+	}()
+
+	if got, want := err.Error(), "Failed to read file: open <redacted-path>/emg_raw.csv: file does not exist"; got != want {
+		t.Errorf("err 文字應為英文且 redact 目錄段\n got: %q\nwant: %q", got, want)
 	}
 
 	var pathErr *fs.PathError

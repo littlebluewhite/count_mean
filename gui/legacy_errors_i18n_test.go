@@ -2,6 +2,7 @@ package gui
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,8 @@ import (
 //   - err.Error() 是 zh-TW,前綴與遷移前硬編碼逐位元組相同
 //   - 下游也帶 key 時(io / validation),i18n.Localize 在 en-US 下整條鏈為英文
 //   - 下游仍是硬編碼中文的(calculator、Output placement 前綴、os.ReadDir 包裝)只斷言
-//     en-US 前綴;路徑經 webview 出口脫敏的錯誤只斷言 key(出口在地化屬 ADR-0058)
+//     en-US 前綴;路徑經 webview 出口脫敏的錯誤只斷言 key(出口在地化見
+//     TestBoundHandler_ErrChannelLocalizedThenRedacted)
 //
 // 計算相對路徑失敗(maxmean_batch_adapter)不可達:IsWithin 為 true 蘊含 Rel 成功。
 func TestLegacyPanelErrors_KeyedAndLocalized(t *testing.T) {
@@ -253,4 +255,30 @@ func TestCalculateMaxMeanBatch_SummaryMessageLocalized(t *testing.T) {
 		assert.False(t, result.Success)
 		assert.Equal(t, want, result.Message, "locale %s", locale)
 	}
+}
+
+// TestBoundHandler_ErrChannelLocalizedThenRedacted 釘住 bound handler 的 err 通道出口
+// (recoverHandlerPanic)先在地化再 redact(ADR-0058):en-US 讀不存在的檔,整條鏈都帶 key、
+// Cause 是帶絕對路徑的 *fs.PathError —— 出口文字全英文、路徑脫敏,chain 仍可 errors.As。
+func TestBoundHandler_ErrChannelLocalizedThenRedacted(t *testing.T) {
+	prevLocale := i18n.GetLocale()
+	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
+
+	cfg := config.DefaultConfig()
+	cfg.InputDir = t.TempDir()
+	cfg.OutputDir = t.TempDir()
+	app := NewApp(cfg, "test")
+	missing := filepath.Join(cfg.InputDir, "missing.csv")
+
+	i18n.SetLocale(i18n.LocaleEnUS)
+	_, err := app.CalculateMaxMean(MaxMeanParams{InputPath: missing, WindowSize: 5})
+	require.Error(t, err)
+
+	const wantPrefix = "Failed to read file: Unable to get file information: open <redacted-path>/missing.csv: "
+	assert.True(t, strings.HasPrefix(err.Error(), wantPrefix), "got %q", err.Error())
+	assert.NotContains(t, err.Error(), cfg.InputDir)
+
+	var pathErr *fs.PathError
+	require.True(t, errors.As(err, &pathErr), "errors.As(*fs.PathError) 應仍成立,got %v", err)
+	assert.Equal(t, missing, pathErr.Path)
 }
