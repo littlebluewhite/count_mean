@@ -26,6 +26,7 @@ import (
 type placementCase struct {
 	name     string
 	wantName string
+	png      []byte // 非 nil = PNG 列:落檔位元組必須逐字等於它,不受 BOMEnabled 影響
 	write    func(h *CSVHandler) (string, error)
 }
 
@@ -36,7 +37,8 @@ type fileWriter struct {
 	writeIn  func(h *CSVHandler, subDir string) (string, error)
 }
 
-// placementCases 是全部 10 種 CSV:7 種 Subject-based + 3 種 File-based(寫在 OutputDir 根)。
+// placementCases 是全部 11 種輸出:7 種 Subject-based CSV + Subject PNG + 3 種 File-based CSV
+// (寫在 OutputDir 根)。
 func placementCases() []placementCase {
 	cases := subjectPlacementCases()
 	for _, fw := range fileWriters() {
@@ -86,7 +88,7 @@ func fileWriters() []fileWriter {
 	}
 }
 
-// subjectPlacementCases 是 7 種 Subject-based writer(檔名由 subject 推導,一律落在 OutputDir 根)。
+// subjectPlacementCases 是 Subject-based 輸出:7 種 CSV + PNG(檔名由 subject 推導,一律落在 OutputDir 根)。
 func subjectPlacementCases() []placementCase {
 	stats := &models.EMGStatistics{
 		Subject:      "subj_01",
@@ -114,8 +116,15 @@ func subjectPlacementCases() []placementCase {
 		Headers:  []string{"MuscleA"},
 	}
 	ctx := context.Background()
+	png := []byte("\x89PNG\r\n\x1a\n placement 不驗 PNG 內容(gui 的 DecodeAndValidatePNG 負責)")
 
 	return []placementCase{
+		{
+			name: "SubjectPNG", wantName: "subj_01_CCI_Rudolph.png", png: png,
+			write: func(h *CSVHandler) (string, error) {
+				return h.WriteSubjectPNG("subj_01", "CCI_Rudolph", png)
+			},
+		},
 		{
 			name: "PhaseSyncResult", wantName: "subj_01_P1-C_statistics.csv",
 			write: func(h *CSVHandler) (string, error) {
@@ -167,9 +176,9 @@ func subjectPlacementCases() []placementCase {
 	}
 }
 
-// Output placement 的共用契約(10 種 CSV 全部適用):
-// 檔名逐字、敏感目錄被拒(先驗證再建目錄)、不留 tmp、BOM 照 config.BOMEnabled、
-// 尚不存在的 OutputDir 會被建立(SaveConfig 換到新資料夾後不必重啟)。
+// Output placement 的共用契約(11 種輸出全部適用):
+// 檔名逐字、敏感目錄被拒(先驗證再建目錄)、不留 tmp、CSV 的 BOM 照 config.BOMEnabled
+// (PNG 位元組原樣)、尚不存在的 OutputDir 會被建立(SaveConfig 換到新資料夾後不必重啟)。
 func TestOutputPlacement(t *testing.T) {
 	t.Parallel()
 
@@ -218,7 +227,7 @@ func TestOutputPlacement(t *testing.T) {
 				require.False(t, strings.Contains(entries[0].Name(), ".tmp"), entries[0].Name())
 			})
 
-			// BOM 只照 config.BOMEnabled:開 → 帶 BOM,關 → 不帶。
+			// BOM 只照 config.BOMEnabled:開 → 帶 BOM,關 → 不帶。PNG 兩種設定都原樣寫出。
 			t.Run("BOM", func(t *testing.T) {
 				t.Parallel()
 				for _, bom := range []bool{true, false} {
@@ -232,6 +241,10 @@ func TestOutputPlacement(t *testing.T) {
 
 					content, readErr := os.ReadFile(got) //nolint:gosec // t.TempDir 內的測試檔
 					require.NoError(t, readErr)
+					if tc.png != nil {
+						require.Equal(t, tc.png, content, "BOMEnabled=%v", bom)
+						continue
+					}
 					require.Equal(t, bom, bytes.HasPrefix(content, csvutil.BOMBytes()),
 						"BOMEnabled=%v", bom)
 				}

@@ -400,7 +400,7 @@ func TestGenerateChartComposer_LoadFailureMessagePerStage(t *testing.T) {
 func TestDownloadChartComposerImage_HappyPath(t *testing.T) {
 	outputDir := t.TempDir()
 	app := setupChartComposerTestApp(t)
-	app.state.Store(&appState{config: &config.AppConfig{OutputDir: outputDir}})
+	app.state.Store(newPNGTestState(t, outputDir))
 
 	result, err := app.DownloadChartComposerImage(&DownloadChartComposerImageParams{
 		Base64Data: validPNGDataURLForComposer(),
@@ -427,13 +427,10 @@ func TestDownloadChartComposerImage_NilParams(t *testing.T) {
 	assert.Contains(t, err.Error(), "參數")
 }
 
-// 註:bad-prefix→ErrInvalidImageFormat 與 sensitive-path rejection 這兩個原本
-// 在此的 case，已隨 ADR-0009 Phase 2 把共用 PNG 管線抽到 downloadValidatedPNG，
-// 改由 helper 的 seam test（png_download_test.go:
-// TestDownloadValidatedPNG_RejectsBadPrefix /
-// TestDownloadValidatedPNG_RejectsSensitivePath_NoDoubleLabel）擁有,避免重複覆蓋。
-// 此處僅保留 Composer adapter 行為:nil params guard、從 Subject 經
-// SubjectOutputName 推導、寫到 config.OutputDir。
+// 註:bad-prefix→ErrInvalidImageFormat 與 decode/validate 失敗由 png_download_test.go 的
+// downloadValidatedPNG 測試擁有;敏感 OutputDir 由 cci_download_test.go 與 internal/io 的
+// Output placement 表(SubjectPNG 列)覆蓋,避免重複。此處僅保留 Composer adapter 行為:
+// nil params guard、從 Subject 經 SubjectOutputName 推導、寫到 config.OutputDir。
 
 // TestDownloadChartComposerImage_EmptySubjectFallsBackToUntitled 釘住 ADR-0019
 // 唯一的行為變更:對稱化後空 subject 走 Sanitize 的 untitled fallback,得
@@ -441,7 +438,7 @@ func TestDownloadChartComposerImage_NilParams(t *testing.T) {
 func TestDownloadChartComposerImage_EmptySubjectFallsBackToUntitled(t *testing.T) {
 	outputDir := t.TempDir()
 	app := setupChartComposerTestApp(t)
-	app.state.Store(&appState{config: &config.AppConfig{OutputDir: outputDir}})
+	app.state.Store(newPNGTestState(t, outputDir))
 
 	result, err := app.DownloadChartComposerImage(&DownloadChartComposerImageParams{
 		Base64Data: validPNGDataURLForComposer(),

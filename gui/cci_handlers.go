@@ -2,11 +2,9 @@ package gui
 
 import (
 	"bytes"
-	"path/filepath"
 
 	"count_mean/internal/cci"
 	"count_mean/internal/i18n"
-	"count_mean/internal/validation/filename"
 )
 
 // CCIParams 共同收縮分析參數.
@@ -105,33 +103,24 @@ func (a *App) AnalyzeCCI(params CCIParams) (result *CCIResult, err error) {
 
 // DownloadCCIChart 下載 CCI 圖表為 PNG 檔案.
 //
-// adapter 職責:從 params.Subject 經 SubjectOutputName 推導 OutputDir 內的固定
-// 檔名({subject}_CCI_Rudolph.png,內部強制 Sanitize 防 traversal)。共用的 PNG 安全
-// 管線（prefix 檢查 → decode/validate → boundary 路徑驗證 → WriteFileNoFollow）
-// 已抽到 downloadValidatedPNG（ADR-0009）— 此 handler 只負責 adapter 邏輯與
-// handler-level logging,不再內聯管線。
+// adapter 職責:給 suffix "CCI_Rudolph",檔名 {subject}_CCI_Rudolph.png 由
+// CSVHandler.WriteSubjectPNG 經 SubjectOutputName 推導(內部強制 Sanitize 防 traversal),
+// 落在 OutputDir。PNG 管線(prefix 檢查 → DecodeAndValidatePNG → Output placement)
+// 在 downloadValidatedPNG(ADR-0009 / ADR-0055)— 此 handler 只負責 adapter 與 logging。
 func (a *App) DownloadCCIChart(params CCIDownloadParams) (result *ChartResult, err error) {
 	defer recoverHandlerPanic("DownloadCCIChart", a.logger, &err)
 
 	a.logger.Info("開始下載 CCI 圖表", nil)
 
 	// params.Subject 來自前端；sanitize 防路徑穿越（"../x" 之類）由 SubjectOutputName 內部強制。
-	s := a.state.Load()
-	outputPath := filepath.Join(
-		s.config.OutputDir,
-		filename.SubjectOutputName(params.Subject, "CCI_Rudolph")+".png",
-	)
-
-	result, err = a.downloadValidatedPNG(params.ImageData, outputPath)
+	result, err = a.downloadValidatedPNG(params.ImageData, params.Subject, "CCI_Rudolph")
 	if err != nil {
-		a.logger.Error("CCI 圖表下載失敗", err, map[string]any{
-			"output": outputPath,
-		})
+		a.logger.Error("CCI 圖表下載失敗", err)
 		return nil, err
 	}
 
 	a.logger.Info("CCI 圖表下載完成", map[string]any{
-		"output": outputPath,
+		"output": result.OutputPath,
 	})
 
 	return result, nil

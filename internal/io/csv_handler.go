@@ -445,15 +445,23 @@ func (h *CSVHandler) WriteFileCSV(req WriteRequest, data [][]string) (string, er
 	return h.placeOutput(req.SubDir, req.Filename, h.csvPayload(data[0], emitRows(data[1:])))
 }
 
-// placeOutput 是所有輸出落檔的單一步驟([[Subject output placement]],File-based 與
-// Subject-based 共用),依序:
+// outputPayload 是一種輸出格式的 payload adapter:checkName 是該格式的檔名規則
+// (CSV = ValidateFilename,含 .csv;PNG = ValidateName),write 把位元組寫進 placement
+// 給的 tmp 檔。格式與它的檔名規則綁在一起,placeOutput 不必知道是哪種格式。
+type outputPayload struct {
+	checkName func(name string) error
+	write     func(stdio.Writer) error
+}
+
+// placeOutput 是所有輸出落檔的單一步驟([[Output placement]]:File-based CSV、Subject-based
+// CSV 與 PNG 共用),依序:
 //  1. 命名:caller 給 name —— File-based 是 req.Filename;Subject-based 是
-//     filename.SubjectOutputName(subject, suffix)+".csv"(見 placeSubjectOutput)。
-//  2. safeJoinOutput(OutputDir/subDir/name,containment)。join 後以
-//     ValidateFilename(Base(path)) 驗檔名;Subject 檔名恆通過(ADR-0054 property 測試)。
+//     filename.SubjectOutputName(subject, suffix) + 副檔名(見 placeSubjectOutput / WriteSubjectPNG)。
+//  2. safeJoinOutput(OutputDir/subDir/name,containment)。join 後以 payload.checkName(Base(path))
+//     驗檔名;Subject 檔名恆通過(ADR-0054 property 測試)。
 //  3. ValidateExternalPath(敏感位置,含 symlink resolve)。
 //  4. MkdirAll —— 先驗證、後建目錄,被拒的路徑不留下目錄。
-//  5. fsperm.AtomicWriteFile(path, GetAllowedBasePaths(), payload):tmp → fsync → rename,
+//  5. fsperm.AtomicWriteFile(path, GetAllowedBasePaths(), payload.write):tmp → fsync → rename,
 //     parent 以 dirfd 錨定在 allow-list 之下。leaf 若是 symlink,rename 取代連結本身,
 //     不跟到目標;parent 是逸出 base 的 symlink 則拒寫。
 //
@@ -465,13 +473,13 @@ func (h *CSVHandler) WriteFileCSV(req WriteRequest, data [][]string) (string, er
 //   - ValidateExternalPath 失敗:以 %w 包 validator error,可帶輸出「檔案」路徑
 //     (webview sink 只保留檔名,見 ADR-0036 D5)。
 //   - AtomicWriteFile 失敗:原樣回傳底層 error,不另加前綴。
-func (h *CSVHandler) placeOutput(subDir, name string, payload func(stdio.Writer) error) (string, error) {
+func (h *CSVHandler) placeOutput(subDir, name string, payload outputPayload) (string, error) {
 	outputPath, err := h.safeJoinOutput(subDir, name)
 	if err != nil {
 		return "", fmt.Errorf("輸出路徑無效: %w", err)
 	}
 
-	if err := h.filenameValidator.ValidateFilename(filepath.Base(outputPath)); err != nil {
+	if err := payload.checkName(filepath.Base(outputPath)); err != nil {
 		return "", fmt.Errorf("檔案名稱驗證失敗: %w", err)
 	}
 
@@ -489,21 +497,47 @@ func (h *CSVHandler) placeOutput(subDir, name string, payload func(stdio.Writer)
 		return "", fmt.Errorf("輸出目錄建立失敗: %w", err)
 	}
 
-	if err := fsperm.AtomicWriteFile(outputPath, h.pathValidator.GetAllowedBasePaths(), payload); err != nil {
+	if err := fsperm.AtomicWriteFile(outputPath, h.pathValidator.GetAllowedBasePaths(), payload.write); err != nil {
 		return "", err
 	}
 
 	return outputPath, nil
 }
 
-// csvPayload 是 CSV 的 payload adapter:BOM 照 config.BOMEnabled(io 是唯一讀這個設定的地方),
-// 標題列與資料列的 formula-injection sanitize 由 csvutil.CSVPayload 持有。
-func (h *CSVHandler) csvPayload(header []string, emit csvutil.RowEmitter) func(stdio.Writer) error {
-	return csvutil.CSVPayload(csvutil.SafeWriteOptions{
-		Header:  header,
-		Emit:    emit,
-		OmitBOM: !h.config.BOMEnabled,
-	})
+// csvPayload 是 CSV 的 payload adapter:檔名必須是 .csv(ValidateFilename);BOM 照
+// config.BOMEnabled(io 是唯一讀這個設定的地方),標題列與資料列的 formula-injection
+// sanitize 由 csvutil.CSVPayload 持有。
+func (h *CSVHandler) csvPayload(header []string, emit csvutil.RowEmitter) outputPayload {
+	return outputPayload{
+		checkName: h.filenameValidator.ValidateFilename,
+		write: csvutil.CSVPayload(csvutil.SafeWriteOptions{
+			Header:  header,
+			Emit:    emit,
+			OmitBOM: !h.config.BOMEnabled,
+		}),
+	}
+}
+
+// pngPayload 是 PNG 的 payload adapter:檔名走不綁副檔名的 ValidateName,位元組原樣寫出。
+// png 必須是 caller 已解碼並驗證過的 PNG(gui 的 DecodeAndValidatePNG,ADR-0009)。
+func pngPayload(png []byte) outputPayload {
+	return outputPayload{
+		checkName: filename.ValidateName,
+		write: func(w stdio.Writer) error {
+			if _, err := w.Write(png); err != nil {
+				return fmt.Errorf("寫入 PNG 失敗: %w", err)
+			}
+			return nil
+		},
+	}
+}
+
+// WriteSubjectPNG 把已解碼、已驗證的 PNG 位元組寫成
+// OutputDir/{filename.SubjectOutputName(subject, suffix)}.png,回傳實際寫入的路徑。
+// 落檔與 CSV 走同一道 placeOutput:containment、敏感位置、MkdirAll(OutputDir 尚不存在也能寫)、
+// atomic 寫入 + fsync、dirfd 錨定在 allow-list 之下。PNG 內容的驗證不在這裡(ADR-0009 / ADR-0055)。
+func (h *CSVHandler) WriteSubjectPNG(subject, suffix string, png []byte) (string, error) {
+	return h.placeOutput("", filename.SubjectOutputName(subject, suffix)+".png", pngPayload(png))
 }
 
 // emitRows 把現成的 rows 逐列交給 emit。

@@ -6,150 +6,187 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"count_mean/internal/config"
+	"count_mean/internal/i18n"
 	"count_mean/internal/logging"
 )
 
-// validPNGBase64 回傳一個最小但合法 PNG 的 base64 字串（不含 dataURL 前綴），
-// reuse png_validation_test.go 的 validPNGBytes（同 package 可見）。caller 自行
-// 視需要在前面拼 pngDataURLPrefix。
-func validPNGBase64(width, height uint32) string {
-	return base64.StdEncoding.EncodeToString(validPNGBytes(width, height))
-}
-
-// setupDownloadValidatedPNGTestApp 構造僅含 logger 的最小 App。
-// downloadValidatedPNG 不讀 app.state（OutputPath 由 caller 直接給），只需 logger
-// 不為 nil 以免後續若加入 log 行造成 nil-deref。對齊 sibling
-// setupChartComposerTestApp 的最小化精神。
-func setupDownloadValidatedPNGTestApp(t *testing.T) *App {
+// newPNGTestState 以 buildAppState 建完整 state(含 csvHandler),OutputDir 由 caller 指定;
+// InputDir / OperateDir 各用一個 t.TempDir(),避免 allow-list 落到 CWD。
+func newPNGTestState(t *testing.T, outputDir string) *appState {
 	t.Helper()
 
-	app := &App{
-		logger: logging.GetLogger("png_download_test"),
-	}
+	cfg := config.DefaultConfig()
+	cfg.InputDir = t.TempDir()
+	cfg.OperateDir = t.TempDir()
+	cfg.OutputDir = outputDir
+
+	return buildAppState(cfg)
+}
+
+// newPNGTestApp 構造只含 logger 與 state 的最小 App,供 PNG 下載管線測試。
+func newPNGTestApp(t *testing.T, outputDir string) *App {
+	t.Helper()
+
+	app := &App{logger: logging.GetLogger("png_download_test")}
+	app.state.Store(newPNGTestState(t, outputDir))
+
 	return app
 }
 
 // TestDownloadValidatedPNG_RejectsBadPrefix 釘住第一道守門:imageData 缺
-// "data:image/png;base64," 前綴時，直接回 ErrInvalidImageFormat（不 wrap），
-// 對齊 DownloadCCIChart / DownloadChartComposerImage 既有行為。
+// "data:image/png;base64," 前綴時直接回 ErrInvalidImageFormat(不 wrap),且不落檔。
 func TestDownloadValidatedPNG_RejectsBadPrefix(t *testing.T) {
-	app := setupDownloadValidatedPNGTestApp(t)
+	outputDir := t.TempDir()
+	app := newPNGTestApp(t, outputDir)
 
-	result, err := app.downloadValidatedPNG("not-a-data-url", "/tmp/whatever.png")
+	result, err := app.downloadValidatedPNG("not-a-data-url", "S1", "CCI_Rudolph")
 
 	require.Error(t, err, "缺 PNG dataURL 前綴必須 reject")
 	assert.Nil(t, result, "格式錯誤時不應回 result")
 	assert.True(t, errors.Is(err, ErrInvalidImageFormat),
 		"reject reason 應為 ErrInvalidImageFormat（不 wrap），got %v", err)
+	assertDirEmpty(t, outputDir)
 }
 
-// TestDownloadValidatedPNG_RejectsInvalidPNGPayload 釘住第二道守門:前綴正確
-// 但 strip 後 payload 不是合法 base64 / PNG 時，回的 error 必須帶
-// "PNG 驗證失敗" 前綴（DecodeAndValidatePNG 錯誤被 fmt.Errorf wrap）。
+// TestDownloadValidatedPNG_RejectsInvalidPNGPayload 釘住第二道守門:前綴正確但 payload
+// 不是合法 base64 / PNG 時,DecodeAndValidatePNG 的錯誤 wrap 成「PNG 驗證失敗」,
+// 且在落檔之前就擋下(OutputDir 不留任何東西)。
 func TestDownloadValidatedPNG_RejectsInvalidPNGPayload(t *testing.T) {
-	app := setupDownloadValidatedPNGTestApp(t)
-
-	// 前綴正確，但後面接的是不可解析的 base64 — DecodeAndValidatePNG 必失敗。
-	result, err := app.downloadValidatedPNG(pngDataURLPrefix+"!!! not base64 !!!", "/tmp/whatever.png")
-
-	require.Error(t, err, "前綴正確但 payload 非法 PNG 必須 reject")
-	assert.Nil(t, result, "PNG 驗證失敗時不應回 result")
-	assert.Contains(t, err.Error(), "PNG 驗證失敗",
-		"PNG decode/validate 失敗應 wrap 成「PNG 驗證失敗」，got %v", err)
-}
-
-// TestDownloadValidatedPNG_RejectsSensitivePath_NoDoubleLabel 釘住第三道守門:
-// 輸出路徑落在系統敏感目錄時，由 validateExternalPathInputs reject，且 helper
-// 不再外層 re-wrap → label "PNG 輸出路徑" 在錯誤訊息中最多出現一次。
-//
-// 跨平台規則:用「字串樣本」/etc/passwd（normalizePath 後在所有 OS 都命中
-// "/etc/" 敏感樣式）而非 t.TempDir()，確保 mac/linux/windows CI 都驗得到
-// sensitive-path rejection。
-func TestDownloadValidatedPNG_RejectsSensitivePath_NoDoubleLabel(t *testing.T) {
-	app := setupDownloadValidatedPNGTestApp(t)
-
-	// 合法 PNG dataURL 走過 decode → 讓 reject reason 一定是 path validation。
-	imageData := pngDataURLPrefix + validPNGBase64(1, 1)
-
-	result, err := app.downloadValidatedPNG(imageData, "/etc/passwd")
-
-	require.Error(t, err, "系統敏感路徑必須被 boundary 擋下")
-	assert.Nil(t, result, "path validation 失敗時不應回 result")
-
-	msg := err.Error()
-	t.Logf("downloadValidatedPNG 敏感路徑錯誤訊息: %q", msg)
-
-	// label "PNG 輸出路徑" 不可重複（雙重 wrap 會產生重複 label 的 bug）。
-	occurrences := strings.Count(msg, "PNG 輸出路徑")
-	assert.LessOrEqual(t, occurrences, 1,
-		"「PNG 輸出路徑」label 最多出現一次（不可雙重 wrap），got %d 次: %q", occurrences, msg)
-
-	// 仍須帶 path validation 語義 token，audit log 可定位。
-	assert.Contains(t, msg, "路徑驗證失敗", "錯誤仍須指出失敗類別")
-}
-
-// TestDownloadValidatedPNG_RejectsLeafSymlink 釘住第四道守門:輸出路徑本身是
-// 一個 symlink 時，fsperm.WriteFileNoFollow（O_NOFOLLOW）必須 reject，且
-// symlink 指向的目標檔案不可被覆寫。鏡像 fsperm/symlink_test.go 的設定，含
-// Windows symlink 權限 skip guard。
-func TestDownloadValidatedPNG_RejectsLeafSymlink(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows symlink creation requires Developer Mode / admin; skipping leaf-symlink boundary test")
+	cases := []struct {
+		name    string
+		payload string
+		wantIs  error
+	}{
+		{name: "NotBase64", payload: "!!! not base64 !!!"},
+		{
+			name:    "NotPNG",
+			payload: base64.StdEncoding.EncodeToString([]byte("GIF89a not a png at all, padding")),
+			wantIs:  ErrPNGSignatureInvalid,
+		},
 	}
 
-	app := setupDownloadValidatedPNGTestApp(t)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			outputDir := t.TempDir()
+			app := newPNGTestApp(t, outputDir)
 
-	tempDir := t.TempDir()
-	target := filepath.Join(tempDir, "victim.png")
-	require.NoError(t, os.WriteFile(target, []byte("untouched"), 0o600), "setup: 寫 victim 檔失敗")
+			result, err := app.downloadValidatedPNG(pngDataURLPrefix+tc.payload, "S1", "CCI_Rudolph")
 
-	symlinkPath := filepath.Join(tempDir, "out.png")
-	require.NoError(t, os.Symlink(target, symlinkPath), "setup: 建 symlink 失敗")
-
-	imageData := pngDataURLPrefix + validPNGBase64(1, 1)
-
-	result, err := app.downloadValidatedPNG(imageData, symlinkPath)
-
-	require.Error(t, err, "leaf symlink 輸出路徑必須被 WriteFileNoFollow 擋下")
-	assert.Nil(t, result, "symlink 寫入失敗時不應回 result")
-	assert.Contains(t, err.Error(), "保存圖片失敗",
-		"WriteFileNoFollow 失敗應 wrap 成「保存圖片失敗」，got %v", err)
-
-	// 核心安全保證:symlink 指向的目標檔案不可被覆寫。
-	got, readErr := os.ReadFile(target)
-	require.NoError(t, readErr, "verify: 讀 victim 檔失敗")
-	assert.Equal(t, "untouched", string(got),
-		"symlink 目標檔被覆寫了 — O_NOFOLLOW 未生效")
+			require.Error(t, err, "前綴正確但 payload 非法 PNG 必須 reject")
+			assert.Nil(t, result)
+			assert.Contains(t, err.Error(), "PNG 驗證失敗")
+			if tc.wantIs != nil {
+				assert.ErrorIs(t, err, tc.wantIs)
+			}
+			assertDirEmpty(t, outputDir)
+		})
+	}
 }
 
-// TestDownloadValidatedPNG_HappyPath 釘住成功路徑:合法 PNG dataURL + 合法輸出
-// 路徑 → 把 decode 後的 PNG bytes 寫到該路徑，回 ChartResult{OutputPath, Success,
-// Message}。檔案內容必須等於 decode 後的 PNG bytes（reuse validPNGBytes fixture）。
-func TestDownloadValidatedPNG_HappyPath(t *testing.T) {
-	app := setupDownloadValidatedPNGTestApp(t)
+// TestDownloadCCIChart_LeafSymlinkIsReplaced 釘住 leaf symlink 語意(ADR-0055 起與 CSV 相同):
+// 輸出檔位置已是指向 OutputDir 外的 symlink 時,atomic rename 取代連結本身 —— 下載成功、
+// 連結變成內容為新 PNG 的一般檔,連結目標(victim)不被改寫。
+func TestDownloadCCIChart_LeafSymlinkIsReplaced(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows symlink creation requires Developer Mode / admin; skipping leaf-symlink test")
+	}
 
-	outputPath := filepath.Join(t.TempDir(), "chart.png")
-	pngBytes := validPNGBytes(1, 1)
-	imageData := pngDataURLPrefix + base64.StdEncoding.EncodeToString(pngBytes)
+	outputDir := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "victim.png")
+	require.NoError(t, os.WriteFile(victim, []byte("untouched"), 0o600), "setup: 寫 victim 檔失敗")
 
-	result, err := app.downloadValidatedPNG(imageData, outputPath)
+	link := filepath.Join(outputDir, "S1_CCI_Rudolph.png")
+	require.NoError(t, os.Symlink(victim, link), "setup: 建 symlink 失敗")
 
-	require.NoError(t, err, "合法 PNG + 合法路徑必須成功")
+	app := newPNGTestApp(t, outputDir)
+	result, err := app.DownloadCCIChart(CCIDownloadParams{ImageData: validPNGBase64DataURL(), Subject: "S1"})
+
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, outputPath, result.OutputPath)
-	assert.True(t, result.Success)
-	// Message 進 webview 顯示:只帶檔名,不帶輸出目錄的絕對路徑。
-	assert.Equal(t, "圖表已下載至: chart.png", result.Message)
-	assert.NotContains(t, result.Message, filepath.Dir(outputPath))
+	assert.Equal(t, link, result.OutputPath)
 
-	// 檔案真的被寫出，且內容等於 decode 後的 PNG bytes。
-	written, readErr := os.ReadFile(outputPath)
-	require.NoError(t, readErr, "PNG 必須真的被寫入 disk")
-	assert.Equal(t, pngBytes, written, "寫入的 bytes 必須等於 decode 後的 PNG bytes")
+	got, readErr := os.ReadFile(victim)
+	require.NoError(t, readErr)
+	assert.Equal(t, "untouched", string(got), "symlink 目標不可被改寫")
+
+	info, lstatErr := os.Lstat(link)
+	require.NoError(t, lstatErr)
+	assert.True(t, info.Mode().IsRegular(), "連結應被取代成一般檔,mode=%v", info.Mode())
+
+	written, readErr := os.ReadFile(link)
+	require.NoError(t, readErr)
+	assert.Equal(t, validPNGBytes(1, 1), written)
+}
+
+// TestDownloadPNG_SaveConfigToMissingOutputDir 釘住 bug:SaveConfig 把 OutputDir 換到尚不存在
+// 的資料夾後,PNG 下載必須直接成功(建立目錄),不必重啟 App(只有 Startup 的
+// EnsureDirectories 會建目錄)。CSV 經 Output placement 一向會 MkdirAll,PNG 原本沒有。
+func TestDownloadPNG_SaveConfigToMissingOutputDir(t *testing.T) {
+	// SaveConfig 會 i18n.SetLocale(cfg.Language) 改全域 locale。
+	prevLocale := i18n.GetLocale()
+	t.Cleanup(func() { i18n.SetLocale(prevLocale) })
+
+	downloads := []struct {
+		name     string
+		wantName string
+		download func(app *App) (*ChartResult, error)
+	}{
+		{
+			name: "DownloadCCIChart", wantName: "S1_CCI_Rudolph.png",
+			download: func(app *App) (*ChartResult, error) {
+				return app.DownloadCCIChart(CCIDownloadParams{ImageData: validPNGBase64DataURL(), Subject: "S1"})
+			},
+		},
+		{
+			name: "DownloadChartComposerImage", wantName: "S1_chart_composer.png",
+			download: func(app *App) (*ChartResult, error) {
+				return app.DownloadChartComposerImage(&DownloadChartComposerImageParams{
+					Base64Data: validPNGBase64DataURL(), Subject: "S1",
+				})
+			},
+		},
+	}
+
+	for _, tc := range downloads {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			newConfig := func(outputDir string) *config.AppConfig {
+				cfg := config.DefaultConfig()
+				cfg.InputDir = root
+				cfg.OperateDir = root
+				cfg.OutputDir = outputDir
+				return cfg
+			}
+			app := NewAppWithConfigPath(newConfig(root), "test", filepath.Join(root, "config.json"))
+
+			missing := filepath.Join(root, "new_output")
+			require.NoError(t, app.SaveConfig(newConfig(missing)))
+			require.NoDirExists(t, missing, "前提:SaveConfig 不建立 OutputDir")
+
+			result, err := tc.download(app)
+
+			require.NoError(t, err, "SaveConfig 換到新資料夾後 PNG 下載必須成功")
+			require.NotNil(t, result)
+			assert.True(t, result.Success)
+			assert.Equal(t, filepath.Join(missing, tc.wantName), result.OutputPath)
+			written, readErr := os.ReadFile(result.OutputPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, validPNGBytes(1, 1), written)
+		})
+	}
+}
+
+// assertDirEmpty 斷言 dir 內沒有任何檔案(被拒的下載不落檔、不留 tmp)。
+func assertDirEmpty(t *testing.T, dir string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "被拒的下載不得在 OutputDir 留下任何檔案")
 }

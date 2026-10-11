@@ -10,10 +10,9 @@
 //     無多步驟 pipeline（ADR-0002）；Generate 的資料組裝委派 internal/composer
 //     （ADR-0046），handler 只做驗證 / chart render / envelope。
 //   - Handler 3（DownloadChartComposerImage）鏡像既有 `DownloadCCIChart` 模式
-//     — adapter 端從 params.Subject 經 filename.SubjectOutputName 推導 config.OutputDir
-//     內的 `{subject}_chart_composer.png`,再把
-//     共用 PNG 安全管線（base64 → DecodeAndValidatePNG → validateExternalPathInputs
-//     → fsperm.WriteFileNoFollow）委派給 downloadValidatedPNG（ADR-0009）。
+//     — adapter 端只給 params.Subject 與 suffix "chart_composer",把共用 PNG 管線
+//     （base64 → DecodeAndValidatePNG → CSVHandler.WriteSubjectPNG 落在 config.OutputDir
+//     內的 `{subject}_chart_composer.png`）委派給 downloadValidatedPNG（ADR-0009 / ADR-0055）。
 //
 // 錯誤通道契約：
 //
@@ -31,13 +30,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"count_mean/internal/chart"
 	"count_mean/internal/composer"
 	"count_mean/internal/i18n"
 	"count_mean/internal/manifest"
-	"count_mean/internal/validation/filename"
 )
 
 // ErrChartComposerNilParams err113 sentinel — 純承載 user-facing 訊息
@@ -286,16 +283,15 @@ func chartComposerLoadFailKey(err error) string {
 	return i18n.KeyErrorHandlerLoadDataFailed
 }
 
-// DownloadChartComposerImage 接前端 base64 PNG dataURL,從 params.Subject 推導
-// config.OutputDir 內的固定檔名({SubjectOutputName(subject, "chart_composer")}.png)
-// 並寫入(對稱 DownloadCCIChart)。
+// DownloadChartComposerImage 接前端 base64 PNG dataURL,寫成 config.OutputDir 內的固定檔名
+// ({SubjectOutputName(subject, "chart_composer")}.png,對稱 DownloadCCIChart)。
 //
-// short-circuit 順序敏感(PNG decode 先於 path validation,避免在合法路徑寫進
-// 非 PNG 內容),鏡像 `DownloadCCIChart`。
+// short-circuit 順序敏感(PNG decode 先於落檔,避免在合法路徑寫進非 PNG 內容),
+// 鏡像 `DownloadCCIChart`。
 //
-// adapter 職責:從 params.Subject 經 filename.SubjectOutputName 推導檔名(內部強制
-// Sanitize 防 traversal)。共用的 PNG 安全管線(prefix 檢查 → DecodeAndValidatePNG
-// → boundary 路徑驗證 → WriteFileNoFollow)已抽到 downloadValidatedPNG(ADR-0009)
+// adapter 職責:給 suffix "chart_composer";檔名由 CSVHandler.WriteSubjectPNG 經
+// SubjectOutputName 推導(內部強制 Sanitize 防 traversal)。PNG 管線(prefix 檢查 →
+// DecodeAndValidatePNG → Output placement)在 downloadValidatedPNG(ADR-0009 / ADR-0055)
 // — 此 handler 只負責 adapter 邏輯與 logging。
 func (a *App) DownloadChartComposerImage(
 	params *DownloadChartComposerImageParams,
@@ -309,22 +305,14 @@ func (a *App) DownloadChartComposerImage(
 	}
 
 	// params.Subject 來自前端;sanitize 防路徑穿越("../x" 之類)由 SubjectOutputName 內部強制。
-	s := a.state.Load()
-	outputPath := filepath.Join(
-		s.config.OutputDir,
-		filename.SubjectOutputName(params.Subject, "chart_composer")+".png",
-	)
-
-	result, err = a.downloadValidatedPNG(params.Base64Data, outputPath)
+	result, err = a.downloadValidatedPNG(params.Base64Data, params.Subject, "chart_composer")
 	if err != nil {
-		a.logger.Error("Chart Composer 圖表下載失敗", err, map[string]any{
-			"output": outputPath,
-		})
+		a.logger.Error("Chart Composer 圖表下載失敗", err)
 		return nil, err
 	}
 
 	a.logger.Info("Chart Composer 圖表下載完成", map[string]any{
-		"output": outputPath,
+		"output": result.OutputPath,
 	})
 
 	return result, nil

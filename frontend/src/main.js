@@ -1129,7 +1129,7 @@ class EMGAnalysisApp {
     // 鏡像 `downloadCCIChart`(ADR-0019 對稱化):前端只傳 subject,backend 用
     // filename.SubjectOutputName(subject, "chart_composer") 推導 config.OutputDir 內的
     // `<subject>_chart_composer.png`(SubjectOutputName 內部 Sanitize 防 traversal),再走
-    // downloadValidatedPNG 安全管線(validateExternalPathInputs 防 sensitive dir)。空 subject
+    // downloadValidatedPNG 安全管線(Output placement 防 sensitive dir,ADR-0055)。空 subject
     // 由 backend Sanitize 走 untitled fallback。
     async downloadComposerChart() {
         const iframe = document.querySelector('#composerChartContent iframe');

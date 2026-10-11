@@ -93,10 +93,14 @@ func newRPCRedactTestApp(t *testing.T, outputDir, configPath string) *App {
 // 不含路徑);SetLanguage 只回 locale 字串;SelectFile / SelectDirectory 的錯誤
 // 只來自 ErrAppNotReady 或 Wails 對話框 runtime(單元測試無法觸發),handler 本身
 // 不把路徑組進 err。出口 redact 對它們一樣生效,只是不在此表內。
+//
+// pathFree 列:觸發的錯誤本身就不帶路徑(兩個 PNG 下載經 Output placement,MkdirAll 失敗
+// 只包 errno),不要求 `<redacted-path>` 標記。
 func TestRPCErrChannel_NoAbsolutePath(t *testing.T) {
 	cases := []struct {
 		name     string
 		sentinel error
+		pathFree bool
 		call     func(t *testing.T, planted string) error
 	}{
 		{
@@ -162,10 +166,11 @@ func TestRPCErrChannel_NoAbsolutePath(t *testing.T) {
 		},
 		{
 			name:     "DownloadCCIChart",
-			sentinel: fs.ErrNotExist,
+			sentinel: syscall.ENOTDIR,
+			pathFree: true,
 			call: func(t *testing.T, planted string) error {
-				// OutputDir 不存在 → WriteFileNoFollow 回 ENOENT,錯誤帶輸出路徑。
-				app := newRPCRedactTestApp(t, filepath.Join(planted, "out"), "")
+				// OutputDir 的父層是一般檔案 → placement 的 MkdirAll 回 ENOTDIR(只包 errno)。
+				app := newRPCRedactTestApp(t, blockedOutputDir(t, planted), "")
 				_, err := app.DownloadCCIChart(CCIDownloadParams{
 					ImageData: validPNGBase64DataURL(),
 					Subject:   "S1",
@@ -176,9 +181,10 @@ func TestRPCErrChannel_NoAbsolutePath(t *testing.T) {
 		},
 		{
 			name:     "DownloadChartComposerImage",
-			sentinel: fs.ErrNotExist,
+			sentinel: syscall.ENOTDIR,
+			pathFree: true,
 			call: func(t *testing.T, planted string) error {
-				app := newRPCRedactTestApp(t, filepath.Join(planted, "out"), "")
+				app := newRPCRedactTestApp(t, blockedOutputDir(t, planted), "")
 				_, err := app.DownloadChartComposerImage(&DownloadChartComposerImageParams{
 					Base64Data: validPNGBase64DataURL(),
 					Subject:    "S1",
@@ -196,10 +202,28 @@ func TestRPCErrChannel_NoAbsolutePath(t *testing.T) {
 			err := tc.call(t, planted)
 			require.Error(t, err, "觸發條件應讓 handler 走 err 通道")
 
-			requireNoDirLeak(t, err.Error(), planted)
+			if tc.pathFree {
+				// 錯誤本身不帶路徑(Output placement 的 MkdirAll 失敗只包 errno):
+				// 沒有 <redacted-path> 可要求,但仍不得出現植入目錄或 system-root 前綴。
+				requireNoDirLeak(t, err.Error(), "")
+				require.NotContains(t, err.Error(), plantedDirMarker)
+			} else {
+				requireNoDirLeak(t, err.Error(), planted)
+			}
 			assert.ErrorIs(t, err, tc.sentinel, "redact 後 errors.Is 仍須命中原 sentinel")
 		})
 	}
+}
+
+// blockedOutputDir 回傳一個「父層是一般檔案」的 OutputDir(planted/blocker/out),
+// 讓 Output placement 的 MkdirAll 以 ENOTDIR 失敗。
+func blockedOutputDir(t *testing.T, planted string) string {
+	t.Helper()
+
+	blocker := filepath.Join(planted, "blocker")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
+
+	return filepath.Join(blocker, "out")
 }
 
 // TestRPCMessage_NoAbsolutePath 守 Message 通道出口:每個把可預期失敗包進 result

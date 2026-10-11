@@ -4,36 +4,29 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-
-	"count_mean/internal/security/fsperm"
 )
 
 // pngDataURLPrefix 是前端 canvas.toDataURL() 產出的 PNG base64 dataURL 前綴。
 // 與 DownloadCCIChart / DownloadChartComposerImage 內聯字面值保持一致。
 const pngDataURLPrefix = "data:image/png;base64,"
 
-// downloadValidatedPNG 是 CCI / Chart Composer 兩個下載 handler 共用的 PNG
-// 安全管線單一抽出點（ADR-0009 Phase 1）。
-func (a *App) downloadValidatedPNG(imageData, outputPath string) (*ChartResult, error) {
+// downloadValidatedPNG 是 CCI / Chart Composer 兩個下載 handler 共用的 PNG 管線(ADR-0009)。
+// gui 只持有 dataURL prefix 檢查與 DecodeAndValidatePNG;落檔(SubjectOutputName 命名、
+// containment、敏感位置、MkdirAll、atomic 寫入)交給 CSVHandler.WriteSubjectPNG
+// ([[Output placement]],ADR-0055)。檔名 = OutputDir/{SubjectOutputName(subject, suffix)}.png。
+func (a *App) downloadValidatedPNG(imageData, subject, suffix string) (*ChartResult, error) {
 	if !strings.HasPrefix(imageData, pngDataURLPrefix) {
 		return nil, ErrInvalidImageFormat
 	}
 
-	base64Data := strings.TrimPrefix(imageData, pngDataURLPrefix)
-
-	pngData, err := DecodeAndValidatePNG(base64Data)
+	pngData, err := DecodeAndValidatePNG(strings.TrimPrefix(imageData, pngDataURLPrefix))
 	if err != nil {
 		return nil, fmt.Errorf("PNG 驗證失敗: %w", err)
 	}
 
-	// label 一次到位帶 "PNG 輸出路徑"，validateExternalPathInputs 已會附上
-	// 「路徑驗證失敗: <reason>」。caller 不再外層 re-wrap，避免重複 label。
-	if pathErr := validateExternalPathInputs("PNG 輸出路徑", outputPath); pathErr != nil {
-		return nil, pathErr
-	}
-
-	if writeErr := fsperm.WriteFileNoFollow(outputPath, pngData); writeErr != nil {
-		return nil, fmt.Errorf("保存圖片失敗: %w", writeErr)
+	outputPath, err := a.state.Load().csvHandler.WriteSubjectPNG(subject, suffix, pngData)
+	if err != nil {
+		return nil, fmt.Errorf("保存圖片失敗: %w", err)
 	}
 
 	// Message 由 Composer 前端原樣顯示:只帶檔名,輸出目錄的絕對路徑不進 webview 文字。
