@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -358,103 +357,4 @@ func TestLoadConfig(t *testing.T) {
 		require.Equal(t, []string{"階段A", "階段B"}, loaded.PhaseLabels)
 		require.Equal(t, 6, loaded.Precision)
 	})
-}
-
-func TestAppConfig_SaveConfig(t *testing.T) {
-	t.Run("ValidSave", func(t *testing.T) {
-		tempDir := t.TempDir()
-		configFile := filepath.Join(tempDir, "save_test.json")
-
-		cfg := &AppConfig{
-			ScalingFactor: 15,
-			PhaseLabels:   []string{"保存測試階段1", "保存測試階段2"},
-			Precision:     12,
-			OutputFormat:  "xlsx",
-			BOMEnabled:    false,
-			InputDir:      "./input",
-			OutputDir:     "./output",
-			OperateDir:    "./value_operate",
-			Language:      "zh-TW",
-		}
-
-		err := cfg.SaveConfig(configFile)
-		require.NoError(t, err)
-
-		// 檢查文件是否存在
-		_, err = os.Stat(configFile)
-		require.NoError(t, err)
-
-		// 重新載入並驗證
-		reloadedConfig, err := LoadConfig(configFile)
-		require.NoError(t, err)
-		require.Equal(t, cfg.ScalingFactor, reloadedConfig.ScalingFactor)
-		require.Equal(t, cfg.PhaseLabels, reloadedConfig.PhaseLabels)
-		require.Equal(t, cfg.Precision, reloadedConfig.Precision)
-		require.Equal(t, cfg.OutputFormat, reloadedConfig.OutputFormat)
-		require.Equal(t, cfg.BOMEnabled, reloadedConfig.BOMEnabled)
-	})
-
-	t.Run("SaveLoadRoundTrip", func(t *testing.T) {
-		tempDir := t.TempDir()
-		configFile := filepath.Join(tempDir, "roundtrip_test.json")
-
-		originalConfig := DefaultConfig()
-		originalConfig.ScalingFactor = 25
-		originalConfig.Precision = 6
-
-		// 保存
-		err := originalConfig.SaveConfig(configFile)
-		require.NoError(t, err)
-
-		// 載入
-		loadedConfig, err := LoadConfig(configFile)
-		require.NoError(t, err)
-
-		// 比較
-		require.Equal(t, originalConfig.ScalingFactor, loadedConfig.ScalingFactor)
-		require.Equal(t, originalConfig.PhaseLabels, loadedConfig.PhaseLabels)
-		require.Equal(t, originalConfig.Precision, loadedConfig.Precision)
-		require.Equal(t, originalConfig.OutputFormat, loadedConfig.OutputFormat)
-		require.Equal(t, originalConfig.BOMEnabled, loadedConfig.BOMEnabled)
-	})
-
-	t.Run("InvalidDirectory", func(t *testing.T) {
-		cfg := DefaultConfig()
-		invalidPath := "/nonexistent/directory/config.json"
-		err := cfg.SaveConfig(invalidPath)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "無法創建配置檔案")
-	})
-}
-
-func TestAppConfig_ToAnalysisConfig(t *testing.T) {
-	cfg := &AppConfig{
-		ScalingFactor: 15,
-		PhaseLabels:   []string{"測試階段1", "測試階段2", "測試階段3"},
-		Precision:     8,
-		OutputFormat:  "json",
-		BOMEnabled:    true,
-	}
-
-	analysisConfig := cfg.ToAnalysisConfig()
-	require.NotNil(t, analysisConfig)
-	require.Equal(t, cfg.ScalingFactor, analysisConfig.ScalingFactor)
-	require.Equal(t, cfg.PhaseLabels, analysisConfig.PhaseLabels)
-	require.WithinDuration(t, time.Now(), analysisConfig.CreatedAt, time.Second)
-}
-
-func TestAppConfig_ProcessingOptions(t *testing.T) {
-	cfg := &AppConfig{
-		ScalingFactor: 10,
-		PhaseLabels:   []string{"階段1"},
-		Precision:     12,
-		OutputFormat:  "xlsx",
-		BOMEnabled:    false,
-	}
-
-	options := cfg.ProcessingOptions()
-	require.NotNil(t, options)
-	require.True(t, options.ValidateInput)
-	require.Equal(t, cfg.Precision, options.Precision)
-	require.Equal(t, cfg.OutputFormat, options.OutputFormat)
 }

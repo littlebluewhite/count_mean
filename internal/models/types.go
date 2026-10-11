@@ -1,8 +1,6 @@
 package models
 
 import (
-	"time"
-
 	calcerrors "count_mean/internal/errors"
 )
 
@@ -66,55 +64,8 @@ type PhaseAnalysisResult struct {
 	MeanValues map[int]float64 `json:"mean_values"`
 }
 
-// AnalysisConfig 代表分析配置.
-type AnalysisConfig struct {
-	ScalingFactor int         `json:"scaling_factor"`
-	WindowSize    int         `json:"window_size"`
-	PhaseLabels   []string    `json:"phase_labels"`
-	Phases        []TimeRange `json:"phases"`
-	CreatedAt     time.Time   `json:"created_at"`
-}
-
-// Validate 驗證分析配置是否有效.
-func (c *AnalysisConfig) Validate() error {
-	if c.ScalingFactor <= 0 {
-		return calcerrors.NewCalculatorError(calcerrors.ErrInvalidWindowSize, "scaling factor must be greater than 0")
-	}
-
-	if c.WindowSize <= 0 {
-		return calcerrors.ErrInvalidWindowSize
-	}
-
-	if len(c.PhaseLabels) != len(c.Phases) {
-		return calcerrors.ErrPhaseMismatch
-	}
-
-	return nil
-}
-
 // TimeRange 代表時間範圍.
 type TimeRange struct {
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
-}
-
-// IsValid 檢查時間範圍是否有效.
-func (t *TimeRange) IsValid() bool {
-	return t.Start >= 0 && t.End > t.Start
-}
-
-// Validate 驗證時間範圍是否有效.
-func (t *TimeRange) Validate() error {
-	if !t.IsValid() {
-		return calcerrors.ErrInvalidTimeRange
-	}
-
-	return nil
-}
-
-// ProcessingOptions 代表處理選項.
-type ProcessingOptions struct {
-	ValidateInput bool   `json:"validate_input"`
-	Precision     int    `json:"precision"`
-	OutputFormat  string `json:"output_format"`
 }

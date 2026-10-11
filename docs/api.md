@@ -531,13 +531,13 @@ fmt.Printf("輸出目錄：%s\n", config.OutputDir)
 fmt.Printf("精度：%d\n", config.Precision)
 ```
 
-**SaveConfig**
+**SaveConfigAtomic**
 
 ```go
-func (c *AppConfig) SaveConfig(configPath string) error
+func (c *AppConfig) SaveConfigAtomic(configPath string) error
 ```
 
-保存配置到文件。
+以 atomic tmp+rename 保存配置到文件，parent 目錄不存在時自動建立。
 
 **示例：**
 ```go
@@ -546,7 +546,7 @@ config.WindowSize = 100
 config.ScalingFactor = 1000
 
 // 保存配置
-err := config.SaveConfig("config.json")
+err := config.SaveConfigAtomic("config.json")
 if err != nil {
     log.Fatal(err)
 }

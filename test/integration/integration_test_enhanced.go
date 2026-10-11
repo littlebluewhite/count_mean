@@ -159,7 +159,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 
 		// Test config save/load
 		configPath := filepath.Join(tempDir, "test_config.json")
-		err = cfg.SaveConfig(configPath)
+		err = cfg.SaveConfigAtomic(configPath)
 		require.NoError(t, err)
 
 		loadedCfg, err := config.LoadConfig(configPath)

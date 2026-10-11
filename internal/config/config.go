@@ -11,10 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"count_mean/internal/i18n"
-	"count_mean/internal/models"
 	"count_mean/internal/security"
 	"count_mean/internal/security/fsperm"
 )
@@ -155,35 +153,6 @@ func LoadConfig(filename string) (*AppConfig, error) {
 	}
 
 	return &config, nil
-}
-
-// SaveConfig 保存配置到檔案.
-//
-// 這條 path 保留給既有 caller (test fixture / migration) 使用,生產
-// caller (GUI App.SaveConfig) 改走 SaveConfigAtomic — 後者自動建立 parent dir
-// 且做 atomic tmp+rename,擋掉「中途 crash 留下半寫的 config.json」與
-// 「parent dir 不存在直接 OpenFile fail」兩個常見坑。
-func (c *AppConfig) SaveConfig(filename string) error {
-	//nolint:gosec // filename provided by caller
-	file, err := os.OpenFile(filename, fsperm.WriteFlags, fsperm.FilePerm)
-	if err != nil {
-		return fmt.Errorf("無法創建配置檔案: %w", err)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-
-	if err := encoder.Encode(c); err != nil {
-		return fmt.Errorf("保存配置檔案失敗: %w", err)
-	}
-
-	return nil
 }
 
 // SaveConfigAtomic 將 config 以 atomic tmp+rename 方式寫到 filename,並在
@@ -332,22 +301,4 @@ func (c *AppConfig) EnsureDirectories() error {
 	}
 
 	return nil
-}
-
-// ToAnalysisConfig 轉換為分析配置.
-func (c *AppConfig) ToAnalysisConfig() *models.AnalysisConfig {
-	return &models.AnalysisConfig{
-		ScalingFactor: c.ScalingFactor,
-		PhaseLabels:   c.PhaseLabels,
-		CreatedAt:     time.Now(),
-	}
-}
-
-// ProcessingOptions 獲取處理選項.
-func (c *AppConfig) ProcessingOptions() *models.ProcessingOptions {
-	return &models.ProcessingOptions{
-		ValidateInput: true,
-		Precision:     c.Precision,
-		OutputFormat:  c.OutputFormat,
-	}
 }
