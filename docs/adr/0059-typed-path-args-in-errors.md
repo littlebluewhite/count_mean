@@ -106,5 +106,5 @@ fsperm、security 不能 import i18n（i18n import fsperm），這些站點用�
 
 - [[ADR-0048]]（**extended** —— 路徑型 Args 改為 typed arg；`Error()` 仍固定 zh-TW）
 - [[ADR-0036]]（Decision 5 的留存清單縮短；Option C 保留；Decision 1 / 2 的 sink 端 `Paths` 保留為安全網）
-- [[ADR-0056]]（`LoadManifests` 開檔站點的來源）
+- [[ADR-0056]]（**amended** —— `LoadManifests` 開檔站點的來源；其 Decision 3 第 3 步與行為變更「分期總檔案」的「無法開啟檔案 <path>」改為只帶檔名）
 - [[ADR-0058]]（err 通道出口先在地化後脫敏，順序不變）

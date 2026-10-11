@@ -79,7 +79,7 @@ _Avoid_: raw read, direct open.
 
 **Output placement**
 所有輸出（CSV 與 PNG）落檔的唯一步驟 `CSVHandler.placeOutput`：containment join（`safeJoinOutput`）→ 依格式驗檔名（CSV 用 `ValidateFilename`，PNG 用 `ValidateName`）→ `ValidateExternalPath`（敏感位置，含 symlink resolve）→ `MkdirAll`（先驗證、後建目錄）→ `fsperm.AtomicWriteFile`（crypto tmp → fsync → rename，parent 以 dirfd 錨定在 allow-list 之下），回傳實際寫入路徑。格式由 payload 帶：`csvPayload`（BOM 照 `config.BOMEnabled`、formula 逸出）、`pngPayload`（位元組原樣）。三組入口共用這一道門：File-based CSV（`WriteFileCSV`，檔名與 SubDir 由 [[WriteRequest]] 給）、Subject-based CSV（`placeSubjectOutput`，檔名 `SubjectOutputName(subject, suffix)`，寫在 OutputDir 根）、Subject PNG（`WriteSubjectPNG`，只收已解碼並驗證過的位元組）。
-leaf 是 symlink 時 rename 取代連結本身、不跟到目標；寫到一半失敗不動既有檔，crash 可能留下 `*.tmp.<hex>`。錯誤文字固定為「輸出路徑無效」「檔案名稱驗證失敗」「輸出目錄建立失敗」。PHI 性質依分支而異：containment 失敗是固定哨兵（不帶 SubDir）；`MkdirAll` 失敗只包底層 errno（不帶目錄路徑）；`ValidateExternalPath` 失敗以 `%w` 包 validator error，可帶輸出「檔案」路徑，經 webview sink 時只剩檔名（ADR-0036 D5）。見 [[ADR-0055]]（取代 [[ADR-0040]] 只管 Subject-based 的版本）。
+leaf 是 symlink 時 rename 取代連結本身、不跟到目標；寫到一半失敗不動既有檔，crash 可能留下 `*.tmp.<hex>`。錯誤文字固定為「輸出路徑無效」「檔案名稱驗證失敗」「輸出目錄建立失敗」。PHI 性質依分支而異：containment 失敗是固定哨兵（不帶 SubDir）；`MkdirAll` 失敗只包底層 errno（不帶目錄路徑）；`ValidateExternalPath` 失敗以 `%w` 包 validator error，只帶輸出檔名：validator 建錯誤時就以 `redact.FilePath` 帶入被拒路徑，`Error()` 與 log 都只有檔名（[[ADR-0059]]）。見 [[ADR-0055]]（取代 [[ADR-0040]] 只管 Subject-based 的版本）。
 _Avoid_: subject output placement, phase-sync atomic write, output dir validation, writeFileOutput.
 
 **Read sanity / write escape**
