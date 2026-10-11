@@ -173,18 +173,22 @@ func TestAnalyzeNormalizedPhaseSync_RejectsTraversalManifest(t *testing.T) {
 	}
 }
 
-// TestLoadPhaseManifest_RejectsTraversal 驗證 LoadPhaseManifest
-// boundary 擋下 traversal 路徑。LoadPhaseManifest 是 GUI 第一步 (load manifest
-// 取得 subject list)，這條 path 若沒擋會把 user-controlled path 直接送進
-// manifest parser。
-func TestLoadPhaseManifest_RejectsTraversal(t *testing.T) {
+// TestLoadManifestSubjects_RejectsTraversal 驗證 subject 清單 handler 的 boundary 擋下
+// traversal 路徑。LoadManifestSubjects 是 panel 的第一步(選 manifest 後取 subject 清單),
+// 這條 path 若沒擋會把 user-controlled path 直接送進 manifest parser。統一錯誤通道:
+// 失敗回 result.Success=false + Message,err 為 nil。
+func TestLoadManifestSubjects_RejectsTraversal(t *testing.T) {
 	app := setupHandlerTestApp(t)
 
 	for _, tc := range traversalPaths() {
 		t.Run(tc.name, func(t *testing.T) {
-			subjects, err := app.LoadPhaseManifest(tc.path)
-			require.Error(t, err, "traversal manifest 應被 boundary 擋下: %s", tc.path)
-			assert.Nil(t, subjects)
+			result, err := app.LoadManifestSubjects(tc.path)
+			require.NoError(t, err, "統一通道下 boundary 失敗不應走 err: %s", tc.path)
+			require.NotNil(t, result)
+			assert.False(t, result.Success, "traversal manifest 應被 boundary 擋下: %s", tc.path)
+			assert.Nil(t, result.Subjects)
+			assert.True(t, containsAnyTraversalMarker(result.Message),
+				"result.Message 應含 boundary path validation 標誌: got %q", result.Message)
 		})
 	}
 }

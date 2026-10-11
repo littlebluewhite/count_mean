@@ -280,11 +280,8 @@ jobs:
         export const ResetConfig = bind('ResetConfig');
         export const CalculateMaxMean = bind('CalculateMaxMean');
         export const NormalizeData = bind('NormalizeData');
-        export const GenerateChart = bind('GenerateChart');
         export const AnalyzePhases = bind('AnalyzePhases');
-        export const GetCSVHeaders = bind('GetCSVHeaders');
-        export const GenerateInteractiveChart = bind('GenerateInteractiveChart');
-        export const LoadPhaseManifest = bind('LoadPhaseManifest');
+        export const LoadManifestSubjects = bind('LoadManifestSubjects');
         export const GetAvailablePhases = bind('GetAvailablePhases');
         export const AnalyzePhaseSync = bind('AnalyzePhaseSync');
         export const AnalyzeNormalizedPhaseSync = bind('AnalyzeNormalizedPhaseSync');
@@ -295,7 +292,7 @@ jobs:
         export const GetTranslations = bind('GetTranslations');
         export const SetLanguage = bind('SetLanguage');
         export const GenerateChartComposer = bind('GenerateChartComposer');
-        export const LoadChartComposerSubjects = bind('LoadChartComposerSubjects');
+        export const DownloadChartComposerImage = bind('DownloadChartComposerImage');
         EOF
         cat > wailsjs/runtime/runtime.js <<'EOF'
         // CI stub — see .github/workflows/build.yml frontend-test job.

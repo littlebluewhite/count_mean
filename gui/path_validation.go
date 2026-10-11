@@ -78,7 +78,7 @@ func validateExternalPathInputs(labelPathPairs ...string) error {
 	return nil
 }
 
-// validateManifestHandlerParams 是 7 個「manifest + dataFolder」Wails handler 共用
+// validateManifestHandlerParams 是 5 個「manifest + dataFolder」Wails handler 共用
 // 的 prelude:先走 strict empty check(manifestFile 先, dataFolder 次, 任一為空
 // 即回對應 sentinel),再 delegate 給 validateExternalPathInputs(manifest,檔案語意)與
 // validateExternalDirInput(dataFolder,目錄語意)跑 traversal /

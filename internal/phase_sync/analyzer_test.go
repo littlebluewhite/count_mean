@@ -31,65 +31,6 @@ func TestNewPhaseSyncAnalyzer(t *testing.T) {
 	assert.NotNil(t, analyzer)
 }
 
-func TestPhaseSyncAnalyzer_LoadManifestSubjects(t *testing.T) {
-	tests := []struct {
-		name             string
-		manifestContent  string
-		expectedSubjects []string
-		expectError      bool
-	}{
-		{
-			name: "valid manifest with multiple subjects",
-			manifestContent: `Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
-TestSubject1,motion1.csv,force1.csv,emg1.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0
-TestSubject2,motion2.csv,force2.csv,emg2.csv,120,1.5,2.5,3.5,4.5,5.5,280,6.5,7.5,380,8.5`,
-			expectedSubjects: []string{"TestSubject1", "TestSubject2"},
-			expectError:      false,
-		},
-		{
-			name: "manifest with single subject",
-			manifestContent: `Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
-SingleSubject,motion.csv,force.csv,emg.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0`,
-			expectedSubjects: []string{"SingleSubject"},
-			expectError:      false,
-		},
-		{
-			name:             "empty manifest",
-			manifestContent:  `Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L`,
-			expectedSubjects: []string{},
-			expectError:      false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create temporary manifest file
-			manifestFile := createTempFile(t, tt.manifestContent)
-
-			analyzer := NewPhaseSyncAnalyzer()
-			subjects, err := analyzer.LoadManifestSubjects(manifestFile)
-
-			if tt.expectError {
-				assert.Error(t, err)
-				return
-			}
-
-			assert.NoError(t, err)
-			assert.Equal(t, tt.expectedSubjects, subjects)
-		})
-	}
-}
-
-func TestPhaseSyncAnalyzer_LoadManifestSubjects_InvalidFile(t *testing.T) {
-	analyzer := NewPhaseSyncAnalyzer()
-
-	// Test with non-existent file
-	subjects, err := analyzer.LoadManifestSubjects("/non/existent/file.csv")
-	assert.Error(t, err)
-	assert.Nil(t, subjects)
-	assert.Contains(t, err.Error(), "解析分期總檔案失敗")
-}
-
 func TestPhaseSyncAnalyzer_AnalyzePhaseSync_InvalidParams(t *testing.T) {
 	analyzer := NewPhaseSyncAnalyzer()
 
@@ -462,34 +403,6 @@ func TestResolvePhaseRange_ToleratesSyncDriftAtEMGEdges(t *testing.T) {
 			assert.InDelta(t, tc.s-0.1, got.StartTime, 1e-12)
 			assert.InDelta(t, tc.l-0.1, got.EndTime, 1e-12)
 		})
-	}
-}
-
-// Benchmark test.
-func BenchmarkPhaseSyncAnalyzer_LoadManifestSubjects(b *testing.B) {
-	// Create a large manifest file
-	content := `Subject,Motion檔案,力板檔案,EMG檔案,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L
-`
-	for i := 0; i < 1000; i++ {
-		content += fmt.Sprintf(
-			"Subject%d,motion%d.csv,force%d.csv,emg%d.csv,100,1.0,2.0,3.0,4.0,5.0,250,6.0,7.0,350,8.0\n",
-			i, i, i, i)
-	}
-
-	tmpDir := b.TempDir()
-	manifestFile := filepath.Join(tmpDir, "manifest.csv")
-	err := os.WriteFile(manifestFile, []byte(content), fsperm.FilePerm)
-	require.NoError(b, err)
-
-	analyzer := NewPhaseSyncAnalyzer()
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		_, err := analyzer.LoadManifestSubjects(manifestFile)
-		if err != nil {
-			b.Fatal(err)
-		}
 	}
 }
 

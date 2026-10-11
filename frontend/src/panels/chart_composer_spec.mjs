@@ -38,7 +38,7 @@
 
 import { bridge } from '../charts/iframeBridge.mjs';
 import { recalcPercents } from '../charts/phaseMarkers.mjs';
-import { GenerateChartComposer, LoadChartComposerSubjects } from '../../wailsjs/go/gui/App.js';
+import { GenerateChartComposer, LoadManifestSubjects } from '../../wailsjs/go/gui/App.js';
 
 /**
  * Chart Composer panel HTML body(注入 ManifestPanel shell 的 spec.formBody)。
@@ -88,11 +88,6 @@ export function makeChartComposerSpec(app) {
         // Composer 的成功訊號是「chart 出現」— ADR-0007 §6 + handoff 鎖定:
         // 不彈 ShowMessage dialog,避免 user 流程被打斷。
         silentSuccess: true,
-        // Composer subject 依賴 dataFolder(LoadChartComposerSubjects 帶 dataFolder),
-        // 故 selectMpDataFolder 寫完 dataFolder 後需 re-load subjects。僅 Composer 設此
-        // 旗標 — 其他 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest,
-        // 設 true 會讓選 dataFolder 清空已選 subject(codex round-1 P2)。
-        subjectsDependOnDataFolder: true,
 
         formBody: composerFormBody,
 
@@ -113,33 +108,16 @@ export function makeChartComposerSpec(app) {
             + `onclick="app.standardizeComposerView()">${t('button.standardize_view')}</button>`,
 
         /**
-         * Subject load:Composer 走 LoadChartComposerSubjects({manifestPath, dataFolder})
-         * → result.subjects;option.value 是 Subject 名稱(ADR-0002 §1 canonical-key,
-         * ADR-0057 後四個有 subject 的 panel 一致)。
-         *
-         * Composer 的 loadSubjects 需要 dataFolder(LoadChartComposerSubjects 帶它),
-         * 故 ManifestPanel selectMpDataFolder 寫完 dataFolder 後會 re-load(見
-         * manifestPanel.mjs selectMpDataFolder 註解)。result.success=false 時 throw,
-         * 讓 ManifestPanel selectMpManifest/DataFolder 的 catch 統一 ShowError
-         *(對齊舊 loadComposerSubjects:1736-1738 的 `if (!success) ShowError + return`)。
+         * Subject load:同 CCI 走 LoadManifestSubjects(只讀 manifest,不需 dataFolder);
+         * option.value 是 Subject 名稱(ADR-0002 §1 canonical-key,ADR-0057 後四個有 subject
+         * 的 panel 一致)。result.success=false 時 throw,讓 ManifestPanel 的 catch 統一 ShowError。
          *
          * @param {string} manifestPath - #mpManifestPath value
-         * @param {string} dataFolder - #mpDataFolder value
          * @returns {Promise<{subjects: string[]}>}
          */
-        loadSubjects: async (manifestPath, dataFolder) => {
-            // 對齊舊 selectComposerManifest/DataFolder(main.js:1700/1715):只有在
-            // manifest + dataFolder 都齊時才打 RPC(backend LoadChartComposerSubjects
-            // RejectsEmptyDataFolder)。dataFolder 缺時回空 subjects(不 throw、不打
-            // RPC)— ManifestPanel 此時保留 placeholder + 不 enable,等使用者選完
-            // dataFolder 後 selectMpDataFolder 會 re-load。其他 3 panel 無此
-            // 限制(LoadPhaseManifest 不需 dataFolder),故只 Composer loadSubjects 設此 guard。
-            if (!dataFolder) {
-                return { subjects: [] };
-            }
-            const result = await LoadChartComposerSubjects({ manifestPath, dataFolder });
+        loadSubjects: async (manifestPath) => {
+            const result = await LoadManifestSubjects(manifestPath);
             if (!result.success) {
-                // 升 throw 讓 ManifestPanel caller catch → ShowError(對齊舊路徑語意)。
                 throw new Error(result.message || '載入主題失敗');
             }
             return { subjects: result.subjects || [] };

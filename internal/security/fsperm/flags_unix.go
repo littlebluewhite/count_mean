@@ -43,9 +43,9 @@ const AppendFlags = os.O_WRONLY | os.O_CREATE | os.O_APPEND | syscall.O_NOFOLLOW
 //
 // O_NONBLOCK 防止 read-only open 阻塞在 FIFO / device 等 special file 上：本 app
 // 只讀 regular file（config / manifest / CSV），對 regular file O_NONBLOCK 是
-// **no-op**，零行為差異；但若驗證流程（如 manifest.ValidateAllEMGFiles 的開檔即存在
-// 性檢查）誤碰到 FIFO，少了 O_NONBLOCK 會在沒有 writer 時無限阻塞、把整個載入卡死
-// （DoS）。加上後 open 立即返回,呼叫端再以 fstat 拒絕 non-regular file。
+// **no-op**，零行為差異；但若開檔時誤碰到 FIFO（如 manifest 資料檔名指向 FIFO，
+// manifest.OpenDataFile 開檔），少了 O_NONBLOCK 會在沒有 writer 時無限阻塞、把整個載入
+// 卡死（DoS）。加上後 open 立即返回,呼叫端再以 fstat（CheckRegularSize）拒絕 non-regular file。
 const ReadFlags = os.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 
 // TmpCreateFlags 用於 atomic write 流程中建立 .tmp 中介檔：

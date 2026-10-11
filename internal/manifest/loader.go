@@ -170,8 +170,8 @@ func OpenDataFile(baseFolder, name string) (*os.File, error) {
 	f, err := security.OpenLenientValidated(resolvedBase, name)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			// wrap inner err (含解析後的 *os.PathError 路徑),保留 MissingRow UI
-			// 「期待的檔放在哪」affordance;雙層 %w 不影響 errors.Is(ErrManifestDataFileMissing)。
+			// wrap inner err (含解析後的 *os.PathError 路徑),錯誤訊息保留「期待的檔放在哪」;
+			// 雙層 %w 不影響 errors.Is(ErrManifestDataFileMissing)。
 			return nil, fmt.Errorf("%w: %w", ErrManifestDataFileMissing, err)
 		}
 		return nil, fmt.Errorf("%w: %w", ErrManifestDataFilePathInvalid, err)

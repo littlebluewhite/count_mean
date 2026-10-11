@@ -1,26 +1,26 @@
 // Package gui — Chart Composer handler family.
 //
-// Slice C of the Chart Composer PRD (#15) — 3 個 Wails RPC handler（依序為
-// LoadChartComposerSubjects / GenerateChartComposer / DownloadChartComposerImage），串接前端
-// Composer panel 與 backend `internal/chart` composer engine。
+// Slice C of the Chart Composer PRD (#15) — 2 個 Wails RPC handler（依序為
+// GenerateChartComposer / DownloadChartComposerImage），串接前端 Composer panel 與 backend
+// `internal/chart` composer engine。subject 下拉與其他 panel 共用 LoadManifestSubjects（ADR-0057）。
 //
 // 設計取捨摘要：
 //   - 每個 handler 與其他 Wails bound method 同形（ADR-0035）：首句
 //     `defer recoverHandlerPanic`，其餘直列在 body。Chart Composer 不寫 CSV、
 //     無多步驟 pipeline（ADR-0002）；Generate 的資料組裝委派 internal/composer
 //     （ADR-0046），handler 只做驗證 / chart render / envelope。
-//   - Handler 3（DownloadChartComposerImage）鏡像既有 `DownloadCCIChart` 模式
+//   - Handler 2（DownloadChartComposerImage）鏡像既有 `DownloadCCIChart` 模式
 //     — adapter 端只給 params.Subject 與 suffix "chart_composer",把共用 PNG 管線
 //     （base64 → DecodeAndValidatePNG → CSVHandler.WriteSubjectPNG 落在 config.OutputDir
 //     內的 `{subject}_chart_composer.png`）委派給 downloadValidatedPNG（ADR-0009 / ADR-0055）。
 //
 // 錯誤通道契約：
 //
-//   - Handler 1-2 永遠回 non-nil `*XxxResult`，所有可預期失敗都包成
+//   - Handler 1 永遠回 non-nil `*ChartComposerResult`，所有可預期失敗都包成
 //     result.Success=false + result.Message；Go err 只在 panic 經由
 //     recoverHandlerPanic 灌入 named return 時才為 non-nil。前端可單一路徑
 //     檢查 result.success / result.message。
-//   - Handler 3 鏡像 DownloadCCIChart 的 dual-channel 契約（path validation
+//   - Handler 2 鏡像 DownloadCCIChart 的 dual-channel 契約（path validation
 //     failure / PNG decode 失敗都走 err channel）— frontend 對 download
 //     按鈕 binding 已假設此契約，不可變更。
 
@@ -29,7 +29,6 @@ package gui
 import (
 	"bytes"
 	"errors"
-	"fmt"
 
 	"count_mean/internal/chart"
 	"count_mean/internal/composer"
@@ -40,12 +39,6 @@ import (
 // ErrChartComposerNilParams err113 sentinel — 純承載 user-facing 訊息
 // (DownloadChartComposerImage 的 nil params guard,不做 errors.Is 比對;test 走 substring assertion)。
 var ErrChartComposerNilParams = errors.New("參數為空")
-
-// LoadChartComposerSubjectsParams Wails RPC params for subject list lookup.
-type LoadChartComposerSubjectsParams struct {
-	ManifestPath string `json:"manifestPath"`
-	DataFolder   string `json:"dataFolder"`
-}
 
 // GenerateChartComposerParams Wails RPC params for composer chart generation.
 //
@@ -66,31 +59,6 @@ type GenerateChartComposerParams struct {
 type DownloadChartComposerImageParams struct {
 	Base64Data string `json:"base64Data"`
 	Subject    string `json:"subject"`
-}
-
-// MissingFileDTO 把 manifest.MissingRow 轉成 JSON-marshalable form(error type
-// 不可直接被 Wails JSON encoder 處理,改用 ErrMessage 字串)。
-//
-// 前端可透過 ChartComposerSubjectsResult.MissingFiles 列出在 Load 階段就偵測到
-// 缺 EMG 檔的 row,UI 顯示警告 banner / 表格給 user 看「期待的檔在哪、為何沒找到」,
-// 而非等 Generate 階段才炸。
-type MissingFileDTO struct {
-	Subject    string `json:"subject"`    // 對應 PhaseManifest.Subject
-	EMGFile    string `json:"emgFile"`    // manifest 內字面的 EMGFile 欄
-	ErrMessage string `json:"errMessage"` // OpenDataFile error 訊息(含期待路徑)
-}
-
-// ChartComposerSubjectsResult Wails RPC result for subject list lookup.
-//
-// MissingFiles 是 Bug 1 整合產物:LoadChartComposerSubjects 在 Load 階段
-// validator-pass 掃過所有 EMG 檔,把缺檔 row 收集進來。non-blocking — Success
-// 仍可能為 true,user 看到 missing list 後決定下一步(改 manifest / data folder
-// 或忽略 missing 跑健康的 subject)。
-type ChartComposerSubjectsResult struct {
-	Subjects     []string         `json:"subjects"`
-	MissingFiles []MissingFileDTO `json:"missingFiles"`
-	Success      bool             `json:"success"`
-	Message      string           `json:"message"`
 }
 
 // ChartComposerResult Wails RPC result for chart generation.
@@ -117,85 +85,6 @@ func failedChartComposerResult(message string) *ChartComposerResult {
 		Success: false,
 		Message: message,
 	}
-}
-
-// failedChartComposerSubjectsResult builds a subjects result indicating failure.
-func failedChartComposerSubjectsResult(message string) *ChartComposerSubjectsResult {
-	return &ChartComposerSubjectsResult{
-		Success: false,
-		Message: message,
-	}
-}
-
-// LoadChartComposerSubjects 解析 manifest，回 subject dropdown 列表。
-//
-//   - panic safety 由首句 defer recoverHandlerPanic 收乾（panic → named return err，result=nil）
-//   - 非 panic 路徑永遠回 non-nil result + nil err（單一通道契約）
-//
-// nil params guard 在 body 入口先處理，避免裸 deref。
-func (a *App) LoadChartComposerSubjects(
-	params *LoadChartComposerSubjectsParams,
-) (result *ChartComposerSubjectsResult, err error) {
-	defer recoverHandlerPanic("Chart Composer 載入主題", a.logger, &err)
-
-	a.logger.Info("開始Chart Composer 載入主題", nil)
-	// exit log 只在正常返回時打:單一通道下正常返回的 result 必 non-nil,panic
-	// 路徑 result 仍為 nil。
-	defer func() {
-		if result != nil {
-			a.logger.Info("Chart Composer 載入主題完成", nil)
-		}
-	}()
-
-	// nil params guard — Wails RPC 入口若被惡意呼叫（或前端 bug）傳 nil，
-	// 不該 panic。回 failedResult + nil err（單一通道契約）。
-	if params == nil {
-		return failedChartComposerSubjectsResult("參數為空"), nil
-	}
-
-	if vErr := validateManifestHandlerParams(params.ManifestPath, params.DataFolder); vErr != nil {
-		return failedChartComposerSubjectsResult(inputMessage(vErr)), nil
-	}
-
-	manifests, parseErr := manifest.LoadManifests(params.ManifestPath)
-	if parseErr != nil {
-		return failedChartComposerSubjectsResult(a.failMessage(i18n.KeyErrorHandlerLoadManifestFailed, parseErr)), nil
-	}
-
-	// 收集 unique subject — 與 LoadPhaseManifest 對稱:回 dedup 過的 subject
-	// list,避免相同 subject 在 manifest 內出現多次時 dropdown 重複。
-	seen := make(map[string]struct{}, len(manifests))
-	subjects := make([]string, 0, len(manifests))
-	for i := range manifests {
-		s := manifests[i].Subject
-		if _, exists := seen[s]; exists {
-			continue
-		}
-		seen[s] = struct{}{}
-		subjects = append(subjects, s)
-	}
-
-	// Bug 1 整合:Load 階段先掃過所有 EMG 檔,把不存在的 row surface 給前端,
-	// 避免 user 進 dropdown 後在 Generate 階段才看到「EMG 檔案不存在」錯誤。
-	// non-blocking — 即使有 missing,dropdown 仍列出全部 subject,user 自行
-	// 決定下一步(改 manifest / data folder 或忽略 missing 跑其他 OK subject)。
-	missing := manifest.ValidateAllEMGFiles(manifests, params.DataFolder)
-	missingDTOs := make([]MissingFileDTO, len(missing))
-	for i, m := range missing {
-		missingDTOs[i] = MissingFileDTO{
-			Subject: m.Subject,
-			EMGFile: m.EMGFile,
-			// OpenDataFile error 含期待路徑 → 過 redact 防 PHI 洩漏(保留 basename)。
-			ErrMessage: redactText(m.Err),
-		}
-	}
-
-	return &ChartComposerSubjectsResult{
-		Subjects:     subjects,
-		MissingFiles: missingDTOs,
-		Success:      true,
-		Message:      fmt.Sprintf("已載入 %d 個主題", len(subjects)),
-	}, nil
 }
 
 // GenerateChartComposer 呼叫 chart.RenderComposer 並回 HTML preview。

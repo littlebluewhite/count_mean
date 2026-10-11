@@ -38,7 +38,7 @@
 //   * spec.formBody 為 builder function 且不洩漏 hardcoded 繁中(start/end phase 下拉)
 //   * rpc 在 manifestPath / dataFolder / subjectName / startPhase / endPhase 缺時 throw
 
-import { AnalyzePhaseSync, LoadPhaseManifest } from '../../wailsjs/go/gui/App.js';
+import { AnalyzePhaseSync, LoadManifestSubjects } from '../../wailsjs/go/gui/App.js';
 
 /**
  * 分期同步 panel HTML body(注入 ManifestPanel shell 的 spec.formBody)。
@@ -98,14 +98,19 @@ export function makePhaseSyncSpec(app) {
         formBody: phaseSyncFormBody,
 
         /**
-         * Subject load:同 CCI 走 LoadPhaseManifest;option.value 是 Subject 名稱(ADR-0057)。
+         * Subject load:同 CCI 走 LoadManifestSubjects;option.value 是 Subject 名稱(ADR-0057)。
+         * result.success=false 時 throw,讓 ManifestPanel 的 catch 統一 ShowError。
          *
          * @param {string} manifestPath - #mpManifestPath value
          * @returns {Promise<{subjects: string[]}>}
          */
-        loadSubjects: async (manifestPath) => ({
-            subjects: await LoadPhaseManifest(manifestPath),
-        }),
+        loadSubjects: async (manifestPath) => {
+            const result = await LoadManifestSubjects(manifestPath);
+            if (!result.success) {
+                throw new Error(result.message || '載入主題失敗');
+            }
+            return { subjects: result.subjects || [] };
+        },
 
         /**
          * afterRender:panel render 完後 load phase 下拉(GetAvailablePhases,

@@ -78,26 +78,34 @@ test('cciSpec 必須暴露 ADR-0007 §6 spec shape 所有必填欄位(CCI 標準
 
 // ---------- spec.loadSubjects(M5)----------
 
-test('CCI spec.loadSubjects 走 LoadPhaseManifest 且只回 subjects', async () => {
-    // option.value 由 ManifestPanel 寫 Subject 名稱(ADR-0057),loadSubjects 不再回 valueMode。
-    // loadSubjects 呼 LoadPhaseManifest(manifestPath) → window.go.gui.App。
+test('CCI spec.loadSubjects 走 LoadManifestSubjects:只回 subjects,success=false 時 throw', async () => {
+    // option.value 由 ManifestPanel 寫 Subject 名稱(ADR-0057),loadSubjects 只回 subjects。
+    // loadSubjects 呼 LoadManifestSubjects(manifestPath) → window.go.gui.App;失敗走 result
+    // 通道(success=false + message),升 throw 讓 ManifestPanel 的 catch 統一 ShowError。
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
     try {
         let manifestArg = null;
+        let reply = { success: true, subjects: ['S1', 'S2'], message: '已載入 2 個主題' };
         window.go = {
             gui: {
                 App: {
-                    LoadPhaseManifest: async (m) => { manifestArg = m; return ['S1', 'S2']; },
+                    LoadManifestSubjects: async (m) => { manifestArg = m; return reply; },
                 },
             },
         };
         const spec = makeCciSpec({});
-        const out = await spec.loadSubjects('/tmp/manifest.csv', '/tmp/data');
+        const out = await spec.loadSubjects('/tmp/manifest.csv');
 
-        assert.equal(manifestArg, '/tmp/manifest.csv', 'loadSubjects 把 manifestPath 傳給 LoadPhaseManifest');
-        assert.deepEqual(out.subjects, ['S1', 'S2'], 'subjects 為 LoadPhaseManifest 結果');
-        assert.deepEqual(Object.keys(out), ['subjects'], 'loadSubjects 只回 subjects(無 valueMode)');
+        assert.equal(manifestArg, '/tmp/manifest.csv', 'loadSubjects 把 manifestPath 傳給 LoadManifestSubjects');
+        assert.deepEqual(out, { subjects: ['S1', 'S2'] }, 'loadSubjects 只回 result.subjects');
+
+        reply = { success: false, subjects: null, message: '載入分期總檔案失敗: 後端訊息' };
+        await assert.rejects(
+            () => spec.loadSubjects('/tmp/manifest.csv'),
+            /載入分期總檔案失敗: 後端訊息/,
+            'success=false 時 loadSubjects 應 throw 並帶 backend message'
+        );
     } finally {
         if (window?.happyDOM?.close) await window.happyDOM.close();
         delete globalThis.window;

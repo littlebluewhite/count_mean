@@ -36,28 +36,6 @@ type PhaseSyncResult struct {
 	Message      string             `json:"message"`
 }
 
-// LoadPhaseManifest 載入分期總檔案的主題列表.
-func (a *App) LoadPhaseManifest(manifestPath string) (subjects []string, err error) {
-	defer recoverHandlerPanic("LoadPhaseManifest", a.logger, &err)
-
-	a.logger.Info("載入分期總檔案", map[string]any{"path": manifestPath})
-
-	// 邊界路徑驗證,擋掉 "../etc/passwd" 之類的 traversal / 系統敏感目錄。
-	if err := validateExternalPathInputs("分期總檔案", manifestPath); err != nil {
-		return nil, err
-	}
-
-	subjects, err = a.phaseSyncAnalyzer.LoadManifestSubjects(manifestPath)
-	if err != nil {
-		a.logger.Error("載入分期總檔案失敗", err, map[string]any{})
-		return nil, fmt.Errorf("載入分期總檔案失敗: %w", err)
-	}
-
-	a.logger.Info("成功載入分期總檔案", map[string]any{"subjects": len(subjects)})
-
-	return subjects, nil
-}
-
 // GetAvailablePhases 獲取可用的分期點列表。
 //
 // 回傳 []string 而非 []models.PhasePoint:Wails v2 TypeScript binding generator

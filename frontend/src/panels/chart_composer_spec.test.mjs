@@ -58,80 +58,52 @@ test('chartComposerSpec 必須暴露 ADR-0007 §6 spec shape 所有必填欄位'
 
 // ---------- spec.loadSubjects(M5)+ onSubjectChange ----------
 
-test('Composer spec.loadSubjects 走 LoadChartComposerSubjects 且只回 subjects', async () => {
+test('Composer spec.loadSubjects 走 LoadManifestSubjects 且只回 subjects(不需 dataFolder)', async () => {
     // Composer subject 用 string(ADR-0002 canonical-key;ADR-0057 後四個 panel 一致)。
-    // loadSubjects 呼 LoadChartComposerSubjects({manifestPath, dataFolder}) → result.subjects。
+    // loadSubjects 呼 LoadManifestSubjects(manifestPath) → result.subjects;subject 清單只讀
+    // manifest,dataFolder 未選也照樣 load。
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
     try {
-        let argObj = null;
+        let args = null;
         window.go = {
             gui: {
                 App: {
-                    LoadChartComposerSubjects: async (o) => {
-                        argObj = o;
+                    LoadManifestSubjects: async (...a) => {
+                        args = a;
                         return { success: true, subjects: ['Rudolph', 'Donner'] };
                     },
                 },
             },
         };
         const spec = makeChartComposerSpec({});
-        const out = await spec.loadSubjects('/tmp/manifest.csv', '/tmp/data');
+        const out = await spec.loadSubjects('/tmp/manifest.csv');
 
-        assert.equal(argObj.manifestPath, '/tmp/manifest.csv', 'loadSubjects forward manifestPath');
-        assert.equal(argObj.dataFolder, '/tmp/data', 'loadSubjects forward dataFolder(Composer 需要)');
-        assert.deepEqual(out.subjects, ['Rudolph', 'Donner']);
-        assert.deepEqual(Object.keys(out), ['subjects'], 'loadSubjects 只回 subjects(無 valueMode)');
+        assert.deepEqual(args, ['/tmp/manifest.csv'], 'loadSubjects 只送 manifestPath');
+        assert.deepEqual(out, { subjects: ['Rudolph', 'Donner'] }, 'loadSubjects 只回 result.subjects');
     } finally {
         if (window?.happyDOM?.close) await window.happyDOM.close();
         delete globalThis.window;
     }
 });
 
-test('Composer spec.loadSubjects 在 dataFolder 缺時回空(不打 RPC,對齊舊「兩者齊才 load」)', async () => {
-    // 舊 selectComposerManifest 只在 dataFolder 已設時才 loadComposerSubjects;
-    // backend LoadChartComposerSubjects RejectsEmptyDataFolder。故 dataFolder 缺時
-    // loadSubjects 必須回空 subjects、不打 RPC、不 throw。
-    const window = new Window({ url: 'http://localhost:34115/' });
-    globalThis.window = window;
-    try {
-        let rpcCalled = false;
-        window.go = {
-            gui: {
-                App: {
-                    LoadChartComposerSubjects: async () => { rpcCalled = true; return { success: true, subjects: ['X'] }; },
-                },
-            },
-        };
-        const spec = makeChartComposerSpec({});
-        const out = await spec.loadSubjects('/tmp/manifest.csv', ''); // dataFolder 空
-
-        assert.equal(rpcCalled, false, 'dataFolder 缺時不應打 LoadChartComposerSubjects RPC');
-        assert.deepEqual(out.subjects, [], 'dataFolder 缺時回空 subjects');
-        assert.deepEqual(Object.keys(out), ['subjects'], 'dataFolder 缺時也只回 subjects');
-    } finally {
-        if (window?.happyDOM?.close) await window.happyDOM.close();
-        delete globalThis.window;
-    }
-});
-
-test('Composer spec.loadSubjects 在 result.success=false 時 throw(對齊舊 loadComposerSubjects)', async () => {
-    // 升 throw 讓 ManifestPanel selectMpManifest/DataFolder 的 catch 統一 ShowError。
+test('Composer spec.loadSubjects 在 result.success=false 時 throw', async () => {
+    // 升 throw 讓 ManifestPanel selectMpManifest 的 catch 統一 ShowError。
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
     try {
         window.go = {
             gui: {
                 App: {
-                    LoadChartComposerSubjects: async () => ({ success: false, message: '主題載入失敗訊息' }),
+                    LoadManifestSubjects: async () => ({ success: false, message: '主題載入失敗訊息' }),
                 },
             },
         };
         const spec = makeChartComposerSpec({});
         await assert.rejects(
-            async () => { await spec.loadSubjects('/tmp/m.csv', '/tmp/d'); },
+            async () => { await spec.loadSubjects('/tmp/m.csv'); },
             (err) => {
-                assert.match(err.message, /主題載入失敗訊息|載入主題失敗/, 'throw 帶 backend message 或 fallback');
+                assert.match(err.message, /主題載入失敗訊息/, 'throw 帶 backend message');
                 return true;
             },
             'success=false 時 loadSubjects 應 throw'

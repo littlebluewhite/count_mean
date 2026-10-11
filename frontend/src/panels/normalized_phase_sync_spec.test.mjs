@@ -88,17 +88,24 @@ test('normalizedPhaseSyncSpec 必須暴露 ADR-0007 §6 spec shape + silentSucce
 
 // ---------- spec.loadSubjects + afterRender(M5)----------
 
-test('Normalized spec.loadSubjects 走 LoadPhaseManifest 且只回 subjects', async () => {
+test('Normalized spec.loadSubjects 走 LoadManifestSubjects:只回 subjects,success=false 時 throw', async () => {
     const window = new Window({ url: 'http://localhost:34115/' });
     globalThis.window = window;
     try {
+        let reply = { success: true, subjects: ['N1', 'N2'], message: '已載入 2 個主題' };
         window.go = {
-            gui: { App: { LoadPhaseManifest: async () => ['N1', 'N2'] } },
+            gui: { App: { LoadManifestSubjects: async () => reply } },
         };
         const spec = makeNormalizedPhaseSyncSpec({});
-        const out = await spec.loadSubjects('/tmp/m.csv', '');
-        assert.deepEqual(out.subjects, ['N1', 'N2']);
-        assert.deepEqual(Object.keys(out), ['subjects'], 'loadSubjects 只回 subjects(無 valueMode)');
+        const out = await spec.loadSubjects('/tmp/m.csv');
+        assert.deepEqual(out, { subjects: ['N1', 'N2'] }, 'loadSubjects 只回 result.subjects');
+
+        reply = { success: false, subjects: null, message: '載入分期總檔案失敗: 後端訊息' };
+        await assert.rejects(
+            () => spec.loadSubjects('/tmp/m.csv'),
+            /載入分期總檔案失敗: 後端訊息/,
+            'success=false 時 loadSubjects 應 throw 並帶 backend message'
+        );
     } finally {
         if (window?.happyDOM?.close) await window.happyDOM.close();
         delete globalThis.window;

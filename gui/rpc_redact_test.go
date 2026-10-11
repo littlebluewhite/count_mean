@@ -85,10 +85,9 @@ func newRPCRedactTestApp(t *testing.T, outputDir, configPath string) *App {
 //     frontend main.js 原樣顯示)
 //  2. errors.Is(err, 原 sentinel) 仍成立(redact 只改文字,不斷 chain)
 //
-// 名單:SaveConfig、CalculateMaxMean、NormalizeData、AnalyzePhases、
-// LoadPhaseManifest、DownloadCCIChart、
+// 名單:SaveConfig、CalculateMaxMean、NormalizeData、AnalyzePhases、DownloadCCIChart、
 // DownloadChartComposerImage。其餘回 error 的 bound method 不列:AnalyzeCCI /
-// AnalyzeMuscleRatio / AnalyzeNormalizedPhaseSync / AnalyzePhaseSync / LoadChartComposerSubjects /
+// AnalyzeMuscleRatio / AnalyzeNormalizedPhaseSync / AnalyzePhaseSync / LoadManifestSubjects /
 // GenerateChartComposer 走單一通道,err 只在 panic 時非 nil(ErrInternalPanic,
 // 不含路徑);SetLanguage 只回 locale 字串;SelectFile / SelectDirectory 的錯誤
 // 只來自 ErrAppNotReady 或 Wails 對話框 runtime(單元測試無法觸發),handler 本身
@@ -150,16 +149,6 @@ func TestRPCErrChannel_NoAbsolutePath(t *testing.T) {
 					InputFile: filepath.Join(planted, "missing.csv"),
 					Phases:    []PhaseSpec{{Name: "P1", StartTime: "0", EndTime: "1"}},
 				})
-
-				return err
-			},
-		},
-		{
-			name:     "LoadPhaseManifest",
-			sentinel: fs.ErrNotExist,
-			call: func(t *testing.T, planted string) error {
-				app := newRPCRedactTestApp(t, t.TempDir(), "")
-				_, err := app.LoadPhaseManifest(filepath.Join(planted, "missing_manifest.csv"))
 
 				return err
 			},
@@ -230,7 +219,7 @@ func blockedOutputDir(t *testing.T, planted string) string {
 // 字串欄位的 handler 各一列,植入病患目錄、觸發帶路徑的錯誤,斷言送進 webview 的
 // 字串不洩漏目錄段。
 //
-// 名單:AnalyzeCCI、AnalyzeNormalizedPhaseSync、LoadChartComposerSubjects、
+// 名單:AnalyzeCCI、AnalyzeNormalizedPhaseSync、LoadManifestSubjects、
 // GenerateChartComposer、AnalyzePhaseSync(validate / 分析分支)走 result.Message;
 // AnalyzeMuscleRatio 的逐 subject 失敗走 Subjects[i].Error(analyzer 回的字串,
 // 不經 Message)。
@@ -278,13 +267,10 @@ func TestRPCMessage_NoAbsolutePath(t *testing.T) {
 			},
 		},
 		{
-			name: "LoadChartComposerSubjects",
+			name: "LoadManifestSubjects",
 			call: func(t *testing.T, planted string) string {
 				app := newRPCRedactTestApp(t, t.TempDir(), "")
-				result, err := app.LoadChartComposerSubjects(&LoadChartComposerSubjectsParams{
-					ManifestPath: missingManifest(planted),
-					DataFolder:   planted,
-				})
+				result, err := app.LoadManifestSubjects(missingManifest(planted))
 				require.NoError(t, err)
 				require.False(t, result.Success)
 

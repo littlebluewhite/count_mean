@@ -574,18 +574,3 @@ func validateEMGTimeRange(
 
 	return nil
 }
-
-// LoadManifestSubjects 載入分期總檔案中的所有主題.
-func (analyzer *PhaseSyncAnalyzer) LoadManifestSubjects(manifestPath string) ([]string, error) {
-	manifests, err := manifest.LoadManifests(manifestPath)
-	if err != nil {
-		return nil, i18n.WrapError(err, i18n.KeyErrorPhaseSyncParseManifestFailed)
-	}
-
-	subjects := make([]string, len(manifests))
-	for i := range manifests {
-		subjects[i] = manifests[i].Subject
-	}
-
-	return subjects, nil
-}

@@ -21,9 +21,6 @@
 //     rpc: async (ctx) => AnalyzeCCI({ manifestFile: ctx.manifestPath, dataFolder: ctx.dataFolder, subject: ctx.subjectName }),
 //     onResult: async (result, ctx, mp) => { mp.attachIframe(...); mp.bindPhaseCheckboxes(...); },
 //     silentSuccess: false,  // optional, Composer 寫 true、其他 4 省略
-//     subjectsDependOnDataFolder: false,  // optional, 僅 Composer 寫 true(subject
-//                                         // 依賴 dataFolder → 選 folder 後 re-load);
-//                                         // 其他 3 panel 省略避免清空已選 subject
 //   });
 //   // ctx shape:{ manifestPath, dataFolder, subjectName, subjects }
 //   //   subjectName: `#mpSubject` 的 option.value = Subject 名稱(後端以名稱取 row,
@@ -97,17 +94,12 @@ export class ManifestPanel {
      * @param {boolean} [spec.hideSubject=false] - true 時 shell 省略 subject `<select>`
      *   區塊。MuscleRatio 只吃 manifest + dataFolder(無 subject,ADR-0007 §2 入口
      *   定義),設此旗標;其他 4 panel 省略走 default(顯示 subject select)。
-     * @param {(manifestPath: string, dataFolder: string) => Promise<{subjects: string[]}>} [spec.loadSubjects]
+     * @param {(manifestPath: string) => Promise<{subjects: string[]}>} [spec.loadSubjects]
      *   - Optional。manifest 選好後 selectMpManifest 呼此 fn 取 subject 列表並填
      *   `#mpSubject`:option.value 與 option 文字都是 Subject 名稱(後端以名稱取 row,
-     *   ADR-0057),_gatherCtx 的 subjectName 即 select.value。MuscleRatio 省略
-     *   (hideSubject,無 subject load)。
-     * @param {boolean} [spec.subjectsDependOnDataFolder=false] - Optional。true 時
-     *   subject 列表依賴 dataFolder(目前僅 Composer:LoadChartComposerSubjects 帶
-     *   dataFolder),selectMpDataFolder 寫完 dataFolder 後會 re-load subjects。
-     *   其他 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest,
-     *   省略此旗標(default false)→ 選 dataFolder 不 reload,避免 _loadMpSubjects
-     *   的 `select.innerHTML=''` 清空已選 subject(codex round-1 P2)。
+     *   ADR-0057),_gatherCtx 的 subjectName 即 select.value。subject 列表只依賴
+     *   manifest(四個 panel 都走 LoadManifestSubjects),選 dataFolder 不 reload。
+     *   MuscleRatio 省略(hideSubject,無 subject load)。
      * @param {(mp: ManifestPanel) => void} [spec.afterRender] - Optional。run() 把
      *   shell + formBody render 完、showPanel 之後呼叫。PhaseSync/Normalized 用來
      *   load phase 下拉(GetAvailablePhases,manifest-independent)+ (Normalized)
@@ -493,34 +485,16 @@ export class ManifestPanel {
     }
 
     /**
-     * 選資料夾 → 寫 `#mpDataFolder`。**僅** subject 列表真的依賴 dataFolder 的
-     * panel(spec.subjectsDependOnDataFolder=true,目前只有 Composer:
-     * LoadChartComposerSubjects 帶 dataFolder)才在寫完 dataFolder 後 re-load
-     * subjects(對齊既有 selectComposerDataFolder:1710「dataFolder 改了且 manifest
-     * 在 → reload subjects」behaviour)。
-     *
-     * 其他 3 panel(CCI/PhaseSync/Normalized)subject 只依賴 manifest、
-     * **不**讀 dataFolder。對它們 re-load 並非冪等:`_loadMpSubjects` 先
-     * `select.innerHTML=''` 再重填,會把已選的 subject value reset 回空 placeholder
-     *(codex round-1 P2:先選 subject 再選 dataFolder 會 silent 清空 subject →
-     * 後續 Run required-field validation fail)。故這些 panel 省略
-     * subjectsDependOnDataFolder(default false)→ 選 dataFolder 不 reload、保留
-     * 已選 subject。
+     * 選資料夾 → 寫 `#mpDataFolder`。subject 列表只依賴 manifest(ADR-0057),
+     * 選 dataFolder 不 re-load:`_loadMpSubjects` 先 `select.innerHTML=''` 再重填,
+     * reload 會把已選的 subject reset 回空 placeholder(codex round-1 P2)。
      */
     async selectMpDataFolder() {
-        const spec = this._currentSpec;
         try {
             const folder = await SelectDirectory('選擇數據資料夾');
             if (!folder) return; // user cancel
             const input = document.getElementById('mpDataFolder');
             if (input) input.value = folder;
-
-            const manifest = document.getElementById('mpManifestPath')?.value || '';
-            // 只有 subjectsDependOnDataFolder=true(Composer)才 re-load — 否則對
-            // 其他 panel 的 reload 會清空已選 subject(見上方註解 codex P2)。
-            if (spec?.subjectsDependOnDataFolder && spec?.loadSubjects && !spec.hideSubject && manifest) {
-                await this._loadMpSubjects();
-            }
         } catch (err) {
             // eslint-disable-next-line no-console
             console.error('選擇資料夾失敗:', err);
@@ -558,17 +532,16 @@ export class ManifestPanel {
     }
 
     /**
-     * 內部 helper:呼 spec.loadSubjects(manifestPath, dataFolder) 取 subject 列表,
+     * 內部 helper:呼 spec.loadSubjects(manifestPath) 取 subject 列表,
      * 填 `#mpSubject` option 並 enable。option.value = Subject 名稱(後端以名稱取 row,
      * ADR-0057),_gatherCtx 的 subjectName 即 select.value。
      *
-     * loadSubjects throw(例如 Composer LoadChartComposerSubjects success=false)→
-     * 往外冒給 caller(selectMpManifest / selectMpDataFolder)的 catch 統一 ShowError。
+     * loadSubjects throw(LoadManifestSubjects success=false)→ 往外冒給 caller
+     *(selectMpManifest / onMpManifestDropped)的 catch 統一 ShowError。
      */
     async _loadMpSubjects() {
         const manifestPath = document.getElementById('mpManifestPath')?.value || '';
-        const dataFolder = document.getElementById('mpDataFolder')?.value || '';
-        const { subjects } = await this._currentSpec.loadSubjects(manifestPath, dataFolder);
+        const { subjects } = await this._currentSpec.loadSubjects(manifestPath);
 
         const select = document.getElementById('mpSubject');
         if (!select) return;
@@ -586,9 +559,8 @@ export class ManifestPanel {
             opt.textContent = subject;
             select.appendChild(opt);
         });
-        // 空 subjects(例如 Composer 在 dataFolder 尚未選時 loadSubjects 回空)→
-        // 保留 placeholder + 不 enable(對齊舊 Composer「兩者齊才 load」UX),不發
-        // status。有 subjects 才 enable + 報「已載入 N 個主題」。
+        // 空 subjects(manifest 沒有非空 Subject 的列)→ 保留 placeholder + 不 enable,
+        // 不發 status。有 subjects 才 enable + 報「已載入 N 個主題」。
         if (list.length > 0) {
             select.disabled = false;
             this._app.updateStatus(globalThis.t('status.subjects_loaded', list.length));

@@ -585,8 +585,8 @@ test('11. selectMpManifest:loadSubjects 填 #mpSubject(option.value=Subject 名�
 
         let loadArgs = null;
         const spec = minimalSpec({
-            loadSubjects: async (manifestPath, dataFolder) => {
-                loadArgs = { manifestPath, dataFolder };
+            loadSubjects: async (...args) => {
+                loadArgs = args;
                 return { subjects: ['SubjA', 'SubjB', 'SubjC'] };
             },
         });
@@ -596,8 +596,8 @@ test('11. selectMpManifest:loadSubjects 填 #mpSubject(option.value=Subject 名�
 
         // manifest 寫入 input
         assert.equal(window.document.getElementById('mpManifestPath').value, '/tmp/manifest.csv');
-        // loadSubjects 被呼叫,manifestPath forward 正確
-        assert.equal(loadArgs.manifestPath, '/tmp/manifest.csv', 'loadSubjects 收到 manifestPath');
+        // loadSubjects 被呼叫,只收 manifestPath(subject 清單只依賴 manifest,ADR-0057)
+        assert.deepEqual(loadArgs, ['/tmp/manifest.csv'], 'loadSubjects 只收到 manifestPath');
 
         // #mpSubject 填了 placeholder + 3 個 subject,option.value 為 Subject 名稱(非索引)
         const select = window.document.getElementById('mpSubject');
@@ -705,61 +705,9 @@ test('15. selectMpManifest:loadSubjects throw → ShowError(冒泡到 catch)', a
     }
 });
 
-test('16. selectMpDataFolder:寫 #mpDataFolder + 若 manifest 已選則 re-load subjects(Composer)', async () => {
-    const { window, mp } = await setup();
-    try {
-        stubWails(window, { folder: '/tmp/data-dir' });
-
-        let loadArgs = null;
-        // subjectsDependOnDataFolder=true:Composer 的 subject 依賴 dataFolder,選完
-        // dataFolder 才 re-load(codex round-1 P2 後唯一會在 selectMpDataFolder reload 的 panel)。
-        const spec = minimalSpec({
-            subjectsDependOnDataFolder: true,
-            loadSubjects: async (manifestPath, dataFolder) => {
-                loadArgs = { manifestPath, dataFolder };
-                return { subjects: ['X'] };
-            },
-        });
-        mp.run(spec);
-        // 先有 manifest(模擬 user 已選 manifest 再選 dataFolder)
-        window.document.getElementById('mpManifestPath').value = '/tmp/manifest.csv';
-
-        await mp.selectMpDataFolder();
-
-        assert.equal(window.document.getElementById('mpDataFolder').value, '/tmp/data-dir');
-        // manifest 已在 → 應 re-load subjects 且 dataFolder forward 正確(Composer 需要)
-        assert.ok(loadArgs, 'manifest 已選 → selectMpDataFolder 應 re-load subjects');
-        assert.equal(loadArgs.dataFolder, '/tmp/data-dir', 'loadSubjects 收到 dataFolder');
-        assert.equal(loadArgs.manifestPath, '/tmp/manifest.csv', 'loadSubjects 收到 manifestPath');
-    } finally {
-        await teardown(window);
-    }
-});
-
-test('17. selectMpDataFolder:manifest 未選時不 re-load subjects', async () => {
-    const { window, mp } = await setup();
-    try {
-        stubWails(window, { folder: '/tmp/data-dir' });
-
-        let loadCalled = false;
-        const spec = minimalSpec({
-            loadSubjects: async () => { loadCalled = true; return { subjects: [] }; },
-        });
-        mp.run(spec);
-        // manifest 留空
-
-        await mp.selectMpDataFolder();
-
-        assert.equal(window.document.getElementById('mpDataFolder').value, '/tmp/data-dir');
-        assert.equal(loadCalled, false, 'manifest 未選 → 不 load subjects');
-    } finally {
-        await teardown(window);
-    }
-});
-
-test('17b. selectMpManifest:loadSubjects 回空 subjects → select 保留 disabled(Composer dataFolder 未選)', async () => {
-    // Composer 在 dataFolder 未選時 loadSubjects 回空(不打 RPC)。此時 _loadMpSubjects
-    // 應保留 placeholder + 不 enable select(對齊舊「兩者齊才 load」UX),不報 status。
+test('16. selectMpManifest:loadSubjects 回空 subjects → select 保留 disabled', async () => {
+    // manifest 沒有非空 Subject 的列時 loadSubjects 回空。此時 _loadMpSubjects
+    // 應保留 placeholder + 不 enable select,不報 status。
     const { window, mp, calls } = await setup();
     try {
         stubWails(window, { file: '/tmp/manifest.csv' });
@@ -782,20 +730,18 @@ test('17b. selectMpManifest:loadSubjects 回空 subjects → select 保留 disab
     }
 });
 
-test('17c. selectMpDataFolder:subject 只依賴 manifest 的 panel(無 subjectsDependOnDataFolder)選 folder 不 reload,保留已選 subject', async () => {
-    // codex round-1 P2 regression:CCI/PhaseSync/Normalized 的 subject 只依賴 manifest。
-    // 先選 subject 再選 dataFolder 時,若 selectMpDataFolder 仍 reload subjects,
-    // _loadMpSubjects 的 `select.innerHTML=''` 會把已選 subject value reset 回空
-    // placeholder → 後續 Run required-field validation fail。此 test 釘:省略
-    // subjectsDependOnDataFolder(default false)時 selectMpDataFolder **不** reload、
-    // 已選 subject value 必須被保留。
+test('17. selectMpDataFolder:只寫 #mpDataFolder,不 reload subjects,保留已選 subject', async () => {
+    // codex round-1 P2 regression:subject 清單只依賴 manifest(ADR-0057,四個 panel 都走
+    // LoadManifestSubjects)。先選 subject 再選 dataFolder 時,若 selectMpDataFolder
+    // reload subjects,_loadMpSubjects 的 `select.innerHTML=''` 會把已選 subject value
+    // reset 回空 placeholder → 後續 Run required-field validation fail。此 test 釘:
+    // manifest 已選時 selectMpDataFolder 也**不** reload、已選 subject value 必須被保留。
     const { window, mp } = await setup();
     try {
         stubWails(window, { folder: '/tmp/data-dir' });
 
         let loadCalled = false;
         const spec = minimalSpec({
-            // 故意不傳 subjectsDependOnDataFolder(CCI/PhaseSync/Normalized 行為)
             loadSubjects: async () => {
                 loadCalled = true;
                 return { subjects: ['SubjA', 'SubjB'] };
@@ -811,42 +757,9 @@ test('17c. selectMpDataFolder:subject 只依賴 manifest 的 panel(無 subjectsD
         await mp.selectMpDataFolder();
 
         assert.equal(window.document.getElementById('mpDataFolder').value, '/tmp/data-dir', 'dataFolder 仍寫入');
-        assert.equal(loadCalled, false, 'subject 只依賴 manifest 的 panel 選 dataFolder 不應 reload subjects');
+        assert.equal(loadCalled, false, '選 dataFolder 不應 reload subjects');
         // 已選 subject value 必須被保留(reload 會 reset 回空 placeholder)
         assert.equal(select.value, 'SubjB', '已選 subject value 必須被保留,不被清空');
-    } finally {
-        await teardown(window);
-    }
-});
-
-test('17d. selectMpDataFolder:subjectsDependOnDataFolder=true(Composer)選 folder 後 reload subjects', async () => {
-    // codex round-1 P2 對照組:Composer 的 subject 真的依賴 dataFolder
-    //(LoadChartComposerSubjects 帶 dataFolder),設 subjectsDependOnDataFolder=true。
-    // 此 test 釘:選 dataFolder 後 loadSubjects **必被呼叫** 且 select 被重新填充
-    //(這是 Composer 正確行為 — 不同 dataFolder 可能有不同 subject 集合)。
-    const { window, mp } = await setup();
-    try {
-        stubWails(window, { folder: '/tmp/data-dir' });
-
-        let loadArgs = null;
-        const spec = minimalSpec({
-            subjectsDependOnDataFolder: true,
-            loadSubjects: async (manifestPath, dataFolder) => {
-                loadArgs = { manifestPath, dataFolder };
-                return { subjects: ['Alice', 'Bob', 'Carol'] };
-            },
-        });
-        mp.run(spec);
-        window.document.getElementById('mpManifestPath').value = '/tmp/manifest.csv';
-
-        await mp.selectMpDataFolder();
-
-        assert.ok(loadArgs, 'subjectsDependOnDataFolder=true → selectMpDataFolder 應 reload subjects');
-        assert.equal(loadArgs.dataFolder, '/tmp/data-dir', 'loadSubjects 收到 dataFolder');
-        // select 被重新填充:placeholder + 3 subject
-        const select = window.document.getElementById('mpSubject');
-        assert.equal(select.options.length, 4, 'select 重新填充為 placeholder + 3 subject');
-        assert.equal(select.options[1].value, 'Alice', 'option.value=Subject 名稱');
     } finally {
         await teardown(window);
     }

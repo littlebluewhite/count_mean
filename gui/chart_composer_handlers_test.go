@@ -157,99 +157,6 @@ func setupChartComposerV14Fixture(t *testing.T) (manifestPath, dataFolder string
 }
 
 // ---------------------------------------------------------------------------
-// LoadChartComposerSubjects
-// ---------------------------------------------------------------------------
-
-func TestLoadChartComposerSubjects_HappyPath(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-	manifestPath, dataFolder := setupChartComposerV10Fixture(t)
-
-	result, err := app.LoadChartComposerSubjects(&LoadChartComposerSubjectsParams{
-		ManifestPath: manifestPath,
-		DataFolder:   dataFolder,
-	})
-
-	require.NoError(t, err, "expected non-nil err only via panic recovery")
-	require.NotNil(t, result)
-	assert.True(t, result.Success, "Message: %s", result.Message)
-	assert.Equal(t, []string{"TestSubjectV10"}, result.Subjects)
-}
-
-// TestLoadChartComposerSubjects_NilParams 釘住 nil params guard:
-// 不可 panic,回 failedResult 結構。
-func TestLoadChartComposerSubjects_NilParams(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-
-	result, err := app.LoadChartComposerSubjects(nil)
-
-	require.NoError(t, err, "nil params 應走單一通道契約 — err 留 nil,result 帶 failure")
-	require.NotNil(t, result)
-	assert.False(t, result.Success)
-	assert.Contains(t, result.Message, "參數為空")
-}
-
-// TestLoadChartComposerSubjects_RejectsTraversalPath 釘住 boundary path validation:
-// "../etc/passwd" 之類 traversal 路徑必須在 manifest 解析前 reject。
-func TestLoadChartComposerSubjects_RejectsTraversalPath(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-
-	result, err := app.LoadChartComposerSubjects(&LoadChartComposerSubjectsParams{
-		ManifestPath: "/etc/passwd",
-		DataFolder:   t.TempDir(),
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Success)
-	assert.Contains(t, result.Message, "路徑驗證失敗")
-}
-
-// TestLoadChartComposerSubjects_SurfacesMissingEMGFiles 釘住 Bug 1 整合:
-// LoadChartComposerSubjects 在 Load 階段呼叫 manifest.ValidateAllEMGFiles
-// 掃過所有 EMG 檔,把不存在 row 收集到 result.MissingFiles surface 給 user。
-// Success 仍為 true(non-blocking) — user 仍可在 dropdown 選其他 OK subject
-// 繼續分析,只是有 missing 的會被警告。
-//
-// 動機:V.14 manifest 升級時 NSF 系列 EMGFile 欄誤改,user 在 Chart Composer
-// Generate 階段才看到「EMG 檔案不存在」錯誤;此整合讓 Load 階段就 surface,
-// 避免 user 進 dropdown 選 subject 後才在最後一步炸。
-func TestLoadChartComposerSubjects_SurfacesMissingEMGFiles(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-	dataFolder := t.TempDir()
-
-	// 只建 ok subject 對應的 EMG;broken subject 的 EMG 故意不建。
-	writeChartComposerMinimalEMG(t, filepath.Join(dataFolder, "exists.csv"))
-
-	// 注意:LoadChartComposerSubjects 只 LoadManifests + dedup,**不會** 嘗試
-	// parse motion/force(那是 GenerateChartComposer 的事),所以 fixture 不必建
-	// motion.csv / force.anc。Subject dropdown 邏輯只看 EMGFile 欄是否 disk 上存在。
-	manifestContent := "Subject,Motion,Force,EMG,EMGMotionOffset,P0,P1,P2,S,C,D,T0,T,O,L\n" +
-		"OkSubject,motion.csv,force.anc,exists.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,0.8\n" +
-		"BrokenSubject,motion.csv,force.anc,missing.csv,1,0.1,0.2,0.3,0.4,0.5,400,0.6,0.7,600,0.8"
-	manifestPath := filepath.Join(dataFolder, "manifest.csv")
-	require.NoError(t, os.WriteFile(manifestPath, []byte(manifestContent), 0o644))
-
-	result, err := app.LoadChartComposerSubjects(&LoadChartComposerSubjectsParams{
-		ManifestPath: manifestPath,
-		DataFolder:   dataFolder,
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.True(t, result.Success,
-		"missing EMG 不該阻擋 Load (non-blocking surface),Message=%s", result.Message)
-	assert.Equal(t, []string{"OkSubject", "BrokenSubject"}, result.Subjects,
-		"dropdown 仍應列出兩個 subject — missing 的 user 仍可選看到 warning")
-
-	require.Len(t, result.MissingFiles, 1,
-		"應 surface 1 個 missing EMG row,實際 %d:%+v", len(result.MissingFiles), result.MissingFiles)
-	assert.Equal(t, "BrokenSubject", result.MissingFiles[0].Subject)
-	assert.Equal(t, "missing.csv", result.MissingFiles[0].EMGFile)
-	assert.Contains(t, result.MissingFiles[0].ErrMessage, "missing.csv",
-		"ErrMessage 應含 missing.csv 名稱 / path 讓 user 知道期待的檔位置")
-}
-
-// ---------------------------------------------------------------------------
 // GenerateChartComposer
 // ---------------------------------------------------------------------------
 
@@ -462,7 +369,7 @@ func TestDownloadChartComposerImage_EmptySubjectFallsBackToUntitled(t *testing.T
 }
 
 // ---------------------------------------------------------------------------
-// Panic recovery — 跨 3 個 handler 共用 contract
+// Panic recovery — 跨 2 個 handler 共用 contract
 // ---------------------------------------------------------------------------
 
 // TestChartComposerHandlers_PanicRecovery 釘住 panic safety:
@@ -475,21 +382,6 @@ func TestDownloadChartComposerImage_EmptySubjectFallsBackToUntitled(t *testing.T
 func TestChartComposerHandlers_PanicRecovery(t *testing.T) {
 	// 每個 handler 都用同一個構造方式驗證 panic safety;
 	// 個別測試只關心 errors.Is(err, ErrInternalPanic)。
-	t.Run("LoadChartComposerSubjects", func(t *testing.T) {
-		app := &App{logger: nil} // nil logger → entry log 必 panic
-		app.state.Store(&appState{config: &config.AppConfig{OutputDir: t.TempDir()}})
-
-		result, err := app.LoadChartComposerSubjects(&LoadChartComposerSubjectsParams{
-			ManifestPath: filepath.Join(t.TempDir(), "x.csv"),
-			DataFolder:   t.TempDir(),
-		})
-		// recoverHandlerPanic 把 panic 包成 ErrInternalPanic;
-		// result 為 zero value(*ChartComposerSubjectsResult nil pointer)。
-		require.Error(t, err, "panic 應透過 named return 灌入 err")
-		assert.ErrorIs(t, err, ErrInternalPanic)
-		assert.Nil(t, result)
-	})
-
 	t.Run("GenerateChartComposer", func(t *testing.T) {
 		app := &App{logger: nil}
 		app.state.Store(&appState{config: &config.AppConfig{OutputDir: t.TempDir()}})
@@ -530,27 +422,8 @@ func validPNGDataURLForComposer() string {
 // P2 #4 muscle_ratio 空 cell 的資料組裝 test 已隨 ADR-0046 移到 internal/composer)
 // ---------------------------------------------------------------------------
 
-// TestLoadChartComposerSubjects_RejectsEmptyDataFolder 釘住 P2 finding #2:
-// DataFolder 為空字串時應在 manifest 解析前 short-circuit 回 ErrNoDataFolder,
-// 對齊 cci_handlers.validateCCIParams 慣例;不可走到 manifest 解析然後 silently
-// 用 process cwd 解析相對 EMG 路徑。
-func TestLoadChartComposerSubjects_RejectsEmptyDataFolder(t *testing.T) {
-	app := setupChartComposerTestApp(t)
-	manifestPath, _ := setupChartComposerV10Fixture(t)
-
-	result, err := app.LoadChartComposerSubjects(&LoadChartComposerSubjectsParams{
-		ManifestPath: manifestPath,
-		DataFolder:   "", // empty — 觸發 P2 #2 finding
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Success)
-	assert.Equal(t, ErrNoDataFolder.Error(), result.Message,
-		"DataFolder 空字串必須對齊 ErrNoDataFolder 訊息(請選擇數據資料夾)")
-}
-
-// TestGenerateChartComposer_RejectsEmptyDataFolder P2 #2 sibling
+// TestGenerateChartComposer_RejectsEmptyDataFolder 釘住 P2 finding #2:DataFolder 為空字串時
+// 在 manifest 解析前回 ErrNoDataFolder,不以 process cwd 解析相對 EMG 路徑。
 func TestGenerateChartComposer_RejectsEmptyDataFolder(t *testing.T) {
 	app := setupChartComposerTestApp(t)
 	manifestPath, _ := setupChartComposerV10Fixture(t)
