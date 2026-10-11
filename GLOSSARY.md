@@ -49,7 +49,7 @@ _Avoid_: config, batch file, descriptor, sheet.
 _Avoid_: trial, sample, case, 分析主題（UI label only — 內部以 Subject 為準）, subject index / SubjectIndex（已退役，見 [[ADR-0057]]）.
 
 **Subject output key**
-[[Subject]] 在 macOS / Windows 上的輸出檔名身分：`filename.SubjectOutputKey(subject)` = NFC(ToLower(Sanitize(subject)))，與 `SubjectOutputName` 同在 filename 套件，Sanitize 規則改了兩者一起改。兩個 Subject 的 key 相同 ⇔ 它們推導出的輸出檔（CCI、PhaseSync、NormalizedPhaseSync、MuscleRatio、Composer PNG）是同一個檔。`manifest.LoadManifests` 以它做撞名檢查：兩列 key 相同即整份 manifest 拒絕 —— `A/B` 與 `A:B`、`SF8` 與 `sf8`、兩列空 Subject 都算（[[ADR-0056]]）；Subject 名稱因此可當 manifest row 的唯一鍵（[[ADR-0057]]）。
+[[Subject]] 在 macOS / Windows 上的輸出檔名身分：`filename.SubjectOutputKey(subject)` = NFC(ToLower(Sanitize(subject)))，與 `SubjectOutputName` 同在 filename 套件，Sanitize 規則改了兩者一起改。兩個 Subject 的 key 相同 ⇔ 它們推導出的輸出檔（CCI、PhaseSync、NormalizedPhaseSync、MuscleRatio、Composer PNG）是同一個檔。`manifest.LoadManifests` 以它做撞名檢查：兩列 key 相同即整份 manifest 拒絕 —— `A/B` 與 `A:B`、`SF8` 與 `sf8`、兩列空 Subject 都算（[[ADR-0056]]）；Subject 名稱因此可當 manifest row 的唯一鍵（[[ADR-0057]]）。已知限制：manifest 不解碼，Big5 中文 Subject 逐 byte 變成 U+FFFD，不同的中文名可能得到同一個 key，整份 manifest 被拒；處置是另存為 UTF-8（撞名訊息會提示），解碼 Big5 是可能的後續工作。
 _Avoid_: sanitized subject / safeSubject（`Sanitize` 的輸出字串本身，不含大小寫與 NFC 摺疊）、subject id.
 
 **Subject source**

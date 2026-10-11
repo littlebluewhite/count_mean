@@ -54,6 +54,7 @@
 ### 範圍外
 
 - **編碼**：不套用 user-picked pipeline 的 UTF-8 規則，真實 V.16 manifest 是 Big5（[[ADR-0041]]）。
+  - 已知限制：Big5 中文 Subject 的 byte 不是合法 UTF-8，`Sanitize` 逐 byte 換成 U+FFFD，不同的中文名（例：陳美玲、黃美玲）可能得到同一個 [[Subject output key]]，整份 manifest 被撞名檢查拒絕。撞名訊息結尾提示處置方式：另存為 UTF-8，或改用英數 Subject。解碼 Big5 是可能的後續工作。
 - **xlsx 解壓後的大小**：上限只看磁碟上的位元組數；ANC `.xlsx` 經 excelize 解壓後的大小不在此限。
 - **資料檔開檔後變大**：`OpenDataFile` 回 `*os.File`，只在開檔時 fstat；分期總檔案與 ReadCSV 才有讀取中封頂。
 - **Windows**：`ReadFlags` 沒有 `O_NONBLOCK`，非一般檔案只靠 pre-stat / fstat 擋；FIFO 測試只在非 Windows 跑。

@@ -370,13 +370,42 @@ func TestLoadManifests_SubjectCollisionMessage(t *testing.T) {
 	writeFileHelper(t, base, "manifest.csv", manifestCSV("A/B", "A:B"))
 	_, err := LoadManifests(filepath.Join(base, "manifest.csv"))
 
-	const zhTW = `輸出檔名衝突: subject "A/B" 與 "A:B" 經檔名安全化後同為 "A_B" (case-insensitive)`
-	const enUS = `Output filename collision: subjects "A/B" and "A:B" both sanitize to "A_B" (case-insensitive)`
+	const zhTW = `輸出檔名衝突: subject "A/B" 與 "A:B" 經檔名安全化後同為 "A_B" (case-insensitive)` +
+		`；若 Subject 是中文且分期總檔案為 Big5 編碼，請另存為 UTF-8 或改用英數 Subject`
+	const enUS = `Output filename collision: subjects "A/B" and "A:B" both sanitize to "A_B" (case-insensitive)` +
+		`; if subjects are Chinese and the manifest file is Big5-encoded, re-save it as UTF-8 or use ASCII subject names`
 	if err == nil || err.Error() != zhTW {
 		t.Fatalf("Error() = %v; want %q", err, zhTW)
 	}
 	if got := i18n.Localize(err); got != enUS {
 		t.Errorf("Localize = %q; want %q", got, enUS)
+	}
+}
+
+// TestLoadManifests_Big5ChineseSubjectsCollide 釘住已知限制(ADR-0056):分期總檔案不解碼,
+// Big5 中文 Subject 的 byte 不是合法 UTF-8,Sanitize 逐 byte 換成 U+FFFD,兩個不同的三字
+// 中文名得到同一個 Subject output key,整份拒絕。錯誤訊息結尾帶出處置提示(另存為 UTF-8)。
+func TestLoadManifests_Big5ChineseSubjectsCollide(t *testing.T) {
+	_ = i18n.InitI18n("./nonexistent") // 不存在路徑 → 內建 catalog
+	t.Cleanup(func() { i18n.SetLocale(i18n.LocaleZhTW) })
+	i18n.SetLocale(i18n.LocaleEnUS)
+
+	const (
+		chenMeiLing  = "\xb3\xaf\xac\xfc\xac\xc2" // Big5「陳美玲」
+		huangMeiLing = "\xb6\xc0\xac\xfc\xac\xc2" // Big5「黃美玲」
+	)
+
+	base := t.TempDir()
+	writeFileHelper(t, base, "manifest.csv", manifestCSV(chenMeiLing, huangMeiLing))
+	_, err := LoadManifests(filepath.Join(base, "manifest.csv"))
+
+	e, ok := errors.AsType[*i18n.Error](err)
+	if !ok || e.Key != i18n.KeyErrorManifestSubjectCollision {
+		t.Fatalf("err = %v; want i18n key %s", err, i18n.KeyErrorManifestSubjectCollision)
+	}
+	const hint = "re-save it as UTF-8"
+	if got := i18n.Localize(err); !strings.Contains(got, hint) {
+		t.Errorf("Localize = %q; want it to contain %q", got, hint)
 	}
 }
 

@@ -51,7 +51,8 @@ func TestLoadManifestSubjects_LoadFailureOnResultChannel(t *testing.T) {
 	assert.False(t, result.Success)
 	assert.Nil(t, result.Subjects)
 	assert.Equal(t,
-		`載入分期總檔案失敗: 輸出檔名衝突: subject "A/B" 與 "A:B" 經檔名安全化後同為 "A_B" (case-insensitive)`,
+		`載入分期總檔案失敗: 輸出檔名衝突: subject "A/B" 與 "A:B" 經檔名安全化後同為 "A_B" (case-insensitive)`+
+			`；若 Subject 是中文且分期總檔案為 Big5 編碼，請另存為 UTF-8 或改用英數 Subject`,
 		result.Message)
 }
 

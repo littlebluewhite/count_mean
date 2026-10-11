@@ -97,7 +97,7 @@ var translationsEnUS = map[string]string{
 	// batch cancellation.
 	KeyErrorMuscleRatioCancelled: "Muscle ratio batch cancelled",
 	// Manifest read door (ADR-0056).
-	KeyErrorManifestSubjectCollision: "Output filename collision: subjects %q and %q both sanitize to %q (case-insensitive)",
+	KeyErrorManifestSubjectCollision: "Output filename collision: subjects %q and %q both sanitize to %q (case-insensitive); if subjects are Chinese and the manifest file is Big5-encoded, re-save it as UTF-8 or use ASCII subject names",
 	KeyErrorManifestSubjectNotFound:  "not found in the manifest file",
 	// CCI Analysis Messages (backend i18n).
 	KeyErrorCCIParseManifestFailed:     "Failed to parse manifest file",

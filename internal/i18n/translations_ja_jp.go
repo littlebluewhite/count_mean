@@ -97,7 +97,7 @@ var translationsJaJP = map[string]string{
 	// バッチキャンセル。
 	KeyErrorMuscleRatioCancelled: "筋肉比率バッチがキャンセルされました",
 	// マニフェスト読み込みゲート (ADR-0056)。
-	KeyErrorManifestSubjectCollision: "出力ファイル名の競合: サブジェクト %q と %q はファイル名安全化後に同じ %q になります (case-insensitive)",
+	KeyErrorManifestSubjectCollision: "出力ファイル名の競合: サブジェクト %q と %q はファイル名安全化後に同じ %q になります (case-insensitive)。サブジェクトが中国語でマニフェストファイルが Big5 エンコードの場合は、UTF-8 で保存し直すか英数字のサブジェクト名を使用してください",
 	KeyErrorManifestSubjectNotFound:  "はマニフェストファイルに存在しません",
 	// CCI Analysis Messages (backend i18n).
 	KeyErrorCCIParseManifestFailed:     "マニフェストファイルの解析に失敗しました",
