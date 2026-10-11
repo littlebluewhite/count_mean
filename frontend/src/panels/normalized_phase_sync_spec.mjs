@@ -41,7 +41,8 @@
 //   * spec.formBody 為 builder function 且不洩漏 hardcoded 繁中(4 個 phase 下拉)
 //   * rpc 在 manifestPath / dataFolder / subjectName / 任一 phase 缺時 throw
 
-import { AnalyzeNormalizedPhaseSync, LoadManifestSubjects } from '../../wailsjs/go/gui/App.js';
+import { loadManifestSubjects } from '../manifestPanel.mjs';
+import { AnalyzeNormalizedPhaseSync } from '../../wailsjs/go/gui/App.js';
 
 /**
  * 標準化分期同步 panel HTML body(注入 ManifestPanel shell 的 spec.formBody)。
@@ -117,20 +118,9 @@ export function makeNormalizedPhaseSyncSpec(app) {
 
         formBody: normalizedPhaseSyncFormBody,
 
-        /**
-         * Subject load:同 CCI/PhaseSync 走 LoadManifestSubjects;option.value 是 Subject
-         * 名稱(ADR-0057)。result.success=false 時 throw,讓 ManifestPanel 的 catch 統一 ShowError。
-         *
-         * @param {string} manifestPath - #mpManifestPath value
-         * @returns {Promise<{subjects: string[]}>}
-         */
-        loadSubjects: async (manifestPath) => {
-            const result = await LoadManifestSubjects(manifestPath);
-            if (!result.success) {
-                throw new Error(result.message || '載入主題失敗');
-            }
-            return { subjects: result.subjects || [] };
-        },
+        // Subject load:同 CCI/PhaseSync 用共用的 loadManifestSubjects;option.value 是
+        // Subject 名稱(ADR-0057)。
+        loadSubjects: loadManifestSubjects,
 
         /**
          * afterRender:panel render 完後 load 4 個 phase 下拉

@@ -32,13 +32,13 @@
 
    `ErrNoManifestFile` → `validateExternalPathInputs("分期總檔案", …)` → `manifest.LoadSubjectNames`。可預期失敗回 failed result（`inputMessage` / `failMessage(KeyErrorHandlerLoadManifestFailed)`），err 只留給 panic（[[ADR-0051]]）。不吃 dataFolder、不開資料檔。取代 `LoadPhaseManifest` 與 `LoadChartComposerSubjects`；之後沒有 manifest loader 走 err 通道（[[ADR-0051]] §5 留下的項目到此結案）。
 
-5. **前端**：ctx 為 `{ manifestPath, dataFolder, subjectName, subjects }`，`#mpSubject` 的 option.value 一律是 Subject 名稱，`subjectName` 讀 `select.value`（placeholder 為 `''`，必填守門擋得到）。`valueMode`、`subjectIdx`、`subjectsDependOnDataFolder` 刪除；CCI / PhaseSync / NPS / Composer 的 `loadSubjects(manifestPath)` 都呼 `LoadManifestSubjects`，`!success` 時 throw，由 `ManifestPanel` 的 catch 統一 `ShowError`；選 dataFolder 不再 reload subject 清單。
+5. **前端**：ctx 為 `{ manifestPath, dataFolder, subjectName, subjects }`，`#mpSubject` 的 option.value 一律是 Subject 名稱，`subjectName` 讀 `select.value`（placeholder 為 `''`，必填守門擋得到）。`valueMode`、`subjectIdx`、`subjectsDependOnDataFolder` 刪除；`manifestPanel.mjs` export 一個 `loadManifestSubjects(manifestPath)`：呼 `LoadManifestSubjects`、只回 `{ subjects }`、`!success` 時 throw，由 `ManifestPanel` 的 catch 統一 `ShowError`。CCI / PhaseSync / NPS / Composer 都設 `loadSubjects: loadManifestSubjects`。選 dataFolder 不再 reload subject 清單。
 
 6. **刪除**：`phase_sync.LoadManifestSubjects`（與 2 支測試、1 支 benchmark）、`phase_sync.ErrInvalidSubjectIndex`、`KeyErrorCCIInvalidSubjectIndex` / `KeyErrorPhaseSyncInvalidSubjectIndex`（4 個 locale）、`composer.ErrSubjectNotFound` 與 `findManifestBySubject`、Composer 的去重迴圈與「對稱」註解、`MissingFiles` / `MissingFileDTO` / `ChartComposerSubjectsResult`、`manifest.ValidateAllEMGFiles` / `MissingRow`（FIFO 測試已由 [[ADR-0056]] 的 `TestOpenDataFile_RejectsFIFO` 涵蓋）。
 
 ### 與既有 ADR 的關係
 
-- **[[ADR-0007]] §4 被取代**：§4 讓 ManifestPanel 同時給 idx 與 name、「不擴 scope 動 backend RPC signature」。本 ADR 改後端，ctx 只剩名稱。ADR-0007 Considered Options 的「ctx Option C（改 backend 強制統一 idx 或 name）」當初擱置的理由是範圍（「擴 candidate scope 動 backend…動之前要驗證」），不是否決；本 ADR 重開它並選名稱。§6 範例裡的 `ctx.subjectIdx` 一併成為歷史。ADR-0007 依慣例不修改。
+- **[[ADR-0007]] §4 被取代**：§4 讓 ManifestPanel 同時給 idx 與 name、「不擴 scope 動 backend RPC signature」。本 ADR 改後端，ctx 只剩名稱。ADR-0007 Considered Options 拒絕了「ctx Option C（改 backend 強制統一 idx 或 name）」，理由有二：要擴 scope 動 backend；Composer 的 subject 字串是 [[ADR-0002]] 的 canonical-key 設計，「動之前要驗證」。拒的是當時的範圍，不是方向。本 ADR 重開它並選名稱：Composer 本來就以名稱為鍵，ADR-0002 的設計不必改；「動之前要驗證」的疑慮因改用名稱、並在取用時一律驗證（Decision 3）而消解。§6 範例裡的 `ctx.subjectIdx` 一併成為歷史。ADR-0007 依慣例不修改。
 - **[[ADR-0047]]** Decision 裡的 `load(manifestFile, dataFolder string, subjectIndex int)` 是當時的簽名，現為 `load(…, subject string)`；索引的措辭只是歷史紀錄。
 - **[[ADR-0002]]** 讓 Composer 以名稱為 canonical key（manifest 改版時索引會位移、名稱不會），本 ADR 把同一理由套到四個有 subject 的 panel。
 
@@ -46,7 +46,7 @@
 
 - **Composer** 遇到沒通過 `ValidatePhaseManifest` 的列（如分期點不單調）回「載入分期總檔案失敗: <驗證錯誤>」，原本照樣組圖、markLine 錯位。
 - **Composer 的 subject 下拉**在選好 manifest 後就載入，不必先選資料夾；`MissingFiles` 消失（前端從未顯示，UI 無差異）。
-- **CCI / PhaseSync / NPS 的清單載入失敗**改走 result 通道：原本 err 通道送「載入分期總檔案失敗: 解析分期總檔案失敗: <err>」（只有 zh-TW）；現在是 `failMessage` 的「載入分期總檔案失敗: <err>」，依 locale 在地化。前端 `loadSubjects` throw `Error`，對話框文字前面多「Error: 」，與 Composer 原本的顯示相同。
+- **CCI / PhaseSync / NPS 的清單載入失敗**改走 result 通道：原本 err 通道送「載入分期總檔案失敗: 解析分期總檔案失敗: <err>」（只有 zh-TW）；現在是 `failMessage` 的「載入分期總檔案失敗: <err>」，依 locale 在地化。前端 `loadManifestSubjects` throw `Error`，對話框文字前面多「Error: 」，與 Composer 原本的顯示相同。
 - **選定的名稱不在 manifest**（例如載入清單後 manifest 被改過）回 `Subject "<name>" 不存在於分期總檔案`；原本索引會靜默指到位移後的另一列。
 - **空 Subject 的列**不再出現在任何下拉。這些列從來無法分析（`ValidatePhaseManifest` 與 Composer 的 Subject 非空檢查都拒絕空 Subject），能力沒有改變。
 - golden（真實 V.16 資料走 GUI handler）的輸出檔與 W9 逐位元組相同；結果 JSON 只有 Composer 的清單紀錄少了 `missingFiles`。
@@ -64,7 +64,7 @@
 2. **名稱為鍵，但同名時取第一列或在清單中去重**：拒。同名兩列的輸出檔本來就會互相覆蓋；靜默挑一列等於把錯誤藏起來。整份拒絕已由 [[ADR-0056]] 在讀檔門完成。
 3. **保留兩個清單 handler，只修正註解**：拒。兩者通道、參數、回傳形狀都不同，前端要記住各自的契約；`MissingFiles` 沒有讀者。
 4. **合併後保留 `MissingFiles`（清單載入時就掃資料檔）**：拒。前端從未顯示；資料檔缺失在分析時由 `OpenDataFile` 以帶路徑的錯誤回報。掃描還讓清單依賴 dataFolder，選資料夾時得重載清單。
-5. **清單由 `ManifestPanel` 直接呼 `LoadManifestSubjects`，spec 不再帶 `loadSubjects`**：本次不做。四個 spec 的 `loadSubjects` 現在相同，但 spec 介面與 MuscleRatio 的 `hideSubject` 不受影響，留作後續收斂。
+5. **清單由 `ManifestPanel` 直接呼 `LoadManifestSubjects`，spec 不再帶 `loadSubjects`**：本次不做。四個 spec 共用同一個 `loadManifestSubjects`（Decision 5），行為只寫一次、只測一次。拿掉 `loadSubjects` 欄位要改 [[ADR-0007]] 的 spec 介面：`ManifestPanel` 的載入條件（現為 `loadSubjects && !hideSubject`）只剩 `hideSubject`，`manifestPanel.test.mjs` 以 `loadSubjects` 注入清單的測試也得改成 stub Wails；收益只是省下四行設定，留作後續。
 
 ## Related
 

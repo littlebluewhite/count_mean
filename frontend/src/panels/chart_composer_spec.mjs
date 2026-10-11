@@ -38,7 +38,8 @@
 
 import { bridge } from '../charts/iframeBridge.mjs';
 import { recalcPercents } from '../charts/phaseMarkers.mjs';
-import { GenerateChartComposer, LoadManifestSubjects } from '../../wailsjs/go/gui/App.js';
+import { loadManifestSubjects } from '../manifestPanel.mjs';
+import { GenerateChartComposer } from '../../wailsjs/go/gui/App.js';
 
 /**
  * Chart Composer panel HTML body(注入 ManifestPanel shell 的 spec.formBody)。
@@ -107,21 +108,10 @@ export function makeChartComposerSpec(app) {
             `<button id="composerStandardizeBtn" class="btn btn-secondary" disabled `
             + `onclick="app.standardizeComposerView()">${t('button.standardize_view')}</button>`,
 
-        /**
-         * Subject load:同 CCI 走 LoadManifestSubjects(只讀 manifest,不需 dataFolder);
-         * option.value 是 Subject 名稱(ADR-0002 §1 canonical-key,ADR-0057 後四個有 subject
-         * 的 panel 一致)。result.success=false 時 throw,讓 ManifestPanel 的 catch 統一 ShowError。
-         *
-         * @param {string} manifestPath - #mpManifestPath value
-         * @returns {Promise<{subjects: string[]}>}
-         */
-        loadSubjects: async (manifestPath) => {
-            const result = await LoadManifestSubjects(manifestPath);
-            if (!result.success) {
-                throw new Error(result.message || '載入主題失敗');
-            }
-            return { subjects: result.subjects || [] };
-        },
+        // Subject load:同 CCI 用共用的 loadManifestSubjects(只讀 manifest,不需 dataFolder);
+        // option.value 是 Subject 名稱(ADR-0002 §1 canonical-key,ADR-0057 後四個有 subject
+        // 的 panel 一致)。
+        loadSubjects: loadManifestSubjects,
 
         /**
          * onSubjectChange(Composer 獨有):subject 切換時清 chart container +

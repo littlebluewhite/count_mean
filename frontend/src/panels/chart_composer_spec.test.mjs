@@ -22,6 +22,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
 import { composerFormBody, makeChartComposerSpec } from './chart_composer_spec.mjs';
+import { loadManifestSubjects } from '../manifestPanel.mjs';
 
 // ---------- spec shape 釘必填欄位 ----------
 
@@ -51,68 +52,14 @@ test('chartComposerSpec 必須暴露 ADR-0007 §6 spec shape 所有必填欄位'
 
     // M5:loadSubjects + onSubjectChange(reset state)必填;
     // afterRender 省略(Composer 無 phase 下拉,phase checkbox 在 onResult 內 render)。
-    assert.equal(typeof spec.loadSubjects, 'function', 'Composer 有 loadSubjects');
+    // loadSubjects 的行為(只送 manifestPath、不需 dataFolder)由 manifestPanel.test.mjs
+    // 測一次(ADR-0057)。
+    assert.equal(spec.loadSubjects, loadManifestSubjects, 'Composer 用共用的 loadManifestSubjects');
     assert.equal(typeof spec.onSubjectChange, 'function', 'Composer 有 onSubjectChange(reset state)');
     assert.equal(spec.afterRender, undefined, 'Composer 省略 afterRender(無 phase 下拉)');
 });
 
-// ---------- spec.loadSubjects(M5)+ onSubjectChange ----------
-
-test('Composer spec.loadSubjects 走 LoadManifestSubjects 且只回 subjects(不需 dataFolder)', async () => {
-    // Composer subject 用 string(ADR-0002 canonical-key;ADR-0057 後四個 panel 一致)。
-    // loadSubjects 呼 LoadManifestSubjects(manifestPath) → result.subjects;subject 清單只讀
-    // manifest,dataFolder 未選也照樣 load。
-    const window = new Window({ url: 'http://localhost:34115/' });
-    globalThis.window = window;
-    try {
-        let args = null;
-        window.go = {
-            gui: {
-                App: {
-                    LoadManifestSubjects: async (...a) => {
-                        args = a;
-                        return { success: true, subjects: ['Rudolph', 'Donner'] };
-                    },
-                },
-            },
-        };
-        const spec = makeChartComposerSpec({});
-        const out = await spec.loadSubjects('/tmp/manifest.csv');
-
-        assert.deepEqual(args, ['/tmp/manifest.csv'], 'loadSubjects 只送 manifestPath');
-        assert.deepEqual(out, { subjects: ['Rudolph', 'Donner'] }, 'loadSubjects 只回 result.subjects');
-    } finally {
-        if (window?.happyDOM?.close) await window.happyDOM.close();
-        delete globalThis.window;
-    }
-});
-
-test('Composer spec.loadSubjects 在 result.success=false 時 throw', async () => {
-    // 升 throw 讓 ManifestPanel selectMpManifest 的 catch 統一 ShowError。
-    const window = new Window({ url: 'http://localhost:34115/' });
-    globalThis.window = window;
-    try {
-        window.go = {
-            gui: {
-                App: {
-                    LoadManifestSubjects: async () => ({ success: false, message: '主題載入失敗訊息' }),
-                },
-            },
-        };
-        const spec = makeChartComposerSpec({});
-        await assert.rejects(
-            async () => { await spec.loadSubjects('/tmp/m.csv'); },
-            (err) => {
-                assert.match(err.message, /主題載入失敗訊息/, 'throw 帶 backend message');
-                return true;
-            },
-            'success=false 時 loadSubjects 應 throw'
-        );
-    } finally {
-        if (window?.happyDOM?.close) await window.happyDOM.close();
-        delete globalThis.window;
-    }
-});
+// ---------- spec.onSubjectChange ----------
 
 test('Composer spec.onSubjectChange 呼叫 app.onComposerSubjectChange()', () => {
     // ADR-0013 後 onComposerSubjectChange 清 chart container + 清勾選分期 Set

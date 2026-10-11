@@ -29,6 +29,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
 import { phaseSyncFormBody, makePhaseSyncSpec } from './phase_sync_spec.mjs';
+import { loadManifestSubjects } from '../manifestPanel.mjs';
 
 // 合法 ctx(rpc 不卡在 ctx guard 用)。
 function validCtx(overrides = {}) {
@@ -88,36 +89,13 @@ test('phaseSyncSpec 必須暴露 ADR-0007 §6 spec shape + silentSuccess 特例'
 
     // M5:loadSubjects + afterRender(phase 下拉 load)必填;
     // onSubjectChange 省略(subject change 無特殊行為)。
-    assert.equal(typeof spec.loadSubjects, 'function', 'PhaseSync 有 loadSubjects');
+    // loadSubjects 的行為由 manifestPanel.test.mjs 測一次(ADR-0057)。
+    assert.equal(spec.loadSubjects, loadManifestSubjects, 'PhaseSync 用共用的 loadManifestSubjects');
     assert.equal(typeof spec.afterRender, 'function', 'PhaseSync 有 afterRender(load phase 下拉)');
     assert.equal(spec.onSubjectChange, undefined, 'PhaseSync 省略 onSubjectChange');
 });
 
-// ---------- spec.loadSubjects + afterRender(M5)----------
-
-test('PhaseSync spec.loadSubjects 走 LoadManifestSubjects:只回 subjects,success=false 時 throw', async () => {
-    const window = new Window({ url: 'http://localhost:34115/' });
-    globalThis.window = window;
-    try {
-        let reply = { success: true, subjects: ['A', 'B', 'C'], message: '已載入 3 個主題' };
-        window.go = {
-            gui: { App: { LoadManifestSubjects: async () => reply } },
-        };
-        const spec = makePhaseSyncSpec({});
-        const out = await spec.loadSubjects('/tmp/m.csv');
-        assert.deepEqual(out, { subjects: ['A', 'B', 'C'] }, 'loadSubjects 只回 result.subjects');
-
-        reply = { success: false, subjects: null, message: '載入分期總檔案失敗: 後端訊息' };
-        await assert.rejects(
-            () => spec.loadSubjects('/tmp/m.csv'),
-            /載入分期總檔案失敗: 後端訊息/,
-            'success=false 時 loadSubjects 應 throw 並帶 backend message'
-        );
-    } finally {
-        if (window?.happyDOM?.close) await window.happyDOM.close();
-        delete globalThis.window;
-    }
-});
+// ---------- spec.afterRender(M5)----------
 
 test('PhaseSync spec.afterRender 呼叫 app.loadAvailablePhases()', () => {
     // afterRender 對齊舊 showPhaseSyncPanel:1045 的 loadAvailablePhases() 呼叫時機。

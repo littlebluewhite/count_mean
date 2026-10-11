@@ -48,7 +48,8 @@
 
 import { bridge } from '../charts/iframeBridge.mjs';
 import { recalcPercents } from '../charts/phaseMarkers.mjs';
-import { AnalyzeCCI, LoadManifestSubjects } from '../../wailsjs/go/gui/App.js';
+import { loadManifestSubjects } from '../manifestPanel.mjs';
+import { AnalyzeCCI } from '../../wailsjs/go/gui/App.js';
 
 /**
  * CCI panel HTML body(注入 ManifestPanel shell 的 spec.formBody)。
@@ -94,22 +95,9 @@ export function makeCciSpec(app) {
 
         formBody: cciFormBody,
 
-        /**
-         * Subject load:manifest 選好後 ManifestPanel selectMpManifest 呼此 fn 取
-         * subject 列表填 #mpSubject。四個有 subject 的 panel 都走 LoadManifestSubjects;
-         * option.value 是 Subject 名稱,_gatherCtx 的 subjectName 對應後端 subject(ADR-0057)。
-         * result.success=false 時 throw,讓 ManifestPanel 的 catch 統一 ShowError。
-         *
-         * @param {string} manifestPath - #mpManifestPath value
-         * @returns {Promise<{subjects: string[]}>}
-         */
-        loadSubjects: async (manifestPath) => {
-            const result = await LoadManifestSubjects(manifestPath);
-            if (!result.success) {
-                throw new Error(result.message || '載入主題失敗');
-            }
-            return { subjects: result.subjects || [] };
-        },
+        // Subject load:四個有 subject 的 panel 共用 loadManifestSubjects(ADR-0057);
+        // option.value 是 Subject 名稱,_gatherCtx 的 subjectName 對應後端 subject。
+        loadSubjects: loadManifestSubjects,
 
         /**
          * 呼 AnalyzeCCI RPC。在 envelope 包之內 — throw 後 envelope 統一接

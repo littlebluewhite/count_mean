@@ -20,6 +20,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
 import { normalizedPhaseSyncFormBody, makeNormalizedPhaseSyncSpec } from './normalized_phase_sync_spec.mjs';
+import { loadManifestSubjects } from '../manifestPanel.mjs';
 
 function validCtx(overrides = {}) {
     return {
@@ -81,36 +82,13 @@ test('normalizedPhaseSyncSpec 必須暴露 ADR-0007 §6 spec shape + silentSucce
 
     // M5:loadSubjects + afterRender(4 個 phase 下拉 load + mirror)必填;
     // onSubjectChange 省略。
-    assert.equal(typeof spec.loadSubjects, 'function', 'Normalized 有 loadSubjects');
+    // loadSubjects 的行為由 manifestPanel.test.mjs 測一次(ADR-0057)。
+    assert.equal(spec.loadSubjects, loadManifestSubjects, 'Normalized 用共用的 loadManifestSubjects');
     assert.equal(typeof spec.afterRender, 'function', 'Normalized 有 afterRender(load 4 phase 下拉)');
     assert.equal(spec.onSubjectChange, undefined, 'Normalized 省略 onSubjectChange');
 });
 
-// ---------- spec.loadSubjects + afterRender(M5)----------
-
-test('Normalized spec.loadSubjects 走 LoadManifestSubjects:只回 subjects,success=false 時 throw', async () => {
-    const window = new Window({ url: 'http://localhost:34115/' });
-    globalThis.window = window;
-    try {
-        let reply = { success: true, subjects: ['N1', 'N2'], message: '已載入 2 個主題' };
-        window.go = {
-            gui: { App: { LoadManifestSubjects: async () => reply } },
-        };
-        const spec = makeNormalizedPhaseSyncSpec({});
-        const out = await spec.loadSubjects('/tmp/m.csv');
-        assert.deepEqual(out, { subjects: ['N1', 'N2'] }, 'loadSubjects 只回 result.subjects');
-
-        reply = { success: false, subjects: null, message: '載入分期總檔案失敗: 後端訊息' };
-        await assert.rejects(
-            () => spec.loadSubjects('/tmp/m.csv'),
-            /載入分期總檔案失敗: 後端訊息/,
-            'success=false 時 loadSubjects 應 throw 並帶 backend message'
-        );
-    } finally {
-        if (window?.happyDOM?.close) await window.happyDOM.close();
-        delete globalThis.window;
-    }
-});
+// ---------- spec.afterRender(M5)----------
 
 test('Normalized spec.afterRender 呼叫 app.loadNormalizedPhaseSyncPhases()', () => {
     // afterRender 對齊舊 showNormalizedPhaseSyncPanel:2189(內部會綁 mirror)。

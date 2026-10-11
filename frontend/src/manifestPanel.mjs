@@ -50,7 +50,24 @@
 // 既有 onLocaleChange `panelDispatch[currentPanel]()` re-render pattern 天然
 // work — 只重設 functionPanel.innerHTML、不動 app instance state。
 
-import { SelectFile, SelectDirectory } from '../wailsjs/go/gui/App.js';
+import { SelectFile, SelectDirectory, LoadManifestSubjects } from '../wailsjs/go/gui/App.js';
+
+/**
+ * 四個有 subject 的 panel(CCI / PhaseSync / NormalizedPhaseSync / Composer)共用的
+ * `spec.loadSubjects`(ADR-0057):LoadManifestSubjects(manifestPath) → `{ subjects }`。
+ * 清單只依賴 manifest。後端失敗走 result 通道(success=false + message),這裡升為 throw,
+ * 由 selectMpManifest / onMpManifestDropped 的 catch 統一 ShowError。
+ *
+ * @param {string} manifestPath - #mpManifestPath value
+ * @returns {Promise<{subjects: string[]}>}
+ */
+export async function loadManifestSubjects(manifestPath) {
+    const result = await LoadManifestSubjects(manifestPath);
+    if (!result.success) {
+        throw new Error(result.message || '載入主題失敗');
+    }
+    return { subjects: result.subjects || [] };
+}
 
 /**
  * ManifestPanel — 5 個 manifest+dataFolder panel 共用的 envelope。
@@ -97,8 +114,9 @@ export class ManifestPanel {
      * @param {(manifestPath: string) => Promise<{subjects: string[]}>} [spec.loadSubjects]
      *   - Optional。manifest 選好後 selectMpManifest 呼此 fn 取 subject 列表並填
      *   `#mpSubject`:option.value 與 option 文字都是 Subject 名稱(後端以名稱取 row,
-     *   ADR-0057),_gatherCtx 的 subjectName 即 select.value。subject 列表只依賴
-     *   manifest(四個 panel 都走 LoadManifestSubjects),選 dataFolder 不 reload。
+     *   ADR-0057),_gatherCtx 的 subjectName 即 select.value。四個有 subject 的 panel
+     *   都設 `loadSubjects: loadManifestSubjects`(本檔 export);清單只依賴 manifest,
+     *   選 dataFolder 不 reload。
      *   MuscleRatio 省略(hideSubject,無 subject load)。
      * @param {(mp: ManifestPanel) => void} [spec.afterRender] - Optional。run() 把
      *   shell + formBody render 完、showPanel 之後呼叫。PhaseSync/Normalized 用來

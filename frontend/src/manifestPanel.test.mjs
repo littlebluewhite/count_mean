@@ -830,6 +830,30 @@ test('21. onMpSubjectChange:spec.onSubjectChange 省略 → no-op 不 throw', as
     }
 });
 
+test('22. loadManifestSubjects:只送 manifestPath、只回 subjects;success=false 時 throw 帶 backend message', async () => {
+    // 四個有 subject 的 spec 都設 loadSubjects: loadManifestSubjects(ADR-0057),行為只在這裡測。
+    const { window } = await setup();
+    try {
+        let args = null;
+        let reply = { success: true, subjects: ['S1', 'S2'], message: '已載入 2 個主題' };
+        window.go = { gui: { App: { LoadManifestSubjects: async (...a) => { args = a; return reply; } } } };
+        const { loadManifestSubjects } = await import('./manifestPanel.mjs');
+
+        const out = await loadManifestSubjects('/tmp/manifest.csv');
+        assert.deepEqual(args, ['/tmp/manifest.csv'], '只送 manifestPath(清單不依賴 dataFolder)');
+        assert.deepEqual(out, { subjects: ['S1', 'S2'] }, '只回 result.subjects');
+
+        reply = { success: false, subjects: null, message: '載入分期總檔案失敗: 後端訊息' };
+        await assert.rejects(
+            () => loadManifestSubjects('/tmp/manifest.csv'),
+            /載入分期總檔案失敗: 後端訊息/,
+            'success=false 時 throw 並帶 backend message'
+        );
+    } finally {
+        await teardown(window);
+    }
+});
+
 // ---------- panel shell hardcoded 中文回歸測試 ----------
 
 test('panel shell 內 user-visible text 均來自 translator(無 hardcoded 繁中)', async () => {
